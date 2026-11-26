@@ -221,6 +221,16 @@ fn provider_hooks_guard_blocks_reading_vault_files_but_not_passing_the_path() {
     }
 }
 
+/// Pasta temporária com espaço no nome: o caminho só chega inteiro ao guarda entre aspas.
+fn spaced_tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new().prefix("meu projeto ").tempdir().unwrap()
+}
+
+/// O caminho como uma palavra só do shell, entre aspas simples.
+fn sq(path: &str) -> String {
+    format!("'{}'", path.replace('\'', r"'\''"))
+}
+
 /// Uma cópia do Hangar de mentira (o guarda a reconhece por `crates/hangar-server`) e outro projeto
 /// com a mesma `backend/`.
 fn checkouts(root: &std::path::Path) -> (String, String) {
@@ -242,7 +252,7 @@ fn in_dir(payload: &Value, cwd: &str) -> Value {
 /// R6 do envio pelo WhatsApp: a sessão não lê as chaves do dono nem responde ao rascunho no lugar dele.
 #[test]
 fn provider_hooks_guard_blocks_the_owner_keys_and_the_draft_answer_routes() {
-    let root = tempfile::tempdir().unwrap();
+    let root = spaced_tempdir();
     let (hangar, _) = checkouts(root.path());
     let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(&in_dir(payload, &hangar)).unwrap(), &[]);
     let bash = |command: &str| json!({"tool_name":"Bash","tool_input":{"command":command}});
@@ -259,7 +269,7 @@ fn provider_hooks_guard_blocks_the_owner_keys_and_the_draft_answer_routes() {
         bash("cat /home/eu/.hangar/config/.env"),
         bash("grep CP_AUTH_TOKEN ~/.hangar/config/.env"),
         bash("source backend/.env && echo $CP_AUTH_TOKEN"),
-        bash(&format!(". {hangar}/backend/.env")),
+        bash(&format!(". {}", sq(&format!("{hangar}/backend/.env")))),
         bash("TOKEN=$(sed -n 's/^CP_AUTH_TOKEN=//p' backend/.env)"),
         bash("cat < ~/.hangar/config/.env"),
         bash("cd ~/.hangar/whatsapp && cat control.key"),
@@ -314,7 +324,7 @@ fn provider_hooks_guard_blocks_the_owner_keys_and_the_draft_answer_routes() {
 /// `.` e `..` no caminho não escondem as chaves do dono: o guarda resolve o caminho antes de comparar.
 #[test]
 fn provider_hooks_guard_resolves_dot_segments_before_matching_the_owner_keys() {
-    let root = tempfile::tempdir().unwrap();
+    let root = spaced_tempdir();
     let (hangar, _) = checkouts(root.path());
     let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(&in_dir(payload, &hangar)).unwrap(), &[]);
     let bash = |command: &str| json!({"tool_name":"Bash","tool_input":{"command":command}});
@@ -360,7 +370,7 @@ fn provider_hooks_guard_resolves_dot_segments_before_matching_the_owner_keys() {
 /// relativo conta como cópia do Hangar. As chaves de ´~/.hangar´ valem em toda pasta.
 #[test]
 fn provider_hooks_guard_anchors_backend_env_to_the_hangar_copy() {
-    let root = tempfile::tempdir().unwrap();
+    let root = spaced_tempdir();
     let (hangar, other) = checkouts(root.path());
     let installed = root.path().join("instalado");
     std::fs::create_dir_all(installed.join("backend")).unwrap();
@@ -376,7 +386,7 @@ fn provider_hooks_guard_anchors_backend_env_to_the_hangar_copy() {
         bash("cd backend && grep -rn TODO *", &other),
         bash("cat backend/.env", &other),
         bash("source backend/.env", &other),
-        bash(&format!("cat {other}/backend/.env"), &hangar),
+        bash(&format!("cat {}", sq(&format!("{other}/backend/.env"))), &hangar),
         read("backend/.env", &other),
         read(&format!("{other}/backend/.env"), &hangar),
     ] {
@@ -387,8 +397,8 @@ fn provider_hooks_guard_anchors_backend_env_to_the_hangar_copy() {
     for payload in [
         bash("cat backend/.env", &hangar),
         bash("cd backend && grep -rn TODO *", &hangar),
-        bash(&format!("cat {hangar}/backend/.env"), &other),
-        bash(&format!("cat {installed}/backend/.env"), &other),
+        bash(&format!("cat {}", sq(&format!("{hangar}/backend/.env"))), &other),
+        bash(&format!("cat {}", sq(&format!("{installed}/backend/.env"))), &other),
         read("backend/.env", &hangar),
         bash("cat ~/.hangar/config/.env", &other),
         bash("cat ~/.hangar/whatsapp/control.key", &other),
@@ -410,28 +420,30 @@ fn provider_hooks_guard_anchors_backend_env_to_the_hangar_copy() {
 /// (variável, subshell, pipeline) deixa a pasta desconhecida, e desconhecida conta como cópia do Hangar.
 #[test]
 fn provider_hooks_guard_follows_the_command_cd_and_fails_closed_on_an_unknown_folder() {
-    let root = tempfile::tempdir().unwrap();
+    let root = spaced_tempdir();
     let (hangar, other) = checkouts(root.path());
+    let (h, o) = (sq(&hangar), sq(&other));
     let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(payload).unwrap(), &[]);
     let bash = |command: &str, cwd: &str| json!({"tool_name":"Bash","cwd":cwd,"tool_input":{"command":command}});
     let pwsh = |command: &str, cwd: &str| json!({"tool_name":"PowerShell","cwd":cwd,"tool_input":{"command":command}});
     for payload in [
-        bash(&format!("cd {hangar} && cat backend/.env"), &other),
+        bash(&format!("cd {h} && cat backend/.env"), &other),
         bash("cd hangar && cat backend/.env", root.path().to_str().unwrap()),
         bash("cd ~/hangar && cat backend/.env", &other),
         bash("cd crates && cat ../backend/.env", &hangar),
         bash("cd crates && cd ../backend && cat .env", &hangar),
         bash("cd crates/hangar-server && cd ../.. && cat backend/.env", &hangar),
         bash("cd backend/sub && cd .. && cat .env", &hangar),
-        bash(&format!("bash -c 'cd {hangar} && cat backend/.env'"), &other),
-        bash(&format!("cd {other}; cd {hangar}; cat backend/.env"), &other),
+        // Dentro do `bash -c "..."` o caminho vai entre aspas simples.
+        bash(&format!("bash -c \"cd {h} && cat backend/.env\""), &other),
+        bash(&format!("cd {o}; cd {h}; cat backend/.env"), &other),
         bash("cd $DIR && cat backend/.env", &other),
         bash("cd \"$(git rev-parse --show-toplevel)\" && cat backend/.env", &other),
         bash("cd - && cat backend/.env", &other),
-        bash(&format!("(cd {other}); cat backend/.env"), &hangar),
-        bash(&format!("cd {other} | true; cat backend/.env"), &hangar),
+        bash(&format!("(cd {o}); cat backend/.env"), &hangar),
+        bash(&format!("cd {o} | true; cat backend/.env"), &hangar),
         bash("cat .env", &format!("{hangar}/backend")),
-        pwsh(&format!("Set-Location {hangar}; Get-Content backend\\.env"), &other),
+        pwsh(&format!("Set-Location {h}; Get-Content backend\\.env"), &other),
     ] {
         let result = guard(&payload);
         assert_eq!(result.status.code(), Some(2), "{payload}");
@@ -445,7 +457,7 @@ fn provider_hooks_guard_follows_the_command_cd_and_fails_closed_on_an_unknown_fo
         bash("cd backend && grep -rn TODO * | head", &other),
         bash("cd backend && cat .env.example", &other),
         bash("cd crates && cat ../backend/.env", &other),
-        bash(&format!("cd {other} && cat backend/.env"), &hangar),
+        bash(&format!("cd {o} && cat backend/.env"), &hangar),
         bash("cd backend && cat pyproject.toml", &hangar),
         bash("cat .env", &format!("{other}/backend")),
         bash("cat *", &format!("{other}/backend")),
@@ -506,6 +518,139 @@ fn provider_hooks_guard_sees_owner_keys_through_quotes_escapes_and_globs() {
         bash("curl -s 'http://127.0.0.1:8765/api/whatsapp/outbox/d1/media'"),
     ] {
         let result = guard(&payload);
+        assert!(result.status.success(), "{payload}");
+        assert!(result.stdout.is_empty(), "{payload}");
+    }
+}
+
+/// `file_path` e `path` do `Read`/`Grep` são um caminho inteiro: o espaço do nome da pasta não o parte e
+/// `?`/`*` são letras do nome; curinga só no `glob`. No Bash, o caminho entre aspas também chega inteiro.
+#[test]
+fn provider_hooks_guard_takes_read_and_grep_paths_whole_and_literal() {
+    let root = spaced_tempdir();
+    let (hangar, other) = checkouts(root.path());
+    assert!(hangar.contains(' '), "{hangar}");
+    let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(payload).unwrap(), &[]);
+    let read = |path: &str, cwd: &str| json!({"tool_name":"Read","cwd":cwd,"tool_input":{"file_path":path}});
+    let grep = |field: &str, value: &str, cwd: &str| {
+        let mut payload = json!({"tool_name":"Grep","cwd":cwd,"tool_input":{"pattern":"TOKEN"}});
+        payload["tool_input"][field] = json!(value);
+        payload
+    };
+    let bash = |command: &str, cwd: &str| json!({"tool_name":"Bash","cwd":cwd,"tool_input":{"command":command}});
+    let hangar_env = format!("{hangar}/backend/.env");
+    let other_env = format!("{other}/backend/.env");
+    for payload in [
+        read(&hangar_env, &other),
+        grep("path", &hangar_env, &other),
+        grep("glob", "**/.hangar/config/.en?", &other),
+        bash(&format!("cat {}", sq(&hangar_env)), &other),
+        bash(&format!("cat {}/backend/.env", sq(&hangar)), &other),
+        bash(&format!("wc -c < {}", sq(&hangar_env)), &other),
+        bash(&format!("grep -f {} alvo.txt", sq(&hangar_env)), &other),
+        bash(&format!("cd {} && cat .env", sq(&format!("{hangar}/backend"))), &other),
+    ] {
+        let result = guard(&payload);
+        assert_eq!(result.status.code(), Some(2), "{payload}");
+        let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+        let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert!(reason.contains("control.key"), "{payload}: {reason}");
+    }
+    for payload in [
+        read(&other_env, &hangar),
+        read("~/.hangar/config/.e?v", &other),
+        read("/home/eu/.hangar/whatsapp/control.ke*", &other),
+        grep("path", "/home/eu/.hangar/config/.e?v", &other),
+        bash(&format!("cat {}", sq(&other_env)), &hangar),
+        bash(&format!("rg -n TOKEN {}", sq(&format!("{other}/backend"))), &hangar),
+    ] {
+        let result = guard(&payload);
+        assert!(result.status.success(), "{payload}");
+        assert!(result.stdout.is_empty(), "{payload}");
+    }
+}
+
+/// O `cd` só leva a pasta quando o resto depende dele (`&&`): depois de `;`, nova linha, `||` ou `&` ele pode ter
+/// falhado e o shell seguir na de antes. Pipeline, fundo ou subshell só tiram a pasta do `cd` que está neles, e
+/// um segundo `cd` confirmado refaz a conta de estar ou não na pasta da chave.
+#[test]
+fn provider_hooks_guard_cd_moves_the_folder_only_when_the_rest_depends_on_it() {
+    let root = spaced_tempdir();
+    let (hangar, other) = checkouts(root.path());
+    let (h, o) = (sq(&hangar), sq(&other));
+    let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(payload).unwrap(), &[]);
+    let bash = |command: &str, cwd: &str| json!({"tool_name":"Bash","cwd":cwd,"tool_input":{"command":command}});
+    for payload in [
+        bash(&format!("cd {o}; cat backend/.env"), &hangar),
+        bash(&format!("cd {o}\ncat backend/.env"), &hangar),
+        bash(&format!("cd {o} || cat backend/.env"), &hangar),
+        bash(&format!("cd {o} && true; cat backend/.env"), &hangar),
+        bash(&format!("cd {o} && true || cat backend/.env"), &hangar),
+        bash(&format!("cd {o} && true & cat backend/.env"), &hangar),
+        bash(&format!("cd {o} & cat backend/.env"), &hangar),
+        bash(&format!("true | cd {o} && cat backend/.env"), &hangar),
+        bash(&format!("true || cd {o} && cat backend/.env"), &hangar),
+        bash(&format!("cd {o} && cd {h}/backend && cat .env"), &other),
+    ] {
+        let result = guard(&payload);
+        assert_eq!(result.status.code(), Some(2), "{payload}");
+        let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+        let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert!(reason.contains("control.key"), "{payload}: {reason}");
+    }
+    for payload in [
+        bash(&format!("cd {o} && cat backend/.env | head"), &hangar),
+        bash("cd ../outro && cat backend/.env | head", &hangar),
+        bash(&format!("cd {o} && cat backend/.env; ls"), &hangar),
+        bash(&format!("cd backend && cd {o}/backend && cat .env"), &hangar),
+        bash(&format!("cd backend && cd {o}/backend && cat *"), &hangar),
+    ] {
+        let result = guard(&payload);
+        assert!(result.status.success(), "{payload}");
+        assert!(result.stdout.is_empty(), "{payload}");
+    }
+}
+
+/// Nome cheio de `{` não prende o guarda: a expansão das chaves tem teto, e passar dele conta como casamento
+/// possível, que barra.
+#[test]
+fn provider_hooks_guard_brace_expansion_has_a_ceiling() {
+    let root = tempfile::tempdir().unwrap();
+    let braces = "{".repeat(200_000);
+    let payload = json!({"tool_name":"Bash","tool_input":{"command":format!("cat ~/.hangar/config/{braces}")}});
+    let result = run(root.path(), "guard-tmux", &serde_json::to_vec(&payload).unwrap(), &[]);
+    assert_eq!(result.status.code(), Some(2), "{}", String::from_utf8_lossy(&result.stderr));
+    let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap().contains("control.key"));
+    let fine = json!({"tool_name":"Bash","tool_input":{"command":"cat ~/.hangar/config/{a,b}{c,d}{e,f}"}});
+    let result = run(root.path(), "guard-tmux", &serde_json::to_vec(&fine).unwrap(), &[]);
+    assert!(result.status.success() && result.stdout.is_empty(), "{fine}");
+}
+
+/// A ação do rascunho é o trecho inteiro da URL: `send.html` é outro caminho, e `send?`, `send#` e `send/`
+/// continuam a rota.
+#[test]
+fn provider_hooks_guard_draft_route_needs_the_whole_action_segment() {
+    let root = tempfile::tempdir().unwrap();
+    let bash = |command: &str| json!({"tool_name":"Bash","tool_input":{"command":command}});
+    for payload in [
+        bash("curl -X POST 'http://127.0.0.1:8765/api/whatsapp/outbox/d1/send?via=desktop'"),
+        bash("curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/d1/decline#x"),
+        bash("curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/d1/send/"),
+        bash("curl -X POST 'http://127.0.0.1:8765/api/whatsapp/outbox/d1/{send,x}'"),
+    ] {
+        let result = run(root.path(), "guard-tmux", &serde_json::to_vec(&payload).unwrap(), &[]);
+        assert_eq!(result.status.code(), Some(2), "{payload}");
+        let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+        let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert!(reason.contains("/api/whatsapp/outbox/"), "{payload}: {reason}");
+    }
+    for payload in [
+        bash("curl -s http://127.0.0.1:8765/api/whatsapp/outbox/exemplo/send.html"),
+        bash("curl -s 'http://127.0.0.1:8765/api/whatsapp/outbox/exemplo/decline.json'"),
+        bash("curl -s 'http://127.0.0.1:8765/api/whatsapp/outbox/exemplo/{send,x}.html'"),
+    ] {
+        let result = run(root.path(), "guard-tmux", &serde_json::to_vec(&payload).unwrap(), &[]);
         assert!(result.status.success(), "{payload}");
         assert!(result.stdout.is_empty(), "{payload}");
     }
@@ -1526,4 +1671,22 @@ fn provider_hooks_agy_guard_always_answers_a_decision() {
     assert_eq!(decide(&agy_tool("list_dir", json!({"DirectoryPath": "/"}))), json!({"decision": "allow"}));
     // Falha da guarda deixa passar: `{}` bloquearia toda ferramenta.
     assert_eq!(decide(b"{ quebrado"), json!({"decision": "allow"}));
+}
+
+/// No `agy` a pasta do `run_command` vem em `toolCall.args.Cwd`: o `backend/.env` é procurado nela.
+#[test]
+fn provider_hooks_agy_guard_runs_the_command_in_the_run_command_cwd() {
+    let root = spaced_tempdir();
+    let (hangar, other) = checkouts(root.path());
+    let decide = |args: Value| {
+        let result = run(root.path(), "agy-guard-tmux", &agy_tool("run_command", args), &[]);
+        assert!(result.status.success());
+        serde_json::from_slice::<Value>(&result.stdout).unwrap()
+    };
+    let in_hangar = decide(json!({"CommandLine": "cat backend/.env", "Cwd": hangar}));
+    assert_eq!(in_hangar["decision"], "deny", "{in_hangar}");
+    assert!(in_hangar["reason"].as_str().unwrap().contains("control.key"), "{in_hangar}");
+    assert_eq!(decide(json!({"CommandLine": "cat backend/.env", "Cwd": other})), json!({"decision": "allow"}));
+    // Sem pasta nenhuma o relativo conta como cópia do Hangar.
+    assert_eq!(decide(json!({"CommandLine": "cat backend/.env"}))["decision"], "deny");
 }

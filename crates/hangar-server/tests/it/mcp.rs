@@ -1101,6 +1101,10 @@ fn c5_reply(method: &str, uri: &str, body: &[u8], drafts: &Mutex<Vec<Value>>, ou
     }
 }
 
+fn declined(fake: &FakeWhatsApp, id: &str) -> bool {
+    fake.drafts.lock().unwrap().iter().any(|d| d["id"] == id && d["state"] == "declined")
+}
+
 /// Espera a condição a cada pedido que o serviço falso recebe: a tool roda noutra tarefa, presa na espera do dono.
 async fn until<T>(fake: &FakeWhatsApp, mut probe: impl FnMut() -> Option<T>) -> T {
     let mut calls = fake.calls.subscribe();
@@ -1243,8 +1247,8 @@ async fn a_cancelled_whatsapp_draft_is_declined_unless_already_approved() {
             assert!(!fake.seen.lock().unwrap().contains(&decline), "aprovado não é recusado");
             assert_eq!(fake.drafts.lock().unwrap()[0]["state"], json!("sending"));
         } else {
-            until(&fake, || fake.seen.lock().unwrap().contains(&decline).then_some(())).await;
-            assert_eq!(fake.drafts.lock().unwrap()[0]["state"], json!("declined"));
+            until(&fake, || declined(&fake, &id).then_some(())).await;
+            assert!(fake.seen.lock().unwrap().contains(&decline));
         }
         task.abort();
     }
@@ -1270,8 +1274,8 @@ async fn a_draft_born_after_the_call_was_cancelled_is_declined() {
     // a criação morre com a chamada e o rascunho não nasce, ou nasce sem ninguém para recusá-lo.
     fake.hold.release.notify_one();
     let id = until(&fake, || fake.drafts.lock().unwrap().first().and_then(|d| d["id"].as_str().map(str::to_owned))).await;
-    let decline = format!("POST /v1/outbox/{id}/decline");
-    until(&fake, || fake.seen.lock().unwrap().contains(&decline).then_some(())).await;
-    assert_eq!(fake.drafts.lock().unwrap()[0]["state"], json!("declined"));
+    // O pedido entra em `seen` antes da recusa gravar o estado: espera o estado, que vale também se já veio antes.
+    until(&fake, || declined(&fake, &id).then_some(())).await;
+    assert!(fake.seen.lock().unwrap().contains(&format!("POST /v1/outbox/{id}/decline")));
     task.abort();
 }

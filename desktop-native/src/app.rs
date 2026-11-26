@@ -1661,7 +1661,7 @@ impl Hangar {
         if let Some((key, sessions, online, error, live_terms)) = previous {
             self.remote.insert(key, servers::RemoteList { loaded: true, online, sessions, error, api: None, live_terms, ..Default::default() });
         }
-        self.start_remote_lists();
+        self.start_remote_lists(cx);
         self.sync_updater(cx);
         if !self.active_invite() { self.ask_auto_report(window, cx); }
         self.connection_dialog = false;

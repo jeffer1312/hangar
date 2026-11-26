@@ -171,7 +171,7 @@ impl Hangar {
         self.apply_external_pairs(cx);
         self.servers_rev += 1;
         self.persist_servers();
-        self.start_remote_lists();
+        self.start_remote_lists(cx);
         self.open_remote(&key, redeemed.session, window, cx);
     }
 
@@ -220,7 +220,7 @@ impl Hangar {
         self.invite_ended.remove(key);
         self.servers_rev += 1;
         self.persist_servers();
-        self.start_remote_lists();
+        self.start_remote_lists(cx);
         // O par que estava nesta entrada volta na entrada só dele.
         self.apply_external_pairs(cx);
         cx.notify();
