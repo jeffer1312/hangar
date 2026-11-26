@@ -207,6 +207,16 @@ pub fn check_kimi(catalog: &Value, alias: &str) -> Result<Value, ModelError> {
         .cloned()
         .ok_or_else(|| ModelError::text(422, format!("modelo fora do catalogo: {a}")))
 }
+/// Outros aliases do catálogo com o mesmo nome exibido: o picker só busca pelo nome, e a troca poderia cair no vizinho.
+pub fn kimi_name_twins(catalog: &Value, entry: &Value) -> Vec<String> {
+    catalog["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|m| m["name"] == entry["name"] && m["alias"] != entry["alias"])
+        .filter_map(|m| m["alias"].as_str().map(str::to_owned))
+        .collect()
+}
 pub fn check_effort(entry: &Value, level: &str) -> Result<String, ModelError> {
     let normalized = level.trim_matches(space).to_lowercase();
     let levels: Vec<String> = entry["efforts"]

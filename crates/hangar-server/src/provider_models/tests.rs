@@ -163,6 +163,22 @@ async fn kimi_switch_without_the_row_closes_the_picker_even_with_a_search_typed(
     // O primeiro Esc só limpa a busca; o picker só fecha no segundo.
     assert_eq!(keys, ["/model", "Enter", "K9", "Escape", "Escape"]);
 }
+#[test]
+fn kimi_name_twins_lists_other_aliases_with_the_same_shown_name() {
+    let catalog = json!({"models":[{"alias":"p/k3","name":"K3"},{"alias":"q/k3","name":"K3"},{"alias":"p/k4","name":"K4"}]});
+    assert_eq!(pure::kimi_name_twins(&catalog, &catalog["models"][1]), ["p/k3"]);
+    assert!(pure::kimi_name_twins(&catalog, &catalog["models"][2]).is_empty());
+}
+#[tokio::test(start_paused = true)]
+async fn kimi_identical_baseline_after_the_exact_row_is_rejected() {
+    let baseline = "Switched to K3 with thinking high for this session only.";
+    let io = FakeIo::frames(&json!([baseline, "Select a model", KIMI_PICKER_SEARCH, baseline]));
+    let err = driver::kimi_switch(&io, Some("K3"), None, Timing::default()).await.unwrap_err();
+    assert_eq!(err.status, 409);
+    let keys = io.keys.lock().unwrap();
+    assert_eq!(keys.iter().filter(|v| v["key"] == "M-s").count(), 1);
+    assert_eq!(keys.iter().filter(|v| v["key"] == "Enter").count(), 1);
+}
 #[tokio::test(start_paused = true)]
 async fn kimi_picker_timeout_and_identical_baseline_never_save_global_default() {
     for frames in [
