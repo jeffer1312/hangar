@@ -108,8 +108,9 @@ const SETTLE_MS: u64 = 150;
 const QUIET_MAX_MS: u64 = 3_000;
 /// DOM mudando sem rede (relógio, animação): até aqui, não até o teto.
 const QUIET_DOM_MS: u64 = 1_500;
-/// Navegação causada por uma ação: o resto do `VERB_MS` depois da espera.
-const NAV_IN_ACTION_MS: u64 = 12_000;
+/// Navegação causada por uma ação. Somada ao armar (1 s), à espera (3 s) e à saída (`LEAVE_MS`), cabe no `VERB_MS`.
+const NAV_IN_ACTION_MS: u64 = 11_000;
+const LEAVE_MS: u64 = 3_000;
 /// Teto de um verbo cuja página não responde: sem ele uma chamada CDP presa segurava a vez para sempre, e todo verbo
 /// seguinte esgotava o prazo com a página viva.
 const VERB_MS: u64 = 20_000;
@@ -757,9 +758,10 @@ impl<P: Page> Controller<P> {
     /// Depois da ação: espera o DOM e a rede da página pararem (`min_ms` sem nada = volta), ou o documento novo quando
     /// ela navegou. O texto é o que se acrescenta à resposta: só diz algo quando a espera não confirmou.
     async fn calm(&self, verb: &str, (before, armed): (u64, bool), min_ms: u64) -> String {
-        if !armed { return " (não deu para acompanhar a página depois da ação: confira com wait --text ou snapshot)".into(); }
         let mut said = String::new();
-        if !self.state.borrow().navigated {
+        if !armed {
+            said = " (não deu para acompanhar a página depois da ação: confira com wait --text ou snapshot)".into();
+        } else if !self.state.borrow().navigated {
             let js = format!("new Promise(r=>{{const s=window.__hangarQuieto;if(!s)return r('sem');const t0=performance.now();const end=w=>{{s.drop();r(w)}};const tick=()=>{{const now=performance.now(),t=now-t0;if(s.saindo)return end('saindo');if(s.n===0&&t>={min_ms})return end('ok');if(s.p<=0&&s.n>0&&now-s.t>=300)return end('ok');if(s.p<=0&&t>={QUIET_DOM_MS})return end('mudando');if(t>={QUIET_MAX_MS})return end(s.p>0?'rede':'mudando');setTimeout(tick,50)}};tick()}})");
             let answer = within(&self.page, QUIET_MAX_MS + 1_000, self.call("Runtime.evaluate", json!({"expression": js, "awaitPromise": true, "returnByValue": true}))).await;
             said = match answer {
@@ -772,7 +774,7 @@ impl<P: Page> Controller<P> {
                     _ => String::new(),
                 },
                 // Contexto destruído = o documento trocou; o resto não confirmou a espera.
-                Some(Err(e)) if e.contains("context") => String::new(),
+                Some(Err(e)) if e.contains("context") || e.contains("navigated") => String::new(),
                 Some(Err(e)) => format!(" (a espera da página falhou: {e})"),
                 None => " (a página não respondeu à espera)".into(),
             };
@@ -793,15 +795,16 @@ impl<P: Page> Controller<P> {
         }
     }
 
-    /// A página avisou que vai sair (link ou formulário com resposta lenta): espera a navegação começar.
+    /// A página avisou que vai sair (link ou formulário com resposta lenta): espera a navegação começar, pouco, porque
+    /// download e saída cancelada também avisam e nunca navegam.
     async fn leaving(&self, before: u64) -> String {
         let mut waited = 0;
-        while waited < NAV_IN_ACTION_MS {
+        while waited < LEAVE_MS {
             if self.state.borrow().navs != before { return String::new(); }
             self.page.sleep(POLL_MS).await;
             waited += POLL_MS;
         }
-        format!(" (a página começou a sair, mas não navegou em {} s)", NAV_IN_ACTION_MS / 1000)
+        format!(" (a página avisou que ia sair, mas não navegou em {} s: pode ter sido um download ou uma saída cancelada)", LEAVE_MS / 1000)
     }
 
     async fn page_text(&self) -> Result<String, String> {
