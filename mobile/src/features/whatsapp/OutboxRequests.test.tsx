@@ -41,7 +41,7 @@ const draft = (id: string, extra: Partial<WhatsAppDraft> = {}): WhatsAppDraft =>
   id, origin: 'a::sessao', chat: '5511987654321@s.whatsapp.net', chat_kind: 'contact', chat_number: '5511987654321',
   chat_name: 'Carlos', chat_name_source: 'contact', chat_avatar: null, recent: [], text: 'nada perdido\u200B', reply_to: '', quoted_text: '',
   file: null, created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z', answer_by: '2026-11-24T14:09:30Z', state: 'pending',
-  edited: false, sent_text: '', ...extra,
+  ...extra,
 });
 const event = (...drafts: WhatsAppDraft[]): WhatsAppOutboxEvent => ({ drafts, edit: false });
 const editable = (...drafts: WhatsAppDraft[]): WhatsAppOutboxEvent => ({ drafts, edit: true });

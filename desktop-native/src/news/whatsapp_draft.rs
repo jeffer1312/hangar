@@ -90,8 +90,8 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
                 // A máquina do exemplo aceita edição: o Editar aparece, sem clique.
                 let edit = app::whatsapp_edit_button("edit", "news-whatsapp-draft", tr_shared("whatsapp_draft_edit", &[]), false).tab_stop(false);
                 let block = app::WhatsAppTextBlock::Exact { text: &text, edit: Some(edit) };
-                app::whatsapp_draft_card(&draft, block, PHOTO.with(Clone::clone), &tr("vault_news_machine"), app::whatsapp_countdown_label("9:12"),
-                    send, decline, None)
+                app::whatsapp_draft_card(&draft, block, &draft.bubbles(), PHOTO.with(Clone::clone), &tr("vault_news_machine"),
+                    app::whatsapp_countdown_label("9:12"), send, decline, None)
                     .mx_0().my_0().into_any_element()
             }
             None => div().flex().flex_col().gap_1()

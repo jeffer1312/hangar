@@ -52,7 +52,6 @@ export function sampleDraft(): WhatsAppDraft {
     text: m.whatsapp_draft_news_text(),
     reply_to: '', quoted_text: '', file: { name: file, size: 2_516_582, sha256: '', source: `/home/ana/site/${file}`, outside_cwd: false },
     created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z', answer_by: '2026-11-24T14:09:30Z', state: 'pending',
-    edited: false, sent_text: '',
   };
 }
 

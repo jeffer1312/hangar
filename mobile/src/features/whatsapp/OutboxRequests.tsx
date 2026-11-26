@@ -3,7 +3,7 @@ import { Pressable, ScrollView, Text, TextInput, View, type StyleProp, type Text
 import { Image } from 'expo-image';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
-  answerWhatsAppDraft, draftAvatarUri, draftCharCount, draftClock, draftInitial, draftRefusalEndsCard, draftSecondsLeft, draftTextChanged,
+  answerWhatsAppDraft, draftAvatarUri, draftCharCount, draftClock, draftField, draftInitial, draftRefusalEndsCard, draftSecondsLeft,
   draftTextError, fmtBytes, formatCountdown, getWhatsApp, invisibleMark, markInvisibles, normalizeDraftText, recentBubble,
   sendEditedWhatsAppDraft, sentTextMatches, whatsappDraftRefusalText,
   type Server, type WhatsAppDraft, type WhatsAppDraftAnswer, type WhatsAppDraftRecent, type WhatsAppOutboxEvent,
@@ -70,18 +70,14 @@ function DraftCard({ server, item: draft, onDone }: { server: Server; item: What
     setBusy(true);
     setError('');
     try {
+      let confirmed = true;
       if (kind === 'send' && editedText !== undefined) {
-        const reply = await sendEditedWhatsAppDraft(server, draft.id, editedText, 'mobile');
-        outbox.answered.add(draft.id);
-        // O serviço aprovou outro texto: nunca dizer que saiu o editado. O aviso dura além do cartão, que sai com o envio.
-        if (sentTextMatches(reply, editedText)) toast.ok(m.whatsapp_draft_sending());
-        else toast.erro(m.whatsapp_draft_err_sent_text_mismatch());
-        onDone();
-        return;
-      }
-      await answerWhatsAppDraft(server, draft.id, kind, 'mobile');
+        confirmed = sentTextMatches(await sendEditedWhatsAppDraft(server, draft.id, editedText, 'mobile'), editedText);
+      } else await answerWhatsAppDraft(server, draft.id, kind, 'mobile');
       outbox.answered.add(draft.id);
-      toast.ok(kind === 'send' ? m.whatsapp_draft_sending() : m.whatsapp_draft_declined());
+      // O serviço aprovou outro texto: nunca dizer que saiu o editado. O aviso dura além do cartão, que sai com o envio.
+      if (!confirmed) toast.erro(m.whatsapp_draft_err_sent_text_mismatch());
+      else toast.ok(kind === 'send' ? m.whatsapp_draft_sending() : m.whatsapp_draft_declined());
       onDone();
     } catch (e) {
       const code = codeOf(e) ?? undefined;
@@ -130,17 +126,19 @@ export function DraftCardView({ draft, edit = false, now, busy, error, onAnswer 
   const warn = theme.tokens.status.warning;
   const source = SOURCE[draft.chat_name_source]?.();
   const file = draft.file;
-  const [open, setOpen] = useState(false);
-  const [field, setField] = useState(draft.text);
   // Campo aberto não fecha se o evento passar a dizer `edit: false`: fechar faria sair o original; o servidor recusa com 409.
-  const editing = open;
-  const changed = editing && draftTextChanged(draft.text, field);
+  const [editing, setEditing] = useState(false);
+  const [field, setField] = useState(draft.text);
+  const typed = useMemo(() => draftField(field), [field]);
+  const original = useMemo(() => normalizeDraftText(draft.text), [draft.text]);
+  const changed = editing && typed.text !== original;
   // Só o texto mudado vai pela edição; o igual sai pelo Enviar de sempre, que já passou pelas regras do serviço.
-  const fieldError = changed ? draftTextError(field, !!file) : undefined;
+  const fieldError = changed ? draftTextError(typed, !!file) : undefined;
+  const editingLabel = m.whatsapp_draft_text_editing({ count: typed.count });
   const toggle = () => {
     haptic.selection();
     setField(draft.text);
-    setOpen(!editing);
+    setEditing(!editing);
   };
   // Nome de quem escreveu, embaixo do balão dele: em grupo o remetente, na conversa o nome do contato.
   const theirName = (r: WhatsAppDraftRecent) => (draft.chat_kind === 'group' ? r.sender : draft.chat_name || r.sender);
@@ -171,13 +169,13 @@ export function DraftCardView({ draft, edit = false, now, busy, error, onAnswer 
     </MachineGroup> : null}
     {/* Como no nativo: rascunho só com anexo também ganha "Editar" para receber um texto. */}
     {draft.text || edit || editing ? <MachineGroup>
-      <Block label={editing ? m.whatsapp_draft_text_editing({ count: draftCharCount(normalizeDraftText(field)) }) : m.whatsapp_draft_text({ count: draftCharCount(draft.text) })}
+      <Block label={editing ? editingLabel : m.whatsapp_draft_text({ count: draftCharCount(draft.text) })}
         action={edit || editing ? <Pressable accessibilityRole="button" accessibilityLabel={editing ? m.whatsapp_draft_edit_undo() : m.whatsapp_draft_edit()}
           disabled={busy} hitSlop={LINK_SLOP} onPress={toggle}>
           <Text style={[styles.small, { color: c.accent }]}>{editing ? m.whatsapp_draft_edit_undo() : m.whatsapp_draft_edit()}</Text>
         </Pressable> : null}>
         {editing ? <TextInput multiline value={field} onChangeText={setField} editable={!busy} autoFocus
-          accessibilityLabel={m.whatsapp_draft_text_editing({ count: draftCharCount(normalizeDraftText(field)) })}
+          accessibilityLabel={editingLabel}
           style={[styles.mono, styles.field, { color: c.text, backgroundColor: c.inset, borderColor: warn }]} />
           : draft.text ? <ScrollView nestedScrollEnabled style={styles.textBox}>
             <Marked text={draft.text} selectable style={[styles.mono, { color: c.text }]} />
@@ -194,7 +192,7 @@ export function DraftCardView({ draft, edit = false, now, busy, error, onAnswer 
     <Notice text={fieldError ?? error} error />
     <MachineGroup>
       <MachineRow title={changed ? m.whatsapp_draft_send_edited() : m.whatsapp_draft_send()} action disabled={busy || !!fieldError}
-        onPress={() => (changed ? onAnswer('send', normalizeDraftText(field)) : onAnswer('send'))} />
+        onPress={() => (changed ? onAnswer('send', typed.text) : onAnswer('send'))} />
       <MachineRow title={m.whatsapp_draft_decline()} danger disabled={busy} onPress={() => onAnswer('decline')} />
     </MachineGroup>
   </>;
@@ -204,21 +202,23 @@ export function DraftCardView({ draft, edit = false, now, busy, error, onAnswer 
 const LINK_SLOP = { top: 13, bottom: 13, left: 8, right: 8 };
 
 /** Foto do destino; sem ela, ou com bytes que não abrem, a inicial do nome num círculo do mesmo tamanho. */
-function Avatar({ draft }: { draft: WhatsAppDraft }) {
+const Avatar = memo(function Avatar({ draft }: { draft: WhatsAppDraft }) {
   const c = useSettingsColors();
   const [broken, setBroken] = useState(false);
-  if (draft.chat_avatar && !broken) {
-    return <Image source={{ uri: draftAvatarUri(draft.chat_avatar) }} alt={m.whatsapp_draft_avatar({ name: draft.chat_name || draft.chat_number })}
+  // Fonte estável: o base64 de até 24 KB não vira objeto novo a cada desenho do cartão.
+  const source = useMemo(() => (draft.chat_avatar ? { uri: draftAvatarUri(draft.chat_avatar) } : null), [draft.chat_avatar]);
+  if (source && !broken) {
+    return <Image source={source} alt={m.whatsapp_draft_avatar({ name: draft.chat_name || draft.chat_number })}
       contentFit="cover" onError={() => setBroken(true)} style={[styles.avatar, { borderColor: c.borderStrong }]} />;
   }
   return <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
     style={[styles.avatar, styles.initial, { backgroundColor: c.accentDim, borderColor: c.borderStrong }]}>
     <Text style={[styles.initialText, { color: c.accentText }]}>{draftInitial(draft)}</Text>
   </View>;
-}
+});
 
 /** Mensagem recente como balão: as minhas à direita, as dele à esquerda, com a hora (e o nome dele) embaixo. */
-function Bubble({ recent: r, name }: { recent: WhatsAppDraftRecent; name: string }) {
+const Bubble = memo(function Bubble({ recent: r, name }: { recent: WhatsAppDraftRecent; name: string }) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
   const { tag, text } = recentBubble(r);
@@ -238,7 +238,7 @@ function Bubble({ recent: r, name }: { recent: WhatsAppDraftRecent; name: string
     </View>
     {meta ? <Text style={[styles.meta, { color: c.faint }]}>{meta}</Text> : null}
   </View>;
-}
+});
 
 /** Texto de terceiro ou do rascunho com os invisíveis marcados. */
 function Marked({ text, style, selectable }: { text: string; style: StyleProp<TextStyle>; selectable?: boolean }) {

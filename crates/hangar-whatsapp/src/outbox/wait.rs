@@ -28,7 +28,7 @@ pub const DRAFT_MAYBE_CREATED: &str = "o rascunho pode ter sido criado; ele só 
 não crie outro rascunho para o mesmo envio";
 const CANCELLED: &str = "whatsapp_draft_cancelled: a chamada foi cancelada";
 /// O texto que saiu não é o que a sessão pediu: o agente conta isso ao dono, e o `sent_text` é dele, não de terceiro.
-const EDITED_NOTE: &str = "o dono editou o texto antes de enviar; o aprovado foi sent_text";
+const EDITED: &str = "o dono editou o texto antes de enviar; o aprovado foi";
 
 /// A leitura do rascunho na espera.
 #[derive(Clone, Debug)]
@@ -82,8 +82,8 @@ struct Track {
     id: Option<String>,
     /// O último estado lido: só o `pending` é recusado quando a espera é largada.
     last_state: String,
-    /// `edited` e `sent_text` da última leitura com edição do dono; `Null` sem edição.
-    edit: Value,
+    /// O `sent_text` da última leitura com edição do dono; `None` sem edição.
+    sent_text: Option<String>,
     done: bool,
     decline: Option<JoinHandle<Declined>>,
 }
@@ -114,7 +114,7 @@ impl Progress {
     fn saw(&self, draft: &Value) {
         let mut track = self.lock();
         draft["state"].as_str().unwrap_or_default().clone_into(&mut track.last_state);
-        track.edit = if draft["edited"] == true { json!({"edited": true, "sent_text": draft["sent_text"]}) } else { Value::Null };
+        track.sent_text = sent_text(draft).map(str::to_owned);
     }
 
     fn finish(&self) {
@@ -123,15 +123,15 @@ impl Progress {
 
     /// O texto da chamada cancelada: espera a recusa disparada e diz o que houve com o rascunho.
     pub async fn cancelled(&self) -> String {
-        let (id, last_state, edit, done, decline) = {
+        let (id, last_state, sent_text, done, decline) = {
             let mut track = self.lock();
-            (track.id.clone(), track.last_state.clone(), track.edit.clone(), track.done, track.decline.take())
+            (track.id.clone(), track.last_state.clone(), track.sent_text.clone(), track.done, track.decline.take())
         };
-        cancelled_text(id.as_deref(), &last_state, &edit, done, decline).await
+        cancelled_text(id.as_deref(), &last_state, sent_text.as_deref(), done, decline).await
     }
 }
 
-async fn cancelled_text(id: Option<&str>, last_state: &str, edit: &Value, done: bool, decline: Option<JoinHandle<Declined>>) -> String {
+async fn cancelled_text(id: Option<&str>, last_state: &str, sent_text: Option<&str>, done: bool, decline: Option<JoinHandle<Declined>>) -> String {
     let Some(id) = id else {
         return format!("{CANCELLED} antes de o rascunho existir; {DRAFT_MAYBE_CREATED}");
     };
@@ -139,7 +139,7 @@ async fn cancelled_text(id: Option<&str>, last_state: &str, edit: &Value, done: 
 em 10 min: {DONT_REPEAT}");
     let Some(decline) = decline else {
         return match (last_state, done) {
-            ("sending", _) => format!("{CANCELLED}; rascunho {id}: {}", note(&with_edit(still_sending(id), edit))),
+            ("sending", _) => format!("{CANCELLED}; rascunho {id}: {}", note(&still_sending(id, sent_text))),
             (_, true) => format!("{CANCELLED} depois de o rascunho {id} chegar ao fim"),
             _ => unconfirmed(),
         };
@@ -154,16 +154,15 @@ em 10 min: {DONT_REPEAT}");
 
 /// O que o dono respondeu, pela mesma nota que a tool devolveria. Sem leitura, pode ter sido o "Enviar".
 fn answered(id: &str, draft: Option<&Value>) -> String {
-    let result = match draft.map(|d| (d, d["state"].as_str().unwrap_or_default())) {
-        Some((draft, "sending")) => with_edit(still_sending(id), draft),
-        Some((draft, "sent" | "declined" | "expired" | "failed")) => outcome(id, draft),
-        _ => return format!("a resposta não se leu e a mensagem pode sair: {DONT_REPEAT}"),
-    };
-    // O `sent` só leva a nota da edição: o estado já diz que saiu.
-    match (result["status"] == "sent", result["note"].as_str()) {
-        (true, Some(edited)) => format!("a mensagem saiu; {edited}; {DONT_REPEAT}"),
-        (true, None) => format!("a mensagem saiu; {DONT_REPEAT}"),
-        (false, _) => note(&result),
+    match draft.map(|d| (d, d["state"].as_str().unwrap_or_default())) {
+        Some((draft, "sending")) => note(&still_sending(id, sent_text(draft))),
+        // O `sent` só leva a nota da edição: o estado já diz que saiu.
+        Some((draft, "sent")) => match sent_text(draft) {
+            Some(_) => format!("a mensagem saiu; {EDITED} sent_text; {DONT_REPEAT}"),
+            None => format!("a mensagem saiu; {DONT_REPEAT}"),
+        },
+        Some((draft, "declined" | "expired" | "failed")) => note(&outcome(id, draft)),
+        _ => format!("a resposta não se leu e a mensagem pode sair: {DONT_REPEAT}"),
     }
 }
 
@@ -256,10 +255,7 @@ fn after_creation(id: &str, error: &str) -> String {
 }
 
 fn sending_overdue(id: &str, draft: &Value) -> String {
-    let edit = match draft["edited"] == true {
-        true => format!(" o dono editou o texto antes de enviar; o aprovado foi {};", draft["sent_text"]),
-        false => String::new(),
-    };
+    let edit = sent_text(draft).map(|text| format!(" {EDITED} {text};")).unwrap_or_default();
     format!("whatsapp_draft_unconfirmed: o rascunho {id} foi aprovado e não terminou de sair em 10 min;{edit} a mensagem pode ter saído: {DONT_REPEAT}")
 }
 
@@ -295,7 +291,7 @@ fn wait_step(id: &str, draft: Option<&Value>, now: DateTime<Utc>, call_deadline:
         },
         "sending" => match at(draft, "answered_at") {
             Some(answered) if now >= answered + TimeDelta::seconds(SENDING_SECS) => Wait::SendingOverdue,
-            Some(_) if now >= call_deadline => Wait::Done(with_edit(still_sending(id), draft)),
+            Some(_) if now >= call_deadline => Wait::Done(still_sending(id, sent_text(draft))),
             Some(answered) => Wait::Until((answered + TimeDelta::seconds(SENDING_SECS)).min(call_deadline)),
             None => Wait::Unknown("rascunho saindo sem answered_at".into()),
         },
@@ -303,10 +299,10 @@ fn wait_step(id: &str, draft: Option<&Value>, now: DateTime<Utc>, call_deadline:
     }
 }
 
-/// O prazo da chamada chegou com o envio aprovado e ainda saindo.
-fn still_sending(id: &str) -> Value {
-    json!({"status": "sending", "id": id,
-        "note": "o dono aprovou; a mensagem está saindo. Não crie outro rascunho; confira com whatsapp_read"})
+/// O envio aprovado e ainda saindo, com a edição do dono quando houve.
+fn still_sending(id: &str, sent_text: Option<&str>) -> Value {
+    with_edit(json!({"status": "sending", "id": id,
+        "note": "o dono aprovou; a mensagem está saindo. Não crie outro rascunho; confira com whatsapp_read"}), sent_text)
 }
 
 /// Recusado pela própria tool depois de expirar sem resposta do dono.
@@ -326,7 +322,7 @@ fn outcome(id: &str, draft: &Value) -> Value {
         out["error"] = json!(error);
     }
     let note = match (state, error) {
-        ("sent", _) => return with_edit(out, draft),
+        ("sent", _) => return with_edit(out, sent_text(draft)),
         ("declined", _) => format!("o dono recusou; {DONT_REPEAT}"),
         ("expired", _) => format!("o dono não respondeu a tempo; {DONT_REPEAT} sem ele pedir de novo"),
         (_, Some("unconfirmed")) => format!("a mensagem pode ter saído (o WhatsApp não confirmou); {DONT_REPEAT}"),
@@ -334,20 +330,23 @@ fn outcome(id: &str, draft: &Value) -> Value {
         _ => format!("o envio falhou; {DONT_REPEAT}"),
     };
     out["note"] = json!(note);
-    with_edit(out, draft)
+    with_edit(out, sent_text(draft))
 }
 
-/// Com `edited`, o resultado leva o texto que saiu (`sent_text`) e a nota da edição antes da que já houver. Nada mais do
+/// O texto que saiu quando o dono editou; `None` sem edição.
+fn sent_text(draft: &Value) -> Option<&str> {
+    if draft["edited"] == true { Some(draft["sent_text"].as_str().unwrap_or_default()) } else { None }
+}
+
+/// Com edição, o resultado leva o texto que saiu (`sent_text`) e a nota da edição antes da que já houver. Nada mais do
 /// rascunho entra: `recent` e `file_name` são de terceiros.
-fn with_edit(mut out: Value, draft: &Value) -> Value {
-    if draft["edited"] != true {
-        return out;
-    }
+fn with_edit(mut out: Value, sent_text: Option<&str>) -> Value {
+    let Some(text) = sent_text else { return out };
     out["edited"] = json!(true);
-    out["sent_text"] = json!(draft["sent_text"].as_str().unwrap_or_default());
+    out["sent_text"] = json!(text);
     let note = match out["note"].as_str() {
-        Some(note) => format!("{EDITED_NOTE}; {note}"),
-        None => EDITED_NOTE.to_owned(),
+        Some(note) => format!("{EDITED} sent_text; {note}"),
+        None => format!("{EDITED} sent_text"),
     };
     out["note"] = json!(note);
     out
@@ -512,9 +511,9 @@ mod tests {
     /// A chamada cancelada depois de o dono enviar o texto editado diz que saiu e que ele editou.
     #[tokio::test]
     async fn a_cancelled_call_after_an_edited_send_says_the_owner_edited() {
-        let text = cancelled_text(Some("d1"), "pending", &Value::Null, false, Some(tokio::spawn(async { Declined::Answered(Some(edited("sent", ""))) }))).await;
+        let text = cancelled_text(Some("d1"), "pending", None, false, Some(tokio::spawn(async { Declined::Answered(Some(edited("sent", ""))) }))).await;
         assert!(text.contains("a mensagem saiu") && text.contains("o dono editou o texto") && text.ends_with(DONT_REPEAT), "{text}");
-        let text = cancelled_text(Some("d1"), "pending", &Value::Null, false, Some(tokio::spawn(async { Declined::Answered(Some(draft("sent"))) }))).await;
+        let text = cancelled_text(Some("d1"), "pending", None, false, Some(tokio::spawn(async { Declined::Answered(Some(draft("sent"))) }))).await;
         assert!(text.contains("a mensagem saiu") && !text.contains("editou"), "{text}");
     }
 
@@ -687,13 +686,13 @@ mod tests {
     #[tokio::test]
     async fn the_cancelled_call_says_what_happened_to_the_draft() {
         let done = |declined: Declined| Some(tokio::spawn(async move { declined }));
-        let text = cancelled_text(Some("d1"), "pending", &Value::Null, false, done(Declined::Declined)).await;
+        let text = cancelled_text(Some("d1"), "pending", None, false, done(Declined::Declined)).await;
         assert!(text.starts_with("whatsapp_draft_cancelled:") && text.contains("d1") && text.contains("nada saiu"), "{text}");
-        let text = cancelled_text(Some("d1"), "sending", &Value::Null, false, None).await;
+        let text = cancelled_text(Some("d1"), "sending", None, false, None).await;
         assert!(text.contains("a mensagem está saindo"), "aprovado antes do cancelamento: {text}");
-        let text = cancelled_text(Some("d1"), "pending", &Value::Null, false, done(Declined::Unconfirmed)).await;
+        let text = cancelled_text(Some("d1"), "pending", None, false, done(Declined::Unconfirmed)).await;
         assert!(text.contains("não se confirmou") && text.contains(DONT_REPEAT), "{text}");
-        let text = cancelled_text(None, "", &Value::Null, false, None).await;
+        let text = cancelled_text(None, "", None, false, None).await;
         assert!(text.contains("pode ter sido criado"), "{text}");
     }
 
@@ -705,7 +704,7 @@ mod tests {
         let read = |state: &str, error: &str| Some((200, json!({"id": "d1", "state": state, "error": error})));
         let of = |state: &str, error: &str| Declined::of(409, &answered, read(state, error));
         assert_eq!(of("declined", ""), Declined::Answered(Some(json!({"id": "d1", "state": "declined", "error": ""}))));
-        let text = |declined: Declined| cancelled_text(Some("d1"), "pending", &Value::Null, false, Some(tokio::spawn(async move { declined })));
+        let text = |declined: Declined| cancelled_text(Some("d1"), "pending", None, false, Some(tokio::spawn(async move { declined })));
         let declined = text(of("declined", "")).await;
         assert!(declined.contains("o dono recusou") && !declined.contains("pode sair"), "{declined}");
         assert!(text(of("sending", "")).await.contains("a mensagem está saindo"));

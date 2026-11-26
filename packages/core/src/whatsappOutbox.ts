@@ -55,10 +55,6 @@ export interface WhatsAppDraft {
   /** Até quando o cartão conta: o menor entre `expires_at` e o prazo da tool que espera a resposta (do Hangar). */
   answer_by: string;
   state: WhatsAppDraftState;
-  /** O dono editou o texto antes de enviar. */
-  edited: boolean;
-  /** O texto aprovado; vazio enquanto pendente (o cliente só o lê na resposta do envio). */
-  sent_text: string;
 }
 
 /** Evento `whatsapp_outbox` da lista do dono: só os pendentes. `edit`: o serviço aceita texto editado (hangar-server antigo
@@ -100,7 +96,6 @@ function draftOf(raw: unknown): WhatsAppDraft | null {
     id, origin, chat: str(r.chat), chat_kind: r.chat_kind === 'group' ? 'group' : 'contact',
     chat_number, chat_name: str(r.chat_name), chat_name_source: source, chat_avatar: avatarOf(r.chat_avatar), recent, text,
     reply_to: str(r.reply_to), quoted_text: str(r.quoted_text), file, created_at: str(r.created_at), expires_at, answer_by: str(r.answer_by), state: 'pending',
-    edited: r.edited === true, sent_text: str(r.sent_text),
   };
 }
 
@@ -119,35 +114,39 @@ export function parseWhatsAppOutboxEvent(data: string): WhatsAppOutboxEvent | nu
   }) };
 }
 
+const postDraft = (s: Server, id: string, action: WhatsAppDraftAnswer | 'send-edited', body?: object): Promise<unknown> =>
+  apiFetchForServer(s, `/api/whatsapp/outbox/${encodeURIComponent(id)}/${action}`,
+    body ? { method: 'POST', body: JSON.stringify(body) } : { method: 'POST' }, 30_000);
+
 /** Responde o rascunho na máquina do WhatsApp; `via` só vai no envio e serve ao registro do serviço. */
 export function answerWhatsAppDraft(s: Server, id: string, answer: WhatsAppDraftAnswer, via: WhatsAppDraftVia): Promise<unknown> {
-  const path = `/api/whatsapp/outbox/${encodeURIComponent(id)}/${answer}`;
-  const init: RequestInit = answer === 'send' ? { method: 'POST', body: JSON.stringify({ via }) } : { method: 'POST' };
-  return apiFetchForServer(s, path, init, 30_000);
+  return postDraft(s, id, answer, answer === 'send' ? { via } : undefined);
 }
 
 /** Quebras de linha como o serviço grava: `\r\n` e `\r` viram `\n`. */
 export const normalizeDraftText = (text: string) => text.replace(/\r\n?/g, '\n');
 
-/** O campo mudou o texto do rascunho? Os dois comparados já normalizados. */
-export const draftTextChanged = (original: string, field: string) => normalizeDraftText(field) !== normalizeDraftText(original);
-
 /** Teto do texto no serviço, em pontos de código. */
 export const DRAFT_TEXT_MAX = 4096;
 
+/** Texto do campo normalizado e contado uma vez: o rótulo, a comparação e as regras leem daqui. */
+export interface DraftField { text: string; count: number }
+export function draftField(raw: string): DraftField {
+  const text = normalizeDraftText(raw);
+  return { text, count: draftCharCount(text) };
+}
+
 /** Frase do texto que o serviço recusaria (as regras da criação: até 4096 caracteres, vazio só com anexo); `undefined` quando
  *  pode sair. */
-export function draftTextError(text: string, hasFile: boolean): string | undefined {
-  const t = normalizeDraftText(text);
-  if (draftCharCount(t) > DRAFT_TEXT_MAX) return m.whatsapp_draft_err_text_long();
-  if (!t.trim() && !hasFile) return m.whatsapp_draft_err_text_empty();
+export function draftTextError(field: DraftField, hasFile: boolean): string | undefined {
+  if (field.count > DRAFT_TEXT_MAX) return m.whatsapp_draft_err_text_long();
+  if (!field.text.trim() && !hasFile) return m.whatsapp_draft_err_text_empty();
   return undefined;
 }
 
 /** Envia o texto editado, normalizado. Devolve o corpo do 202 (o rascunho), que quem chama confere com `sentTextMatches`. */
 export function sendEditedWhatsAppDraft(s: Server, id: string, text: string, via: WhatsAppDraftVia): Promise<unknown> {
-  const path = `/api/whatsapp/outbox/${encodeURIComponent(id)}/send-edited`;
-  return apiFetchForServer(s, path, { method: 'POST', body: JSON.stringify({ via, text: normalizeDraftText(text) }) }, 30_000);
+  return postDraft(s, id, 'send-edited', { via, text: normalizeDraftText(text) });
 }
 
 /** O serviço confirmou que saiu o texto editado? `sent_text` ausente ou diferente é não: o cartão nunca diz que saiu o editado. */

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  answerWhatsAppDraft, draftAvatarUri, draftCharCount, draftInitial, draftRefusalEndsCard, draftSecondsLeft, draftTextChanged, draftTextError,
+  answerWhatsAppDraft, draftAvatarUri, draftCharCount, draftField, draftInitial, draftRefusalEndsCard, draftSecondsLeft, draftTextError,
   invisibleMark, markInvisibles, normalizeDraftText, parseWhatsAppOutboxEvent, recentBubble, sendEditedWhatsAppDraft, sentTextMatches,
   whatsappDraftRefusalText,
 } from './whatsappOutbox';
@@ -39,14 +39,14 @@ describe('evento whatsapp_outbox', () => {
     expect(parseWhatsAppOutboxEvent('não é json')).toBeNull();
   });
 
-  it('lê os campos da edição e da foto; sem eles (serviço e hangar-server antigos), vazio, sem foto e sem Editar', () => {
+  it('lê a edição e a foto; sem elas (serviço e hangar-server antigos), sem foto e sem Editar', () => {
     const avatar = '/9j/4AAQSkZJRgABAQAAAQABAAD/2w==';
-    const now = parseWhatsAppOutboxEvent(JSON.stringify({ edit: true, drafts: [draft({ chat_avatar: avatar, edited: true, sent_text: 'x' })] }));
+    const now = parseWhatsAppOutboxEvent(JSON.stringify({ edit: true, drafts: [draft({ chat_avatar: avatar })] }));
     expect(now?.edit).toBe(true);
-    expect(now?.drafts[0]).toMatchObject({ chat_avatar: avatar, edited: true, sent_text: 'x' });
+    expect(now?.drafts[0]).toMatchObject({ chat_avatar: avatar });
     const old = parseWhatsAppOutboxEvent(JSON.stringify({ drafts: [draft()] }));
     expect(old?.edit).toBe(false);
-    expect(old?.drafts[0]).toMatchObject({ chat_avatar: null, edited: false, sent_text: '' });
+    expect(old?.drafts[0]).toMatchObject({ chat_avatar: null });
     expect(parseWhatsAppOutboxEvent(JSON.stringify({ edit: 'true', drafts: [] }))?.edit).toBe(false);
   });
 
@@ -193,19 +193,18 @@ describe('balões e foto', () => {
 });
 
 describe('texto editado', () => {
-  it('\\r\\n e \\r viram \\n; mudou só se mudou depois de normalizar', () => {
+  it('\\r\\n e \\r viram \\n', () => {
     expect(normalizeDraftText('a\r\nb\rc\nd')).toBe('a\nb\nc\nd');
-    expect(draftTextChanged('a\nb', 'a\r\nb')).toBe(false);
-    expect(draftTextChanged('a\nb', 'a\nb ')).toBe(true);
   });
 
   it('até 4096 pontos de código; vazio só com anexo', () => {
-    expect(draftTextError('🚀'.repeat(4096), false)).toBeUndefined();
-    expect(draftTextError('🚀'.repeat(4097), false)).toBe(m.whatsapp_draft_err_text_long());
+    expect(draftTextError(draftField('🚀'.repeat(4096)), false)).toBeUndefined();
+    expect(draftTextError(draftField('🚀'.repeat(4097)), false)).toBe(m.whatsapp_draft_err_text_long());
     // A quebra \r\n conta como uma depois de normalizar.
-    expect(draftTextError('a'.repeat(4095) + '\r\n', false)).toBeUndefined();
-    expect(draftTextError(' \n ', false)).toBe(m.whatsapp_draft_err_text_empty());
-    expect(draftTextError('', true)).toBeUndefined();
+    expect(draftField('a'.repeat(4095) + '\r\n')).toEqual({ text: 'a'.repeat(4095) + '\n', count: 4096 });
+    expect(draftTextError(draftField('a'.repeat(4095) + '\r\n'), false)).toBeUndefined();
+    expect(draftTextError(draftField(' \n '), false)).toBe(m.whatsapp_draft_err_text_empty());
+    expect(draftTextError(draftField(''), true)).toBeUndefined();
   });
 
   it('envio editado vai na rota própria com o via e o texto normalizado, e devolve o 202', async () => {
