@@ -93,23 +93,36 @@ fn tree_edges(root: u32) -> io::Result<BTreeMap<u32, u32>> {
 pub fn stop_processes(identities: &[(u32, u64)], timeout: Duration) -> io::Result<()> {
     let mut handles = Vec::new();
     for &(pid, expected) in identities {
-        if let Some(handle) = open_process(pid, true)? && birth(&handle)? == expected && !exited(&handle, 0)? {
-            handles.push(handle);
-        }
+        let Some(query) = open_process(pid, false).map_err(|e| process_error("OpenProcess/consulta", pid, e))? else { continue; };
+        if birth(&query).map_err(|e| process_error("GetProcessTimes", pid, e))? != expected
+            || exited(&query, 0).map_err(|e| process_error("WaitForSingleObject", pid, e))? { continue; }
+        let Some(handle) = open_process(pid, true).map_err(|e| process_error("OpenProcess/encerrar", pid, e))? else { continue; };
+        handles.push((pid, handle));
     }
     let deadline = Instant::now() + timeout;
-    for handle in &handles {
-        if unsafe { TerminateProcess(handle.as_raw_handle(), 1) } == 0 && !exited(handle, 0)? {
-            return Err(io::Error::last_os_error());
+    for (pid, handle) in &handles {
+        if unsafe { TerminateProcess(handle.as_raw_handle(), 1) } == 0 {
+            let error = io::Error::last_os_error();
+            match exited(handle, 0) {
+                Ok(true) => {}
+                Ok(false) => return Err(process_error("TerminateProcess", *pid, error)),
+                Err(wait_error) => return Err(io::Error::new(error.kind(),
+                    format!("TerminateProcess (PID {pid}): {error}; WaitForSingleObject: {wait_error}"))),
+            }
         }
     }
-    for handle in &handles {
+    for (pid, handle) in &handles {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if !exited(handle, remaining.as_millis().min(u128::from(u32::MAX - 1)) as u32)? {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "processo antigo não encerrou"));
+        if !exited(handle, remaining.as_millis().min(u128::from(u32::MAX - 1)) as u32)
+            .map_err(|e| process_error("WaitForSingleObject", *pid, e))? {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, format!("processo antigo não encerrou (PID {pid})")));
         }
     }
     Ok(())
+}
+
+fn process_error(operation: &str, pid: u32, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{operation} (PID {pid}): {error}"))
 }
 
 fn open_process(pid: u32, terminate: bool) -> io::Result<Option<OwnedHandle>> {

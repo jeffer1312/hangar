@@ -177,8 +177,8 @@ fn end_checked(home: &Path, name: &str, fallen: &super::fallen::Fallen, settle: 
         return Err("psmux_orphan_unknown");
     }
     lives.insert(0, (pid, birth));
-    if hangar_psmux::stop_processes(&lives, Duration::from_secs(10)).is_err() {
-        report(crate::diag::diary_dir().as_deref(), Some(name), "psmux_orphan_not_ended", "não foi possível comprovar a saída da sessão e dos seus processos");
+    if let Err(error) = hangar_psmux::stop_processes(&lives, Duration::from_secs(10)) {
+        report(crate::diag::diary_dir().as_deref(), Some(name), "psmux_orphan_not_ended", &error.to_string());
         return Err("psmux_orphan_not_ended");
     }
     NAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(name);

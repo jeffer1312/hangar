@@ -9,6 +9,8 @@ use crate::session_open::{claude, fallen, record, restore};
 async fn a_real_psmux_orphan_can_be_recovered_and_dismissed() {
     assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
     assert_eq!(std::env::var("RUNNER_ENVIRONMENT").as_deref(), Ok("github-hosted"));
+    let subscriber = tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).finish();
+    let _log = tracing::subscriber::set_default(subscriber);
     let runner = PathBuf::from(std::env::var_os("RUNNER_TEMP").unwrap()).canonicalize().unwrap();
     let mux = PathBuf::from(std::env::var_os("HANGAR_TEST_PSMUX").unwrap()).canonicalize().unwrap();
     let registry = PathBuf::from(std::env::var_os("PSMUX_DATA_DIR").unwrap()).canonicalize().unwrap();
