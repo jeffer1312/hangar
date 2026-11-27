@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import {
-  basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory,
+  basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory, isInputRefusal,
   sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName,
 } from '@hangar/core';
 import type {
@@ -355,8 +355,8 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
         setIssue(serverId, { kind: 'local', message: messageOf(cause) });
         return;
       }
-      const status = statusOf(cause);
-      const rejected = status !== null && status >= 400 && status < 500 && status !== 408;
+      // Mesmo portão do rascunho (`submitConversationDraft`): regras diferentes deixariam o envio recusado e incerto.
+      const rejected = isInputRefusal(cause);
       try {
         if (!apply(sending, { type: rejected ? 'send_rejected' : 'send_unknown' })) return;
       } catch {

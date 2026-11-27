@@ -499,6 +499,27 @@ describe('primeiro input', () => {
     expect(attempt()?.phase).toBe('sent');
   });
 
+  it('503 com código anterior à escrita é recusa no primeiro envio, igual ao rascunho', async () => {
+    await beginAttempt('server-a', input);
+    const created = attempt()!;
+    calls.send.mockRejectedValueOnce(Object.assign(httpError(503, '503: ator doente'), { code: 'runtime_unhealthy' }));
+    await sendFirstInput('server-a', created.id);
+    expect(attempt()).toMatchObject({ id: created.id, phase: 'created', text: 'oi' });
+    expect(issue()?.kind).toBe('rejected');
+    expect(readDraft('server-a', created.sessionName!)).toMatchObject({ text: 'oi', submission: { text: 'oi', status: 'rejected' } });
+    expect(calls.send).toHaveBeenCalledOnce();
+  });
+
+  it('503 runtime_reply_lost no primeiro envio continua incerto', async () => {
+    await beginAttempt('server-a', input);
+    const created = attempt()!;
+    calls.send.mockRejectedValueOnce(Object.assign(httpError(503), { code: 'runtime_reply_lost' }));
+    await sendFirstInput('server-a', created.id);
+    expect(stored()).toMatchObject({ phase: 'send_unknown', text: 'oi' });
+    expect(issue()?.kind).toBe('unknown');
+    expect(readDraft('server-a', created.sessionName!)?.submission?.status).toBe('unknown');
+  });
+
   it.each([new TypeError('offline'), new Error('sem status'), httpError(503), httpError(408)])(
     'input incerto conserva snapshot após reabertura e não repete automaticamente (%s)', async (cause) => {
       await beginAttempt('server-a', input);
