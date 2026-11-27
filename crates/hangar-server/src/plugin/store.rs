@@ -617,6 +617,10 @@ impl Store {
         };
         let mut memory = self.memory.lock().map_err(|_| unavailable())?;
         let s = session(&mut memory, binding)?;
+        // Os avisos chegam com prazo e podem cruzar: o mais velho que o último gravado não vale.
+        let newest = s.agents.get(agent_id).and_then(|life| life.since.as_deref().or(life.ended_at.as_deref()))
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok());
+        if newest.is_some_and(|newest| at < newest) { return Ok(()); }
         let stamp = at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let (ended_at, since) = if state == AgentState::Running { (None, Some(stamp)) } else { (Some(stamp), None) };
         // ponytail: sem teto por conversa; a memória some com a vida da sessão.
@@ -1281,7 +1285,7 @@ mod tests {
     #[test]
     fn agent_lifecycle_finishes_fails_and_resume_reopens() {
         let (store, binding) = setup();
-        store.record_agent(&binding, "a1", AgentState::Running, None).unwrap();
+        store.record_agent(&binding, "a1", AgentState::Running, Some(1_791_900_500_000)).unwrap();
         assert_eq!(store.agent_lives(&binding).unwrap()["a1"].state, AgentState::Running);
         store.record_agent(&binding, "a1", AgentState::Finished, Some(1_791_900_509_038)).unwrap();
         assert_eq!(store.agent_lives(&binding).unwrap()["a1"].ended_at.as_deref(), Some("2026-10-13T14:08:29.038Z"));
@@ -1297,6 +1301,17 @@ mod tests {
         store.bind(&next).unwrap();
         assert!(store.agent_lives(&next).unwrap().is_empty());
         assert!(store.agent_lives(&binding).is_err());
+    }
+
+    /// O `/agent` com prazo pode chegar depois do aviso seguinte: o fim mais velho não cobre a retomada mais nova.
+    #[test]
+    fn a_stale_end_does_not_cover_a_newer_run() {
+        let (store, binding) = setup();
+        store.record_agent(&binding, "a1", AgentState::Running, Some(2_000_000)).unwrap();
+        store.record_agent(&binding, "a1", AgentState::Finished, Some(1_000_000)).unwrap();
+        assert_eq!(store.agent_lives(&binding).unwrap()["a1"].state, AgentState::Running);
+        store.record_agent(&binding, "a1", AgentState::Finished, Some(3_000_000)).unwrap();
+        assert_eq!(store.agent_lives(&binding).unwrap()["a1"].state, AgentState::Finished);
     }
 
     #[tokio::test]

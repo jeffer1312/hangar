@@ -408,11 +408,20 @@ pub fn resolved_for(home: &Path, server_projects: &Path, key: &str, entry: &Entr
 
 pub(super) fn resolve_orphan(home: &Path, projects: &Path, key: &str, entry: &Entry) -> Result<super::Resolved, String> {
     let mut resolved = resolved_for(home, projects, key, entry)?;
-    let transcript = entry.transcript.as_deref().filter(|path| Path::new(path).is_file())
+    // A fotografia de antes da atualização não tem o caminho: no Claude ele sai do spec e da conversa, que o
+    // `resolved_for` já conferiu existir.
+    let derived = (resolved.spec.provider == AgentProvider::Claude).then(|| resolved.resume.as_deref()
+        .map(|conversation| super::claude::transcript(&resolved.spec, conversation, projects).to_string_lossy().into_owned())).flatten();
+    let transcript = entry.transcript.clone().or(derived).filter(|path| Path::new(path).is_file())
         .ok_or("restore_transcript_missing")?;
+    let transcript = transcript.as_str();
     match resolved.spec.provider {
-        AgentProvider::Claude if entry.permission_mode.as_deref().and_then(super::PermissionMode::claude).is_none() =>
-            return Err("restore_permission_unconfirmed".into()),
+        // O modo da fotografia pode ser velho: vale o último que a própria conversa gravou.
+        AgentProvider::Claude => {
+            let mode = last_claude_mode(Path::new(transcript)).as_deref().and_then(super::PermissionMode::claude)
+                .ok_or("restore_permission_unconfirmed")?;
+            resolved.spec.permission_mode = Some(mode);
+        }
         AgentProvider::Codex => {
             let path = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(home), &entry.name);
             let meta = crate::runtime::codex_sidecar::read(&path).ok().flatten()
@@ -433,6 +442,15 @@ pub(super) fn resolve_orphan(home: &Path, projects: &Path, key: &str, entry: &En
         _ => {}
     }
     Ok(resolved)
+}
+
+/// O último `permission-mode` que o Claude Code gravou na conversa.
+fn last_claude_mode(transcript: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(transcript).ok()?;
+    text.lines().rev().filter(|line| line.contains("\"permission-mode\"")).find_map(|line| {
+        let value: serde_json::Value = serde_json::from_str(line).ok()?;
+        (value["type"] == "permission-mode").then(|| value["permissionMode"].as_str().map(str::to_owned)).flatten()
+    })
 }
 
 /// Reabre uma sessão pelo spec gravado, na conversa dela; devolve o código da falha.

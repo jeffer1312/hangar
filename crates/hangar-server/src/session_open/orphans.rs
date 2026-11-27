@@ -25,6 +25,18 @@ pub(super) fn accepts_action(fallen: &super::fallen::Fallen, requested: Option<&
 }
 
 static NAMES: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+/// Encerramentos por nome, numerados: a busca que começou antes de um não devolve o nome que ele liberou.
+static ENDED: Mutex<(u64, std::collections::BTreeMap<String, u64>)> = Mutex::new((0, std::collections::BTreeMap::new()));
+
+fn generation() -> u64 { ENDED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).0 }
+
+fn mark_ended(name: &str) {
+    let mut ended = ENDED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    ended.0 += 1;
+    let at = ended.0;
+    ended.1.insert(name.to_owned(), at);
+    NAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(name);
+}
 
 /// O nome que um servidor órfão segura: o psmux recusa outra sessão com ele.
 pub fn holds(name: &str) -> bool { NAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(name) }
@@ -65,7 +77,8 @@ fn find_after(settle: Duration) -> io::Result<Vec<(Orphan, Option<Binding>)>> {
         procs.prefetch(&pids);
         let mut binding: Option<Binding> = None;
         for &(pid, started) in &descendants {
-            if hangar_psmux::process_birth(pid)? != Some(started) { continue; }
+            // Releitura que falha não derruba a busca inteira: aquele descendente fica sem prova.
+            if hangar_psmux::process_birth(pid).ok().flatten() != Some(started) { continue; }
             let process = i64::from(pid);
             let argv = match procs.argv_checked(process) {
                 Ok(argv) => argv,
@@ -76,7 +89,7 @@ fn find_after(settle: Duration) -> io::Result<Vec<(Orphan, Option<Binding>)>> {
             let env = |name| procs.env_var(process, name).ok().flatten().and_then(|value| value.into_string().ok());
             let mux = env("TMUX").as_deref().and_then(hangar_psmux::pane_server_pid);
             let key = env("CP_SESSION_KEY");
-            if hangar_psmux::process_birth(pid)? != Some(started) { continue; }
+            if hangar_psmux::process_birth(pid).ok().flatten() != Some(started) { continue; }
             let Some(key) = key.filter(|key| !key.is_empty() && mux == Some(orphan.pid)) else {
                 binding = None;
                 break;
@@ -100,12 +113,15 @@ fn proven_spec(home: &Path, orphan: &Orphan, binding: &Binding) -> Option<Sessio
 
 fn now() -> f64 { SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()) }
 
-fn register(home: &Path, found: &[(Orphan, Option<Binding>)], snapshot: &super::restore::Snapshot, diary: Option<&Path>) {
+fn register(home: &Path, found: &[(Orphan, Option<Binding>)], snapshot: &super::restore::Snapshot, diary: Option<&Path>, seen: u64) {
+    let ended = ENDED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let found: Vec<_> = found.iter().filter(|(orphan, _)| ended.1.get(&orphan.name).is_none_or(|at| *at <= seen)).collect();
     let before = std::mem::replace(&mut *NAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
         found.iter().map(|(orphan, _)| orphan.name.clone()).collect());
+    drop(ended);
     // Dispensado há pouco (o encerrar e a busca se cruzaram) não volta nesta passada.
     let since = Instant::now().checked_sub(Duration::from_secs(5)).unwrap_or_else(Instant::now);
-    for (orphan, binding) in found {
+    for (orphan, binding) in found.iter().copied() {
         let Some((binding, spec)) = binding.as_ref().and_then(|binding| proven_spec(home, orphan, binding).map(|spec| (binding, spec))) else {
             if !before.contains(&orphan.name) {
                 report(diary, Some(&orphan.name), "psmux_orphan_unbound", "servidor sem ficha e sem vínculo comprovado com uma sessão do Hangar");
@@ -135,8 +151,10 @@ fn report(diary: Option<&Path>, name: Option<&str>, code: &'static str, detail: 
 
 pub async fn scan(_home: &Path, _snapshot: &super::restore::Snapshot) {
     #[cfg(windows)]
+    let seen = generation();
+    #[cfg(windows)]
     match tokio::task::spawn_blocking(find).await {
-        Ok(Ok(found)) => register(_home, &found, _snapshot, crate::diag::diary_dir().as_deref()),
+        Ok(Ok(found)) => register(_home, &found, _snapshot, crate::diag::diary_dir().as_deref(), seen),
         Ok(Err(_)) | Err(_) => {
             if crate::warn_limit::allow(None, "psmux_orphan_scan_failed") {
                 report(crate::diag::diary_dir().as_deref(), None, "psmux_orphan_scan_failed", "não foi possível conferir os servidores órfãos do psmux");
@@ -161,11 +179,14 @@ fn end_checked(home: &Path, name: &str, fallen: &super::fallen::Fallen, settle: 
     let unknown = |_| "psmux_orphan_unknown";
     let mut lives: BTreeSet<_> = fallen.orphan_descendants.iter().copied().collect();
     if hangar_psmux::process_birth(pid).map_err(unknown)? == Some(birth) {
-        let binding = find_after(settle).map_err(unknown)?.into_iter().find_map(|(orphan, binding)| {
-            binding.filter(|binding| orphan.pid == pid && orphan.name == name
-                && binding.birth == birth && binding.key == fallen.key && binding.provider == fallen.provider)
-        }).ok_or("psmux_orphan_unknown")?;
-        lives.extend(binding.descendants);
+        // O pid com o mesmo nascimento já é o servidor gravado; sem agente dentro (saiu e ficou o shell) os
+        // descendentes gravados bastam. Agente de outra sessão dentro dele recusa.
+        let (_, binding) = find_after(settle).map_err(unknown)?.into_iter()
+            .find(|(orphan, _)| orphan.pid == pid && orphan.name == name).ok_or("psmux_orphan_unknown")?;
+        if let Some(binding) = binding {
+            if binding.birth != birth || binding.key != fallen.key || binding.provider != fallen.provider { return Err("psmux_orphan_unknown"); }
+            lives.extend(binding.descendants);
+        }
     }
     let mut lives: Vec<_> = lives.into_iter().collect();
     if !super::fallen::remember_orphan_descendants(home, name, fallen, &lives) {
@@ -181,7 +202,7 @@ fn end_checked(home: &Path, name: &str, fallen: &super::fallen::Fallen, settle: 
         report(crate::diag::diary_dir().as_deref(), Some(name), "psmux_orphan_not_ended", &error.to_string());
         return Err("psmux_orphan_not_ended");
     }
-    NAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(name);
+    mark_ended(name);
     Ok(())
 }
 
@@ -215,13 +236,13 @@ mod tests {
         })].into() };
         let orphan = Orphan { name: "hangar".into(), pid: 9032 };
         let diary = home.path().join("diary");
-        register(home.path(), &[(orphan.clone(), None)], &snapshot, Some(&diary));
+        register(home.path(), &[(orphan.clone(), None)], &snapshot, Some(&diary), generation());
         assert!(holds("hangar") && fallen::get(home.path(), "hangar").is_none());
 
         register(home.path(), &[
             (orphan, Some(Binding { key: key.into(), provider: AgentProvider::Claude, birth: 42, descendants: vec![(9033, 43)] })),
             (Orphan { name: "sem-spec".into(), pid: 7 }, None),
-        ], &snapshot, Some(&diary));
+        ], &snapshot, Some(&diary), generation());
 
         let fallen = fallen::get(home.path(), "hangar").expect("o órfão com vínculo vira caída");
         assert_eq!((fallen.key.as_str(), fallen.cause.as_str(), fallen.orphan_pid, fallen.orphan_birth, fallen.problem()),
@@ -230,11 +251,13 @@ mod tests {
         assert_eq!(fallen.permission_mode.as_deref(), Some("acceptEdits"));
         let mut entry = fallen.entry("hangar");
         let resolve = |entry: &super::super::restore::Entry| super::super::restore::resolve_orphan(home.path(), &projects, key, entry);
+        assert_eq!(resolve(&entry).err().as_deref(), Some("restore_permission_unconfirmed"), "sem registro de modo na conversa");
+        std::fs::write(&transcript, "{\"type\":\"permission-mode\",\"permissionMode\":\"acceptEdits\"}\n{\"type\":\"permission-mode\",\"permissionMode\":\"plan\"}\n").unwrap();
         let resolved = resolve(&entry).unwrap();
         assert_eq!(resolved.resume.as_deref(), Some(conversation));
-        assert_eq!(resolved.spec.permission_mode, Some(super::super::PermissionMode::AcceptEdits));
-        entry.permission_mode = None;
-        assert_eq!(resolve(&entry).err().as_deref(), Some("restore_permission_unconfirmed"));
+        assert_eq!(resolved.spec.permission_mode, Some(super::super::PermissionMode::Plan), "vale o último modo da conversa, não o da fotografia");
+        entry.transcript = None;
+        assert!(resolve(&entry).is_ok(), "fotografia de antes da atualização: o caminho sai do spec e da conversa");
         entry.conversation = None;
         assert_eq!(resolve(&entry).err().as_deref(), Some("restore_no_conversation"));
         let published = fallen::rows(home.path(), &[]).remove(0).lifecycle_id;
@@ -247,7 +270,20 @@ mod tests {
         assert!(fallen::get(home.path(), "sem-spec").is_none(), "sem vínculo não há o que reabrir");
         assert!(holds("hangar") && holds("sem-spec"), "os dois seguram o nome no psmux");
 
-        register(home.path(), &[], &snapshot, Some(&diary));
+        register(home.path(), &[], &snapshot, Some(&diary), generation());
         assert!(!holds("hangar"), "encerrado, o nome volta a ficar livre");
+    }
+
+    /// A busca que começou antes de um encerramento não devolve o nome que ele liberou.
+    #[test]
+    fn a_stale_scan_does_not_hold_an_ended_name() {
+        let home = tempfile::tempdir().unwrap();
+        let snapshot = super::super::restore::Snapshot::default();
+        let started = generation();
+        mark_ended("velho");
+        register(home.path(), &[(Orphan { name: "velho".into(), pid: 1 }, None)], &snapshot, None, started);
+        assert!(!holds("velho"));
+        register(home.path(), &[(Orphan { name: "velho".into(), pid: 1 }, None)], &snapshot, None, generation());
+        assert!(holds("velho"), "a busca seguinte, que viu o servidor de pé depois do encerramento, vale");
     }
 }

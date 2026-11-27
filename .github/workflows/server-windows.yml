@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   psmux-probe:
-    if: github.event_name == 'workflow_dispatch' && inputs.psmux_probe && github.ref_name == 'fix/subagentes-branch-orfaos-psmux'
+    if: github.event_name == 'workflow_dispatch' && inputs.psmux_probe
     runs-on: windows-latest
     timeout-minutes: 45
     env:
@@ -42,6 +42,12 @@ jobs:
       run:
         working-directory: crates
     steps:
+      # Pedido fora da branch da prova falha à vista: pulado, o job contaria como sucesso sem provar nada.
+      - name: Recusar prova fora da branch permitida
+        if: github.ref_name != 'fix/subagentes-branch-orfaos-psmux'
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: throw "A prova do psmux só roda na branch fix/subagentes-branch-orfaos-psmux"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
