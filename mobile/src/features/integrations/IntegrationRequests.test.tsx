@@ -82,6 +82,7 @@ vi.mock('../machines/parts', () => ({
   Notice: ({ text }: { text: string }) => (text ? createElement('div', { role: 'alert' }, text) : null),
 }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {}, deleteItemAsync: async () => {} }));
+vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => true) }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {}, remove: () => {} }) }));
 vi.mock('../../ui/Icon', () => ({ Icon: ({ name }: { name: string }) => createElement('i', { 'data-icon': name }) }));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: mocks.toastOk, erro: mocks.toastErro } }));

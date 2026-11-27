@@ -761,6 +761,10 @@ impl IntegrationsPage {
             move |this: &mut Self, result, _, cx| {
                 this.busy.remove(&id);
                 if start_seq != this.oauth_start_seq {
+                    // Outra tentativa de login começou depois: a nota "abrindo" desta não vale mais.
+                    if matches!(this.feedback.get(&id), Some(Feedback::Pending(_))) {
+                        this.feedback.remove(&id);
+                    }
                     return;
                 }
                 match result {

@@ -14,7 +14,7 @@
     "setup_guide": {
       "title": "Criar o acesso no Google Cloud (uma vez)",
       "steps": [
-        "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Gmail.",
+        "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Gmail e também o serviço MCP dela (gmailmcp.googleapis.com); são duas ativações separadas.",
         "Em Google Auth Platform → Público-alvo, escolha Externo se a conta for @gmail.com ou Interno se for Google Workspace. Em Externo, ainda em Público-alvo, use Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail.",
         "Em Clientes → Criar cliente, escolha Aplicativo da Web, marque \"Use this client for an AI-powered agent\" (is_agentic) e, em URIs de redirecionamento autorizados, cole http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
         "Copie o ID do cliente e a chave secreta do cliente do Google para os campos Client ID e Client Secret abaixo e salve: o navegador abre para você autorizar.",
@@ -43,7 +43,7 @@
     "setup_guide": {
       "title": "Criar o acesso no Google Cloud (uma vez)",
       "steps": [
-        "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Google Drive.",
+        "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Google Drive e também o serviço MCP dela (drivemcp.googleapis.com); são duas ativações separadas.",
         "Em Google Auth Platform → Público-alvo, escolha Externo se a conta for @gmail.com ou Interno se for Google Workspace. Em Externo, ainda em Público-alvo, use Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail.",
         "Em Clientes → Criar cliente, escolha Aplicativo da Web, marque \"Use this client for an AI-powered agent\" (is_agentic) e, em URIs de redirecionamento autorizados, cole http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
         "Copie o ID do cliente e a chave secreta do cliente do Google para os campos Client ID e Client Secret abaixo e salve: o navegador abre para você autorizar.",
@@ -72,7 +72,7 @@
     "setup_guide": {
       "title": "Criar o acesso no Google Cloud (uma vez)",
       "steps": [
-        "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Google Calendar.",
+        "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Google Calendar e também o serviço MCP dela (calendarmcp.googleapis.com); são duas ativações separadas.",
         "Em Google Auth Platform → Público-alvo, escolha Externo se a conta for @gmail.com ou Interno se for Google Workspace. Em Externo, ainda em Público-alvo, use Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail.",
         "Em Clientes → Criar cliente, escolha Aplicativo da Web, marque \"Use this client for an AI-powered agent\" (is_agentic) e, em URIs de redirecionamento autorizados, cole http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
         "Copie o ID do cliente e a chave secreta do cliente do Google para os campos Client ID e Client Secret abaixo e salve: o navegador abre para você autorizar.",

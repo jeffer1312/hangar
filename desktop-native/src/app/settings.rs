@@ -1110,12 +1110,10 @@ pub(crate) fn setting_row(live: bool, icon: IconName, title: impl IntoElement, d
         .child(div().flex_shrink_0().when(live, |el| el.flex().pl(px(38.))).child(control))
 }
 
-/// Largura máxima do texto corrido das Configurações (explicação de página, seção e linha). Caixas, listas e controles não
-/// têm teto: ocupam a coluna da página.
+/// Texto corrido das Configurações tem teto de largura; caixas e controles não.
 pub(crate) const READING_WIDTH: f32 = 720.;
 
-/// Coluna de toda página das Configurações: a largura do painel ao lado da navegação, com o mesmo recuo. Página nova usa a
-/// coluna sem largura própria; só o artigo do Manual fica na largura de leitura.
+/// Coluna padrão das páginas de Configurações; página nova não define largura própria.
 pub(crate) fn page_column(el: Div) -> Div {
     el.w_full().px(px(20.))
 }
