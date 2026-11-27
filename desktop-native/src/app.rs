@@ -2382,7 +2382,7 @@ impl Hangar {
             }
             Payload::Stream(Update::Offline(error)) => {
                 // Sem stream, nada mais vem assentar a conversa: o histórico guardado entra já.
-                if is_chat && self.held_history.is_some() { self.release_held_history(window, cx); }
+                if is_chat { self.release_held_history(window, cx); }
                 if if is_chat { self.chat_auth_lost(&error) } else { self.auth_lost(&error) } {
                     self.open_connection(window, cx);
                     self.error = Some(Self::failure(&error));
