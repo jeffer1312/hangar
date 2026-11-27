@@ -542,7 +542,7 @@ pub(crate) trait Resume: Send + Sync {
     fn hhmm(&self, at: f64) -> String;
 }
 
-struct LiveResume<'s>(&'s crate::routes::AppState);
+pub(crate) struct LiveResume<'s>(pub(crate) &'s crate::routes::AppState);
 
 impl Resume for LiveResume<'_> {
     fn send<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), String>> {
