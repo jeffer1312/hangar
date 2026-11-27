@@ -203,9 +203,9 @@ impl Hangar {
         self.fetch_tab_preview(cx);
     }
 
-    pub(super) fn apply_preview_update(&mut self,update: ChatUpdate,cx: &mut Context<Self>) {
+    pub(super) fn apply_preview_update(&mut self,update: ChatUpdate,window: &mut Window,cx: &mut Context<Self>) {
         match update {
-            ChatUpdate::Message(event)=>{self.confirm_chat_message(&event,None,cx);self.chat.apply(event);}
+            ChatUpdate::Message(event)=>{self.confirm_chat_message(&event,window,cx);self.chat.apply(event);}
             // Como na conversa aberta: só troca a nota que a prévia já mostra.
             ChatUpdate::NoticeUpdate(event)=>{if self.chat.events.iter().any(|known|known.id==event.id) {self.chat.apply(event);}}
             ChatUpdate::Preview(preview)=>{self.chat.update_preview(preview);self.visible_preview=self.chat.preview.clone();}
@@ -606,12 +606,12 @@ impl Hangar {
                     if let Some(events) = history.events {
                         this.has_older = events.len() >= limit;
                         if let Some(key) = this.selected_key() && let Some(arrived) = this.delivery.confirm_history(&key, &events) {
-                            this.uncertain_arrived(&key, arrived, None, cx);
+                            this.uncertain_arrived(&key, arrived, window, cx);
                         }
                         this.chat.merge_history(events);
                     }
                     (this.loading, this.history_installed) = (false, true);
-                    for update in std::mem::take(&mut this.pending_chat) {this.apply_preview_update(update,cx);}
+                    for update in std::mem::take(&mut this.pending_chat) {this.apply_preview_update(update,window,cx);}
                     this.sync_tab_preview_rows(cx);
                     // Página anterior chegou: a linha que estava no topo continua na tela.
                     if let Some(index) = anchor.and_then(|id| this.row_ids.iter().position(|row| *row == id)) {

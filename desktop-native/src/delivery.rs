@@ -96,11 +96,12 @@ impl SendTiming {
 
 pub type Held = (String, String, SendTiming, Option<Vec<String>>);
 
-/// Envio incerto que a conversa mostrou: o que voltou ao campo e o texto que saiu.
+/// Envio incerto que a conversa mostrou: o que voltou ao campo, o texto que saiu e o que entra no histórico do campo.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Arrived {
     pub field: String,
     pub text: String,
+    pub history: Option<String>,
 }
 
 impl DeliveryTracker {
@@ -208,8 +209,8 @@ impl DeliveryTracker {
         match record.outcome.clone() {
             Some(SendOutcome::Delivered | SendOutcome::Queued) => { self.records.remove(key); None }
             Some(SendOutcome::Uncertain) if proved => {
-                let SendRecord { field, text, .. } = self.records.remove(key)?;
-                Some(Arrived { field: field.unwrap_or_else(|| text.clone()), text })
+                let SendRecord { field, text, history, .. } = self.records.remove(key)?;
+                Some(Arrived { field: field.unwrap_or_else(|| text.clone()), text, history })
             }
             _ => None,
         }
@@ -424,8 +425,21 @@ mod tests {
         tracker.complete(&key("one"), "hello", SendOutcome::Uncertain);
         assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
         let arrived = tracker.confirm_real(&key("one"), "new-id", None, "hello");
-        assert_eq!(arrived, Some(Arrived { field: "hello".into(), text: "hello".into() }), "o texto que voltou ao campo sai dele");
+        assert_eq!(arrived, Some(Arrived { field: "hello".into(), text: "hello".into(), history: Some("hello".into()) }),
+            "o texto que voltou ao campo sai dele");
         assert_eq!(tracker.outcome(&key("one")), None);
+    }
+
+    #[test]
+    fn uncertain_arrival_keeps_the_chosen_command_for_the_field_history() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "/compact".into(), HashSet::from(["old-id".into()]));
+        tracker.mark_typed(&key("one"), "/co".into());
+        tracker.mark_history(&key("one"), "/compact".into());
+        tracker.complete(&key("one"), "/compact", SendOutcome::Uncertain);
+        let arrived = tracker.confirm_real(&key("one"), "new-id", None, "/compact");
+        assert_eq!(arrived, Some(Arrived { field: "/co".into(), text: "/compact".into(), history: Some("/compact".into()) }),
+            "o histórico guarda o comando escolhido, não o rascunho");
     }
 
     #[test]
