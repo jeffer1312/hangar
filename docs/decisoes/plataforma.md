@@ -529,7 +529,9 @@ Decisões do usuário (26/11, opção A nas quatro):
   Hangar para o serviço sem desregistrar (`service::stop`), confere que o processo saiu, devolve a cópia
   no lugar de `messages.db`, `-wal` e `-shm`, religa a anterior e responde
   `whatsapp_update_restored`. Sem a parada confirmada ou sem cópia fica o `whatsapp_update_data_migrated`
-  de antes, com o serviço parado. Registrar a anterior antes de parar a nova deixaria ela abrir o banco
+  de antes, com o serviço parado. Cópia que não volta (disco cheio na cópia de trabalho, troca que falha)
+  com os arquivos do banco no lugar religa a nova sobre os dados migrados; religar que falha aparece no
+  resultado. Registrar a anterior antes de parar a nova deixaria ela abrir o banco
   migrado e sair com 3. Uma cópia gravada nesta tentativa vale como prova de que a nova abriu os dados
   (o binário migra antes de gravar o `control.json`) e estende a espera da subida até 10 min enquanto o
   processo vive: copiar e converter um banco grande passa dos 30 s. A troca de arquivos tira o conjunto

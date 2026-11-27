@@ -729,7 +729,7 @@ async fn rollback(ctx: &Context, old: &Installed, failure: Failure) -> Failure {
 /// Devolve a cópia que a nova gravou antes de migrar e religa a anterior: o serviço para sem sair do gerenciador
 /// (registrar a anterior com a nova de pé deixaria ela abrir o banco migrado e sair com 3), a cópia vai para o
 /// lugar do `messages.db` e a anterior é registrada. Sem a parada confirmada ou com a troca dos arquivos falhando,
-/// fica o [`keep_new`], com o serviço parado. `fetched`: a nova foi baixada nesta chamada.
+/// fica o [`keep_new`]; na troca que falha, a nova sobe de novo ([`after_restore_failed`]). `fetched`: a nova foi baixada nesta chamada.
 async fn restore(ctx: &Context, old: &Installed, new: &Installed, schema: u32, fetched: bool, failure: Failure) -> Failure {
     let not_restored = |why: String| Failure { detail: format!("{}; a cópia dos dados não voltou: {why}", failure.detail), ..failure.clone() };
     // Conferido antes de parar: sem a anterior rodando, devolver a cópia não adianta.
@@ -742,9 +742,10 @@ async fn restore(ctx: &Context, old: &Installed, new: &Installed, schema: u32, f
     }
     let data = ctx.paths.data.clone();
     let swapped = tokio::task::spawn_blocking(move || restore_backup(&data, schema)).await
-        .unwrap_or_else(|e| Err(format!("a troca dos arquivos parou no meio: {e}")));
-    if let Err(why) = swapped {
-        return keep_new(&ctx.paths, new, not_restored(format!("{why}; o serviço ficou parado")));
+        .unwrap_or_else(|e| Err(NotRestored { why: format!("a troca dos arquivos parou no meio: {e}"), in_place: false }));
+    if let Err(failed) = swapped {
+        let why = after_restore_failed(failed, || service::start(&ctx.paths.home, &SERVICE)).await;
+        return keep_new(&ctx.paths, new, not_restored(why));
     }
     let client = Client::new(ctx.paths.data.clone());
     let before = client.claimed().map(|c| c.pid);
@@ -764,6 +765,22 @@ async fn restore(ctx: &Context, old: &Installed, new: &Installed, schema: u32, f
         Err(e) => Failure::new("whatsapp_update_no_rollback", format!(
             "{}; os dados voltaram para a cópia de antes da troca (o banco da tentativa ficou em messages.db.migrated), \
              mas {} não voltou a rodar: {}", failure.detail, old.tag, e.detail)),
+    }
+}
+
+/// A cópia não voltou e o serviço está parado. Com os arquivos do banco no lugar, a nova, que segue registrada,
+/// sobe de novo sobre os dados migrados; fora do lugar, ela criaria um banco vazio e fica parada.
+async fn after_restore_failed<F, Fut>(failed: NotRestored, start: F) -> String
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), service::Error>>,
+{
+    if !failed.in_place {
+        return format!("{}; o serviço ficou parado", failed.why);
+    }
+    match start().await {
+        Ok(()) => format!("{}; a versão nova foi religada sobre os dados migrados", failed.why),
+        Err(e) => format!("{}; e a versão nova não religou: {}: {}; o serviço ficou parado", failed.why, e.step, e.detail),
     }
 }
 
@@ -854,14 +871,14 @@ pub(crate) const DB_FILES: [&str; 4] = ["", "-wal", "-shm", "-journal"];
 /// # Errors
 ///
 /// O que falhou e o estado em que os arquivos ficaram: o que tinha saído do caminho volta.
-fn restore_backup(data: &Path, schema: u32) -> Result<(), String> {
+fn restore_backup(data: &Path, schema: u32) -> Result<(), NotRestored> {
     let backup = backup_path(data, schema);
     let staged = data.join(RESTORING);
     let copied = std::fs::copy(&backup, &staged)
         .and_then(|_| std::fs::OpenOptions::new().write(true).open(&staged)?.sync_all());
     if let Err(e) = copied {
         let _ = std::fs::remove_file(&staged);
-        return Err(format!("{}: {e}; nada mudou", backup.display()));
+        return Err(NotRestored { why: format!("{}: {e}; nada mudou", backup.display()), in_place: true });
     }
     let mut moved = Vec::new();
     for suffix in DB_FILES {
@@ -881,15 +898,22 @@ fn restore_backup(data: &Path, schema: u32) -> Result<(), String> {
     hangar_core::fs::replace(&staged, &data.join("messages.db")).map_err(|e| undo(&staged, &moved, format!("{}: {e}", staged.display())))
 }
 
+/// A volta da cópia que falhou; `in_place`: os arquivos do banco estão onde estavam antes dela.
+#[derive(Debug)]
+struct NotRestored {
+    why: String,
+    in_place: bool,
+}
+
 /// Põe de volta o que saiu do caminho e diz como os arquivos ficaram.
-fn undo(staged: &Path, moved: &[(PathBuf, PathBuf)], why: String) -> String {
+fn undo(staged: &Path, moved: &[(PathBuf, PathBuf)], why: String) -> NotRestored {
     let _ = std::fs::remove_file(staged);
     let stuck: Vec<String> = moved.iter().rev().filter_map(|(from, to)| hangar_core::fs::replace(to, from).err()
         .map(|e| format!("{} ficou como {}: {e}", from.display(), to.display()))).collect();
     if stuck.is_empty() {
-        format!("{why}; os arquivos do banco voltaram como estavam")
+        NotRestored { why: format!("{why}; os arquivos do banco voltaram como estavam"), in_place: true }
     } else {
-        format!("{why}; e não voltaram: {}", stuck.join("; "))
+        NotRestored { why: format!("{why}; e não voltaram: {}", stuck.join("; ")), in_place: false }
     }
 }
 
@@ -1210,8 +1234,9 @@ mod tests {
         write_db_file(&data.join("messages.db"), "migrated");
         write_db_file(&data.join("messages.db-wal"), "wal");
         write_db_file(&data.join("messages.db.schema2.bak"), "other");
-        let why = restore_backup(data, 1).unwrap_err();
+        let NotRestored { why, in_place } = restore_backup(data, 1).unwrap_err();
         assert!(why.contains("messages.db.schema1.bak") && why.ends_with("nada mudou"), "{why}");
+        assert!(in_place);
         assert_eq!(read(&data.join("messages.db")), "migrated");
         assert_eq!(read(&data.join("messages.db-wal")), "wal");
         assert!(!data.join("messages.db.restoring").exists());
@@ -1229,8 +1254,9 @@ mod tests {
         }
         // Uma pasta com conteúdo no nome de destino do `-shm`: o rename dele falha depois do banco e do `-wal`.
         std::fs::create_dir_all(data.join("messages.db.migrated-shm/x")).unwrap();
-        let why = restore_backup(data, 1).unwrap_err();
+        let NotRestored { why, in_place } = restore_backup(data, 1).unwrap_err();
         assert!(why.contains("messages.db-shm") && why.ends_with("os arquivos do banco voltaram como estavam"), "{why}");
+        assert!(in_place);
         assert_eq!(read(&data.join("messages.db")), "migrated");
         assert_eq!(read(&data.join("messages.db-wal")), "wal");
         assert_eq!(read(&data.join("messages.db-shm")), "shm");
@@ -1238,6 +1264,27 @@ mod tests {
             assert!(!data.join(gone).exists(), "{gone} ficou");
         }
         assert_eq!(read(&data.join("messages.db.schema1.bak")), "before");
+    }
+
+    /// A cópia que não volta com os arquivos no lugar religa a nova sobre os dados migrados, e o religar que falha
+    /// aparece; com os arquivos fora do lugar, ela não sobe.
+    #[tokio::test]
+    async fn a_restore_that_fails_with_the_files_in_place_starts_the_new_version_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path();
+        write_db_file(&data.join("messages.db"), "migrated");
+        let started = std::cell::Cell::new(false);
+        let why = after_restore_failed(restore_backup(data, 1).unwrap_err(), || async { started.set(true); Ok(()) }).await;
+        assert!(started.get(), "a nova não foi religada");
+        assert!(why.contains("religada") && !why.contains("ficou parado"), "{why}");
+
+        let refused = || async { Err(service::Error { step: "systemctl restart".into(), detail: "recusou".into() }) };
+        let why = after_restore_failed(restore_backup(data, 1).unwrap_err(), refused).await;
+        assert!(why.contains("systemctl restart: recusou") && why.contains("ficou parado"), "{why}");
+
+        let stuck = NotRestored { why: "messages.db ficou como messages.db.migrated".into(), in_place: false };
+        let why = after_restore_failed(stuck, || async { panic!("religou com os arquivos fora do lugar") }).await;
+        assert!(why.contains("ficou parado"), "{why}");
     }
 
     /// A cópia desta tentativa leva à volta mesmo sem a prova de que a nova abriu os dados: o binário migra antes
