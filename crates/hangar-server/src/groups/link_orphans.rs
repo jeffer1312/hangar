@@ -54,23 +54,20 @@ pub(crate) async fn mark(st: &AppState, name: &str, leaving: Result<Leaving, ()>
 
 /// A filha que fechou não é mais órfã de ninguém. `None` = nada a avisar.
 pub(crate) async fn closed(st: &AppState, name: &str) -> Option<Value> {
-    let (dir, names) = (st.hangar_dir.clone(), vec![name.to_owned()]);
-    blocking(move || orphans::clear(&dir, &names)).await.err().map(|_| failed(st, name, "link_orphans_clear_failed", "a marca de filha sem pai não saiu no fechamento"))
+    clear(st, vec![name.to_owned()]).await.err().map(|_| failed(st, name, "link_orphans_clear_failed", "a marca de filha sem pai não saiu no fechamento"))
 }
 
 /// Nome reusado por uma sessão nova: a marca da vida que acabou não passa para ela. Falha só vai ao
 /// diário: a abertura segue.
 pub async fn reused(st: &AppState, name: &str) {
-    let (dir, names) = (st.hangar_dir.clone(), vec![name.to_owned()]);
-    if blocking(move || orphans::clear(&dir, &names)).await.is_err() {
+    if clear(st, vec![name.to_owned()]).await.is_err() {
         st.diag.report(FAILED_EVENT, name, "link_orphans_clear_failed", "a marca de filha sem pai do nome reusado não saiu");
     }
 }
 
 /// Religadas a um pai novo: a marca antiga sai. Falha só vai ao diário: a ligação já valeu.
 pub(crate) async fn relinked(st: &AppState, children: &[String]) {
-    let (dir, names) = (st.hangar_dir.clone(), children.to_vec());
-    if blocking(move || orphans::clear(&dir, &names)).await.is_err() {
+    if clear(st, children.to_vec()).await.is_err() {
         st.diag.report(FAILED_EVENT, children.first().map_or("", String::as_str), "link_orphans_clear_failed", "a marca de filha sem pai não saiu na religação");
     }
 }
@@ -99,10 +96,15 @@ pub(crate) async fn marked(st: &AppState) -> Vec<String> {
 
 /// As que a varredura deu por fora da lista. Falha só vai ao diário: a próxima rodada tenta de novo.
 pub(crate) async fn gone(st: &AppState, names: &[String]) {
-    let (dir, all) = (st.hangar_dir.clone(), names.to_vec());
-    if blocking(move || orphans::clear(&dir, &all)).await.is_err() {
+    if clear(st, names.to_vec()).await.is_err() {
         st.diag.report(FAILED_EVENT, names.first().map_or("", String::as_str), "link_orphans_clear_failed", "a marca de filha sem pai que sumiu da lista não saiu");
     }
+}
+
+/// `orphans::clear` fora do runtime: E/S de disco não segura a tarefa.
+async fn clear(st: &AppState, names: Vec<String>) -> std::io::Result<()> {
+    let dir = st.hangar_dir.clone();
+    blocking(move || orphans::clear(&dir, &names)).await
 }
 
 const NOT_RECORDED: &str = "a marca de filha sem pai não foi gravada";

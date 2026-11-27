@@ -533,7 +533,7 @@ async fn cascade_from(st: &Arc<AppState>, root: &str) -> Option<Value> {
     Some(json!({"interrupted": interrupted, "failed": failed}))
 }
 
-pub(crate) const CASCADE_GROUPS_UNAVAILABLE: &str = "groups_unavailable";
+const CASCADE_GROUPS_UNAVAILABLE: &str = "groups_unavailable";
 
 /// As descendentes ligadas de `root` pelos arquivos de grupo. `Err` = arquivos indisponíveis, já no diário.
 pub(crate) async fn cascade_targets(st: &AppState, root: &str) -> Result<Vec<CascadeTarget>, ()> {
@@ -799,14 +799,14 @@ pub(crate) async fn cancel_waiting(st: &AppState, name: &str, entry_id: &str) ->
             return cancelled(runtime.asleep_queue_action(name, &mark.key, &random_hex(16), cancel()).await);
         }
     }
-    match super::route_write(runtime, name, WriteRoute::QueueRemove, st.write_gate_wait).await {
-        super::Write::Rust(held, target) => {
+    match route_write(runtime, name, WriteRoute::QueueRemove, st.write_gate_wait).await {
+        Write::Rust(held, target) => {
             let done = target.handle.queue(random_hex(16), cancel()).await;
             drop(held);
             cancelled(done)
         }
-        super::Write::Busy => Err("busy".into()),
-        super::Write::Failed(error) => Err(error.code),
+        Write::Busy => Err("busy".into()),
+        Write::Failed(error) => Err(error.code),
         _ => Err("unowned".into()),
     }
 }

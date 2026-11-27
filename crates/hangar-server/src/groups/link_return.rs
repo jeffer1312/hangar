@@ -620,13 +620,13 @@ fn unreadable(st: &AppState, e: &io::Error) { report(st, "", "link_returns_unrea
 
 fn io_kind(e: &io::Error) -> String { format!("{:?}", e.kind()) }
 
-/// Falha que se repete a cada tique (arquivo ilegível, pai fora) sai uma vez por minuto. `detail` é o tipo
-/// do erro (E/S, status HTTP), nunca texto da conversa; vai ao código como `codigo:detalhe`.
 /// A filha ligada abriu com a linha de retorno e sem a ligação: a resposta dela não volta sozinha.
 pub(crate) fn line_unlinked(st: &AppState, child: &str, detail: &str) {
     report(st, child, "link_line_unlinked", "filha recebeu a linha de retorno e abriu sem ligação", detail);
 }
 
+/// Falha que se repete a cada tique (arquivo ilegível, pai fora) sai uma vez por minuto. `detail` é o tipo
+/// do erro (E/S, status HTTP), nunca texto da conversa; vai ao código como `codigo:detalhe`.
 fn report(st: &AppState, child: &str, code: &str, reason: &'static str, detail: &str) {
     let code = if detail.is_empty() { code.to_owned() } else { format!("{code}:{detail}") };
     if !crate::warn_limit::allow(Some(child), &code) { return; }
