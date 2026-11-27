@@ -244,7 +244,7 @@ pub const SETTINGS: &[(&str, &[&str])] = &[
     ("default_effort", &["unset", "off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]),
     ("auto_report", &["on", "off", "unanswered"]),
     ("dictation_org", &["none", "harness", "external_api"]),
-    ("dictation_provider", &["openai", "elevenlabs", "whisper_cpp", "none"]),
+    ("dictation_provider", &["openai", "groq", "elevenlabs", "whisper_cpp", "none"]),
     ("connect", ON_OFF),
     ("computer_use", ON_OFF),
     ("whatsapp", &["installed", "no"]),

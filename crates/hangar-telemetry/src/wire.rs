@@ -15,6 +15,9 @@ pub const MAX_LOG_LINES: usize = 100;
 /// Teto da mensagem de uma linha de log, em caracteres.
 pub const MAX_LOG_CHARS: usize = 300;
 pub const LOG_LEVELS: &[&str] = &["warn", "error"];
+/// Teto de `count` de um contador ou linha. Um dia de uma máquina não chega perto disso; o teto impede
+/// que a soma do receptor (`bigint`) estoure com pacote forjado.
+pub const MAX_COUNT: u64 = 10_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Batch {
@@ -96,6 +99,7 @@ impl Batch {
             if !is_name(&counter.event) { return Err("event"); }
             if !counter.dims.iter().all(|(key, value)| is_name(key) && is_name(value)) { return Err("dims"); }
             if counter.bucket.as_deref().is_some_and(|b| !is_name(b)) { return Err("bucket"); }
+            if counter.count > MAX_COUNT { return Err("count"); }
         }
         if self.logs.len() > MAX_LOG_LINES { return Err("logs"); }
         for line in &self.logs {
@@ -103,7 +107,7 @@ impl Batch {
             if !is_name(&line.target) { return Err("log_target"); }
             let chars = line.message.chars().count();
             if !(1..=MAX_LOG_CHARS).contains(&chars) || line.message.chars().any(is_invisible) { return Err("log_message"); }
-            if line.count == 0 { return Err("log_count"); }
+            if line.count == 0 || line.count > MAX_COUNT { return Err("log_count"); }
         }
         Ok(())
     }
@@ -282,6 +286,11 @@ mod tests {
         assert_eq!(with(LogLine { level: "info".into(), ..log("x") }).validate(), Err("log_level"));
         assert_eq!(with(LogLine { target: "Hangar Server".into(), ..log("x") }).validate(), Err("log_target"));
         assert_eq!(with(LogLine { count: 0, ..log("x") }).validate(), Err("log_count"));
+        assert_eq!(with(LogLine { count: MAX_COUNT, ..log("x") }).validate(), Ok(()));
+        assert_eq!(with(LogLine { count: MAX_COUNT + 1, ..log("x") }).validate(), Err("log_count"));
+        let mut big = sample();
+        big.counters[0].count = MAX_COUNT + 1;
+        assert_eq!(big.validate(), Err("count"));
         let full = Batch { logs: (0..=MAX_LOG_LINES).map(|n| log(&n.to_string())).collect(), ..sample() };
         assert_eq!(full.validate(), Err("logs"));
         let body = serde_json::to_value(with(log("x"))).unwrap();

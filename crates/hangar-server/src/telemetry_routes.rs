@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use crate::diag_report::Scrubber;
 use crate::groups::peers::PeerClient;
-use crate::telemetry_log::Line;
+use crate::telemetry_log::{ConsentGate, Line};
 use crate::telemetry_names::{NameBook, read_local};
 use crate::telemetry_scrub::Words;
 use crate::routes::AppState;
@@ -83,17 +83,14 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
     tasks.push(tokio::spawn(async move {
         let mut done: Option<String> = None;
         loop {
-            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            let today = snapshot.today();
             if done.as_deref() != Some(today.as_str()) {
-                // A descoberta dos provedores roda as CLIs: só com a telemetria ligada.
-                let provider = if snapshot.enabled() { default_provider(&snapshot_st).await } else { None };
-                let (telemetry, book) = (snapshot.clone(), book.clone());
-                let env = snapshot_st.accounts.env.clone();
-                let snap = move || -> std::io::Result<bool> {
-                    let values = server_settings(&env.home, &crate::runtime::codex_launch::runtime_config(&env), provider.as_deref());
-                    Ok(peers_snapshot(&telemetry, &book)? && server_settings_snapshot(&telemetry, &values)?)
+                let (st, env, diag) = (snapshot_st.clone(), snapshot_st.accounts.env.clone(), snapshot_diag.clone());
+                let discover = move || async move { default_provider(&st).await };
+                let read = move |provider: Option<String>| {
+                    server_settings(&env.home, &crate::runtime::codex_launch::runtime_config(&env), provider.as_deref(), &diag)
                 };
-                match tokio::task::spawn_blocking(snap).await {
+                match daily_snapshot(snapshot.clone(), book.clone(), discover, read).await {
                     Ok(Ok(true)) => done = Some(today),
                     Ok(Ok(false)) => {}
                     Ok(Err(e)) => report(&snapshot_diag, Failure::Disk(e)),
@@ -122,10 +119,13 @@ async fn log_lines(st: Arc<AppState>, telemetry: Arc<Telemetry>, mut lines: toki
     let scrubber = Scrubber::for_env(&st.accounts.env);
     let started = std::time::Instant::now();
     let mut book = NameBook::default();
+    let mut gate = ConsentGate::new(telemetry.consent_epoch());
     let mut batch = Vec::with_capacity(LOG_BATCH);
     while lines.recv_many(&mut batch, LOG_BATCH).await > 0 {
         let mut dropped = crate::telemetry_log::take_dropped();
         if telemetry.enabled() {
+            gate.update(telemetry.consent_epoch(), crate::telemetry_log::next_seq());
+            batch.retain(|line| gate.admits(line));
             refresh_names(&st, &mut book, started.elapsed()).await;
             match book.words() {
                 Some(words) => record_lines(&telemetry, &scrubber, &words, &batch),
@@ -156,10 +156,15 @@ async fn refresh_names(st: &AppState, book: &mut NameBook, now: Duration) {
         book.see(&chrono::Utc::now().format("%Y-%m-%d").to_string(), sessions);
     }
     if due {
-        let (home, peers, server_id) = (st.accounts.env.home.clone(), st.peers.clone(), st.server_id.clone());
+        let (home, peers, server_id) = local_inputs(st);
         let read = tokio::task::spawn_blocking(move || read_local(&home, peers.ids(), &server_id, crate::pages::routes::machine_name())).await;
         book.read(now, read.ok().and_then(Result::ok));
     }
+}
+
+/// O que a releitura usa; o id é o atual, que muda sem reiniciar o servidor.
+fn local_inputs(st: &AppState) -> (std::path::PathBuf, Arc<PeerClient>, String) {
+    (st.accounts.env.home.clone(), st.peers.clone(), st.current_server_id())
 }
 
 pub(crate) fn record_lines(telemetry: &Telemetry, scrubber: &Scrubber, words: &Words, lines: &[Line]) {
@@ -188,54 +193,84 @@ pub(crate) fn peers_snapshot(telemetry: &Telemetry, peers: &PeerClient) -> std::
     Ok(true)
 }
 
-/// O provedor que a abertura escolhe quando o pedido não diz; `None` quando a descoberta falha.
-async fn default_provider(st: &AppState) -> Option<String> {
-    let snapshot = crate::engines::providers::read(&st.accounts).await.ok()?;
-    Some(crate::session_open::resolve::choose_provider(&snapshot.selection).name().to_owned())
+/// O retrato do dia: máquinas e, se o do servidor ainda não saiu hoje, as preferências dele. `discover` roda as
+/// CLIs, por isso só depois da marca do dia gravada: marca que não se grava não descobre nada. `Ok(Ok(true))` = dia feito.
+async fn daily_snapshot<Fut: std::future::Future<Output = Option<String>>>(
+    telemetry: Arc<Telemetry>,
+    peers: Arc<PeerClient>,
+    discover: impl FnOnce() -> Fut,
+    read: impl FnOnce(Option<String>) -> Vec<(&'static str, String)> + Send + 'static,
+) -> Result<std::io::Result<bool>, tokio::task::JoinError> {
+    let marks = telemetry.clone();
+    let step = tokio::task::spawn_blocking(move || -> std::io::Result<(bool, bool)> {
+        let done = peers_snapshot(&marks, &peers)?;
+        Ok((done, done && marks.once(&format!("settings:server:{}", marks.today()))?))
+    }).await?;
+    let (done, due) = match step { Ok(step) => step, Err(e) => return Ok(Err(e)) };
+    if due {
+        let provider = discover().await;
+        tokio::task::spawn_blocking(move || {
+            let values = read(provider);
+            count_settings(&telemetry, ClientKind::Server, values.iter().map(|(name, value)| (*name, value.as_str())));
+        }).await?;
+    }
+    Ok(Ok(done))
 }
 
-/// As preferências desta máquina, `client: server`, uma vez por dia (UTC); o contrato é o de `peers_snapshot`. Bloqueante.
-pub(crate) fn server_settings_snapshot(telemetry: &Telemetry, values: &[(&'static str, String)]) -> std::io::Result<bool> {
-    if !telemetry.enabled() { return Ok(false); }
-    if telemetry.once(&format!("settings:server:{}", telemetry.today()))? {
-        count_settings(telemetry, ClientKind::Server, values.iter().map(|(name, value)| (*name, value.as_str())));
+/// O provedor que a abertura escolhe quando o pedido não diz; `None` (e o código no diário) quando a descoberta falha.
+async fn default_provider(st: &AppState) -> Option<String> {
+    match crate::engines::providers::read(&st.accounts).await {
+        Ok(snapshot) => Some(crate::session_open::resolve::choose_provider(&snapshot.selection).name().to_owned()),
+        Err(_) => {
+            st.diag.report("telemetry.settings", "", "telemetry_settings_provider_failed", "telemetria: provedor padrão não descoberto");
+            None
+        }
     }
-    Ok(true)
 }
 
 /// O que o servidor guarda das escolhas do dono, já nos nomes de `events::SETTINGS`. Arquivo que não se lê deixa a
-/// preferência dele de fora; sem provedor, saem de fora ele e o esforço. Bloqueante.
-pub(crate) fn server_settings(home: &Path, runtime: &Value, provider: Option<&str>) -> Vec<(&'static str, String)> {
+/// preferência dele de fora, com o código no diário; sem provedor, saem de fora ele e o esforço. Bloqueante.
+pub(crate) fn server_settings(home: &Path, runtime: &Value, provider: Option<&str>, diag: &crate::diag::DiagClient) -> Vec<(&'static str, String)> {
     let on = |on: bool| if on { "on" } else { "off" }.to_owned();
+    let unreadable = |code: &str| diag.report("telemetry.settings", "", code, "telemetria: preferência do servidor ilegível, fora do retrato");
     let mut values = Vec::new();
-    if let Ok(options) = crate::session_defaults::options(home) {
-        let options = options.unwrap_or_default();
-        values.push(("conversation_beta", on(options.conversation_beta)));
-        values.push(("code_mode", on(options.code_mode)));
+    match crate::session_defaults::options(home) {
+        Ok(options) => {
+            let options = options.unwrap_or_default();
+            values.push(("conversation_beta", on(options.conversation_beta)));
+            values.push(("code_mode", on(options.code_mode)));
+        }
+        Err(_) => unreadable("telemetry_settings_options_unreadable"),
     }
     if let Some(provider) = provider {
         values.push(("default_provider", provider.to_owned()));
-        if let Ok(saved) = crate::session_defaults::saved(home, provider, "", "") {
-            let effort = saved.map(|d| d.effort).filter(|e| !e.is_empty());
-            values.push(("default_effort", effort.unwrap_or_else(|| "unset".to_owned())));
+        match crate::session_defaults::saved(home, provider, "", "") {
+            Ok(saved) => {
+                let effort = saved.map(|d| d.effort).filter(|e| !e.is_empty());
+                values.push(("default_effort", effort.unwrap_or_else(|| "unset".to_owned())));
+            }
+            Err(_) => unreadable("telemetry_settings_defaults_unreadable"),
         }
     }
-    if let Ok(consent) = crate::diag_report::auto::consent(home) {
-        values.push(("auto_report", consent.map_or("unanswered".to_owned(), on)));
+    match crate::diag_report::auto::consent(home) {
+        Ok(consent) => values.push(("auto_report", consent.map_or("unanswered".to_owned(), on))),
+        Err(_) => unreadable("telemetry_settings_auto_report_unreadable"),
     }
     let text = |key: &str| runtime[key].as_str().map(str::trim).unwrap_or_default().to_owned();
     let organization = text("dictation_organization_mode");
     values.push(("dictation_org", if organization.is_empty() { "none".to_owned() } else { organization }));
-    // O primeiro serviço da lista é o que transcreve; a chave Groq antiga sem lista vale como `openai`.
+    // O primeiro serviço da lista é o que transcreve; sem lista, a chave Groq antiga.
     let provider = runtime["transcription_providers"][0]["kind"].as_str().map(str::to_owned)
-        .or_else(|| (!text("groq_api_key").is_empty()).then(|| "openai".to_owned()));
+        .or_else(|| (!text("groq_api_key").is_empty()).then(|| "groq".to_owned()));
     values.push(("dictation_provider", provider.unwrap_or_else(|| "none".to_owned())));
-    if let Ok(linked) = crate::connect::state::read(&home.join(".hangar").join("connect")) {
-        values.push(("connect", on(linked.is_some())));
+    match crate::connect::state::read(&home.join(".hangar").join("connect")) {
+        Ok(linked) => values.push(("connect", on(linked.is_some()))),
+        Err(_) => unreadable("telemetry_settings_connect_unreadable"),
     }
     let computer = hangar_computer_control_setup::Paths::new(home.to_path_buf(), Vec::new());
-    if let Ok(main) = hangar_computer_control_setup::read_entry(computer.main_file(), false) {
-        values.push(("computer_use", on(main.entry.is_some())));
+    match hangar_computer_control_setup::read_entry(computer.main_file(), false) {
+        Ok(main) => values.push(("computer_use", on(main.entry.is_some()))),
+        Err(_) => unreadable("telemetry_settings_computer_use_unreadable"),
     }
     let whatsapp = hangar_whatsapp::install::current(&hangar_whatsapp::install::Paths::new(home)).is_some();
     values.push(("whatsapp", if whatsapp { "installed" } else { "no" }.to_owned()));
@@ -601,23 +636,32 @@ mod tests {
         let key = crate::session_defaults::scope_key("codex", "", "").unwrap();
         std::fs::write(hangar.join("session-defaults.json"), json!({key: {"model": "gpt-6.1-sol", "effort": "xhigh", "permission": ""}}).to_string()).unwrap();
         let runtime = json!({"dictation_organization_mode": "harness", "groq_api_key": "gsk-segredo", "jev_api_key": "sk-segredo"});
-        let values: BTreeMap<&str, String> = server_settings(home.path(), &runtime, Some("codex")).into_iter().collect();
+        let diag = crate::diag::DiagClient::new();
+        let values: BTreeMap<&str, String> = server_settings(home.path(), &runtime, Some("codex"), &diag).into_iter().collect();
         let expected: BTreeMap<&str, String> = [("conversation_beta", "on"), ("code_mode", "off"), ("default_provider", "codex"),
-            ("default_effort", "xhigh"), ("auto_report", "off"), ("dictation_org", "harness"), ("dictation_provider", "openai"),
+            ("default_effort", "xhigh"), ("auto_report", "off"), ("dictation_org", "harness"), ("dictation_provider", "groq"),
             ("connect", "off"), ("computer_use", "off"), ("whatsapp", "no"), ("jev", "configured")]
             .into_iter().map(|(k, v)| (k, v.to_owned())).collect();
         assert_eq!(values, expected);
-        let bare: BTreeMap<&str, String> = server_settings(home.path(), &json!({}), None).into_iter().collect();
+        let bare: BTreeMap<&str, String> = server_settings(home.path(), &json!({}), None, &diag).into_iter().collect();
         assert_eq!((bare.get("default_provider"), bare["dictation_org"].as_str(), bare["dictation_provider"].as_str(), bare["jev"].as_str()),
             (None, "none", "none", "no"));
 
         let telemetry = test_telemetry(home.path(), true);
-        let values = server_settings(home.path(), &runtime, Some("codex"));
-        assert!(server_settings_snapshot(&telemetry, &values).unwrap());
-        assert!(server_settings_snapshot(&telemetry, &values).unwrap(), "o dia já contado também é feito");
-        assert_eq!(telemetry.counters().len(), values.len(), "uma vez por dia");
+        let values = server_settings(home.path(), &runtime, Some("codex"), &diag);
+        count_settings(&telemetry, ClientKind::Server, values.iter().map(|(name, value)| (*name, value.as_str())));
+        assert_eq!(telemetry.counters().len(), values.len(), "nenhum valor sai other");
+        assert!(telemetry.counters().iter().any(|c| c.dims["setting"] == "dictation_provider" && c.dims["value"] == "groq"));
         assert!(telemetry.counters().iter().all(|c| c.dims.get("client").map(String::as_str) == Some("server")));
         assert!(!serde_json::to_string(&telemetry.counters()).unwrap().contains("segredo"));
+    }
+
+    #[test]
+    fn names_use_the_server_id_of_now() {
+        let home = tempfile::tempdir().unwrap();
+        let st = test_state(home.path(), false);
+        *st.machine_identity.write().unwrap() = Some("lab-novo".into());
+        assert_eq!(local_inputs(&st).2, "lab-novo");
     }
 
     #[test]
@@ -627,18 +671,42 @@ mod tests {
         let names = crate::telemetry_scrub::Names {
             sessions: vec!["ajuste-login-Coordenadora".into()], accounts: Vec::new(), machines: vec!["estudio-02".into()],
         };
-        let line = |error, message: &str| Line { error, target: "hangar_server::list".into(), message: message.into() };
+        let line = |error, message: &str| Line { seq: 0, error, target: "hangar_server::list".into(), message: message.into() };
         let lines = [
             line(true, "sessão ajuste-login-Coordenadora não abriu em /home/fulano/pessoal/x"),
             line(false, "peer estudio-02 lento"),
             line(true, "sessão ajuste-login-Coordenadora não abriu em /home/fulano/pessoal/y"),
         ];
-        record_lines(&telemetry, &Scrubber::new(Some("/home/fulano".into()), None), &names.words(), &lines);
+        record_lines(&telemetry, &Scrubber::new(Some("/home/fulano".into()), None), &names.words().unwrap(), &lines);
         let logs: Vec<(String, String, u64)> = telemetry.logs().into_iter().map(|l| (l.level, l.message, l.count)).collect();
         assert_eq!(logs, vec![
             ("error".into(), "sessão <sessão> não abriu em <caminho>".into(), 2),
             ("warn".into(), "peer <máquina> lento".into(), 1),
         ]);
+    }
+
+    #[tokio::test]
+    async fn provider_is_discovered_only_after_the_day_mark() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let home = tempfile::tempdir().unwrap();
+        let telemetry = test_telemetry(home.path(), true);
+        let peers = Arc::new(PeerClient::new(PeerBook::new(None)));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let round = || {
+            let calls = calls.clone();
+            let discover = move || { calls.fetch_add(1, Ordering::SeqCst); async { Some("codex".to_owned()) } };
+            daily_snapshot(telemetry.clone(), peers.clone(), discover, |p: Option<String>| vec![("default_provider", p.unwrap_or_default())])
+        };
+        let marks = home.path().join(".hangar/telemetry/once.json");
+        std::fs::create_dir_all(&marks).unwrap();
+        assert!(round().await.unwrap().is_err());
+        assert!(round().await.unwrap().is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "marca que não se grava não roda as CLIs");
+        std::fs::remove_dir(&marks).unwrap();
+        assert!(round().await.unwrap().unwrap());
+        assert!(round().await.unwrap().unwrap());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "o dia já contado não redescobre");
+        assert!(telemetry.counters().iter().any(|c| c.dims["setting"] == "default_provider" && c.dims["value"] == "codex"));
     }
 
     #[test]

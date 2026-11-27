@@ -5,7 +5,9 @@
 use std::sync::LazyLock;
 
 use hangar_telemetry::wire::MAX_LOG_CHARS;
-use regex::{Captures, Regex};
+use std::collections::HashMap;
+
+use regex::{Captures, Regex, RegexBuilder};
 
 use crate::diag_report::Scrubber;
 
@@ -22,31 +24,50 @@ pub(crate) struct Names {
     pub(crate) machines: Vec<String>,
 }
 
-/// Os nomes já filtrados e do maior para o menor, montados uma vez por conjunto de nomes.
-pub(crate) struct Words(Vec<(String, &'static str)>);
+/// Os nomes num regex só, sem caixa (Unicode) e do maior para o menor, montado uma vez por conjunto.
+pub(crate) struct Words {
+    regex: Option<Regex>,
+    /// Nome em minúsculas → marcador.
+    marks: HashMap<String, &'static str>,
+}
 
 impl Names {
-    pub(crate) fn words(&self) -> Words {
+    /// `None` só quando o regex não se monta: quem chama mantém o conjunto anterior.
+    pub(crate) fn words(&self) -> Option<Words> {
         let marked = [(&self.sessions, "<sessão>"), (&self.accounts, "<conta>"), (&self.machines, "<máquina>")];
-        let mut words: Vec<(String, &'static str)> = marked.iter()
-            .flat_map(|(names, mark)| names.iter().map(move |name| (name.trim().to_ascii_lowercase(), *mark)))
-            .filter(|(name, _)| name.chars().count() >= MIN_NAME_CHARS && !MARK_WORDS.iter().any(|w| name.eq_ignore_ascii_case(w)))
-            .collect();
-        // O maior primeiro: `ajuste-x` sai inteiro antes de `ajuste` casar dentro dele.
-        words.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
-        words.dedup_by(|a, b| a.0 == b.0);
-        Words(words)
+        let mut marks = HashMap::new();
+        for (names, mark) in marked {
+            for name in names.iter().map(|name| name.trim().to_lowercase()) {
+                if name.chars().count() >= MIN_NAME_CHARS && !MARK_WORDS.contains(&name.as_str()) {
+                    marks.entry(name).or_insert(mark);
+                }
+            }
+        }
+        let mut names: Vec<&String> = marks.keys().collect();
+        // O maior primeiro: na mesma posição `ajuste-x` vence `ajuste`.
+        names.sort_by(|a, b| b.chars().count().cmp(&a.chars().count()).then_with(|| a.cmp(b)));
+        let regex = match names.is_empty() {
+            true => None,
+            false => {
+                let alternation = names.iter().map(|name| regex::escape(name)).collect::<Vec<_>>().join("|");
+                Some(RegexBuilder::new(&alternation).case_insensitive(true).size_limit(64 << 20).build().ok()?)
+            }
+        };
+        Some(Words { regex, marks })
     }
 }
 
 fn re(pattern: &str) -> Regex { Regex::new(pattern).unwrap() }
 
 // Texto entre aspas é dado (resposta de serviço, nome, trecho da conversa), nunca a frase do código.
-static QUOTED: LazyLock<Regex> = LazyLock::new(|| re(r#""[^"]*"|'[^']*'|`[^`]*`"#));
+// Escape (`\"`) não fecha o trecho; trecho só de aspas escapadas (JSON dentro de texto) também conta.
+static QUOTED: LazyLock<Regex> = LazyLock::new(|| {
+    re(r#"\\"(?:[^"\\]|\\[^"])*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`"#)
+});
 static URL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)\b(?:https?|wss?)://[^\s"'`<>]+"#));
-// Caminho para em espaço, aspas, `;`, `,` ou `)`; depois do espaço, palavra com maiúscula ou barra
-// ainda é dele (`C:\Program Files\X`).
-const MORE: &str = r#"(?: (?:\p{Lu}[^\s"'`<>;,)]*|[^\s"'`<>;,)]*[\\/][^\s"'`<>;,)]*))*"#;
+// Caminho para em espaço, aspas, `;`, `,` ou `)`. Se antes da próxima `; , )` ou aspas houver outro
+// trecho com barra, o caminho vai até o fim dele: pasta com espaço (`C:\Program Files\X`, `cliente x/doc`).
+const MORE: &str = r#"(?:[^;,)"'`\r\n]*[\\/][^\s"'`<>;,)]*)?"#;
 // Casa (`~`), as formas já trocadas pelo `Scrubber`, letra de unidade e UNC.
 static ROOTED_PATH: LazyLock<Regex> = LazyLock::new(|| {
     re(&format!(r#"(?:(?:<tmp-claude>|%LOCALAPPDATA%)[^\s"'`<>;,)]*|(?:~|\b[A-Za-z]:)[\\/][^\s"'`<>;,)]*|\\\\[^\s"'`<>\\]+[^\s"'`<>;,)]*){MORE}"#))
@@ -68,17 +89,15 @@ static ID: LazyLock<Regex> =
 /// A mensagem pronta para `Telemetry::log`, cortada em `MAX_LOG_CHARS`.
 pub(crate) fn clean(scrubber: &Scrubber, text: &str, words: &Words) -> String {
     let out = QUOTED.replace_all(text, |c: &Captures| {
-        let quote = &c[0][..1];
+        let quote = if c[0].starts_with('\\') { &c[0][..2] } else { &c[0][..1] };
         format!("{quote}…{quote}")
     });
     let out = scrubber.scrub(&out);
     let out = URL.replace_all(&out, "<url>");
     let out = ROOTED_PATH.replace_all(&out, |c: &Captures| path_mark(&c[0]));
     let out = UNIX_PATH.replace_all(&out, |c: &Captures| format!("{}{}", &c[1], path_mark(&c[0][c[1].len()..])));
-    let mut out = EMAIL.replace_all(&out, "<email>").into_owned();
-    for (name, mark) in &words.0 {
-        out = replace_word(&out, name, mark);
-    }
+    let out = EMAIL.replace_all(&out, "<email>");
+    let out = replace_names(&out, words);
     let out = HOST_PORT.replace_all(&out, "<nome>");
     let out = DOTTED.replace_all(&out, |c: &Captures| {
         let token = &c[0];
@@ -97,23 +116,18 @@ fn path_mark(path: &str) -> String {
 
 fn is_word(c: char) -> bool { c.is_alphanumeric() || c == '_' || c == '-' }
 
-/// Troca `word` inteiro (sem letra, dígito, `_` ou `-` colado), sem diferença de maiúscula ASCII.
-fn replace_word(text: &str, word: &str, mark: &str) -> String {
-    // Minúscula ASCII não muda o tamanho em bytes: as posições valem no texto original.
-    let (hay, needle) = (text.to_ascii_lowercase(), word.to_ascii_lowercase());
-    let mut out = String::with_capacity(text.len());
-    let mut last = 0;
-    for (at, _) in hay.match_indices(&needle) {
-        let end = at + needle.len();
-        if text[..at].chars().next_back().is_some_and(is_word) || text[end..].chars().next().is_some_and(is_word) {
-            continue;
+/// Troca cada nome inteiro (sem letra, dígito, `_` ou `-` colado) pelo marcador dele. As posições são as
+/// do próprio texto: nenhuma cópia em outra caixa, que pode ter outro tamanho.
+fn replace_names(text: &str, words: &Words) -> String {
+    let Some(regex) = &words.regex else { return text.to_owned() };
+    regex.replace_all(text, |c: &Captures| {
+        let found = c.get(0).expect("o regex casou");
+        let alone = !text[..found.start()].chars().next_back().is_some_and(is_word) && !text[found.end()..].chars().next().is_some_and(is_word);
+        if !alone {
+            return found.as_str().to_owned();
         }
-        out.push_str(&text[last..at]);
-        out.push_str(mark);
-        last = end;
-    }
-    out.push_str(&text[last..]);
-    out
+        words.marks.get(&found.as_str().to_lowercase()).copied().unwrap_or("<nome>").to_owned()
+    }).into_owned()
 }
 
 #[cfg(test)]
@@ -128,7 +142,7 @@ mod tests {
         }
     }
 
-    fn cleaned(text: &str) -> String { clean(&Scrubber::new(Some("/home/fulano".into()), None), text, &names().words()) }
+    fn cleaned(text: &str) -> String { clean(&Scrubber::new(Some("/home/fulano".into()), None), text, &names().words().unwrap()) }
 
     #[test]
     fn real_lines_lose_what_identifies_the_person() {
@@ -147,6 +161,8 @@ mod tests {
         assert_eq!(cleaned("`/home/fulano/x/y` sumiu"), "`…` sumiu");
         assert_eq!(cleaned("sessão 'Meu Projeto' fechou"), "sessão '…' fechou");
         assert_eq!(cleaned(r#"login de "fulano.tal@empresa.com.br" recusado"#), r#"login de "…" recusado"#);
+        assert_eq!(cleaned(r#"corpo "início \"conteúdo privado\" fim" recusado"#), r#"corpo "…" recusado"#);
+        assert_eq!(cleaned(r#"corpo início \"conteúdo privado\" fim"#), r#"corpo início \"…\" fim"#);
     }
 
     #[test]
@@ -156,7 +172,9 @@ mod tests {
         assert_eq!(cleaned("abrir ~/My Projects/cliente-x/a.rs"), "abrir <caminho>");
         assert_eq!(cleaned(r"C:\Program Files\X\y.exe falhou"), "<caminho> falhou");
         assert_eq!(cleaned(r"share \\servidor\pasta caiu"), "share <caminho> caiu");
-        assert_eq!(cleaned("ler {/var/lib/x} e >/tmp/a/b; |/opt/c/d"), "ler {<caminho>} e ><caminho>; |<caminho>");
+        assert_eq!(cleaned("ler {/var/lib/x} e; >/tmp/a/b; |/opt/c/d"), "ler {<caminho>} e; ><caminho>; |<caminho>");
+        assert_eq!(cleaned("/home/fulano/cliente projeto secreto/documento falhou"), "<caminho> falhou");
+        assert_eq!(cleaned("abrir /srv/cliente x/a.rs, depois /srv/y/b.rs; fim"), "abrir <caminho>, depois <caminho>; fim");
         assert_eq!(cleaned("GET https://casa.exemplo.hangar.dev.br/api/x?y=1 deu 502"), "GET <url> deu 502");
         assert_eq!(cleaned("pid 1234567 na porta 45678 saiu"), "pid <n> na porta 45678 saiu");
         assert_eq!(cleaned("comando /clear recusado"), "comando /clear recusado", "um segmento só é comando");
@@ -182,11 +200,14 @@ mod tests {
     }
 
     #[test]
-    fn words_are_sorted_once_longest_first_without_repeats() {
-        let names = Names { sessions: vec!["abc".into(), "ABC".into(), "abcdef".into()], accounts: vec!["xy".into()], machines: vec![] };
-        let words = names.words();
-        let words: Vec<&str> = words.0.iter().map(|(name, _)| name.as_str()).collect();
-        assert_eq!(words, ["abcdef", "abc"]);
+    fn names_ignore_case_in_any_alphabet_and_need_the_whole_word() {
+        let names = Names { sessions: vec!["Ação".into(), "abc".into(), "ABC".into(), "abcdef".into()], accounts: vec!["João".into(), "xy".into()], machines: vec![] };
+        let words = names.words().unwrap();
+        let cleaned = |text: &str| clean(&Scrubber::new(None, None), text, &words);
+        assert_eq!(cleaned("JOÃO e AÇÃO falharam; joãozinho e açãox ficam"), "<conta> e <sessão> falharam; joãozinho e açãox ficam");
+        assert_eq!(cleaned("abcdef ABC Abc xy"), "<sessão> <sessão> <sessão> xy", "o maior primeiro, nome curto fica");
+        // Maiúscula com outro tamanho em bytes antes do nome não desloca a troca.
+        assert_eq!(cleaned("İİİ abc"), "İİİ <sessão>");
     }
 
     #[test]
