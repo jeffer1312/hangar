@@ -12,7 +12,8 @@
 # Saída 0 = ok; 1 = disparou sem subir; 2 = constante ilegível ou uso errado.
 # Escape deliberado, para mudança que não muda o que o app exige do servidor:
 #       HANGAR_SEM_CLIENT_API=1 git commit ...
-# e `HANGAR_SEM_CLIENT_API: <por quê>` na mensagem do commit, que é o que o CI enxerga.
+# e `HANGAR_SEM_CLIENT_API: <por quê>` na mensagem de um commit do intervalo, que é o que o CI enxerga:
+# vale para o PR inteiro, como o número, que também é conferido pela ponta.
 set -uo pipefail
 
 LIB=crates/hangar-api/src/lib.rs
@@ -45,10 +46,12 @@ case "${1:-}" in
         base="$(valor "$base_rev:$LIB")"; atual="$(valor ":$LIB")"; onde="o stage" ;;
     *..*)
         git rev-list "$1" >/dev/null 2>&1 || { echo "intervalo inválido: $1" >&2; exit 2; }
+        # Sem pipe: com pipefail, o `grep -q` sai cedo e o SIGPIPE do `git log` daria falha mesmo achando o escape.
+        mensagens="$(git log --no-merges --format=%B "$1")"
+        grep -qE '(^|[^A-Za-z_])HANGAR_SEM_CLIENT_API: +[^ ]' <<<"$mensagens" && exit 0
         algum=""
-        # Merges ficam de fora (trazem o que já foi conferido), e cada commit com a marca também.
+        # Merges ficam de fora: trazem o que já foi conferido.
         for c in $(git rev-list --no-merges "$1"); do
-            git log -1 --format=%B "$c" | grep -qE '(^|[^A-Za-z_])HANGAR_SEM_CLIENT_API: +[^ ]' && continue
             if disparou "$(git diff-tree --no-commit-id --name-only -r "$c")" \
                         "$(git diff-tree --no-commit-id -p -U0 --no-color -r "$c" -- desktop-native/src)"; then
                 algum=1; break
@@ -75,6 +78,6 @@ cat >&2 <<FIM
   Suba para $((base + 1)): é por ele que o app sabe que precisa de servidor novo.
   Mudança que não muda o que o app exige do servidor:
       HANGAR_SEM_CLIENT_API=1 git commit ...
-  e, para o CI, "HANGAR_SEM_CLIENT_API: <por quê>" na mensagem do commit.
+  e, para o CI, "HANGAR_SEM_CLIENT_API: <por quê>" na mensagem de um commit do PR.
 FIM
 exit 1

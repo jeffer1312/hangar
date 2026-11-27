@@ -70,6 +70,13 @@ echo 'const R: &str = "/api/x";' >> desktop-native/src/update.rs
 commit $'nativo usa rota que já existe\n\nHANGAR_SEM_CLIENT_API: a rota já existe desde a api 1'
 confere "escape na mensagem do commit → 0" 0 "$base..HEAD"
 
+# A linha vale para o PR inteiro: num commit posterior, cobre o anterior que mexeu na api.
+git checkout -q -b escape-depois "$base"
+echo 'fn c() {}' >> desktop-native/src/api/mod.rs; commit 'mexe no módulo de api do nativo'
+echo y >> README.md
+commit $'ajuste\n\nHANGAR_SEM_CLIENT_API: nada novo é pedido ao servidor'
+confere "escape num commit posterior do intervalo → 0" 0 "$base..HEAD"
+
 # PR paralelo: a base já subiu para 3 (outro PR mesclado) e esta branch também parou em 3.
 git checkout -q -b base-nova "$base"
 api 3; commit 'outro PR subiu'
