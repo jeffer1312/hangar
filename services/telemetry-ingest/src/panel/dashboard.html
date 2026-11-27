@@ -62,12 +62,73 @@ const EVENTS = {
   server_startup: ["Subida do servidor", "saude", "Do início do servidor até ele aceitar pedidos, depois de ligar, reiniciar ou atualizar."],
   log_dropped: ["Linhas de log que sobraram", "saude", "Linhas novas de aviso ou erro que não couberam no teto de 100 por dia."],
 };
+// Preferências do retrato diário (evento settings): [título, grupo, o que é].
+const SETTING_GROUPS = ["Aparência", "Conversa", "Barra e navegação", "Beta", "Servidor"];
+const SETTINGS = {
+  theme: ["Tema", "Aparência", "Claro, escuro, automático (segue o sistema) ou as cores do papel de parede."],
+  panels: ["Painéis", "Aparência", "Caixas coladas na janela ou soltas sobre o fundo (PC)."],
+  palette: ["Paleta", "Aparência", "Cores clássicas do Hangar ou neutras."],
+  background: ["Fundo", "Aparência", "O que fica atrás das caixas."],
+  background_effect: ["Efeito do fundo", "Aparência", "Efeito desenhado por cima da imagem de fundo."],
+  wallpaper: ["Papel de parede", "Aparência", "Com o fundo da área de trabalho: ver através da janela ou desenhar a foto dentro (PC)."],
+  surface_material: ["Material das caixas", "Aparência", "Vidro que deixa ver o fundo ou caixa opaca (PC)."],
+  reading: ["Leitura", "Aparência", "O que segura o texto da conversa sobre o fundo."],
+  font: ["Fonte da conversa", "Aparência", "Fonte do sistema, monoespaçada ou outra instalada (o nome dela não sai)."],
+  code_font: ["Fonte do código", "Aparência", "Fonte dos blocos de código (PC)."],
+  text_size: ["Tamanho do texto", "Aparência", "Texto da conversa menor, igual ou maior que o de fábrica."],
+  compact_style: ["Estilo compacto", "Aparência", "Se a aparência é exatamente a do atalho Estilo compacto (PC)."],
+  tool_look: ["Estilo da conversa", "Conversa", "Como as ferramentas do agente aparecem na conversa."],
+  thinking_tools: ["Ferramentas no pensamento", "Conversa", "Quais chamadas feitas no meio do raciocínio ficam dentro do bloco do pensamento."],
+  thinking_collapsed: ["Pensamento dobrado", "Conversa", "Pensamento terminado numa linha só, aberto no clique (PC)."],
+  task_list: ["Lista de tarefas", "Conversa", "Tarefas do agente como bloco de progresso na conversa."],
+  table_chart: ["Gráfico nas tabelas", "Conversa", "Botão de gráfico sobre tabelas numéricas."],
+  ask_highlight: ["Destaque da pergunta", "Conversa", "Cor da moldura quando o agente pergunta."],
+  delivery: ["Mensagem com o agente trabalhando", "Conversa", "O que acontece com a mensagem mandada enquanto a sessão trabalha."],
+  hands_free: ["Mãos livres", "Conversa", "Ditado que envia sozinho."],
+  navigation: ["Navegação", "Barra e navegação", "Onde ficam as sessões no PC."],
+  sidebar_compact: ["Barra compacta", "Barra e navegação", "Linhas mais baixas na barra de sessões (PC)."],
+  sidebar_height: ["Altura da barra", "Barra e navegação", "Barra da altura da janela ou do conteúdo (PC)."],
+  sidebar_group: ["Agrupar a barra", "Barra e navegação", "Como a barra do PC agrupa as sessões."],
+  tabs_full: ["Abas detalhadas", "Barra e navegação", "Abas com pasta e branch embaixo do nome (PC)."],
+  list_group: ["Agrupar a lista", "Barra e navegação", "Como a lista do celular agrupa as sessões."],
+  list_organize: ["Organizar a lista", "Barra e navegação", "Lista do celular por sessões ou por conversas."],
+  home_screen: ["Tela inicial", "Barra e navegação", "O que o celular abre primeiro."],
+  tablet_bar: ["Barra no tablet", "Barra e navegação", "Onde fica a barra de sessões no tablet."],
+  language: ["Idioma", "Barra e navegação", "Idioma do app."],
+  tips: ["Dicas", "Barra e navegação", "Dicas do app ligadas ou desligadas (PC)."],
+  tour: ["Tour", "Barra e navegação", "Se a pessoa terminou, pulou ou ainda não viu o tour (PC)."],
+  conversation_beta: ["Conversa nova", "Beta", "O desenho novo da conversa, da tela Beta."],
+  code_mode: ["Code Mode do Claude Code", "Beta", "Sessões do Claude abertas com o Code Mode."],
+  default_provider: ["Agente padrão", "Servidor", "O agente que abre quando o pedido não diz qual."],
+  default_effort: ["Esforço padrão", "Servidor", "O esforço salvo como padrão para o agente padrão."],
+  auto_report: ["Relatório automático", "Servidor", "Se a atualização que falha manda o relatório sozinha."],
+  dictation_org: ["Organizar o ditado", "Servidor", "Quem organiza o texto ditado depois da transcrição."],
+  dictation_provider: ["Transcrição", "Servidor", "O serviço que transforma a fala em texto."],
+  connect: ["Hangar Connect", "Servidor", "Máquina ligada ao Connect."],
+  computer_use: ["Computer Use", "Servidor", "Controle do desktop ligado para os agentes."],
+  whatsapp: ["WhatsApp", "Servidor", "Integração do WhatsApp instalada."],
+  jev: ["Jev", "Servidor", "Chave do Jev configurada."],
+};
+const SETTING_VALUES = { on: "ligado", off: "desligado", auto: "automático", light: "claro", dark: "escuro", desktop: "área de trabalho",
+  attached: "colados", floating: "soltos", classic: "clássico", neutral: "neutra", plain: "liso", texture: "textura", aurora: "luz no canto",
+  image: "imagem", none: "nenhum", dither: "pontilhado", ascii: "ASCII", halftone: "retícula", scanlines: "linhas de TV", window: "janela",
+  glass: "vidro", opaque: "opaco", text: "texto", sheet: "folha", system: "do sistema", mono: "monoespaçada", custom: "outra instalada",
+  jetbrains_mono: "JetBrains Mono", small: "menor", normal: "de fábrica", large: "maior", chips: "chips", tree: "árvore", terminal: "terminal",
+  claude_desktop: "Claude Desktop", search: "só buscas", all: "todas", accent: "cor de destaque", amber: "âmbar", queue: "fila",
+  direct: "direto", jev: "Jev escolhe", conversation: "na conversa", tabs: "abas em cima", bottom_tabs: "abas embaixo",
+  conversations: "conversas", sidebar: "barra lateral", full: "inteira", content: "do conteúdo", project: "projeto", machine: "máquina",
+  server: "servidor", sessions: "sessões", new_conversation: "conversa nova", left: "à esquerda", bottom: "embaixo", top: "em cima",
+  pt: "português", en: "inglês", done: "terminou", skipped: "pulou", unset: "sem padrão", minimal: "mínimo", low: "baixo", medium: "médio",
+  high: "alto", xhigh: "muito alto", max: "máximo", ultra: "ultra", unanswered: "sem resposta", harness: "pelo agente",
+  external_api: "por API externa", openai: "OpenAI (ou compatível)", elevenlabs: "ElevenLabs", whisper_cpp: "whisper.cpp local",
+  installed: "instalado", no: "não", configured: "configurado", other: "outro" };
+const AGENTS = { claude: "Claude", codex: "Codex", pi: "Pi", omp: "omp", kimi: "Kimi", antigravity: "Antigravity" };
 // Valores das dimensões em português; o que não está aqui aparece como veio.
 const VALUES = {
   provider: { claude: "Claude", codex: "Codex", pi: "Pi", omp: "omp", kimi: "Kimi", antigravity: "Antigravity", other: "outro agente" },
   surface: { terminal: "com terminal", headless: "sem terminal" },
   origin: { person: "pela pessoa", session: "por outra sessão", manual: "pelo botão", auto: "automática" },
-  client: { ios: "iPhone/iPad", android: "Android", pwa: "navegador", native: "app do PC", other: "outro app" },
+  client: { ios: "iPhone/iPad", android: "Android", pwa: "navegador", native: "app do PC", server: "servidor", other: "outro app" },
   kind: { lan: "rede local", tailscale: "Tailscale", connect: "Hangar Connect", public: "endereço público", disabled: "desligada",
     crash: "queda", update: "atualização", requested: "parada pedida" },
   cause: { package: "troca de versão", terminal_out_of_memory: "sem memória", terminal_died: "terminal fechou" },
@@ -313,6 +374,33 @@ function timeSentence(buckets) {
   return "Metade das vezes " + say(quantileBucket(buckets, 0.5)) + "; 9 em cada 10 " + say(quantileBucket(buckets, 0.9)) + ".";
 }
 
+// Uma barra por valor, com o número de máquinas que o escolheram. O mesmo valor em dois apps sai em duas barras:
+// somar as máquinas contaria duas vezes a que tem os dois.
+function settingsSection(root, rows) {
+  if (!rows.length) return;
+  const bySetting = new Map();
+  for (const c of rows) {
+    const d = c.dims || {};
+    if (!bySetting.has(d.setting)) bySetting.set(d.setting, []);
+    bySetting.get(d.setting).push({ value: d.value, client: d.client, machines: c.machines });
+  }
+  const groups = new Map([...SETTING_GROUPS, "Outras"].map(g => [g, []]));
+  for (const key of Object.keys(SETTINGS).concat([...bySetting.keys()].filter(k => !Object.hasOwn(SETTINGS, k)).sort())) {
+    const items = bySetting.get(key);
+    if (!items) continue;
+    const [title, group, explain] = Object.hasOwn(SETTINGS, key) ? SETTINGS[key] : [key, "Outras", "Preferência nova, ainda sem descrição neste painel."];
+    const clients = new Set(items.map(i => i.client)).size;
+    const label = i => (key === "default_provider" ? AGENTS[i.value] : SETTING_VALUES[i.value]) || i.value;
+    const bars = items.sort((x, y) => y.machines - x.machines).map(i => ({
+      label: clients > 1 ? label(i) + " · " + (VALUES.client[i.client] || i.client) : label(i), value: i.machines }));
+    groups.get(group).push(el("section", { class: "card" }, el("h3", { text: title }), el("p", { class: "explain", text: explain }), barList(bars)));
+  }
+  root.append(section("Como configuram", "quantas máquinas escolheram cada opção; cada app manda o retrato uma vez por dia"));
+  for (const [group, cards] of groups) {
+    if (cards.length) root.append(el("h3", { class: "group-title", text: group }), el("div", { class: "grid" }, ...cards));
+  }
+}
+
 function render(data) {
   const root = document.getElementById("content");
   root.replaceChildren();
@@ -396,7 +484,7 @@ function render(data) {
 
   const sections = { uso: [], saude: [], outros: [] };
   for (const [event, e] of [...byEvent].sort()) {
-    if (BAD.has(event)) continue;
+    if (BAD.has(event) || event === "settings") continue;
     const [title, group, explain] = Object.hasOwn(EVENTS, event) ? EVENTS[event] : [event, "outros", "Evento novo, ainda sem descrição neste painel."];
     const items = [...e.dims].sort((x, y) => y.value - x.value);
     const shown = items.slice(0, 12);
@@ -406,6 +494,7 @@ function render(data) {
       items.length > shown.length ? el("div", { class: "minor", text: "+ " + (items.length - shown.length) + " na tabela no fim" }) : null));
   }
   if (sections.uso.length) root.append(section("Como usam", "o que as pessoas fazem com o Hangar"), el("div", { class: "grid" }, ...sections.uso));
+  settingsSection(root, data.by_dims.filter(c => c.event === "settings"));
 
   root.append(section("Onde roda", "pelo último pacote de cada máquina"));
   const envGrid = el("div", { class: "grid" });

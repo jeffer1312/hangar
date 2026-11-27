@@ -79,6 +79,59 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 | `server_startup` (faixa) | — | Tempo de subida do servidor |
 | `chat_open` (faixa) | `client` | Tempo para abrir uma conversa |
 
+### Preferências
+
+Uma vez por dia (UTC), o app do PC e o do celular mandam ao servidor ativo (nunca a um convite) o
+retrato das preferências daquele aparelho, e o servidor conta as dele. Cada par vira um contador
+`settings` com `client` (`native`, `ios`, `android` ou `server`), `setting` e `value`. O
+servidor conta no máximo um retrato por dia de cada app e aparelho: o app manda junto o id aleatório
+que já guarda para as novidades da atualização, e esse id fica no `once.json` da máquina, fora do
+pacote. Preferência fora da tabela é descartada; valor fora da lista sai `other`. Nome de fonte, cor
+escolhida, modelo e qualquer número não saem.
+
+| `setting` | Valores | De onde |
+|---|---|---|
+| `theme` | `auto`, `light`, `dark`, `desktop` | PC, celular (`system` do celular sai `auto`) |
+| `panels` | `attached`, `floating` | PC |
+| `palette` | `classic`, `neutral` | PC, celular |
+| `background` | `plain`, `texture`, `aurora`, `image`, `desktop` | PC, celular (o liso do celular sai `plain`; o fundo com luz do PC sai `aurora`) |
+| `background_effect` | `none`, `dither`, `ascii`, `halftone`, `scanlines` | PC, celular |
+| `wallpaper` | `window`, `glass` | PC |
+| `surface_material` | `glass`, `opaque` | PC |
+| `reading` | `auto`, `none`, `text`, `sheet` | PC, celular |
+| `font` | `system`, `mono`, `custom` (outra fonte instalada; o nome não sai) | PC |
+| `code_font` | `jetbrains_mono`, `system`, `custom` | PC |
+| `text_size` | `small`, `normal`, `large`: menor, igual ou maior que o tamanho de fábrica do app | PC, celular |
+| `compact_style` | `on`, `off`: a aparência é a do atalho "Estilo compacto" | PC |
+| `tool_look` | `classic`, `chips`, `tree`, `terminal`, `claude_desktop` | PC, celular |
+| `thinking_tools` | `none`, `search`, `all` | PC, celular |
+| `thinking_collapsed`, `task_list`, `table_chart` | `on`, `off` | PC (`task_list` e `table_chart` também no celular) |
+| `ask_highlight` | `accent`, `amber` | PC, celular |
+| `delivery` | `queue`, `direct`, `jev`, `conversation` | PC, celular |
+| `hands_free` | `on`, `off` | PC, celular |
+| `navigation` | `tabs`, `bottom_tabs`, `conversations`, `sidebar` | PC |
+| `sidebar_compact`, `tabs_full` | `on`, `off` | PC |
+| `sidebar_height` | `full`, `content` | PC |
+| `sidebar_group` | `none`, `project`, `machine` | PC |
+| `list_group` | `none`, `server`, `project` | celular |
+| `list_organize` | `sessions`, `conversations` | celular |
+| `home_screen` | `sessions`, `new_conversation` | celular |
+| `tablet_bar` | `left`, `bottom`, `top` | só tablet |
+| `language` | `system`, `pt`, `en` | PC, celular |
+| `tips` | `on`, `off` | PC |
+| `tour` | `done`, `skipped`, `none` | PC |
+| `conversation_beta`, `code_mode` | `on`, `off` (opções da tela Beta, guardadas no servidor) | servidor |
+| `default_provider` | `claude`, `codex`, `pi`, `omp`, `kimi`, `antigravity` | servidor |
+| `default_effort` | `unset`, `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` (o padrão salvo do agente padrão) | servidor |
+| `auto_report` | `on`, `off`, `unanswered` | servidor |
+| `dictation_org` | `none`, `harness`, `external_api` | servidor |
+| `dictation_provider` | `openai`, `elevenlabs`, `whisper_cpp`, `none` (o primeiro serviço da lista) | servidor |
+| `connect`, `computer_use` | `on`, `off` | servidor |
+| `whatsapp` | `installed`, `no` | servidor |
+| `jev` | `configured`, `no` (só se há chave; a chave não sai) | servidor |
+
+O canal de atualização não entra aqui: ele já vai em `env` em todo pacote.
+
 ### Linhas de erro do servidor
 
 Cada linha de nível aviso (`warn`) ou erro (`error`) que o `hangar-server` escreve no log dele
@@ -137,8 +190,8 @@ Fim de turno, erros, quedas e troca por limite contam para todas as sessões da 
 - `~/.hangar/telemetry/queue/<dia>.json`: um arquivo por dia ainda não enviado, com os contadores
   exatamente como vão sair (o dia de hoje está lá desde a última gravação).
 - `~/.hangar/telemetry.json`: sua resposta (`consent`) e os dois números aleatórios.
-- `~/.hangar/telemetry/once.json`: marcas do que só conta uma vez (o retrato do dia, cada
-  atualização).
+- `~/.hangar/telemetry/once.json`: marcas do que só conta uma vez (o retrato do dia das máquinas
+  e das preferências, cada atualização).
 
 No Windows, `~` é a pasta do seu usuário.
 

@@ -273,6 +273,9 @@ impl Telemetry {
 
     pub fn enabled(&self) -> bool { self.enabled.load(Ordering::SeqCst) }
 
+    /// O dia (UTC) do relógio da telemetria, o mesmo do pacote.
+    pub fn today(&self) -> String { day_of((self.clock)()) }
+
     /// `None` = ainda sem resposta.
     pub fn consent(&self) -> Option<bool> { lock(&self.settings).ok().and_then(|s| s.state.consent) }
 

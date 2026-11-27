@@ -1,10 +1,18 @@
 import { baseOf, configureApi, configureLocale, definirArmazem } from '@hangar/core';
 import { getLocales } from 'expo-localization';
+import { Dimensions } from 'react-native';
 import { overwriteGetLocale } from '../paraglide/runtime';
 import { useServers } from '../stores/servers';
 import { prefs } from '../stores/prefs';
 import { setPairNotice } from '../stores/sessions';
 import { useAparencia } from '../stores/aparencia';
+import { useTabletPrefs } from '../stores/tabletPrefs';
+import { useHandsFree } from '../stores/handsFree';
+import { useDeliveryMode } from '../chat/useQueueDelivery';
+import { CONVERSA_PADRAO } from '../theme/aplicarMaterial';
+import { TABLET_MIN_SIDE } from '../features/tablet/layout';
+import { settingsValues } from './settingsSnapshot';
+import { updateDeviceId } from '../features/updates/pending';
 import { createEventSource } from './sse';
 import { installDemoFetch, isDemoUrl, openDemoEventSource } from './demo';
 import { iniciarDiag } from './diag';
@@ -53,5 +61,16 @@ export function configureCore() {
   configureLocale({ getLocale: locale });
   overwriteGetLocale(locale);
   installDemoFetch();
-  iniciarDiag();
+  iniciarDiag(() => {
+    const a = useAparencia.getState();
+    const { width, height } = Dimensions.get('window');
+    return {
+      valores: settingsValues({
+        ...a, texto: a.conversa.texto, textoPadrao: CONVERSA_PADRAO.texto,
+        tabletBar: Math.min(width, height) >= TABLET_MIN_SIDE ? useTabletPrefs.getState().placement : undefined,
+        delivery: useDeliveryMode.getState().mode, handsFree: useHandsFree.getState().on,
+      }),
+      aparelho: updateDeviceId(),
+    };
+  });
 }

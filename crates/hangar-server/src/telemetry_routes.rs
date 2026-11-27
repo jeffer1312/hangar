@@ -10,7 +10,7 @@ use axum::body::to_bytes;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::response::Response;
-use hangar_telemetry::events::{ClientKind, Code, Dims, Event, LogLevel, PeerKind};
+use hangar_telemetry::events::{self, ClientKind, Code, Dims, Event, LogLevel, PeerKind};
 use hangar_telemetry::{Disabled, Failure, Telemetry};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -79,14 +79,21 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
         }
         Err(_) => st.diag.report("telemetry.unavailable", "", "telemetry_client_failed", "telemetria sem cliente HTTP: nada é enviado"),
     }
-    let (snapshot, book, snapshot_diag) = (telemetry.clone(), st.peers.clone(), diag.clone());
+    let (snapshot, book, snapshot_diag, snapshot_st) = (telemetry.clone(), st.peers.clone(), diag.clone(), st.clone());
     tasks.push(tokio::spawn(async move {
         let mut done: Option<String> = None;
         loop {
             let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
             if done.as_deref() != Some(today.as_str()) {
+                // A descoberta dos provedores roda as CLIs: só com a telemetria ligada.
+                let provider = if snapshot.enabled() { default_provider(&snapshot_st).await } else { None };
                 let (telemetry, book) = (snapshot.clone(), book.clone());
-                match tokio::task::spawn_blocking(move || peers_snapshot(&telemetry, &book)).await {
+                let env = snapshot_st.accounts.env.clone();
+                let snap = move || -> std::io::Result<bool> {
+                    let values = server_settings(&env.home, &crate::runtime::codex_launch::runtime_config(&env), provider.as_deref());
+                    Ok(peers_snapshot(&telemetry, &book)? && server_settings_snapshot(&telemetry, &values)?)
+                };
+                match tokio::task::spawn_blocking(snap).await {
                     Ok(Ok(true)) => done = Some(today),
                     Ok(Ok(false)) => {}
                     Ok(Err(e)) => report(&snapshot_diag, Failure::Disk(e)),
@@ -181,6 +188,83 @@ pub(crate) fn peers_snapshot(telemetry: &Telemetry, peers: &PeerClient) -> std::
     Ok(true)
 }
 
+/// O provedor que a abertura escolhe quando o pedido não diz; `None` quando a descoberta falha.
+async fn default_provider(st: &AppState) -> Option<String> {
+    let snapshot = crate::engines::providers::read(&st.accounts).await.ok()?;
+    Some(crate::session_open::resolve::choose_provider(&snapshot.selection).name().to_owned())
+}
+
+/// As preferências desta máquina, `client: server`, uma vez por dia (UTC); o contrato é o de `peers_snapshot`. Bloqueante.
+pub(crate) fn server_settings_snapshot(telemetry: &Telemetry, values: &[(&'static str, String)]) -> std::io::Result<bool> {
+    if !telemetry.enabled() { return Ok(false); }
+    if telemetry.once(&format!("settings:server:{}", telemetry.today()))? {
+        count_settings(telemetry, ClientKind::Server, values.iter().map(|(name, value)| (*name, value.as_str())));
+    }
+    Ok(true)
+}
+
+/// O que o servidor guarda das escolhas do dono, já nos nomes de `events::SETTINGS`. Arquivo que não se lê deixa a
+/// preferência dele de fora; sem provedor, saem de fora ele e o esforço. Bloqueante.
+pub(crate) fn server_settings(home: &Path, runtime: &Value, provider: Option<&str>) -> Vec<(&'static str, String)> {
+    let on = |on: bool| if on { "on" } else { "off" }.to_owned();
+    let mut values = Vec::new();
+    if let Ok(options) = crate::session_defaults::options(home) {
+        let options = options.unwrap_or_default();
+        values.push(("conversation_beta", on(options.conversation_beta)));
+        values.push(("code_mode", on(options.code_mode)));
+    }
+    if let Some(provider) = provider {
+        values.push(("default_provider", provider.to_owned()));
+        if let Ok(saved) = crate::session_defaults::saved(home, provider, "", "") {
+            let effort = saved.map(|d| d.effort).filter(|e| !e.is_empty());
+            values.push(("default_effort", effort.unwrap_or_else(|| "unset".to_owned())));
+        }
+    }
+    if let Ok(consent) = crate::diag_report::auto::consent(home) {
+        values.push(("auto_report", consent.map_or("unanswered".to_owned(), on)));
+    }
+    let text = |key: &str| runtime[key].as_str().map(str::trim).unwrap_or_default().to_owned();
+    let organization = text("dictation_organization_mode");
+    values.push(("dictation_org", if organization.is_empty() { "none".to_owned() } else { organization }));
+    // O primeiro serviço da lista é o que transcreve; a chave Groq antiga sem lista vale como `openai`.
+    let provider = runtime["transcription_providers"][0]["kind"].as_str().map(str::to_owned)
+        .or_else(|| (!text("groq_api_key").is_empty()).then(|| "openai".to_owned()));
+    values.push(("dictation_provider", provider.unwrap_or_else(|| "none".to_owned())));
+    if let Ok(linked) = crate::connect::state::read(&home.join(".hangar").join("connect")) {
+        values.push(("connect", on(linked.is_some())));
+    }
+    let computer = hangar_computer_control_setup::Paths::new(home.to_path_buf(), Vec::new());
+    if let Ok(main) = hangar_computer_control_setup::read_entry(computer.main_file(), false) {
+        values.push(("computer_use", on(main.entry.is_some())));
+    }
+    let whatsapp = hangar_whatsapp::install::current(&hangar_whatsapp::install::Paths::new(home)).is_some();
+    values.push(("whatsapp", if whatsapp { "installed" } else { "no" }.to_owned()));
+    values.push(("jev", if text("jev_api_key").is_empty() { "no" } else { "configured" }.to_owned()));
+    values
+}
+
+fn count_settings<'a>(telemetry: &Telemetry, client: ClientKind, values: impl IntoIterator<Item = (&'a str, &'a str)>) {
+    for (name, value) in values {
+        let Some((setting, value)) = events::setting(name, value) else { continue };
+        telemetry.count(Event::Settings, Dims::new().with("client", client).with("setting", setting).with("value", value), 1);
+    }
+}
+
+/// `settings.snapshot` de um app: um por dia por cliente e aparelho (`aparelho`, o id que o app já guarda); sem id
+/// válido, um por dia por cliente. O id fica só no `once.json` desta máquina.
+fn settings_snapshot(telemetry: &Telemetry, client: ClientKind, item: &Value) {
+    let Some(values) = item["valores"].as_object() else { return };
+    let device = item["aparelho"].as_str()
+        .filter(|id| (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        .unwrap_or_default();
+    // ponytail: um id novo por envio enche o `once.json` (64 marcas); só o próprio dono manda aqui.
+    match telemetry.once(&format!("settings:{}:{device}:{}", client.as_str(), telemetry.today())) {
+        Ok(true) => count_settings(telemetry, client, values.iter().filter_map(|(name, value)| Some((name.as_str(), value.as_str()?)))),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(code = "telemetry_disk_failed", kind = ?e.kind(), "telemetria: retrato de preferências sem marca do dia"),
+    }
+}
+
 /// O tipo de ligação de um endereço; o endereço em si nunca sai daqui. `None` quando não é URL.
 pub(crate) fn classify(base_url: &str) -> Option<PeerKind> {
     let url = reqwest::Url::parse(base_url).ok()?;
@@ -225,7 +309,7 @@ pub(crate) fn count_screen(telemetry: &Telemetry, body: &[u8], accepted: usize) 
 
 fn screen_event(telemetry: &Telemetry, item: &Value) {
     let text = |key: &str| item[key].as_str().unwrap_or_default();
-    let client = ClientKind::parse(text("cliente")).unwrap_or(ClientKind::Other);
+    let client = ClientKind::parse(text("cliente")).filter(|c| *c != ClientKind::Server).unwrap_or(ClientKind::Other);
     let took = item["ms"].as_u64();
     let dims = Dims::new().with("client", client);
     match text("evento") {
@@ -249,6 +333,7 @@ fn screen_event(telemetry: &Telemetry, item: &Value) {
             let code = Code::known(&text("codigo").to_ascii_lowercase(), FATAL_CODES);
             telemetry.count(Event::ClientFatal, dims.with("code", code), 1);
         }
+        "settings.snapshot" => settings_snapshot(telemetry, client, item),
         _ => {}
     }
 }
@@ -474,6 +559,65 @@ mod tests {
         assert_eq!(telemetry.counters().len(), 6);
         let wire = serde_json::to_string(&telemetry.counters()).unwrap();
         assert!(!wire.contains("exemplo") && !wire.contains("celular"), "{wire}");
+    }
+
+    #[test]
+    fn settings_snapshot_counts_once_a_day_per_client_and_device() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        let home = tempfile::tempdir().unwrap();
+        // Um meio-dia UTC qualquer; o relógio é o da telemetria, nunca o real.
+        let now = Arc::new(AtomicI64::new(1_795_780_800));
+        let clock = now.clone();
+        let telemetry = Telemetry::for_test(home.path(), Arc::new(move || chrono::DateTime::from_timestamp(clock.load(Ordering::SeqCst), 0).unwrap()));
+        telemetry.set_consent(true).unwrap();
+        let snapshot = |client: &str, device: &str| json!({"evento": "settings.snapshot", "cliente": client, "aparelho": device,
+            "valores": {"theme": "dark", "font": "Fira Code", "modelo": "opus", "tool_look": 3}});
+        let body = |items: Vec<Value>| json!({"eventos": items}).to_string();
+        count_screen(&telemetry, body(vec![snapshot("native", "a-1"), snapshot("native", "a-1"), snapshot("native", "b-2"),
+            snapshot("ios", "a-1"), snapshot("server", "c-3")]).as_bytes(), 5);
+        let count = |client: &str, setting: &str, value: &str| telemetry.counters().into_iter()
+            .find(|c| c.event == "settings" && c.dims.get("client").map(String::as_str) == Some(client)
+                && c.dims["setting"] == setting && c.dims["value"] == value)
+            .map_or(0, |c| c.count);
+        assert_eq!(count("native", "theme", "dark"), 2, "dois aparelhos, cada um uma vez");
+        assert_eq!(count("ios", "theme", "dark"), 1);
+        assert_eq!(count("other", "theme", "dark"), 1, "app não fala como o servidor");
+        assert_eq!(count("native", "font", "other"), 2, "nome de fonte sai other");
+        assert_eq!(telemetry.counters().len(), 6, "preferência desconhecida e valor que não é texto ficam fora");
+        now.fetch_add(24 * 60 * 60, Ordering::SeqCst);
+        count_screen(&telemetry, body(vec![snapshot("native", "a-1")]).as_bytes(), 1);
+        let wire = serde_json::to_string(&telemetry.counters()).unwrap();
+        assert!(!wire.contains("Fira") && !wire.contains("a-1"), "{wire}");
+        assert_eq!(telemetry.counters().len(), 2, "o dia novo é outro pacote, e o aparelho conta de novo");
+    }
+
+    #[test]
+    fn server_settings_read_the_choices_without_free_text() {
+        let home = tempfile::tempdir().unwrap();
+        let hangar = home.path().join(".hangar");
+        std::fs::create_dir_all(&hangar).unwrap();
+        std::fs::write(hangar.join("session-options.json"), r#"{"conversation_beta": true, "code_mode": false}"#).unwrap();
+        std::fs::write(hangar.join("auto-report.json"), r#"{"auto_report": false}"#).unwrap();
+        let key = crate::session_defaults::scope_key("codex", "", "").unwrap();
+        std::fs::write(hangar.join("session-defaults.json"), json!({key: {"model": "gpt-6.1-sol", "effort": "xhigh", "permission": ""}}).to_string()).unwrap();
+        let runtime = json!({"dictation_organization_mode": "harness", "groq_api_key": "gsk-segredo", "jev_api_key": "sk-segredo"});
+        let values: BTreeMap<&str, String> = server_settings(home.path(), &runtime, Some("codex")).into_iter().collect();
+        let expected: BTreeMap<&str, String> = [("conversation_beta", "on"), ("code_mode", "off"), ("default_provider", "codex"),
+            ("default_effort", "xhigh"), ("auto_report", "off"), ("dictation_org", "harness"), ("dictation_provider", "openai"),
+            ("connect", "off"), ("computer_use", "off"), ("whatsapp", "no"), ("jev", "configured")]
+            .into_iter().map(|(k, v)| (k, v.to_owned())).collect();
+        assert_eq!(values, expected);
+        let bare: BTreeMap<&str, String> = server_settings(home.path(), &json!({}), None).into_iter().collect();
+        assert_eq!((bare.get("default_provider"), bare["dictation_org"].as_str(), bare["dictation_provider"].as_str(), bare["jev"].as_str()),
+            (None, "none", "none", "no"));
+
+        let telemetry = test_telemetry(home.path(), true);
+        let values = server_settings(home.path(), &runtime, Some("codex"));
+        assert!(server_settings_snapshot(&telemetry, &values).unwrap());
+        assert!(server_settings_snapshot(&telemetry, &values).unwrap(), "o dia já contado também é feito");
+        assert_eq!(telemetry.counters().len(), values.len(), "uma vez por dia");
+        assert!(telemetry.counters().iter().all(|c| c.dims.get("client").map(String::as_str) == Some("server")));
+        assert!(!serde_json::to_string(&telemetry.counters()).unwrap().contains("segredo"));
     }
 
     #[test]

@@ -28,6 +28,10 @@ export interface Evento {
   quantidade?: number;
   etapa?: string;
   motivo?: string;
+  /** `settings.snapshot`: preferência → valor de lista; o diário não guarda, só a telemetria conta. */
+  valores?: Record<string, string>;
+  /** Id do aparelho para o servidor contar um retrato por dia; fica fora do diário. */
+  aparelho?: string;
 }
 
 export interface DiagSink {

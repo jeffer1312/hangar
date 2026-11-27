@@ -61,6 +61,7 @@ named_enum!(Event {
     ServerStartup => "server_startup",
     ChatOpen => "chat_open",
     LogDropped => "log_dropped",
+    Settings => "settings",
 });
 
 named_enum!(
@@ -143,7 +144,10 @@ dim_enum!(Provider {
 
 dim_enum!(Surface { Terminal => "terminal", Headless => "headless" });
 
-dim_enum!(ClientKind { Ios => "ios", Android => "android", Pwa => "pwa", Native => "native", Other => "other" });
+dim_enum!(
+    /// Quem mandou o evento; `Server` só no retrato de preferências do próprio servidor.
+    ClientKind { Ios => "ios", Android => "android", Pwa => "pwa", Native => "native", Server => "server", Other => "other" }
+);
 
 dim_enum!(
     /// Quem escreveu a mensagem: a pessoa, ou outra sessão (texto que casa o `FROM` do `input`).
@@ -194,6 +198,62 @@ pub fn model(provider: Provider, value: &str, engine: bool) -> Code {
         Provider::Pi | Provider::Omp | Provider::Other => &[],
     };
     Code::known(value, list)
+}
+
+const ON_OFF: &[&str] = &["on", "off"];
+
+/// As preferências do retrato diário (`Event::Settings`) e os valores de cada uma. Os clientes já mandam
+/// nestes nomes; valor livre (nome de fonte, cor, modelo) não tem nome aqui e sai `other`.
+pub const SETTINGS: &[(&str, &[&str])] = &[
+    ("theme", &["auto", "light", "dark", "desktop"]),
+    ("panels", &["attached", "floating"]),
+    ("palette", &["classic", "neutral"]),
+    ("background", &["plain", "texture", "aurora", "image", "desktop"]),
+    ("background_effect", &["none", "dither", "ascii", "halftone", "scanlines"]),
+    ("wallpaper", &["window", "glass"]),
+    ("surface_material", &["glass", "opaque"]),
+    ("reading", &["auto", "none", "text", "sheet"]),
+    ("font", &["system", "mono", "custom"]),
+    ("code_font", &["jetbrains_mono", "system", "custom"]),
+    // Comparado ao tamanho de fábrica do cliente: menor, igual ou maior.
+    ("text_size", &["small", "normal", "large"]),
+    ("tool_look", &["classic", "chips", "tree", "terminal", "claude_desktop"]),
+    ("thinking_tools", &["none", "search", "all"]),
+    ("thinking_collapsed", ON_OFF),
+    ("task_list", ON_OFF),
+    ("table_chart", ON_OFF),
+    ("ask_highlight", &["accent", "amber"]),
+    ("delivery", &["queue", "direct", "jev", "conversation"]),
+    ("hands_free", ON_OFF),
+    ("compact_style", ON_OFF),
+    ("navigation", &["tabs", "bottom_tabs", "conversations", "sidebar"]),
+    ("sidebar_compact", ON_OFF),
+    ("sidebar_height", &["full", "content"]),
+    ("sidebar_group", &["none", "project", "machine"]),
+    ("tabs_full", ON_OFF),
+    ("list_group", &["none", "server", "project"]),
+    ("list_organize", &["sessions", "conversations"]),
+    ("home_screen", &["sessions", "new_conversation"]),
+    ("tablet_bar", &["left", "bottom", "top"]),
+    ("language", &["system", "pt", "en"]),
+    ("tips", ON_OFF),
+    ("tour", &["done", "skipped", "none"]),
+    ("conversation_beta", ON_OFF),
+    ("code_mode", ON_OFF),
+    ("default_provider", &["claude", "codex", "pi", "omp", "kimi", "antigravity"]),
+    ("default_effort", &["unset", "off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]),
+    ("auto_report", &["on", "off", "unanswered"]),
+    ("dictation_org", &["none", "harness", "external_api"]),
+    ("dictation_provider", &["openai", "elevenlabs", "whisper_cpp", "none"]),
+    ("connect", ON_OFF),
+    ("computer_use", ON_OFF),
+    ("whatsapp", &["installed", "no"]),
+    ("jev", &["configured", "no"]),
+];
+
+/// A preferência e o valor dela pela lista `SETTINGS`: preferência fora da lista é `None`, valor fora sai `other`.
+pub fn setting(name: &str, value: &str) -> Option<(Code, Code)> {
+    SETTINGS.iter().find(|(known, _)| *known == name).map(|(known, values)| (Code::fixed(known), Code::known(value, values)))
 }
 
 /// Método e modelo de rota do axum (`MatchedPath`) que contam como `feature_used`, e o código no fio.
@@ -303,11 +363,28 @@ mod tests {
         names.extend(LogLevel::ALL.iter().map(|v| v.as_str()));
         names.extend(FEATURE_ROUTES.iter().map(|(_, _, code)| *code));
         names.extend([CLAUDE_MODELS, CODEX_MODELS, KIMI_MODELS, ANTIGRAVITY_MODELS].concat());
+        for (setting, values) in SETTINGS {
+            names.push(setting);
+            names.extend(values.iter().copied());
+        }
         for name in names {
             assert!(is_name(name), "{name}");
         }
         let unique: std::collections::BTreeSet<&str> = Event::ALL.iter().map(|e| e.as_str()).collect();
         assert_eq!(unique.len(), Event::ALL.len());
+    }
+
+    #[test]
+    fn settings_pass_only_through_their_list() {
+        let pair = |name, value| setting(name, value).map(|(s, v)| (s.as_str(), v.as_str()));
+        assert_eq!(pair("theme", "dark"), Some(("theme", "dark")));
+        assert_eq!(pair("theme", "#ff0000"), Some(("theme", "other")));
+        assert_eq!(pair("font", "custom"), Some(("font", "custom")));
+        assert_eq!(pair("font", "Fira Code"), Some(("font", "other")), "nome de fonte nunca sai");
+        assert_eq!(pair("default_provider", "meu-motor"), Some(("default_provider", "other")));
+        assert_eq!(pair("modelo", "opus"), None);
+        let unique: std::collections::BTreeSet<&str> = SETTINGS.iter().map(|(s, _)| *s).collect();
+        assert_eq!(unique.len(), SETTINGS.len());
     }
 
     #[test]

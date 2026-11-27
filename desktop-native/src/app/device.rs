@@ -1276,6 +1276,8 @@ struct Unsent {
     failing: AtomicBool,
     /// Lotes seguidos que o servidor respondeu sem gravar.
     rejected: AtomicU8,
+    /// Dia (UTC) do último retrato de preferências mandado; o envio que falha o apaga.
+    settings_day: std::sync::Mutex<String>,
 }
 
 /// Repetir sem fim só reenviaria o mesmo lote a cada passada.
@@ -1326,10 +1328,42 @@ impl ClientTelemetry {
     }
     /// O tempo à vista que um envio que falhou devolveu.
     fn returned_visible(&self) -> Duration { Duration::from_millis(self.unsent.ms.swap(0, Ordering::SeqCst)) }
+    /// `true` uma vez por dia: o dia fica marcado já, e o envio que falha o desmarca para a passada seguinte.
+    fn take_settings_day(&self, today: &str) -> bool {
+        let mut day = self.unsent.settings_day.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *day == today { return false; }
+        *day = today.to_owned();
+        true
+    }
     /// Uma vez por queda.
     fn take_crash(&mut self) -> Option<Value> {
         self.unsent.crashed.swap(false, Ordering::SeqCst).then(|| telemetry_batch(serde_json::json!({"evento": "app.crash", "codigo": "panic"})))
     }
+}
+
+/// As preferências deste computador no `settings.snapshot`, nos nomes de `hangar_telemetry::events::SETTINGS`:
+/// nome de fonte, cor e número nunca saem.
+fn settings_values(a: &appearance::Appearance, seen: &crate::tour::state::Seen) -> Value {
+    use appearance::{Background, CodeFont, Font};
+    fn wire<T: serde::Serialize>(value: T) -> Value { serde_json::to_value(value).unwrap_or(Value::Null) }
+    let on = |on: bool| Value::from(if on { "on" } else { "off" });
+    serde_json::json!({
+        "theme": wire(a.theme), "panels": wire(a.panels), "palette": wire(a.palette),
+        // `Light` é o fundo que o Expo chama `aurora` (o Electron já os juntava): um nome só no painel.
+        "background": if a.background == Background::Light { Value::from("aurora") } else { wire(a.background) },
+        "background_effect": wire(a.background_effect), "wallpaper": wire(a.wallpaper),
+        "surface_material": wire(a.surface_material), "reading": wire(a.reading),
+        "font": match a.font { Font::Named(_) => Value::from("custom"), font => wire(font) },
+        "code_font": match a.code_font { CodeFont::JetBrainsMono => "jetbrains_mono", CodeFont::System => "system", CodeFont::Named(_) => "custom" },
+        "text_size": match a.text_size.cmp(&appearance::Appearance::default().text_size) {
+            std::cmp::Ordering::Less => "small", std::cmp::Ordering::Equal => "normal", std::cmp::Ordering::Greater => "large" },
+        "tool_look": wire(a.tool_look), "thinking_tools": wire(a.thinking_tools), "thinking_collapsed": on(a.thinking_collapsed),
+        "task_list": on(a.task_list), "table_chart": on(a.table_chart), "ask_highlight": wire(a.ask_highlight),
+        "delivery": wire(a.delivery_mode()), "hands_free": on(a.hands_free), "compact_style": on(a.compact_style() == *a),
+        "navigation": wire(a.navigation), "sidebar_compact": on(a.sidebar_compact), "sidebar_height": wire(a.sidebar_height),
+        "sidebar_group": wire(a.sidebar_group), "tabs_full": on(a.tabs_full), "language": wire(a.language),
+        "tips": on(!seen.tips_off()), "tour": seen.tour.map_or(Value::from("none"), wire),
+    })
 }
 
 /// Um evento no lote do diário, com o tipo do cliente.
@@ -1367,7 +1401,7 @@ impl Hangar {
         self.client_telemetry.shown(Instant::now());
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(VISIBLE_EVERY).await;
-            if this.update(cx, |this, _| this.send_visible_time()).is_err() { break; }
+            if this.update(cx, |this, _| { this.send_visible_time(); this.send_settings_snapshot(); }).is_err() { break; }
         }).detach();
     }
 
@@ -1379,6 +1413,17 @@ impl Hangar {
             let body = telemetry_batch(serde_json::json!({"evento": "app.visible_time", "ms": ms}));
             send_telemetry(&self.runtime, api, body, self.client_telemetry.unsent.clone(), move |u| { u.ms.fetch_add(ms, Ordering::SeqCst); });
         }
+    }
+
+    /// O retrato das preferências, uma vez por dia (UTC), à máquina ativa e nunca a convite, como o tempo à vista.
+    fn send_settings_snapshot(&mut self) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        if !self.client_telemetry.take_settings_day(&chrono::Utc::now().format("%Y-%m-%d").to_string()) { return; }
+        let mut event = serde_json::json!({"evento": "settings.snapshot", "valores": settings_values(&appearance::get(), &self.tour.seen)});
+        // O servidor conta um retrato por aparelho e dia; o id fica na máquina dele, fora do pacote.
+        if let Some(device) = crate::update::confirm::device_id() { event["aparelho"] = Value::from(device); }
+        send_telemetry(&self.runtime, api, telemetry_batch(event), self.client_telemetry.unsent.clone(),
+            |u| u.settings_day.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear());
     }
 
     pub(super) fn send_crash_telemetry(&mut self) {
@@ -1409,9 +1454,36 @@ impl Hangar {
 
 #[cfg(test)]
 mod telemetry_tests {
-    use super::{ClientTelemetry, millis};
+    use super::{ClientTelemetry, millis, settings_values};
     use std::sync::atomic::Ordering;
     use std::time::Duration;
+
+    #[test]
+    fn telemetry_settings_snapshot_uses_the_list_names_and_never_a_font_name() {
+        use crate::appearance::{Appearance, Background, Font, FontName};
+        let mut a = Appearance { background: Background::Light, font: Font::Named(FontName::intern("Fira Code")), text_size: 120, ..Appearance::default() };
+        let seen = crate::tour::state::Seen { tour: Some(crate::tour::state::Outcome::Skipped), ..Default::default() };
+        let values = settings_values(&a, &seen);
+        let get = |key: &str| values[key].as_str().unwrap_or_default().to_owned();
+        assert_eq!((get("theme"), get("background"), get("font"), get("code_font"), get("text_size")),
+            ("dark".into(), "aurora".into(), "custom".into(), "jetbrains_mono".into(), "large".into()));
+        assert_eq!((get("navigation"), get("delivery"), get("tool_look"), get("tips"), get("tour"), get("compact_style")),
+            ("sidebar".into(), "queue".into(), "classic".into(), "on".into(), "skipped".into(), "off".into()));
+        assert!(!values.to_string().contains("Fira"), "{values}");
+        a = a.compact_style();
+        assert_eq!(settings_values(&a, &crate::tour::state::Seen::default())["compact_style"], "on");
+        assert_eq!(settings_values(&a, &crate::tour::state::Seen::default())["tour"], "none");
+    }
+
+    #[test]
+    fn telemetry_settings_snapshot_leaves_once_a_day_and_again_after_a_failed_send() {
+        let telemetry = ClientTelemetry::new(None);
+        assert!(telemetry.take_settings_day("2026-11-27"));
+        assert!(!telemetry.take_settings_day("2026-11-27"));
+        telemetry.unsent.settings_day.lock().unwrap().clear();
+        assert!(telemetry.take_settings_day("2026-11-27"), "o envio que falhou volta na passada seguinte");
+        assert!(telemetry.take_settings_day("2026-11-28"));
+    }
 
     #[test]
     fn telemetry_crash_event_never_carries_the_panic_text() {

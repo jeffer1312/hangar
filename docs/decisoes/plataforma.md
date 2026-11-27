@@ -5902,3 +5902,11 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   linha; o excesso só soma `log_dropped`. O campo `logs` é opcional no `schema: 1`, e o receptor
   passou a aceitar 256 KB por pacote: as 100 linhas junto dos contadores passariam dos 64 KB, e o 413
   apagaria o dia inteiro na máquina.
+- **Retrato diário das preferências (27/11/2026).** Pedido do dono: saber como cada pessoa configurou
+  o Hangar para decidir onde melhorar. O app do PC e o do celular mandam `settings.snapshot` ao
+  `/api/diag` do servidor ativo uma vez por dia, já nos nomes de `events::SETTINGS`; o servidor manda
+  as dele no mesmo laço do `peers`. Lista fechada por preferência: fonte instalada vira `custom`, cor e
+  número ficam de fora (o tamanho do texto vira menor/igual/maior que o de fábrica), e valor fora da
+  lista sai `other`. O servidor conta um retrato por dia por app e aparelho, pelo id das novidades
+  da atualização, que fica só no `once.json`. O painel mostra máquinas, não vezes. O canal de
+  atualização não entrou: já vai no `env` do pacote.
