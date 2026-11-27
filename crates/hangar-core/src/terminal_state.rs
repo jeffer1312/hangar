@@ -426,11 +426,26 @@ fn tool_header(lines: &[&str], i: usize) -> bool {
 /// Painel mais estreito que isto não existe; o limite evita confundir recuo de código com painel.
 const PANEL_MIN_COLUMN: usize = 20;
 
+/// Cada caractere com a largura que ocupa na tela; o seletor de emoji (U+FE0F) põe o anterior em
+/// duas células, como o terminal desenha `⚠️`.
+fn widths(line: &str) -> impl Iterator<Item = (usize, char, usize)> + '_ {
+    let mut chars = line.char_indices().peekable();
+    std::iter::from_fn(move || {
+        let (at, c) = chars.next()?;
+        let mut width = c.width().unwrap_or(1);
+        if chars.peek().is_some_and(|&(_, next)| next == '\u{FE0F}') {
+            chars.next();
+            width = width.max(2);
+        }
+        Some((at, c, width))
+    })
+}
+
 /// Células ocupadas da linha, na largura do terminal.
 fn cells(line: &str) -> Vec<bool> {
     let mut out = Vec::with_capacity(line.len());
-    for c in line.chars() {
-        out.extend(std::iter::repeat_n(!whitespace(c), c.width().unwrap_or(1)));
+    for (_, c, width) in widths(line) {
+        out.extend(std::iter::repeat_n(!whitespace(c), width));
     }
     out
 }
@@ -438,28 +453,33 @@ fn cells(line: &str) -> Vec<bool> {
 /// A linha até a coluna `column`, sem o espaço que sobra no fim.
 fn cells_before(line: &str, column: usize) -> String {
     let mut used = 0;
-    let end = line.char_indices().find(|(_, c)| {
-        used += c.width().unwrap_or(1);
+    let end = widths(line).find(|&(_, _, width)| {
+        used += width;
         used > column
-    }).map_or(line.len(), |(at, _)| at);
+    }).map_or(line.len(), |(at, _, _)| at);
     right(&line[..end]).to_owned()
 }
 
 /// Onde começa o painel de diff que o Claude Code abre ao lado da conversa, na mesma linha do
-/// terminal: a régua `─` que vai da borda dele até a borda direita da tela, com essa coluna vazia em
-/// todas as outras linhas. Régua da resposta não chega à borda; as da caixa de digitar começam na
-/// coluna 0 e ficam de fora.
+/// terminal: a régua `─` que vai da borda dele até a borda direita da tela, duas colunas vazias antes
+/// dela em todas as linhas e texto do painel nessa coluna em outras linhas. Régua da resposta não
+/// tem as duas coisas; as da caixa de digitar começam na coluna 0 e ficam de fora.
 fn side_panel_column(lines: &[&str]) -> Option<usize> {
     let screen = lines.iter().map(|l| cells(right(l)).len()).max()?;
     let lines: Vec<&str> = lines.iter().copied().filter(|l| !l.starts_with('─')).collect();
     let rows: Vec<Vec<bool>> = lines.iter().map(|l| cells(l)).collect();
-    lines.iter().find_map(|line| {
+    let blank = |row: &Vec<bool>, column: usize| !row.get(column).copied().unwrap_or(false);
+    lines.iter().enumerate().find_map(|(i, line)| {
         let line = right(line);
         let prefix = line.trim_end_matches('─');
         let column = cells(prefix).len();
-        (line[prefix.len()..].chars().count() >= 10 && column >= PANEL_MIN_COLUMN && prefix.ends_with(whitespace)
-            && cells(line).len() + 2 >= screen
-            && rows.iter().all(|r| !r.get(column - 1).copied().unwrap_or(false))).then_some(column)
+        if line[prefix.len()..].chars().count() < 10 || column < PANEL_MIN_COLUMN || !prefix.ends_with(whitespace)
+            || cells(line).len() + 2 < screen || !rows.iter().all(|r| blank(r, column - 1) && blank(r, column - 2))
+        {
+            return None;
+        }
+        let beside = rows.iter().enumerate().filter(|&(j, r)| j != i && r.get(column..).is_some_and(|rest| rest.contains(&true))).count();
+        (beside >= 2).then_some(column)
     })
 }
 
@@ -474,8 +494,9 @@ fn conversation<'a, 'b>(lines: &'a [&'b str], anchor: Option<&str>) -> &'a [&'b 
 /// A prévia sem o painel lateral do Claude Code: sem o corte, as linhas dele entram grudadas na prosa.
 fn preview(lines: &[&str], anchor: Option<&str>, skip: impl Fn(&[&str], usize, &str) -> bool, stop: impl Fn(&str) -> bool) -> String {
     let Some(column) = side_panel_column(conversation(lines, anchor)) else { return preview_rows(lines, anchor, skip, stop) };
-    // A régua da caixa de digitar fica inteira: cortada no nome da sessão, deixaria de ser régua.
-    let cut: Vec<String> = lines.iter().map(|l| if l.starts_with('─') { (*l).to_owned() } else { cells_before(l, column) }).collect();
+    // A régua da caixa de digitar e a linha da faixa ficam inteiras: cortadas, deixariam de ser achadas.
+    let whole = |l: &str| l.starts_with('─') || anchor.is_some_and(|a| !a.is_empty() && l.contains(a));
+    let cut: Vec<String> = lines.iter().map(|l| if whole(l) { (*l).to_owned() } else { cells_before(l, column) }).collect();
     preview_rows(&cut.iter().map(String::as_str).collect::<Vec<_>>(), anchor, skip, stop)
 }
 
@@ -1029,14 +1050,14 @@ mod tests {
             beside("", " 434         std::fs::create_dir_all(run.join(\"hypr/morta_1\")).unwrap();"),
             beside("● Com 8 MB de pilha o teste passa, então a recursão é só o caminho list_tools → filtro de projeto,",
                 " 435         let vars = vec![(\"HYPRLAND_INSTANCE_SIGNATURE\".to_owned(), \"morta\""),
-            beside("  que estoura no debug do Windows com os 2 MB padrão do tokio.", " 437 -       assert_eq!(register(&home.paths, || O"),
+            beside("  ⚠️ que estoura no debug do Windows com os 2 MB padrão do tokio.", " 437 -       assert_eq!(register(&home.paths, || O"),
             beside("", " 438         assert!(!home.paths.main_file().exists());"),
             "● Running scp -q -o BatchMode=yes /tmp/x.patch".to_owned(),
         ];
         let wide = "─".repeat(200);
         let pane = format!("{}\n✻ Puzzling… (29m 39s · ↓ 21.4k tokens)\n{wide}\n❯ \n{wide}\n", rows.join("\n"));
         assert_eq!(pane_preview(&pane, None).0,
-            "Com 8 MB de pilha o teste passa, então a recursão é só o caminho list_tools → filtro de projeto,\n  que estoura no debug do Windows com os 2 MB padrão do tokio.");
+            "Com 8 MB de pilha o teste passa, então a recursão é só o caminho list_tools → filtro de projeto,\n  ⚠️ que estoura no debug do Windows com os 2 MB padrão do tokio.");
     }
 
     #[test]

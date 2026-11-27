@@ -44,7 +44,8 @@ pub fn parse_hook(raw: &[u8]) -> Option<HookFile> {
 
 /// `read_sidecar`: o texto em voo, `""` quando o agente disse que não há nenhum, `None` para cair
 /// no pane. Texto parado há mais de `MAX_AGE` só vale com o marcador `working` também recente
-/// (turno longo só de ferramentas); vazio nunca envelhece.
+/// (turno longo só de ferramentas); vazio nunca envelhece. No Claude, o `tick` troca o `None` com
+/// arquivo presente por `""`: só sessão sem o arquivo cai no pane.
 pub fn hook_text(files: &[HookFile], marker: Option<(&str, f64)>, now: f64) -> Option<String> {
     for f in files {
         if f.ts.is_some_and(|ts| now - ts > MAX_AGE) && !f.text.is_empty() {
