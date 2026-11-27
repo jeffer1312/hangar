@@ -41,12 +41,23 @@ pub enum SendOutcome {
     Rejected(String),
 }
 
+/// Folga para o relógio desta máquina adiantado em relação ao servidor.
+const ECHO_SLACK_SECS: f64 = 30.0;
+
 #[derive(Clone, Debug)]
 struct SendRecord {
     text: String,
     known: HashSet<String>,
     pending: bool,
     confirmed: bool,
+    /// Segundos Unix do Enter: linha mais velha que isso (menos a folga) é de outro envio.
+    started: f64,
+    /// A conversa mostrou esta mensagem; a pergunta lateral confirmada no Enter não conta como prova.
+    echoed: bool,
+    /// O eco que provou veio sem horário.
+    echo_untimed: bool,
+    /// Linha sem horário prova este envio: o histórico estava na tela no Enter e nenhum igual estava a caminho.
+    untimed: bool,
     outcome: Option<SendOutcome>,
     /// O que saiu do campo no Enter: a bolha mostra isso enquanto o envio não responde e, se falhar, volta ao campo.
     /// Com anexo é a legenda; o `text` leva também os caminhos.
@@ -61,6 +72,9 @@ pub struct DeliveryTracker {
     held: HashMap<SessionKey, VecDeque<Held>>,
     /// Transcript trocado na mesma sessão (`/clear`): a resposta do envio em voo chega com a chave antiga.
     moved: HashMap<SessionKey, SessionKey>,
+    /// Envios incertos dados por chegados por uma linha sem horário: uma igual de outro aparelho também prova, e o
+    /// rastro fica no log.
+    untimed_proofs: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -89,12 +103,35 @@ impl SendTiming {
 
 pub type Held = (String, String, SendTiming, Option<Vec<String>>);
 
+/// Envio incerto que a conversa mostrou: o que voltou ao campo, o texto que saiu e o que entra no histórico do campo.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Arrived {
+    pub field: String,
+    pub text: String,
+    pub history: Option<String>,
+}
+
 impl DeliveryTracker {
     pub fn begin(&mut self, key: SessionKey, text: String, known: HashSet<String>) -> bool {
+        self.begin_beside(key, text, known, &[])
+    }
+
+    /// `queued`: os textos do painel "Na fila" no Enter.
+    pub fn begin_beside(&mut self, key: SessionKey, text: String, known: HashSet<String>, queued: &[String]) -> bool {
         if self.pending(&key) { return false; }
         // A pergunta lateral nunca vira mensagem da conversa: a resposta do backend já é a confirmação.
         let confirmed = crate::composer::side_question(&text);
-        self.records.insert(key, SendRecord { text, known, pending: true, confirmed, outcome: None, field: None, history: None });
+        let same = |other: &str| matches_real(other, &text);
+        let previous = self.records.get(&key).filter(|record| same(record.text.as_str()));
+        // Um igual ainda a caminho ecoaria sem horário como se fosse este: aí só o horário prova.
+        // No reenvio do incerto, o igual a caminho é a mesma mensagem, e o eco dele vale.
+        let resend = previous.is_some_and(|record| matches!(record.outcome, Some(SendOutcome::Uncertain)));
+        let ambiguous = !resend && (previous.is_some_and(|record| matches!(record.outcome, Some(SendOutcome::Delivered | SendOutcome::Queued)))
+            || self.held.get(&key).into_iter().flatten().any(|(held, ..)| same(held.as_str()))
+            || queued.iter().any(|entry| same(entry.as_str())));
+        let untimed = !known.is_empty() && !ambiguous;
+        self.records.insert(key, SendRecord { text, known, pending: true, confirmed, started: now_secs(), echoed: false, echo_untimed: false, untimed,
+            outcome: None, field: None, history: None });
         true
     }
 
@@ -168,28 +205,66 @@ impl DeliveryTracker {
         let Some(record) = self.records.get_mut(key) else { return false; };
         if !record.pending || record.text != text { return false; }
         record.pending = false;
-        if record.confirmed && matches!(&outcome, SendOutcome::Delivered | SendOutcome::Queued) { self.records.remove(key); }
+        let settled = match &outcome {
+            SendOutcome::Delivered | SendOutcome::Queued => record.confirmed,
+            // A mensagem já apareceu na conversa durante o voo: a resposta cortada não deixa dúvida.
+            SendOutcome::Uncertain => record.echoed,
+            SendOutcome::Rejected(_) => false,
+        };
+        let untimed_proof = settled && matches!(outcome, SendOutcome::Uncertain) && record.echo_untimed;
+        if settled { self.records.remove(key); }
         else { record.outcome = Some(outcome); }
+        self.untimed_proofs += usize::from(untimed_proof);
         true
     }
 
-    pub fn confirm_real(&mut self, key: &SessionKey, id: &str, real_text: &str) {
-        let Some(record) = self.records.get_mut(key) else { return; };
-        if record.known.contains(id) { return; }
-        if !matches_real(real_text, &record.text) { return; }
-        if record.pending { record.confirmed = true; }
-        else if matches!(record.outcome.as_ref(), Some(SendOutcome::Delivered | SendOutcome::Queued)) { self.records.remove(key); }
+    /// Quantos envios incertos uma linha sem horário deu por chegados desde a última leitura.
+    pub fn take_untimed_proofs(&mut self) -> usize {
+        std::mem::take(&mut self.untimed_proofs)
     }
 
-    pub fn confirm_history(&mut self, key: &SessionKey, events: &[ChatEvent]) {
-        let Some(record) = self.records.get(key) else { return; };
+    /// Devolve o envio incerto que esta linha prova, já fora do registro.
+    pub fn confirm_real(&mut self, key: &SessionKey, id: &str, ts: Option<f64>, real_text: &str) -> Option<Arrived> {
+        let record = self.records.get_mut(key)?;
+        if record.known.contains(id) { return None; }
+        if !matches_real(real_text, &record.text) { return None; }
+        let proved = proves(record, id, ts);
+        if record.pending {
+            record.confirmed = true;
+            if proved {
+                // Um eco com horário vale mais que um sem.
+                record.echo_untimed = if record.echoed { record.echo_untimed && ts.is_none() } else { ts.is_none() };
+                record.echoed = true;
+            }
+            return None;
+        }
+        match record.outcome.clone() {
+            Some(SendOutcome::Delivered | SendOutcome::Queued) => { self.records.remove(key); None }
+            Some(SendOutcome::Uncertain) if proved => {
+                let SendRecord { field, text, history, .. } = self.records.remove(key)?;
+                self.untimed_proofs += usize::from(ts.is_none());
+                Some(Arrived { field: field.unwrap_or_else(|| text.clone()), text, history })
+            }
+            _ => None,
+        }
+    }
+
+    pub fn confirm_history(&mut self, key: &SessionKey, events: &[ChatEvent]) -> Option<Arrived> {
+        let record = self.records.get(key)?;
         // Uma página antiga com o mesmo texto não confirma um envio novo.
-        let Some(frontier) = events.iter().rposition(|event| record.known.contains(&event.id)) else { return; };
-        for event in &events[frontier + 1..] {
-            if event.kind == "user_msg" && let Some(text) = event.text.as_deref() {
-                self.confirm_real(key, &event.id, text);
+        let start = match events.iter().rposition(|event| record.known.contains(&event.id)) {
+            Some(frontier) => frontier + 1,
+            // Sem nada à vista no Enter, só o horário da linha separa este envio de um antigo (`proves`).
+            None if record.known.is_empty() && matches!(record.outcome, Some(SendOutcome::Uncertain)) => 0,
+            None => return None,
+        };
+        for event in &events[start..] {
+            if event.kind == "user_msg" && let Some(text) = event.text.as_deref()
+                && let Some(arrived) = self.confirm_real(key, &event.id, event.ts, text) {
+                return Some(arrived);
             }
         }
+        None
     }
 
 
@@ -200,6 +275,20 @@ impl DeliveryTracker {
         if record.pending || !matches!(record.outcome, Some(SendOutcome::Delivered)) { return None; }
         self.records.remove(key).map(|record| record.text)
     }
+}
+
+/// A linha é desta conversa e deste envio: nem a fila (`queued-…`), nem uma igual de antes do Enter.
+fn proves(record: &SendRecord, id: &str, ts: Option<f64>) -> bool {
+    if id.starts_with("queued-") { return false; }
+    match ts {
+        Some(ts) => ts >= record.started - ECHO_SLACK_SECS,
+        // A fala do Claude vem sem horário: só vale com o histórico na tela no Enter e sem outro igual a caminho.
+        None => record.untimed,
+    }
+}
+
+fn now_secs() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.)
 }
 
 pub fn matches_real(real: &str, sent: &str) -> bool {
@@ -327,7 +416,7 @@ mod tests {
     fn transcript_confirmed_before_http_result_clears_provisional_status() {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), "hello".into(), HashSet::new());
-        tracker.confirm_real(&key("one"), "new-id", "hello");
+        tracker.confirm_real(&key("one"), "new-id", None, "hello");
         assert!(tracker.complete(&key("one"), "hello", SendOutcome::Delivered));
         assert!(!tracker.pending(&key("one")));
         assert!(tracker.outcome(&key("one")).is_none());
@@ -359,21 +448,159 @@ mod tests {
         assert!(tracker.outcome(&key("one")).is_some());
     }
 
+    fn now() -> f64 { now_secs() }
+
     #[test]
-    fn uncertainty_remains_visible_until_user_decides() {
+    fn uncertain_send_clears_when_the_conversation_shows_it() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "hello".into(), HashSet::from(["old-id".into()]));
+        tracker.mark_typed(&key("one"), "hello".into());
+        tracker.complete(&key("one"), "hello", SendOutcome::Uncertain);
+        assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
+        let arrived = tracker.confirm_real(&key("one"), "new-id", None, "hello");
+        assert_eq!(arrived, Some(Arrived { field: "hello".into(), text: "hello".into(), history: Some("hello".into()) }),
+            "o texto que voltou ao campo sai dele");
+        assert_eq!(tracker.outcome(&key("one")), None);
+    }
+
+    #[test]
+    fn untimed_proof_of_an_uncertain_send_leaves_a_trace() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "ok".into(), HashSet::from(["old-id".into()]));
+        tracker.complete(&key("one"), "ok", SendOutcome::Uncertain);
+        assert!(tracker.confirm_real(&key("one"), "new-id", None, "ok").is_some());
+        assert_eq!(tracker.take_untimed_proofs(), 1, "outro aparelho também prova sem horário: fica o rastro");
+        assert_eq!(tracker.take_untimed_proofs(), 0, "lido uma vez");
+
+        tracker.begin(key("two"), "ok".into(), HashSet::from(["old-id".into()]));
+        tracker.complete(&key("two"), "ok", SendOutcome::Uncertain);
+        assert!(tracker.confirm_real(&key("two"), "new-id", Some(now()), "ok").is_some());
+        assert_eq!(tracker.take_untimed_proofs(), 0, "com horário a prova é deste envio");
+    }
+
+    #[test]
+    fn untimed_echo_during_the_flight_leaves_a_trace_when_it_settles_the_uncertain_answer() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "ok".into(), HashSet::from(["old-id".into()]));
+        tracker.confirm_real(&key("one"), "new-id", None, "ok");
+        assert_eq!(tracker.take_untimed_proofs(), 0, "ainda em voo, nada foi dado por chegado");
+        assert!(tracker.complete(&key("one"), "ok", SendOutcome::Uncertain));
+        assert_eq!(tracker.outcome(&key("one")), None);
+        assert_eq!(tracker.take_untimed_proofs(), 1);
+
+        tracker.begin(key("two"), "ok".into(), HashSet::from(["old-id".into()]));
+        tracker.confirm_real(&key("two"), "untimed", None, "ok");
+        tracker.confirm_real(&key("two"), "timed", Some(now()), "ok");
+        assert!(tracker.complete(&key("two"), "ok", SendOutcome::Uncertain));
+        assert_eq!(tracker.take_untimed_proofs(), 0, "o eco com horário também chegou: a prova é dele");
+    }
+
+    #[test]
+    fn uncertain_arrival_keeps_the_chosen_command_for_the_field_history() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "/compact".into(), HashSet::from(["old-id".into()]));
+        tracker.mark_typed(&key("one"), "/co".into());
+        tracker.mark_history(&key("one"), "/compact".into());
+        tracker.complete(&key("one"), "/compact", SendOutcome::Uncertain);
+        let arrived = tracker.confirm_real(&key("one"), "new-id", None, "/compact");
+        assert_eq!(arrived, Some(Arrived { field: "/co".into(), text: "/compact".into(), history: Some("/compact".into()) }),
+            "o histórico guarda o comando escolhido, não o rascunho");
+    }
+
+    #[test]
+    fn old_echo_outside_the_window_keeps_the_warning() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "hello".into(), HashSet::from(["old-id".into()]));
+        // Outra aba mandou o mesmo texto 2 min antes do Enter.
+        tracker.confirm_real(&key("one"), "other-tab", Some(now() - 120.), "hello");
+        tracker.complete(&key("one"), "hello", SendOutcome::Uncertain);
+        assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
+        assert_eq!(tracker.confirm_real(&key("one"), "other-tab-2", Some(now() - 120.), "hello"), None);
+        assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
+        assert!(tracker.confirm_real(&key("one"), "new-id", Some(now() - 10.), "hello").is_some(), "dentro da folga vale");
+    }
+
+    #[test]
+    fn untimed_echo_without_loaded_history_keeps_the_warning() {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), "hello".into(), HashSet::new());
         tracker.complete(&key("one"), "hello", SendOutcome::Uncertain);
+        assert_eq!(tracker.confirm_real(&key("one"), "new-id", None, "hello"), None);
         assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
-        tracker.confirm_real(&key("one"), "new-id", "hello");
+        assert!(tracker.confirm_real(&key("one"), "new-id", Some(now()), "hello").is_some(), "com horário recente vale");
+    }
+
+    #[test]
+    fn untimed_echo_of_an_equal_message_still_on_its_way_keeps_the_warning() {
+        let mut tracker = DeliveryTracker::default();
+        // O primeiro "ok" foi para a fila e ainda não apareceu na conversa.
+        tracker.begin(key("one"), "ok".into(), HashSet::from(["old-id".into()]));
+        tracker.complete(&key("one"), "ok", SendOutcome::Queued);
+        tracker.begin_beside(key("one"), "ok".into(), HashSet::from(["old-id".into()]), &["ok".into()]);
+        tracker.complete(&key("one"), "ok", SendOutcome::Uncertain);
+        // O turno acaba e o primeiro "ok" entra sem horário: pode ser só ele.
+        assert_eq!(tracker.confirm_real(&key("one"), "first-ok", None, "ok"), None);
         assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
+        assert!(tracker.confirm_real(&key("one"), "second-ok", Some(now()), "ok").is_some(), "com horário recente vale");
+    }
+
+    #[test]
+    fn untimed_echo_with_the_same_text_in_the_queue_panel_keeps_the_warning() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin_beside(key("one"), "ok".into(), HashSet::from(["old-id".into()]), &["outra".into(), "ok".into()]);
+        tracker.complete(&key("one"), "ok", SendOutcome::Uncertain);
+        assert_eq!(tracker.confirm_real(&key("one"), "new-id", None, "ok"), None);
+        assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
+    }
+
+    #[test]
+    fn untimed_echo_proves_the_resend_of_an_uncertain_send() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "ok".into(), HashSet::from(["old-id".into()]));
+        tracker.complete(&key("one"), "ok", SendOutcome::Uncertain);
+        tracker.begin_beside(key("one"), "ok".into(), HashSet::from(["old-id".into()]), &["ok".into()]);
+        tracker.complete(&key("one"), "ok", SendOutcome::Uncertain);
+        assert!(tracker.confirm_real(&key("one"), "new-id", None, "ok").is_some(), "o igual a caminho é a mesma mensagem");
+    }
+
+    #[test]
+    fn queued_row_does_not_settle_an_uncertain_send() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "hello".into(), HashSet::from(["old-id".into()]));
+        tracker.confirm_real(&key("one"), "queued-a", Some(now()), "hello");
+        tracker.complete(&key("one"), "hello", SendOutcome::Uncertain);
+        assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain), "a fila durante o voo não prova");
+        assert_eq!(tracker.confirm_real(&key("one"), "queued-b", Some(now()), "hello"), None);
+        assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
+    }
+
+    #[test]
+    fn side_question_uncertain_is_not_proved_by_begin() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "/btw o que mudou?".into(), HashSet::new());
+        tracker.complete(&key("one"), "/btw o que mudou?", SendOutcome::Uncertain);
+        assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
+    }
+
+    #[test]
+    fn history_page_settles_an_uncertain_send_only_with_a_recent_time() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "hello".into(), HashSet::new());
+        tracker.mark_typed(&key("one"), "hello".into());
+        tracker.complete(&key("one"), "hello", SendOutcome::Uncertain);
+        let event = |id: &str, ts: Option<f64>| ChatEvent { id: id.into(), kind: "user_msg".into(), text: Some("hello".into()), ts, ..Default::default() };
+        assert_eq!(tracker.confirm_history(&key("one"), &[event("old", Some(now() - 600.)), event("untimed", None)]), None);
+        assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
+        assert_eq!(tracker.confirm_history(&key("one"), &[event("old", Some(now() - 600.)), event("new", Some(now()))]).map(|a| a.field),
+            Some("hello".into()));
+        assert_eq!(tracker.outcome(&key("one")), None);
     }
 
     #[test]
     fn known_replayed_id_cannot_hide_an_uncertain_send() {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), "ok".into(), HashSet::from(["old-id".into()]));
-        tracker.confirm_real(&key("one"), "old-id", "ok");
+        tracker.confirm_real(&key("one"), "old-id", None, "ok");
         tracker.complete(&key("one"), "ok", SendOutcome::Uncertain);
         assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
     }
@@ -382,18 +609,19 @@ mod tests {
     fn new_id_with_same_text_can_confirm_the_send() {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), "ok".into(), HashSet::from(["old-id".into()]));
-        tracker.confirm_real(&key("one"), "new-id", "ok");
+        tracker.confirm_real(&key("one"), "new-id", None, "ok");
         tracker.complete(&key("one"), "ok", SendOutcome::Delivered);
         assert!(tracker.outcome(&key("one")).is_none());
     }
 
     #[test]
-    fn new_text_match_before_uncertain_http_result_keeps_warning() {
+    fn echo_during_the_flight_settles_an_uncertain_answer() {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), "ok".into(), HashSet::new());
-        tracker.confirm_real(&key("one"), "other-client-id", "ok");
-        tracker.complete(&key("one"), "ok", SendOutcome::Uncertain);
-        assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Uncertain));
+        tracker.confirm_real(&key("one"), "new-id", Some(now()), "ok");
+        assert!(tracker.complete(&key("one"), "ok", SendOutcome::Uncertain));
+        assert!(!tracker.pending(&key("one")));
+        assert_eq!(tracker.outcome(&key("one")), None);
     }
 
     #[test]
@@ -402,7 +630,7 @@ mod tests {
         tracker.begin(key("one"), "olha — 📎 imagem: /u/1.png".into(), HashSet::new());
         assert_eq!(tracker.take_unconfirmed(&key("one")), None);
         tracker.complete(&key("one"), "olha — 📎 imagem: /u/1.png", SendOutcome::Queued);
-        tracker.confirm_real(&key("one"), "real", "olha");
+        tracker.confirm_real(&key("one"), "real", None, "olha");
         assert!(tracker.outcome(&key("one")).is_none());
         tracker.begin(key("one"), "fila".into(), HashSet::new());
         tracker.complete(&key("one"), "fila", SendOutcome::Delivered);
@@ -420,7 +648,7 @@ mod tests {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), sent.into(), HashSet::new());
         tracker.complete(&key("one"), sent, SendOutcome::Queued);
-        tracker.confirm_real(&key("one"), "real", &format!("{sent}\n{sent}"));
+        tracker.confirm_real(&key("one"), "real", None, &format!("{sent}\n{sent}"));
         assert!(tracker.outcome(&key("one")).is_none());
         assert!(!matches_real("T14 linhas\n001 a", "T14 linhas\n001"));
     }
@@ -505,7 +733,7 @@ mod tests {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), "hello".into(), HashSet::new());
         tracker.mark_typed(&key("one"), "hello".into());
-        tracker.confirm_real(&key("one"), "new-id", "hello");
+        tracker.confirm_real(&key("one"), "new-id", None, "hello");
         assert!(tracker.pending(&key("one")));
         assert!(tracker.outgoing(&key("one")).is_empty());
     }
@@ -529,7 +757,7 @@ mod tests {
         let mut tracker = DeliveryTracker::default();
         tracker.begin(key("one"), "ok".into(), HashSet::new());
         tracker.complete(&key("one"), "ok", SendOutcome::Rejected("HTTP 409".into()));
-        tracker.confirm_real(&key("one"), "other-client-id", "ok");
+        tracker.confirm_real(&key("one"), "other-client-id", None, "ok");
         assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Rejected("HTTP 409".into())));
     }
 }
