@@ -11,4 +11,4 @@ pub mod text;
 pub use classify::{StopKind, classify_claude_line, classify_codex_turn};
 pub use ledger::{Cap, Ledger, Source, Waiting};
 pub use probe::{HttpProbe, Probe};
-pub use scheduler::{Command, Facts, Host, StopHit, spawn, spawn_with_probe};
+pub use scheduler::{CAUSE_REBOOT, Command, Facts, Host, StopHit, spawn, spawn_with_probe};

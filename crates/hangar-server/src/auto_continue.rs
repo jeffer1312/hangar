@@ -41,6 +41,7 @@ type Stops = Arc<Mutex<HashMap<String, (f64, String)>>>;
 pub struct AutoContinue {
     commands: UnboundedSender<Command>,
     stops: Stops,
+    host: Arc<Native>,
     pub ledger: Arc<Mutex<Ledger>>,
 }
 
@@ -64,6 +65,12 @@ impl AutoContinue {
     pub fn forget(&self, name: &str) {
         lock(&self.stops).remove(name);
         let _ = self.commands.send(Command::Forget(name.to_owned()));
+    }
+
+    /// Os fatos da sessão recém-restaurada, para continuar o turno cortado pelo reboot. `since` é a hora do
+    /// boot: mensagem da pessoa depois dele conta como escrita depois da parada.
+    pub async fn restored_facts(&self, name: &str, since: f64) -> Result<Option<Facts>, String> {
+        self.host.restored_facts(name, since).await
     }
 
     pub fn rename(&self, old: &str, new: &str) {
@@ -94,7 +101,7 @@ pub fn spawn(st: Arc<AppState>) -> Vec<JoinHandle<()>> {
         .map(|waiting| (waiting.hit.name, (waiting.hit.at, waiting.hit.provider))).collect()));
     let host = Arc::new(Native { st: st.clone(), runtime: runtime.clone(), stops: stops.clone(), sub: Mutex::new(None) });
     let (commands, scheduler) = hangar_auto_continue::spawn(host.clone(), ledger.clone());
-    let auto = Arc::new(AutoContinue { commands, stops, ledger: ledger.clone() });
+    let auto = Arc::new(AutoContinue { commands, stops, host: host.clone(), ledger: ledger.clone() });
     if st.auto_continue.set(auto.clone()).is_err() { return Vec::new() }
     let (sink, mut hits) = tokio::sync::mpsc::unbounded_channel();
     runtime.set_stop_sink(sink);
@@ -146,6 +153,24 @@ impl Native {
             tokio::time::sleep(POLL).await;
         }
         self.st.list.snapshot().await.map(|produced| produced.rows).map_err(|error| error.code.to_owned())
+    }
+
+    /// Como `facts`, mas a fila que não se lê é erro: logo depois do restore não há agenda que reconfira, e
+    /// sem a fila não se sabe se a pessoa deixou mensagem. O Claude com terminal restaurado ainda sem ator é
+    /// adotado antes, senão a fila dele não responde.
+    async fn restored_facts(&self, name: &str, since: f64) -> Result<Option<Facts>, String> {
+        let rows = self.rows().await?;
+        let Some(row) = rows.iter().find(|row| row.name == name) else { return Ok(None) };
+        if row.provider == "claude" && !row.headless && let Err(error) = self.runtime.adopt_claude_terminal(name).await {
+            return Err(error.code);
+        }
+        let id = format!("autocont-load:{}", crate::mods::state::random_hex(8));
+        let queue = match self.runtime.queue_action(name, id, crate::runtime::queue::Action::Load).await {
+            Ok(Value::Array(queue)) => queue,
+            Ok(_) => return Err("auto_continue_queue_unreadable".to_owned()),
+            Err(error) => return Err(error.code),
+        };
+        Ok(Some(facts_of(row, &rows, &queue, Some(since), self.runtime.handoff_held(name))))
     }
 
     /// O endereço do motor da sessão, quando ela roda num.

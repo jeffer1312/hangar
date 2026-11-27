@@ -2,6 +2,10 @@
 //! aleatório e manda o "continue" uma vez. Uma tarefa só para todas as sessões; sem sessão parada ela não
 //! sonda nada. A única marca da espera é a nota na conversa, trocada no lugar pelo resultado: nada na linha
 //! da lista e nenhuma faixa.
+//!
+//! A nota leva `notice_meta = {kind: "auto_continue", state, stopped_at, continued_at?, code?, count, cause?}`,
+//! horas em segundos. Sem `cause` é a queda passageira. `cause` = [`CAUSE_REBOOT`] é o turno cortado pelo
+//! reboot, nota escrita pelo restore: ali `stopped_at` é a hora do boot e o cliente desenha o texto do reboot.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, Hasher};
@@ -30,6 +34,9 @@ pub const STALE_S: f64 = 2.0 * 3600.0;
 
 /// O motivo do Cancelar da nota; qualquer outro `why` do `Command::Cancel` é uma desistência com esse motivo.
 pub const CANCELLED: &str = "cancelled";
+
+/// O `cause` da nota do turno cortado pelo reboot.
+pub const CAUSE_REBOOT: &str = "reboot";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StopHit {
@@ -452,18 +459,26 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
 /// Por que a sessão não continua mais. `full` inclui o que só vale depois de o estado assentar.
 fn give_up(hit: &StopHit, facts: Option<&Facts>, full: bool) -> Option<&'static str> {
     let Some(facts) = facts else { return Some("life_changed") };
-    let checks = [
-        (facts.life != hit.life, "life_changed"),
-        (facts.off, "off"),
-        (facts.orq, "orq"),
-        (facts.handoff, "handoff"),
-        (full && facts.user_after_stop, "user_after_stop"),
-        (full && facts.queue_pending, "queue_pending"),
-        (full && facts.question_open, "question_open"),
-        // Adormecida ou estacionada não desiste: a escrita a acorda onde estava.
-        (full && facts.state == "working", "working"),
-    ];
-    checks.into_iter().find_map(|(gave_up, why)| gave_up.then_some(why))
+    if facts.life != hit.life { return Some("life_changed"); }
+    facts.blocker(full)
+}
+
+impl Facts {
+    /// O que barra a continuação, fora a troca de vida. Quem continua sem a agenda (o turno cortado pelo
+    /// reboot) confere o mesmo, com `settled`.
+    pub fn blocker(&self, settled: bool) -> Option<&'static str> {
+        let checks = [
+            (self.off, "off"),
+            (self.orq, "orq"),
+            (self.handoff, "handoff"),
+            (settled && self.user_after_stop, "user_after_stop"),
+            (settled && self.queue_pending, "queue_pending"),
+            (settled && self.question_open, "question_open"),
+            // Adormecida ou estacionada não desiste: a escrita a acorda onde estava.
+            (settled && self.state == "working", "working"),
+        ];
+        checks.into_iter().find_map(|(blocked, why)| blocked.then_some(why))
+    }
 }
 
 fn jitter() -> Duration {

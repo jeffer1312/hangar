@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use hangar_auto_continue::{Ledger, Source, StopKind};
+use hangar_auto_continue::{Facts, Ledger, Source, StopKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -487,10 +487,14 @@ async fn mux_lost_event(previous: Option<u64>, current: MuxStart, sessions: usiz
         "journal": journal})
 }
 
-/// O boot desta subida quando a máquina reiniciou depois do servidor da fotografia, o mesmo teste do
-/// `machine_rebooted`. O multiplexador que caiu ou foi trocado com a máquina de pé dá `None`.
+/// Folga do teste de reboot: no Windows o boot é "agora − tempo ligado" e varia um segundo entre leituras, e
+/// o servidor sem hora própria é gravado com o boot.
+const BOOT_SLACK_S: u64 = 60;
+
+/// O boot desta subida quando a máquina reiniciou depois do servidor da fotografia, o teste do
+/// `machine_rebooted` com folga. O multiplexador que caiu ou foi trocado com a máquina de pé dá `None`.
 pub fn rebooted(mux_started: Option<u64>, boot: u64) -> Option<u64> {
-    mux_started.filter(|before| boot > *before).map(|_| boot)
+    mux_started.filter(|before| boot > before.saturating_add(BOOT_SLACK_S)).map(|_| boot)
 }
 
 /// O turno da fotografia: aberto quando a sessão trabalhava. No Claude vai junto a última linha da conversa
@@ -575,7 +579,7 @@ pub(crate) async fn continue_after_reboot(resume: &dyn Resume, ledger: &std::syn
     let sent = resume.send(name, hangar_auto_continue::text::REBOOT).await;
     let at = resume.now();
     // A hora da parada não se sabe: a nota leva a do boot.
-    let mut meta = json!({"kind": "auto_continue", "cause": "reboot", "stopped_at": boot as f64, "count": 1});
+    let mut meta = json!({"kind": "auto_continue", "cause": hangar_auto_continue::CAUSE_REBOOT, "stopped_at": boot as f64, "count": 1});
     let (state, line) = match &sent {
         Ok(()) => {
             lock().record(name, Source::Reboot, &key, StopKind::Other, at);
@@ -597,8 +601,53 @@ pub(crate) async fn continue_after_reboot(resume: &dyn Resume, ledger: &std::syn
     sent.is_ok()
 }
 
-/// Por que o turno aberto no reboot não continua; `None`: continua. Lido antes de reabrir: a vida nova
-/// escreve no mesmo transcript.
+/// Por que o turno aberto no reboot não continua, pelo que a agenda confere com o estado assentado (mensagem
+/// da pessoa na fila ou depois do boot, pergunta aberta, orquestração, troca de agente, turno andando); `None`:
+/// continua. Sessão fora da lista ou fatos que não se leem não provam nada e não continuam.
+fn reboot_blocked(facts: &Result<Option<Facts>, String>) -> Option<String> {
+    match facts {
+        Err(code) => Some(format!("facts_unavailable:{code}")),
+        Ok(None) => Some("not_listed".to_owned()),
+        Ok(Some(facts)) => facts.blocker(true).map(str::to_owned),
+    }
+}
+
+/// Lidos com o agente de pé. A linha da sessão recém-aberta pode faltar na lista de um tique atrás.
+async fn restored_facts(auto: &crate::auto_continue::AutoContinue, name: &str, boot: u64) -> Result<Option<Facts>, String> {
+    let mut facts = auto.restored_facts(name, boot as f64).await;
+    for _ in 0..LISTED_TRIES {
+        if !matches!(facts, Ok(None)) { break; }
+        tokio::time::sleep(LISTED_WAIT).await;
+        facts = auto.restored_facts(name, boot as f64).await;
+    }
+    facts
+}
+
+const LISTED_TRIES: u32 = 3;
+const LISTED_WAIT: Duration = Duration::from_secs(2);
+
+/// O agente subiu depois do reboot: confere o que a agenda conferiria e, sem nada barrando, continua.
+async fn continue_restored(st: &crate::routes::AppState, name: &str, boot: u64) {
+    let Some(auto) = st.auto_continue.get() else { return };
+    if let Some(why) = reboot_blocked(&restored_facts(auto, name, boot).await) {
+        st.diag.report(CONTINUE_EVENT, name, &format!("auto_continue_skipped:{why}"), "continuar depois do reboot: o turno não continua");
+        return;
+    }
+    continue_after_reboot(&LiveResume(st), &auto.ledger, name, boot).await;
+}
+
+/// O boot cujo turno cortado continua quando o agente subir; `None`: só reabre. Lido antes de reabrir: a vida
+/// nova escreve no mesmo transcript.
+fn reboot_resume(host: &super::server::ServerHost, st: &crate::routes::AppState, key: &str, entry: &Entry, reboot: Option<u64>) -> Option<u64> {
+    let boot = reboot.filter(|_| entry.turn_open)?;
+    let why = reboot_skip(super::open::OpenHost::home(host), &super::open::OpenHost::server_projects(host), key, entry);
+    if let Some(why) = why {
+        st.diag.report(CONTINUE_EVENT, &entry.name, &format!("auto_continue_skipped:{why}"), "continuar depois do reboot: o turno não continua");
+    }
+    why.is_none().then_some(boot)
+}
+
+/// Por que o turno aberto no reboot não continua, pelo spec e pelo fim do transcript; `None`: continua.
 fn reboot_skip(home: &Path, server_projects: &Path, key: &str, entry: &Entry) -> Option<&'static str> {
     if !matches!(entry.provider, AgentProvider::Claude | AgentProvider::Codex) { return Some("provider"); }
     let Ok(Some(spec)) = super::record::read(home, key) else { return Some("no_spec") };
@@ -627,16 +676,10 @@ fn agent_problem(st: &crate::routes::AppState, name: &str, shown: bool) {
     else { crate::runtime::terminal_status::clear_problem(&sender, AGENT_MISSING); }
 }
 
-/// `reboot`: o boot da subida quando a máquina reiniciou; o turno que ela cortou continua depois do agente de pé.
+/// `resume`: o boot cujo turno cortado continua depois do agente de pé (`reboot_resume`). O agente que demora
+/// fica para a reconferência, que continua quando ele subir.
 pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry,
-                                reboot: Option<u64>) -> Result<(), String> {
-    let resume = reboot.filter(|_| entry.turn_open).and_then(|boot| {
-        let why = reboot_skip(super::open::OpenHost::home(host), &super::open::OpenHost::server_projects(host), key, entry);
-        if let Some(why) = why {
-            st.diag.report(CONTINUE_EVENT, &entry.name, &format!("auto_continue_skipped:{why}"), "continuar depois do reboot: o turno não continua");
-        }
-        why.is_none().then_some(boot)
-    });
+                                resume: Option<u64>) -> Result<(), String> {
     let mut result = reopen(host, key, entry).await;
     // Restaurada é o agente de pé: o `new-session` volta antes de o shell soltar o comando.
     if result.is_ok() && entry.provider != AgentProvider::Codex {
@@ -656,9 +699,7 @@ pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::ro
         event["codigo"] = json!(code);
     }
     crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[event], "restore");
-    if result.is_ok() && let Some(boot) = resume && let Some(auto) = st.auto_continue.get() {
-        continue_after_reboot(&LiveResume(st), &auto.ledger, &entry.name, boot).await;
-    }
+    if result.is_ok() && let Some(boot) = resume { continue_restored(st, &entry.name, boot).await; }
     result
 }
 
@@ -673,8 +714,8 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
     let mut windows: Option<bool> = None;
     // As sessões da versão antiga, sem spec, voltam uma vez por subida (`legacy_restore`).
     let mut legacy = false;
-    // As que abriram sem o agente aparecer: reconferidas a cada passada.
-    let mut waiting: Vec<(Entry, u32)> = Vec::new();
+    // As que abriram sem o agente aparecer: reconferidas a cada passada, com o boot do turno a continuar.
+    let mut waiting: Vec<LateAgent> = Vec::new();
     loop {
         waiting = recheck(&st, &program, std::mem::take(&mut waiting)).await;
         let (current, count) = mux_now(&program).await;
@@ -737,8 +778,9 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
                 if !pending.is_empty() {
                     let host = super::server::ServerHost::new(st.clone()).await;
                     for (key, entry) in &pending {
-                        let result = restore_one(&host, &st, &program, key, entry, reboot).await;
-                        if result.as_ref().err().is_some_and(|code| code == AGENT_MISSING || code == MUX_SILENT) { waiting.push((entry.clone(), 0)); }
+                        let resume = reboot_resume(&host, &st, key, entry, reboot);
+                        let result = restore_one(&host, &st, &program, key, entry, resume).await;
+                        if result.as_ref().err().is_some_and(|code| code == AGENT_MISSING || code == MUX_SILENT) { waiting.push((entry.clone(), 0, resume)); }
                         results.push((key.clone(), result));
                     }
                 }
@@ -766,19 +808,25 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
     }
 }
 
-/// Reconfere quem abriu sem o agente: o que subiu vai ao diário como restaurada e perde o problema; o que
-/// esgotou as passadas vai como falha definitiva; o resto espera a próxima.
-async fn recheck(st: &crate::routes::AppState, program: &std::ffi::OsStr, waiting: Vec<(Entry, u32)>) -> Vec<(Entry, u32)> {
+/// A sessão que abriu sem o agente aparecer, as passadas já feitas e o boot do turno a continuar.
+type LateAgent = (Entry, u32, Option<u64>);
+
+/// Reconfere quem abriu sem o agente: o que subiu vai ao diário como restaurada, perde o problema e continua o
+/// turno do reboot; o que esgotou as passadas vai como falha definitiva; o resto espera a próxima.
+async fn recheck(st: &crate::routes::AppState, program: &std::ffi::OsStr, waiting: Vec<LateAgent>) -> Vec<LateAgent> {
     let mut left = Vec::new();
-    for (entry, tries) in waiting {
+    for (entry, tries, resume) in waiting {
         let (event, code) = match agent_up(program, &entry.name, Duration::ZERO).await {
             Some(true) => { agent_problem(st, &entry.name, false); ("sessao.restaurada", "restore_agent_late") }
             _ if tries + 1 >= AGENT_TRIES => ("sessao.restauro_falhou", "restore_agent_never_started"),
-            _ => { left.push((entry, tries + 1)); continue; }
+            _ => { left.push((entry, tries + 1, resume)); continue; }
         };
         let nivel = if event == "sessao.restaurada" { "ok" } else { "erro" };
         crate::diag::record_blocking(crate::diag::diary_dir().as_deref(),
             &[json!({"evento": event, "nivel": nivel, "sessao": entry.name, "provider": entry.provider.name(), "codigo": code})], "restore");
+        let Some(boot) = resume else { continue };
+        if event == "sessao.restaurada" { continue_restored(st, &entry.name, boot).await; }
+        else { st.diag.report(CONTINUE_EVENT, &entry.name, "auto_continue_skipped:agent_never_started", "continuar depois do reboot: o agente não subiu"); }
     }
     left
 }
@@ -936,7 +984,58 @@ mod tests {
         assert_eq!(rebooted(Some(1000), 900), None, "boot antes do servidor: o tmux caiu com a máquina de pé");
         assert_eq!(rebooted(Some(1000), 1000), None, "o servidor caiu e voltou pela hora do boot");
         assert_eq!(rebooted(None, 2000), None, "sem servidor conhecido não se prova o reboot");
+        assert_eq!(rebooted(Some(1000), 1001), None, "o boot do Windows relido um segundo depois não é reboot");
         assert_eq!(rebooted(Some(1000), 2000), Some(2000));
+    }
+
+    /// Depois do agente de pé, o turno cortado só continua sem nada que a agenda também barraria: mensagem da
+    /// pessoa esperando na fila ou escrita depois do boot, pergunta aberta, orquestração, troca de agente, turno
+    /// já andando. Sessão fora da lista ou fatos ilegíveis não continuam.
+    #[test]
+    fn the_reboot_continue_checks_what_the_agenda_checks() {
+        let idle = Facts { life: "k:a".into(), state: "idle".into(), ..Facts::default() };
+        assert_eq!(reboot_blocked(&Ok(Some(idle.clone()))), None);
+        for (facts, why) in [
+            (Facts { queue_pending: true, ..idle.clone() }, "queue_pending"),
+            (Facts { user_after_stop: true, ..idle.clone() }, "user_after_stop"),
+            (Facts { question_open: true, ..idle.clone() }, "question_open"),
+            (Facts { orq: true, ..idle.clone() }, "orq"),
+            (Facts { handoff: true, ..idle.clone() }, "handoff"),
+            (Facts { off: true, ..idle.clone() }, "off"),
+            (Facts { state: "working".into(), ..idle.clone() }, "working"),
+        ] {
+            assert_eq!(reboot_blocked(&Ok(Some(facts))).as_deref(), Some(why));
+        }
+        assert_eq!(reboot_blocked(&Ok(None)).as_deref(), Some("not_listed"));
+        assert_eq!(reboot_blocked(&Err("runtime_binding".into())).as_deref(), Some("facts_unavailable:runtime_binding"));
+    }
+
+    /// Antes de reabrir: sem registro, com o interruptor desligado ou com o turno fechado no transcript, não
+    /// continua; o turno aberto continua. O Codex não tem a linha e decide só pelo registro.
+    #[test]
+    fn the_reboot_skip_reads_the_spec_and_the_transcript() {
+        use super::super::PermissionMode;
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join("projects");
+        let (key, codex) = ("a".repeat(32), "b".repeat(32));
+        let open = Entry { turn_open: true, last_line: Some("u1".into()), ..entry("s1", Some("c1")) };
+        assert_eq!(reboot_skip(home.path(), &projects, &key, &open), Some("no_spec"));
+        recorded(home.path(), &key, AgentProvider::Claude, PermissionMode::BypassPermissions);
+        let dir = projects.join(hangar_workspace::worktrees::sanitize_cwd("/w"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tool = line("assistant", "a1", json!({"stop_reason": "tool_use"}));
+        let result = line("user", "u1", json!({}));
+        std::fs::write(dir.join("c1.jsonl"), format!("{tool}{result}")).unwrap();
+        assert_eq!(reboot_skip(home.path(), &projects, &key, &open), None, "o turno ficou aberto");
+        std::fs::write(dir.join("c1.jsonl"), format!("{tool}{result}{}", line("assistant", "a2", json!({"stop_reason": "end_turn"})))).unwrap();
+        assert_eq!(reboot_skip(home.path(), &projects, &key, &open), Some("turn_ended"));
+        std::fs::write(dir.join("c1.jsonl"), format!("{tool}{result}")).unwrap();
+        assert!(super::super::record::write_auto_continue(home.path(), &key, true).unwrap());
+        assert_eq!(reboot_skip(home.path(), &projects, &key, &open), Some("off"));
+        assert_eq!(reboot_skip(home.path(), &projects, &key, &Entry { provider: AgentProvider::Pi, ..open.clone() }), Some("provider"));
+        recorded(home.path(), &codex, AgentProvider::Codex, PermissionMode::FullAccess);
+        let codex_entry = Entry { provider: AgentProvider::Codex, conversation: None, last_line: None, ..open.clone() };
+        assert_eq!(reboot_skip(home.path(), &projects, &codex, &codex_entry), None);
     }
 
     /// No Windows só a subida do Rust sem nenhum servidor psmux e com sessões na fotografia
