@@ -11,6 +11,7 @@ chrono.workspace = true
 chrono-tz.workspace = true
 hangar-core.workspace = true
 serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
 
 [dev-dependencies]
-serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tempfile.workspace = true

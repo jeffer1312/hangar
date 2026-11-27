@@ -1069,6 +1069,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/claude/code-mode", get(crate::claude_defaults::code_mode).fallback(pass_registered))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         .route("/api/session-options", axum::routing::get(crate::session_defaults::handle_options).put(crate::session_defaults::handle_options))
+        // Regras do balanceamento: só o dono, nunca repassadas (o Python não tem a rota).
+        .route("/api/placement/config", axum::routing::get(crate::placement::routes::config).put(crate::placement::routes::config))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .merge(crate::scheduled_tasks::router())
         .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))

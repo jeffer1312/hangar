@@ -4,6 +4,7 @@
 
 mod choose;
 mod rules;
+pub mod store;
 
 pub use choose::{
     choose, CloneTarget, Exclusion, KnownRepo, MachineFacts, OpenContext, Placement, ReasonCode,

@@ -78,6 +78,45 @@ fn default_worktree_settings_are_exported_and_a_rejected_copy_only_warns() {
     assert!(report.contains("config_sync_pref_rejected") && report.contains("worktrees"), "{report}");
 }
 #[test]
+fn shared_preferences_copy_placement_rules_to_the_destination() {
+    use hangar_placement::{store, Limits, PlacementConfig, UiMode};
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let source_home = source.path().join("account-home");
+    let target_home = target.path().join("account-home");
+    let rules = PlacementConfig {
+        ui_mode: UiMode::Ask,
+        limits: Limits { mem_free_pct: 25, working: 3, cpu_pct: 90 },
+        // Pasta de outra máquina: vai como está, sem virar caminho do destino.
+        clone_dirs: [("vm".to_owned(), source_home.join("Projetos").to_string_lossy().into_owned())].into(),
+        ..Default::default()
+    };
+    store::save(&source_home, &rules).unwrap();
+    let bundle = super::export::export(&Context::new(roots(&source_home)), &["hangar_prefs".into()], None, true).unwrap();
+    assert!(bundle.manifest()["items"]["hangar_prefs"]["hashes"]["placement"].is_string());
+    let bundle = Bundle::unpack(&bundle.pack().unwrap()).unwrap();
+    std::fs::create_dir_all(store::path(&target_home).parent().unwrap()).unwrap();
+    std::fs::write(store::path(&target_home), b"{quebrado").unwrap();
+    let mut apply = Apply::new(Context::new(roots(&target_home)), bundle, "placement", Default::default());
+    apply.apply_item("hangar_prefs").unwrap();
+    assert_eq!(store::load(&target_home).unwrap(), rules);
+    assert!(apply.report["hangar_prefs"]["changed"].as_array().unwrap().contains(&json!("placement")));
+    assert_eq!(std::fs::read(apply.backups.join("files/.hangar/placement.json")).unwrap(), b"{quebrado");
+}
+#[test]
+fn a_rejected_placement_copy_only_warns() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let mut bundle = super::export::export(&Context::new(roots(source.path())), &["hangar_prefs".into()], None, true).unwrap();
+    bundle.items["hangar_prefs"]["placement"]["schedule_rules"] =
+        json!([{"from": "09:00", "to": "18:00", "tz": "Lua/Base", "avoid": "nb"}]);
+    let mut apply = Apply::new(Context::new(roots(target.path())), bundle, "rejected", Default::default());
+    apply.apply_item("hangar_prefs").unwrap();
+    assert!(!hangar_placement::store::path(target.path()).exists());
+    let report = apply.report["hangar_prefs"].to_string();
+    assert!(report.contains("config_sync_pref_rejected") && report.contains("schedule_rules[0].tz"), "{report}");
+}
+#[test]
 fn malformed_warnings_are_discarded_before_application() {
     let mut source = Bundle::default();
     source.warnings.insert("engines".into(), json!("invalid"));

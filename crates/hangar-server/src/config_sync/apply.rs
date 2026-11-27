@@ -618,6 +618,9 @@ impl Apply {
                 }
             }
         }
+        if let Some(value) = self.bundle.items[item].get("placement").cloned() {
+            self.placement(item, value)?;
+        }
         if let Some(settings) = self.bundle.items[item].get("worktrees") {
             use hangar_workspace::worktree_settings::{self, WorktreeSettings};
             let roots = self.context.worktree_roots();
@@ -649,6 +652,31 @@ impl Apply {
             }).map_err(|e| Error::new("config_sync_runtime_failed", e.to_string(), json!({})))?;
             if changed { self.changed(item, "worktrees"); }
         }
+        Ok(())
+    }
+    /// As regras do balanceamento, iguais em todas as máquinas; recusada só avisa, como as outras preferências.
+    fn placement(&mut self, item: &str, value: Value) -> Result<(), Error> {
+        use hangar_placement::{store, PlacementConfig};
+        let home = std::path::PathBuf::from(&self.context.roots.home);
+        let parsed = serde_json::from_value::<PlacementConfig>(value).map_err(|e| e.to_string())
+            .and_then(|config| store::validate(&config).map(|()| config).map_err(|e| e.to_string()));
+        let config = match parsed {
+            Ok(config) => config,
+            Err(error) => {
+                self.warn(item, "config_sync_pref_rejected",
+                    json!({"key":"placement","error":error.chars().take(200).collect::<String>()}));
+                return Ok(());
+            }
+        };
+        // Destino ilegível também é trocado: a cópia de segurança guarda o que estava lá.
+        if store::load(&home).is_ok_and(|current| current == config) { return Ok(()); }
+        let path = store::path(&home);
+        if path.exists() {
+            std::fs::copy(&path, files::backup_target(&path, &self.context.roots, &self.backups)?)?;
+        }
+        store::save(&home, &config)
+            .map_err(|e| Error::new("config_sync_runtime_failed", format!("{e:?}"), json!({})))?;
+        self.changed(item, "placement");
         Ok(())
     }
     fn appearance(&mut self) -> Result<(), Error> {

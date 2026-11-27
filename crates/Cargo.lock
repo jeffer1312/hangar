@@ -2112,6 +2112,7 @@ dependencies = [
  "hangar-core",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2288,6 +2289,7 @@ dependencies = [
  "hangar-open-cli",
  "hangar-opencode-cookie",
  "hangar-package",
+ "hangar-placement",
  "hangar-plugins",
  "hangar-port-preview",
  "hangar-port-stop",

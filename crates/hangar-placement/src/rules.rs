@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Datelike, Duration, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, NaiveTime, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
@@ -90,19 +90,19 @@ impl ScheduleRule {
         } else if from < to {
             day_on(today) && from <= t && t < to
         } else {
-            (day_on(today) && t >= from) || (day_on((local - Duration::days(1)).weekday()) && t < to)
+            (day_on(today) && t >= from) || (day_on(today.pred()) && t < to)
         }
     }
 }
 
-fn hhmm(s: &str) -> Option<NaiveTime> {
+pub(crate) fn hhmm(s: &str) -> Option<NaiveTime> {
     NaiveTime::parse_from_str(s.trim(), "%H:%M").ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{Duration, TimeZone};
 
     fn rule(days: &[u8], from: &str, to: &str) -> ScheduleRule {
         ScheduleRule { days: days.to_vec(), from: from.into(), to: to.into(), tz: "America/Sao_Paulo".into(), avoid: "nb".into() }
