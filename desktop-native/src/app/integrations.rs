@@ -283,6 +283,8 @@ enum FormMode {
 #[derive(Clone)]
 enum Feedback {
     Info(String),
+    /// Andamento do login (abrindo, conclua no navegador): some sozinho quando a integração deixa de pedir login.
+    Pending(String),
     Error(String),
 }
 
@@ -739,7 +741,7 @@ impl IntegrationsPage {
         let start_seq = self.oauth_start_seq;
         self.notice = None;
         self.feedback
-            .insert(id.clone(), Feedback::Info(tr_shared("integrations_oauth_opening", &[])));
+            .insert(id.clone(), Feedback::Pending(tr_shared("integrations_oauth_opening", &[])));
         self.handoff = None;
         let (api, path) = (self.api.clone(), id.clone());
         let start_body = oauth_start_body(&api);
@@ -768,7 +770,7 @@ impl IntegrationsPage {
                                 cx.open_url(&safe);
                                 this.feedback.insert(
                                     id,
-                                    Feedback::Info(tr_shared("integrations_oauth_started", &[])),
+                                    Feedback::Pending(tr_shared("integrations_oauth_started", &[])),
                                 );
                             } else {
                                 this.feedback.insert(id, Feedback::Error(tr("invalid_response")));
@@ -843,7 +845,7 @@ impl IntegrationsPage {
                         if same_handoff || this.handoff.is_none() {
                             this.feedback.insert(
                                 id,
-                                Feedback::Info(tr_shared("integrations_oauth_desktop_opened", &[])),
+                                Feedback::Pending(tr_shared("integrations_oauth_desktop_opened", &[])),
                             );
                         }
                     }
@@ -1163,8 +1165,13 @@ impl IntegrationsPage {
             Some(Feedback::Error(err)) => Some(err.clone()),
             _ => item.last_error.clone().filter(|err| !err.is_empty() && item.status != IntegrationStatus::Ready),
         };
+        let waiting_login = matches!(
+            item.status,
+            IntegrationStatus::AuthRequired | IntegrationStatus::AuthExpired | IntegrationStatus::Error
+        );
         let info = match feedback {
             Some(Feedback::Info(text)) => Some(text),
+            Some(Feedback::Pending(text)) if waiting_login => Some(text),
             _ => None,
         };
         let oauth_btn = is_oauth.then(|| {

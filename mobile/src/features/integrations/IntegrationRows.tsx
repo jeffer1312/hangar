@@ -214,13 +214,20 @@ export function ToolSummaryRow({ tool, policy, busy, onAllowAlways, onRevokeAlwa
 }
 
 export function SetupGuideBlock({ guide }: { guide: IntegrationSetupGuide }) {
-  const docsUrl = guide.docs_url;
+  // Link vindo do servidor (pode ser outra máquina): só página https.
+  const docsUrl = guide.docs_url && /^https:\/\//i.test(guide.docs_url) ? guide.docs_url : null;
   const redirectUri = guide.redirect_uri;
   return (
     <MachineGroup>
       <MachineRow title={guide.title} description={guide.docs_hint ?? undefined} />
       {docsUrl ? (
-        <MachineRow title={m.integrations_setup_open_docs()} action onPress={() => void Linking.openURL(docsUrl)} />
+        <MachineRow
+          title={m.integrations_setup_open_docs()}
+          action
+          onPress={() => {
+            Linking.openURL(docsUrl).catch(() => toast.erro(m.integrations_open_failed()));
+          }}
+        />
       ) : null}
       {guide.steps.map((step, idx) => (
         <MachineRow key={idx} title={`${idx + 1}. ${step}`} />
@@ -231,7 +238,9 @@ export function SetupGuideBlock({ guide }: { guide: IntegrationSetupGuide }) {
           description={m.integrations_setup_redirect()}
           value={m.integrations_copy()}
           onPress={() => {
-            void Clipboard.setStringAsync(redirectUri).then(() => toast.ok(m.integrations_copied()));
+            Clipboard.setStringAsync(redirectUri)
+              .then(() => toast.ok(m.integrations_copied()))
+              .catch(() => toast.erro(m.integrations_copy_failed()));
           }}
         />
       ) : null}

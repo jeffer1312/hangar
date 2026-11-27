@@ -372,7 +372,7 @@ it('testIntegration trata 424 auth_expired na folha e libera ferramentas ao apro
   expect(mocks.updateIntegration).toHaveBeenCalledWith(srv, 'notion', { add_allowed_tools: ['create_issue'] });
 });
 
-it('editor de preset Google exibe guia curto e nota dos 7 dias em Testing', async () => {
+it('editor de preset Google exibe guia curto, endereço de retorno com Copiar e link do console', async () => {
   const googlePreset: IntegrationPreset = {
     id: 'google-gmail',
     name: 'Google Gmail',
@@ -387,6 +387,8 @@ it('editor de preset Google exibe guia curto e nota dos 7 dias em Testing', asyn
       title: 'Configurar Client ID do Google Cloud para Gmail MCP',
       steps: ['Passo 1 do console', 'Passo 2 do consentimento'],
       docs_hint: 'Google Cloud Console -> Credenciais',
+      docs_url: 'https://console.cloud.google.com/auth/clients',
+      redirect_uri: 'http://127.0.0.1:8765/api/integrations/oauth/callback',
     },
   };
 
@@ -404,7 +406,9 @@ it('editor de preset Google exibe guia curto e nota dos 7 dias em Testing', asyn
 
   expect(container.textContent).toContain('Configurar Client ID do Google Cloud para Gmail MCP');
   expect(container.textContent).toContain('Passo 1 do console');
-  expect(container.textContent).toContain(m.integrations_google_testing_hint());
+  expect(container.textContent).toContain('http://127.0.0.1:8765/api/integrations/oauth/callback');
+  expect(container.textContent).toContain(m.integrations_copy());
+  expect(container.textContent).toContain(m.integrations_setup_open_docs());
 });
 
 it('com 2 servidores próprios e identidade pendente não vaza pedido de sessão homônima entre máquinas', async () => {
@@ -491,7 +495,6 @@ it('editar integração com preset preserva url_editable=false, modos de auth pe
   expect(urlField).not.toBeNull();
   expect(urlField!.disabled).toBe(true);
   expect(container.textContent).toContain('Configurar Client ID do Google Cloud para Gmail MCP');
-  expect(container.textContent).toContain(m.integrations_google_testing_hint());
   expect(container.querySelector(`button[aria-label="${m.integrations_auth_oauth_dcr()}"]`)).toBeNull();
   expect(container.querySelector(`button[aria-label="${m.integrations_auth_bearer()}"]`)).toBeNull();
   expect(container.querySelector(`button[aria-label="${m.integrations_auth_none()}"]`)).toBeNull();

@@ -125,7 +125,10 @@ pub fn brand_for(preset: Option<&str>, url: Option<&str>) -> Option<Brand> {
 }
 
 fn host_of(url: &str) -> Option<String> {
-    reqwest::Url::parse(url).ok()?.host_str().map(str::to_ascii_lowercase)
+    reqwest::Url::parse(url)
+        .ok()?
+        .host_str()
+        .map(str::to_ascii_lowercase)
 }
 
 // ponytail: últimos dois rótulos, sem lista de sufixos públicos; serve aos domínios do catálogo (`.com`, `.app`, `.dev`).
