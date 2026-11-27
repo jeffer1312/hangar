@@ -17,7 +17,8 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use tokio::signal::unix::{SignalKind, signal};
 
-const MAX_BODY: usize = 64 * 1024;
+// As 100 linhas de log de até 300 caracteres cabem com folga junto dos contadores.
+const MAX_BODY: usize = 256 * 1024;
 
 fn app(pool: PgPool) -> Router {
     Router::new()
@@ -46,7 +47,7 @@ async fn post_batch(State(pool): State<PgPool>, body: Bytes) -> Response {
     if let Err(field) = batch.validate() {
         return refused(StatusCode::BAD_REQUEST, field);
     }
-    if batch.counters.iter().any(|c| i64::try_from(c.count).is_err()) {
+    if batch.counters.iter().map(|c| c.count).chain(batch.logs.iter().map(|l| l.count)).any(|n| i64::try_from(n).is_err()) {
         return refused(StatusCode::BAD_REQUEST, "count");
     }
     match store::insert(&pool, &batch).await {
@@ -291,7 +292,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn body_over_64_kb_is_413() {
+    async fn body_over_the_limit_is_413() {
         let (status, _) = send(offline(), vec![b' '; MAX_BODY + 1]).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         // No limite ainda passa pelo leitor: espaço só não é JSON.
@@ -317,6 +318,39 @@ mod tests {
         body["counters"][0]["count"] = json!(u64::MAX);
         let (status, text) = post_json(offline(), &body).await;
         assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"count"}"#));
+        body["counters"][0]["count"] = json!(1);
+        body["logs"] = json!([{"level": "error", "target": "hangar_server::list", "message": "x", "count": u64::MAX}]);
+        let (status, text) = post_json(offline(), &body).await;
+        assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"count"}"#));
+        body["logs"][0]["level"] = json!("info");
+        let (status, text) = post_json(offline(), &body).await;
+        assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"log_level"}"#));
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn log_lines_of_two_machines_become_one_aggregated_row() {
+        let pool = online().await;
+        let today = utc_day(&pool, 0).await;
+        // Mensagem desta rodada: o banco é dividido entre rodadas.
+        let message = format!("lista não lida {}", fresh_id());
+        for (version, count) in [("0.42.0", 3), ("0.43.0", 2)] {
+            let mut body = batch_body(&fresh_id(), &today);
+            body["env"]["version"] = json!(version);
+            body["logs"] = json!([
+                {"level": "error", "target": "hangar_server::list", "message": message, "count": count},
+                {"level": "warn", "target": "hangar_server::list", "message": format!("{message} aviso"), "count": 1},
+            ]);
+            assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+        }
+        let data = store::summary(&pool, 7).await.unwrap();
+        let row = data["logs"].as_array().unwrap().iter().find(|l| l["message"] == json!(message)).unwrap().clone();
+        assert_eq!(row, json!({
+            "level": "error", "target": "hangar_server::list", "message": message, "count": 5, "machines": 2,
+            "first_day": today, "last_day": today, "versions": ["0.42.0", "0.43.0"],
+        }));
+        let warn = data["logs"].as_array().unwrap().iter().find(|l| l["message"] == json!(format!("{message} aviso"))).unwrap();
+        assert_eq!((&warn["level"], &warn["count"], &warn["machines"]), (&json!("warn"), &json!(2), &json!(2)));
     }
 
     #[tokio::test]

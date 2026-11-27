@@ -87,6 +87,8 @@ pub mod stats;
 pub mod status;
 pub mod telemetry_routes;
 pub mod telemetry_hooks;
+pub(crate) mod telemetry_log;
+pub(crate) mod telemetry_scrub;
 pub mod usage_cli;
 pub mod send_cli;
 pub mod subagents;
@@ -434,7 +436,8 @@ pub fn install_panic_hook() {
 
 use hangar_core::log_rotate::{LOG_MAX_BYTES, rotate_log};
 
-/// Log em arquivo (HANGAR_SERVER_LOG) ou no stderr. Nunca recebe texto de conversa.
+/// Log em arquivo (HANGAR_SERVER_LOG) ou no stderr. Nunca recebe texto de conversa. Avisos e erros
+/// também vão à camada da telemetria, que só os conta com consentimento e depois da limpeza.
 pub fn init_log(path: Option<&std::path::Path>) {
     if let Some(p) = path {
         rotate_log(p, LOG_MAX_BYTES);
@@ -447,10 +450,14 @@ pub fn init_log(path: Option<&std::path::Path>) {
             None
         }
     });
-    let builder = tracing_subscriber::fmt().with_target(false);
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    // O mesmo INFO que o `fmt()` sozinho aplicava.
+    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::INFO).with(telemetry_log::layer());
+    let fmt = tracing_subscriber::fmt::layer().with_target(false);
     let init = match file {
-        Some(f) => builder.with_writer(std::sync::Mutex::new(f)).try_init(),
-        None => builder.with_writer(std::io::stderr).try_init(),
+        Some(f) => registry.with(fmt.with_writer(std::sync::Mutex::new(f))).try_init(),
+        None => registry.with(fmt.with_writer(std::io::stderr)).try_init(),
     };
     if let Err(e) = init {
         eprintln!("hangar-server: log não iniciou: {e}");

@@ -3,6 +3,8 @@
 O Hangar pode mandar, uma vez por dia, contagens de uso e de erros do próprio Hangar ao
 desenvolvedor. Serve para corrigir erro antes de alguém reclamar e saber o que melhorar. Nada é
 contado antes de você responder ao aviso, e nunca sai conversa, texto digitado, nome ou endereço.
+As linhas de aviso e erro do servidor também vão, depois de uma limpeza que tira esses dados delas
+(veja "Linhas de erro do servidor").
 
 A lista abaixo descreve o que o código faz. A fonte é
 [`crates/hangar-telemetry/src/events.rs`](../crates/hangar-telemetry/src/events.rs) (eventos e valores
@@ -21,10 +23,12 @@ Cada pacote é um dia (UTC) de uma máquina e leva:
 - `day`: o dia, sem horário;
 - `env`: versão do Hangar, commit (só em pacote de release; fora disso, `dev`), sistema,
   arquitetura e canal de atualização (`latest`, `beta` ou `other`);
-- `counters`: a lista de contadores `(evento, dimensões, faixa) → quantidade`.
+- `counters`: a lista de contadores `(evento, dimensões, faixa) → quantidade`;
+- `logs`: as linhas de aviso e erro do log do servidor naquele dia, já limpas (abaixo).
 
 Toda dimensão é um valor de uma lista fixa no código, um sim/não ou um número de versão. Valor fora
-da lista sai como `other`. Não existe campo de texto livre.
+da lista sai como `other`. O único texto livre é a mensagem das linhas de `logs`, e só depois da
+limpeza descrita em "Linhas de erro do servidor".
 
 Tempo vai em faixas: `lt100ms`, `lt300ms`, `lt1s`, `lt3s`, `lt10s`, `lt30s`, `ge30s`. Nos
 eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
@@ -56,6 +60,7 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 | `server_exit` | `kind` (`crash`, `update`, `requested`), `cause` | Como o servidor anterior parou; contado na subida seguinte |
 | `limit_switch` | `code` | Troca de conta pelo limite de uso: trocou, ficou ou falhou |
 | `client_fatal` | `client`, `code` (tipo do erro, como `typeerror`, ou `panic` no desktop) | Queda do app. O texto do erro nunca sai |
+| `log_dropped` | — | Linha de aviso ou erro nova que não entrou no pacote porque o dia já tinha 100 linhas diferentes |
 
 ### Atualização
 
@@ -74,11 +79,36 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 | `server_startup` (faixa) | — | Tempo de subida do servidor |
 | `chat_open` (faixa) | `client` | Tempo para abrir uma conversa |
 
+### Linhas de erro do servidor
+
+Cada linha de nível aviso (`warn`) ou erro (`error`) que o `hangar-server` escreve no log dele
+vai também ao pacote do dia como `{level, target, message, count}`: `target` é o módulo do código que
+escreveu (como `hangar_server::list`), `message` é o texto da linha com os campos, e `count` quantas
+vezes a mesma linha, já limpa, apareceu no dia. As linhas do nível informativo, do celular e do desktop
+não vão.
+
+Antes de contar, o servidor limpa o texto na própria máquina:
+
+- tira credenciais (tokens, `Bearer`, senhas em URL e em JSON, chaves conhecidas), IPs, nomes do
+  Tailscale (`*.ts.net`) e trechos longos em hex ou base64, com as mesmas regras do "Reportar
+  problema";
+- todo caminho de arquivo (absoluto, com `~/` ou `%LOCALAPPDATA%`, de unidade do Windows ou de rede)
+  vira `<caminho>`, sem guardar nem o nome do arquivo;
+- endereço `http(s)` vira `<url>` e e-mail vira `<email>`;
+- o nome de cada sessão aberta vira `<sessão>`, e o nome desta máquina e das máquinas do
+  `peers.json` vira `<máquina>`, lidos na hora de cada lote;
+- número com 6 dígitos ou mais (pid, porta alta, id) vira `<n>`;
+- a mensagem é cortada em 300 caracteres.
+
+Por pacote vão no máximo 100 linhas diferentes; passando disso, a linha nova só soma `log_dropped`.
+Sem resposta ao aviso, ou com "Não enviar", nenhuma linha é guardada.
+
 ## O que nunca sai
 
 Texto de mensagem e de comando, nome de sessão, pasta, repositório, branch, conta, e-mail, nome da
-máquina, endereço e IP, user-agent, detalhe e texto de erro, nome de skill, nome de motor, tokens e
-custo, modelo do aparelho, horário dentro do dia, multiplexador.
+máquina, endereço e IP, user-agent, texto de erro do app, nome de skill, nome de motor, tokens e
+custo, modelo do aparelho, horário dentro do dia, multiplexador. O texto de erro do servidor sai só
+nas linhas de `logs`, depois da limpeza acima.
 
 O que convidado faz (porta de convidado, convite, par, login de convidado) não conta: mensagem,
 sessão aberta ou que não abriu, tela, ação na API, evento do app dele e tool do MCP na sessão dele ficam fora.
@@ -141,6 +171,6 @@ máquina de outra pessoa no `peers.json`, as duas passam a contar como um dono s
 
 `https://telemetry.hangar.dev.br/v1/batch`, atrás do proxy da Cloudflare. O receptor é código aberto,
 em [`services/telemetry-ingest`](../services/telemetry-ingest): grava o pacote num Postgres, não lê
-IP, recusa só pacote malformado (até 64 KB) e guarda evento ou valor que ainda não conhece em vez de
+IP, recusa só pacote malformado (até 256 KB) e guarda evento ou valor que ainda não conhece em vez de
 recusar. Os dados ficam 400 dias. Só o mantenedor do Hangar e quem ele convidar veem o resumo, na
 página `/panel` do mesmo receptor, com conta e senha.

@@ -10,12 +10,12 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 
 use crate::buckets::Bucket;
-use crate::events::{Dims, Event};
+use crate::events::{Dims, Event, LogLevel};
 use crate::queue::{self, DayFile};
 use crate::send::Failure;
 use crate::state::{self, State};
 use crate::switch::{self, Disabled};
-use crate::wire::{Counter, Env, is_id};
+use crate::wire::{Counter, Env, LogLine, MAX_LOG_CHARS, MAX_LOG_LINES, is_id, is_name};
 
 /// Relógio de parede; os testes injetam o deles.
 pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
@@ -59,14 +59,37 @@ pub(crate) struct Settings {
 }
 
 type Key = (String, BTreeMap<String, String>, Option<String>);
+/// Nível, alvo e mensagem.
+type LogKey = (String, String, String);
 
 struct Day {
     day: String,
     counters: BTreeMap<Key, u64>,
+    logs: BTreeMap<LogKey, u64>,
 }
 
 impl Day {
-    fn new(day: String) -> Day { Day { day, counters: BTreeMap::new() } }
+    fn new(day: String) -> Day { Day { day, counters: BTreeMap::new(), logs: BTreeMap::new() } }
+
+    /// `false` quando a linha é nova e o dia já tem `MAX_LOG_LINES` distintas: o pacote não passa do teto.
+    fn add_log(&mut self, line: LogLine) -> bool {
+        let key = (line.level, line.target, line.message);
+        if let Some(slot) = self.logs.get_mut(&key) {
+            *slot = slot.saturating_add(line.count);
+            return true;
+        }
+        if self.logs.len() >= MAX_LOG_LINES {
+            return false;
+        }
+        self.logs.insert(key, line.count);
+        true
+    }
+
+    fn to_logs(&self) -> Vec<LogLine> {
+        self.logs.iter()
+            .map(|((level, target, message), count)| LogLine { level: level.clone(), target: target.clone(), message: message.clone(), count: *count })
+            .collect()
+    }
 
     fn add(&mut self, counter: Counter) {
         let slot = self.counters.entry((counter.event, counter.dims, counter.bucket)).or_default();
@@ -76,6 +99,7 @@ impl Day {
     fn from_file(file: DayFile) -> Day {
         let mut day = Day::new(file.day);
         file.counters.into_iter().for_each(|counter| day.add(counter));
+        file.logs.into_iter().for_each(|line| { day.add_log(line); });
         day
     }
 
@@ -85,7 +109,7 @@ impl Day {
             .collect()
     }
 
-    fn file(&self) -> DayFile { DayFile { day: self.day.clone(), batch_id: None, counters: self.to_counters() } }
+    fn file(&self) -> DayFile { DayFile { day: self.day.clone(), batch_id: None, counters: self.to_counters(), logs: self.to_logs() } }
 }
 
 struct Live {
@@ -186,6 +210,28 @@ impl Telemetry {
         }
     }
 
+    /// Uma linha de aviso ou erro do log, já limpa por quem chama; o mesmo portão do `count`. Alvo fora
+    /// do formato sai `other`; caractere de controle vira espaço e a mensagem é cortada em `MAX_LOG_CHARS`.
+    pub fn log(&self, level: LogLevel, target: &str, message: &str) {
+        if !self.enabled() {
+            return;
+        }
+        let message: String = message.chars().map(|c| if c.is_control() { ' ' } else { c }).take(MAX_LOG_CHARS).collect();
+        let message = message.trim();
+        if message.is_empty() {
+            return;
+        }
+        let target = if is_name(target) { target } else { "other" };
+        let line = LogLine { level: level.as_str().to_owned(), target: target.to_owned(), message: message.to_owned(), count: 1 };
+        let today = day_of((self.clock)());
+        let Ok(mut live) = self.live.lock() else { return };
+        live.roll(today);
+        if !live.current.add_log(line) {
+            live.current.add(Counter::new(Event::LogDropped, Dims::new(), None, 1));
+        }
+        live.dirty = true;
+    }
+
     fn add(&self, counter: Counter) {
         let today = day_of((self.clock)());
         let Ok(mut live) = self.live.lock() else { return };
@@ -274,6 +320,9 @@ impl Telemetry {
 
     /// Os contadores do dia corrente em memória.
     pub fn counters(&self) -> Vec<Counter> { lock(&self.live).map(|live| live.current.to_counters()).unwrap_or_default() }
+
+    /// As linhas de log do dia corrente em memória.
+    pub fn logs(&self) -> Vec<LogLine> { lock(&self.live).map(|live| live.current.to_logs()).unwrap_or_default() }
 
     /// Grava na fila os dias que viraram e o corrente, se mudaram; o desligamento do servidor
     /// chama. Bloqueante.
@@ -441,6 +490,67 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn message() -> Dims { Dims::new().with("provider", Provider::Claude).with("surface", Surface::Terminal) }
+
+    #[test]
+    fn log_lines_stop_at_the_cap_and_count_what_was_dropped() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        for n in 0..MAX_LOG_LINES {
+            telemetry.log(LogLevel::Warn, "hangar_server::list", &format!("aviso {n}"));
+        }
+        telemetry.log(LogLevel::Warn, "hangar_server::list", "aviso 0");
+        telemetry.log(LogLevel::Error, "hangar_server::list", "nova depois do teto");
+        telemetry.log(LogLevel::Error, "hangar_server::list", "outra nova");
+        let logs = telemetry.logs();
+        assert_eq!(logs.len(), MAX_LOG_LINES);
+        assert_eq!(logs.iter().find(|l| l.message == "aviso 0").map(|l| l.count), Some(2), "a linha já vista ainda soma");
+        assert!(!logs.iter().any(|l| l.message.contains("nova")));
+        assert_eq!(telemetry.counters(), vec![Counter::new(Event::LogDropped, Dims::new(), None, 2)]);
+    }
+
+    #[test]
+    fn log_message_is_cut_and_has_no_control_character() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.log(LogLevel::Error, "Fora Do Formato", &format!("primeira\nsegunda {}", "é".repeat(400)));
+        telemetry.log(LogLevel::Error, "hangar_server::x", " \n ");
+        let logs = telemetry.logs();
+        assert_eq!(logs.len(), 1, "mensagem vazia não entra");
+        assert_eq!(logs[0].target, "other");
+        assert!(logs[0].message.starts_with("primeira segunda é"));
+        assert_eq!(logs[0].message.chars().count(), MAX_LOG_CHARS);
+    }
+
+    #[test]
+    fn log_without_consent_records_nothing() {
+        let fx = Fixture::new();
+        let telemetry = fx.start_as_is();
+        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
+        telemetry.save().unwrap();
+        assert!(telemetry.logs().is_empty());
+        telemetry.set_consent(false).unwrap();
+        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
+        telemetry.save().unwrap();
+        assert!(telemetry.logs().is_empty() && telemetry.counters().is_empty());
+        assert!(!fx.queue().exists());
+    }
+
+    #[test]
+    fn log_lines_go_through_the_queue_and_back() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
+        telemetry.log(LogLevel::Warn, "hangar_server::list", "devagar");
+        telemetry.save().unwrap();
+        drop(telemetry);
+        let file = queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap();
+        assert_eq!(file.logs.len(), 2);
+        let telemetry = fx.start();
+        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
+        let logs = telemetry.logs();
+        assert_eq!(logs.iter().find(|l| l.message == "falhou").map(|l| (l.level.as_str(), l.count)), Some(("error", 2)));
+        assert_eq!(logs.len(), 2);
+    }
 
     #[test]
     fn unanswered_consent_counts_and_writes_nothing() {
@@ -723,7 +833,7 @@ pub(crate) mod tests {
         telemetry.save().unwrap();
         assert!(!fx.queue().exists(), "sem contagem nada é gravado");
         for n in 12..=25 {
-            queue::write_day(fx.home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new() }).unwrap();
+            queue::write_day(fx.home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), logs: Vec::new() }).unwrap();
         }
         telemetry.count(Event::MessageSent, message(), 1);
         telemetry.save().unwrap();

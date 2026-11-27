@@ -68,6 +68,25 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
     .bind(counts)
     .execute(&mut *tx)
     .await?;
+    if !batch.logs.is_empty() {
+        let logs = &batch.logs;
+        let levels: Vec<&str> = logs.iter().map(|l| l.level.as_str()).collect();
+        let targets: Vec<&str> = logs.iter().map(|l| l.target.as_str()).collect();
+        let messages: Vec<&str> = logs.iter().map(|l| l.message.as_str()).collect();
+        let counts: Vec<i64> = logs.iter().map(|l| l.count as i64).collect();
+        sqlx::query(
+            "INSERT INTO logs (batch_id, level, target, message, count)
+             SELECT $1, level, target, message, count
+             FROM UNNEST($2::text[], $3::text[], $4::text[], $5::bigint[]) AS l(level, target, message, count)",
+        )
+        .bind(&batch.batch_id)
+        .bind(levels)
+        .bind(targets)
+        .bind(messages)
+        .bind(counts)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(Insert::Accepted)
 }
@@ -145,6 +164,16 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
+    let logs: Vec<(String, String, String, i64, i64, String, String, Vec<String>)> = sqlx::query_as(concat!(
+        "SELECT l.level, l.target, l.message, sum(l.count)::bigint, count(DISTINCT b.machine_id),
+                to_char(min(b.day), 'YYYY-MM-DD'), to_char(max(b.day), 'YYYY-MM-DD'), array_agg(DISTINCT b.version ORDER BY b.version)
+         FROM logs l JOIN batches b ON b.batch_id = l.batch_id
+         WHERE ", in_period!("b.day"), "
+         GROUP BY l.level, l.target, l.message ORDER BY 5 DESC, 4 DESC LIMIT 300"
+    ))
+    .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
     tx.commit().await?;
     use serde_json::json;
     Ok(json!({
@@ -158,6 +187,10 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
             json!({"event": event, "dims": dims.0, "count": count, "machines": machines})).collect::<Vec<_>>(),
         "by_bucket": by_bucket.into_iter().map(|(event, bucket, count, machines)|
             json!({"event": event, "bucket": bucket, "count": count, "machines": machines})).collect::<Vec<_>>(),
+        "logs": logs.into_iter().map(|(level, target, message, count, machines, first, last, versions)| json!({
+            "level": level, "target": target, "message": message, "count": count, "machines": machines,
+            "first_day": first, "last_day": last, "versions": versions,
+        })).collect::<Vec<_>>(),
         "counters": counters.into_iter().map(|(event, dims, bucket, count, machines)|
             json!({"event": event, "dims": dims.0, "bucket": bucket, "count": count, "machines": machines})).collect::<Vec<_>>(),
     }))

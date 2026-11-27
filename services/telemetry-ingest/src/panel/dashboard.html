@@ -59,6 +59,7 @@ const EVENTS = {
   update_step: ["Passos de atualização", "saude"],
   update_failed_code: ["Falhas de atualização", "saude"],
   server_startup: ["Subida do servidor", "saude"],
+  log_dropped: ["Linhas de log fora do teto do dia", "saude"],
 };
 // Eventos que são falha de verdade: vão à seção Erros, em vermelho.
 const BAD = new Set(["problem_shown", "session_open_failed", "send_failed", "session_fallen", "client_fatal", "update_failed_code"]);
@@ -171,6 +172,50 @@ function daysChart(daily, days) {
 }
 
 
+// O filtro do log sobrevive ao redesenho do resize.
+let logQuery = "", logLevel = "";
+const dayMonth = day => day.slice(8, 10) + "/" + day.slice(5, 7);
+
+function logRow(l) {
+  const [label, cls] = l.level === "error" ? ["erro", "error"] : ["aviso", "warn"];
+  return el("div", { class: "log-row" },
+    el("span", { class: "level " + cls, text: label }),
+    el("div", { class: "log-main" }, el("code", { class: "log-msg", text: l.message }), el("div", { class: "log-target", text: l.target })),
+    el("div", { class: "log-meta" },
+      el("span", { text: fmt.format(l.count) + (l.count === 1 ? " vez" : " vezes") }),
+      el("span", { text: l.machines + " máquina" + (l.machines === 1 ? "" : "s") }),
+      el("span", { text: "primeira vez " + dayMonth(l.first_day) }),
+      el("span", { text: "última vez " + dayMonth(l.last_day) }),
+      el("span", { text: (l.versions || []).join(", ") })));
+}
+
+function logCard(logs) {
+  if (!logs.length) return el("div", { class: "card empty good", text: "Nenhuma linha de erro no período." });
+  const search = el("input", { type: "search", class: "log-search", placeholder: "Buscar no texto", "aria-label": "Buscar no log de erros" });
+  search.value = logQuery;
+  const levels = el("div", { class: "seg", role: "group", "aria-label": "Nível" });
+  const list = el("div", { class: "log-list" }), shownCount = el("div", { class: "minor" });
+  const draw = () => {
+    const q = logQuery.trim().toLowerCase();
+    const shown = logs.filter(l => (!logLevel || l.level === logLevel) && (!q || (l.message + " " + l.target).toLowerCase().includes(q)));
+    list.replaceChildren(...shown.map(logRow));
+    if (!shown.length) list.append(el("div", { class: "empty", text: "Nenhuma linha com esse filtro." }));
+    shownCount.textContent = shown.length + " de " + logs.length + " linhas";
+  };
+  for (const [value, label] of [["", "Todos"], ["error", "Erros"], ["warn", "Avisos"]]) {
+    const button = el("button", { type: "button", "aria-pressed": String(value === logLevel), text: label });
+    button.addEventListener("click", () => {
+      logLevel = value;
+      levels.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === button)));
+      draw();
+    });
+    levels.append(button);
+  }
+  search.addEventListener("input", () => { logQuery = search.value; draw(); });
+  draw();
+  return el("div", { class: "card" }, el("div", { class: "log-tools" }, search, levels), list, shownCount);
+}
+
 function section(title, note) {
   return el("div", { class: "section-title" }, el("h2", { text: title }), note ? el("span", { text: note }) : null);
 }
@@ -217,6 +262,8 @@ function render(data) {
     ? el("div", { class: "card" }, barList(failures.slice(0, 15), { bad: true }),
         failures.length > 15 ? el("div", { class: "minor", text: "+ " + (failures.length - 15) + " na tabela no fim" }) : null)
     : el("div", { class: "card empty good", text: "Nenhuma falha registrada no período." }));
+
+  root.append(section("Log de erros", "linhas de aviso e erro do servidor, limpas na máquina antes de sair"), logCard(data.logs || []));
 
   root.append(section("Máquinas por dia"), el("div", { class: "card" }, daysChart(data.daily, data.days)));
 

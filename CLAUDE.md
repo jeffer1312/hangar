@@ -707,8 +707,9 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   [plataforma.md](docs/decisoes/plataforma.md#relatório-automático-quando-a-atualização-falha-30102026).
 - **Telemetria anônima é do Rust: crate `hangar-telemetry`, ligado pelo servidor em
   `telemetry_routes.rs` e `telemetry_hooks.rs`.** Conta só ação do dono (convidado, 8766 e login de
-  convidado nunca) e a saúde do servidor; nunca texto livre: toda dimensão é enum, bool, versão ou
-  código de lista fechada, e o que está fora vira `other`. Nada é contado nem gravado sem
+  convidado nunca) e a saúde do servidor. Toda dimensão é enum, bool, versão ou código de lista
+  fechada, e o que está fora vira `other`; texto livre só nas linhas de aviso e erro do servidor,
+  depois da limpeza de `telemetry_scrub.rs`, até 100 distintas por dia. Nada é contado nem gravado sem
   `consent: true` em `~/.hangar/telemetry.json`; `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1` e CI vencem
   e apagam a fila. Um pacote por dia UTC; o receptor (`services/telemetry-ingest`) grava evento e
   valor que não conhece, desde que no formato do `wire`, em vez de recusá-los. Evento ou valor novo entra em `events.rs` e em

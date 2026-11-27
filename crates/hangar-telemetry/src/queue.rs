@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 // O resto da pasta (temporários da gravação atômica) não passa no formato de dia.
-use crate::wire::{Counter, is_day};
+use crate::wire::{Counter, LogLine, is_day};
 
 /// Teto da fila: acima dele sai o dia mais antigo.
 pub(crate) const MAX_DAYS: usize = 14;
@@ -18,6 +18,8 @@ pub(crate) struct DayFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) batch_id: Option<String>,
     pub(crate) counters: Vec<Counter>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) logs: Vec<LogLine>,
 }
 
 fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry") }
@@ -106,7 +108,7 @@ mod tests {
     fn fifteen_days_keep_fourteen() {
         let home = tempfile::tempdir().unwrap();
         for n in 1..=15 {
-            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new() }).unwrap();
+            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), logs: Vec::new() }).unwrap();
         }
         assert_eq!(cap(home.path()).unwrap(), 1);
         let days = days(home.path()).unwrap();

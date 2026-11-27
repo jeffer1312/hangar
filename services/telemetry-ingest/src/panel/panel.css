@@ -6,6 +6,7 @@
   --line: rgba(255,248,244,.08); --line-strong: rgba(255,248,244,.14);
   --accent: #7c87e8; --accent-soft: rgba(124,135,232,.16); --accent-ink: #0c0a11;
   --error: #ff453a; --error-soft: rgba(255,69,58,.14); --ready: #34c759;
+  --warn: #ff9f0a; --warn-soft: rgba(255,159,10,.14);
   --grid: rgba(255,248,244,.06); --axis: rgba(255,248,244,.16);
   --radius: 14px;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -118,6 +119,20 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--lin
 th { color: var(--muted); font-weight: 500; }
 td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 td code { font: 12px var(--mono); color: var(--secondary); }
+/* Log de erros */
+.log-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 6px; }
+.log-search { flex: 1; min-width: 200px; height: 36px; padding: 0 12px; background: var(--deep); border: 1px solid var(--line-strong); border-radius: 10px;
+  transition: border-color .15s var(--ease), box-shadow .15s var(--ease); }
+.log-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.log-list { display: grid; }
+.log-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.log-row:last-child { border-bottom: 0; }
+.level { align-self: start; min-width: 56px; text-align: center; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; }
+.level.error { color: var(--error); background: var(--error-soft); }
+.level.warn { color: var(--warn); background: var(--warn-soft); }
+.log-msg { display: block; font: 12.5px/1.5 var(--mono); color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
+.log-target { margin-top: 2px; font: 11px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.log-meta { grid-column: 2; display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 #tip { position: fixed; pointer-events: none; background: var(--raised); color: var(--text); border: 1px solid var(--line-strong);
   box-shadow: 0 8px 24px rgba(0,0,0,.45); border-radius: 8px; padding: 6px 10px; font-size: 12px; display: none; z-index: 20; max-width: 300px; }
 dialog { background: var(--card); color: var(--text); border: 1px solid var(--line-strong); border-radius: 16px; padding: 24px; width: min(92vw, 480px);
