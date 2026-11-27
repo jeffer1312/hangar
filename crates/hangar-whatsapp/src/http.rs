@@ -327,6 +327,8 @@ fn start_update(wa: &WhatsApp, body: &Value) -> Response {
         Ok(expected) => expected,
         Err(response) => return response,
     };
+    // A confirmação vale só para a tag que o dono viu: sem ela, a troca volta a perguntar.
+    let mode = if mode == install::Mode::Confirmed && expected.is_none() { install::Mode::Manual } else { mode };
     started(wa, install::spawn(&wa.installer, "update", wa.ctx.clone(), mode, expected))
 }
 
@@ -339,7 +341,7 @@ fn update_mode(body: &Value) -> Result<install::Mode, Response> {
     }
 }
 
-/// `tag`: a release que a confirmação mostrou; outra mais nova na hora volta a perguntar. Ausente vale a mais nova.
+/// `tag`: a release que a confirmação mostrou; outra mais nova na hora volta a perguntar.
 fn confirmed_tag(body: &Value) -> Result<Option<String>, Response> {
     match &body["tag"] {
         Value::Null => Ok(None),
