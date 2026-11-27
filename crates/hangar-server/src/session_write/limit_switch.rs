@@ -157,10 +157,15 @@ impl Spent {
     }
 }
 
+/// A última mensagem da conversa principal no fim do transcript; as linhas de controle e as do subagente não contam.
+pub fn last_main_line(tail:&str) -> Option<Value> {
+    tail.lines().rev().filter_map(|line|serde_json::from_str::<Value>(line).ok())
+        .find(|line|matches!(line["type"].as_str(),Some("user" | "assistant")) && line["isSidechain"] != true)
+}
+
 /// A última mensagem da conversa principal, se for um erro da API.
 fn last_api_error(tail:&str) -> Option<Value> {
-    let last = tail.lines().rev().filter_map(|line|serde_json::from_str::<Value>(line).ok())
-        .find(|line|matches!(line["type"].as_str(),Some("user" | "assistant")) && line["isSidechain"] != true)?;
+    let last = last_main_line(tail)?;
     (last["type"] == "assistant" && last["isApiErrorMessage"] == true).then_some(last)
 }
 
@@ -178,7 +183,7 @@ pub fn transcript_auth_error(tail:&str) -> Option<(String,Option<f64>)> {
     Some((auth_error(last["error"].as_str(),None)?,line_at(&last)))
 }
 
-fn line_at(line:&Value) -> Option<f64> {
+pub fn line_at(line:&Value) -> Option<f64> {
     line["timestamp"].as_str().and_then(|ts|chrono::DateTime::parse_from_rfc3339(ts).ok()).map(|ts|ts.timestamp_millis() as f64 / 1000.0)
 }
 
@@ -208,7 +213,7 @@ pub fn file_limit_at(path:&std::path::Path,now:f64) -> Option<(UsageLimit,Option
 
 pub fn file_auth_error_at(path:&std::path::Path) -> Option<(String,Option<f64>)> { transcript_auth_error(&file_tail(path)?) }
 
-fn file_tail(path:&std::path::Path) -> Option<String> {
+pub fn file_tail(path:&std::path::Path) -> Option<String> {
     use std::io::{Read,Seek,SeekFrom};
     let mut file = std::fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
