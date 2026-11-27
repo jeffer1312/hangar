@@ -144,6 +144,19 @@ export function registerState(on: On) {
     return r;
   });
 
+  // Agent chamado de dentro de um script do Code Mode nasce em segundo plano, mas a chamada espera o fim e a
+  // task-notification não vem para a conversa: o `completed` da própria chamada é o fim.
+  on("tool.call", { tool: "Agent" }, async ($, e, next) => {
+    const r = await next(e);
+    const result = (r as { result?: unknown }).result as { status?: unknown; agentId?: unknown } | undefined;
+    const id = typeof result?.agentId === "string" ? result.agentId : "";
+    if (id && result?.status === "completed" && !r.isError) {
+      background.delete(id);
+      if (!ended.has(id)) await agentLife($, id, "finished");
+    }
+    return r;
+  });
+
   // Retomada: só conta a chamada que passou e falou com um subagente conhecido. Ela roda até o
   // `turn.complete` dela; se vier task-notification, também encerra.
   on("tool.call", { tool: "SendMessage" }, async ($, e, next) => {
