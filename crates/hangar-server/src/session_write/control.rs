@@ -677,6 +677,32 @@ pub async fn queue_remove(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     answer(&ctx, queue_answer(&removed))
 }
 
+/// O X do painel com `only_waiting`, de dentro do servidor: tira a linha só se ainda espera, sem acordar a
+/// adormecida. `Ok(true)` = tirada; `Ok(false)` = já entregue ou fora da fila; `Err` = o código da falha.
+pub(crate) async fn cancel_waiting(st: &AppState, name: &str, entry_id: &str) -> Result<bool, String> {
+    let runtime = st.state.runtime.get().ok_or("runtime_watcher")?;
+    let cancel = || Action::Cancel { entry_id: entry_id.to_owned() };
+    let cancelled = |done: Result<Value, RuntimeError>| done.map(|v| v == json!("cancelled")).map_err(|e| e.code);
+    if runtime.waking_key(name).is_some() { return Err("asleep_waking".into()); }
+    {
+        // A porta aberta segura o acordar até a ação terminar, como no painel.
+        let Ok(_pass) = runtime.ingress().enter(name, st.write_gate_wait).await else { return Err("busy".into()) };
+        if runtime.writable(name).await.is_none() && let Some(mark) = runtime.asleep(name).await {
+            return cancelled(runtime.asleep_queue_action(name, &mark.key, &random_hex(16), cancel()).await);
+        }
+    }
+    match super::route_write(runtime, name, WriteRoute::QueueRemove, st.write_gate_wait).await {
+        super::Write::Rust(held, target) => {
+            let done = target.handle.queue(random_hex(16), cancel()).await;
+            drop(held);
+            cancelled(done)
+        }
+        super::Write::Busy => Err("busy".into()),
+        super::Write::Failed(error) => Err(error.code),
+        _ => Err("unowned".into()),
+    }
+}
+
 pub async fn queue_edit(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (ctx, bytes) = match admit(&st, peer, req, WriteRoute::QueueEdit).await {
         Ok(admitted) => admitted,

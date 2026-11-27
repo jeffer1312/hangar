@@ -1,4 +1,5 @@
-//! A resposta final da filha ligada volta sozinha ao pai como `[de: <filha>] …`. Só roda com filha
+//! A resposta final da filha ligada volta sozinha ao pai como `[de: <filha>] …`, e a pergunta que ela espera
+//! chega a ele uma vez (só a `Question` o convida a responder). Só roda com filha
 //! ligada: enquanto houver alguma, segura uma assinatura interna da lista que não conta como app
 //! aberto; sem nenhuma, dorme até o grupo mudar no disco.
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -15,6 +16,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::link_state::{self, LinkReturn, LinkReturns, blocking};
+use crate::interactions::InteractionKind;
 use super::local::is_remote;
 use super::service::{GroupError, GroupService};
 use super::store::{StoreError, file_stem};
@@ -41,6 +43,8 @@ const RATE_WINDOW: Duration = Duration::from_secs(600);
 /// Falha passageira (histórico ilegível, pai ocupado ou reabrindo) tenta de novo depois disso.
 const BACKOFF: Duration = Duration::from_secs(30);
 const EVENT: &str = "rust.link_return_failed";
+/// Texto da pergunta da filha no recado ao pai, em `char`.
+const ASK_CHARS: usize = 300;
 
 static WAKE: LazyLock<Notify> = LazyLock::new(Notify::new);
 
@@ -216,6 +220,15 @@ struct Watcher {
     rate: RateLimit,
     /// Filhas com registro em `link-returns.json` já conferido nesta vigia.
     known: HashSet<String>,
+    /// Desde quando a filha espera nesta interação (`interaction_id`).
+    asking: HashMap<String, (Instant, String)>,
+    /// Avisos de pergunta ao pai: limite próprio, fora do das respostas.
+    question_rate: RateLimit,
+    question_retry_at: HashMap<String, Instant>,
+    /// Filhas com aviso ainda na fila do pai, pela última leitura: a rodada relê o arquivo por elas.
+    open_asks: HashSet<String>,
+    /// O arquivo já foi lido uma vez nesta vigia: aviso pendente de antes do reinício entra em `open_asks`.
+    asks_seeded: bool,
 }
 
 impl Watcher {
@@ -238,7 +251,11 @@ impl Watcher {
         self.handled.retain(|n, _| present(n));
         self.retry_at.retain(|n, _| present(n));
         self.known.retain(|n| present(n));
+        self.asking.retain(|n, _| present(n));
+        self.question_retry_at.retain(|n, _| present(n));
+        self.open_asks.retain(|n| present(n));
         self.rate.forget_old(now);
+        self.question_rate.forget_old(now);
         // Já na primeira vista: o registro criado aqui só deixa voltar resposta posterior a ele.
         let unseen: Vec<String> = children.iter().map(|r| r.name.clone()).filter(|n| !self.known.contains(n)).collect();
         if !unseen.is_empty() {
@@ -254,6 +271,20 @@ impl Watcher {
             }
         }
         let mut links: Option<LinkReturns> = None;
+        let asks = !self.asks_seeded || children.iter().any(|r| open_interaction(r).is_some() || self.open_asks.contains(&r.name));
+        if asks {
+            let dir = st.hangar_dir.clone();
+            let read = match blocking(move || link_state::read(&dir)).await {
+                Ok(read) => read,
+                Err(e) => return unreadable(st, &e),
+            };
+            self.asks_seeded = true;
+            self.open_asks = children.iter().filter(|r| read.get(&r.name).is_some_and(|l| l.asked_queue_id.is_some())).map(|r| r.name.clone()).collect();
+            for row in children {
+                if let Some(link) = read.get(&row.name) { self.ask(st, row, link, now).await; }
+            }
+            links = Some(read);
+        }
         for row in children {
             if row.state != "idle" {
                 self.idle.remove(&row.name);
@@ -282,6 +313,141 @@ impl Watcher {
             self.finish(&row.name, outcome, now);
         }
     }
+}
+
+/// O que fazer nesta rodada com a interação aberta da filha.
+#[derive(Debug, PartialEq)]
+enum QuestionStep {
+    /// Avisar o pai com este texto.
+    Send(String),
+    /// A interação avisada sumiu: tirar da fila do pai a linha do aviso, se ainda espera.
+    Cancel(String),
+    /// Aberta há menos de `SETTLE`.
+    Wait,
+    Skip,
+    /// Avisos demais desta filha em 10 min.
+    Limited,
+}
+
+impl Watcher {
+    /// Decisão pura sobre a linha e o registro da filha; só mexe no relógio da espera e consulta o limite.
+    fn question_step(&mut self, row: &SessionRow, link: &LinkReturn, kind: Option<&InteractionKind>, now: Instant) -> QuestionStep {
+        let child = &row.name;
+        let Some(id) = open_interaction(row) else {
+            self.asking.remove(child);
+            return link.asked_queue_id.clone().map_or(QuestionStep::Skip, QuestionStep::Cancel);
+        };
+        let since = match self.asking.get(child) {
+            Some((since, seen)) if *seen == id => *since,
+            _ => { self.asking.insert(child.clone(), (now, id.clone())); now }
+        };
+        let asked = link.asked_key.as_deref() == Some(id.as_str());
+        if !asked && let Some(queued) = &link.asked_queue_id { return QuestionStep::Cancel(queued.clone()); }
+        if asked { return QuestionStep::Skip; }
+        if now - since < SETTLE { return QuestionStep::Wait; }
+        if !self.question_rate.allow(child, now) { return QuestionStep::Limited; }
+        QuestionStep::Send(question_message(child, &id, row, kind))
+    }
+
+    /// Avisa o pai da interação aberta da filha, ou tira da fila dele o aviso que perdeu o sentido.
+    async fn ask(&mut self, st: &AppState, row: &SessionRow, link: &LinkReturn, now: Instant) {
+        let child = row.name.as_str();
+        let parent = row.linked_by.as_deref().unwrap_or_default();
+        if parent.is_empty() || self.question_retry_at.get(child).is_some_and(|t| now < *t) { return; }
+        let id = open_interaction(row);
+        let kind = match id.as_deref() {
+            Some(id) if link.asked_key.as_deref() != Some(id) => interaction_kind(st, child, id).await,
+            _ => None,
+        };
+        match self.question_step(row, link, kind.as_ref(), now) {
+            QuestionStep::Wait | QuestionStep::Skip => {}
+            QuestionStep::Limited => {
+                report(st, child, "link_question_rate_limited", "perguntas demais da filha em 10 min; não avisa o pai", "");
+                self.question_retry_at.insert(child.to_owned(), now + BACKOFF);
+            }
+            QuestionStep::Cancel(queued) => {
+                if let Err(code) = crate::session_write::control::cancel_waiting(st, parent, &queued).await {
+                    report(st, child, "link_question_cancel_failed", "pergunta já resolvida segue na fila do pai", &code);
+                }
+                self.open_asks.remove(child);
+                record_ask(st, child, move |entry| if entry.asked_queue_id.as_deref() == Some(queued.as_str()) { entry.asked_queue_id = None; }).await;
+            }
+            QuestionStep::Send(text) => {
+                let Some(id) = id else { return };
+                let ((status, answer), queued) = crate::session_write::input::deliver_reply_entry(st, parent, &text).await;
+                if !status.is_success() {
+                    let code = answer["detail"]["code"].as_str().unwrap_or("erro_envio_falhou_desconhecida");
+                    report(st, child, code, "pergunta da filha não chegou ao pai", &status.as_u16().to_string());
+                    if transient(status) { self.question_retry_at.insert(child.to_owned(), now + BACKOFF); return; }
+                    // Recusa de vez (pai sumiu, pedido recusado): esta pergunta não insiste.
+                    record_ask(st, child, move |entry| { entry.asked_key = Some(id); entry.asked_queue_id = None; }).await;
+                    return;
+                }
+                self.question_rate.record(child, now);
+                if queued.is_some() { self.open_asks.insert(child.to_owned()); }
+                record_ask(st, child, move |entry| { entry.asked_key = Some(id); entry.asked_queue_id = queued; }).await;
+                st.diag.record_line(forwarded_line(child));
+            }
+        }
+    }
+}
+
+/// Grava a pergunta avisada no registro da filha; falha vai ao diário (o limite segura o reaviso).
+async fn record_ask(st: &AppState, child: &str, change: impl FnOnce(&mut LinkReturn) + Send + 'static) {
+    let (dir, name) = (st.hangar_dir.clone(), child.to_owned());
+    let written = blocking(move || link_state::update(&dir, |all| { if let Some(entry) = all.get_mut(&name) { change(entry); } })).await;
+    if let Err(e) = written { report(st, child, "link_returns_write_failed", "pergunta da filha avisada não gravada", &io_kind(&e)); }
+}
+
+fn forwarded_line(child: &str) -> serde_json::Value {
+    serde_json::json!({"evento": "rust.link_question_forwarded", "nivel": "ok", "sessao": child, "codigo": "link_question_forwarded"})
+}
+
+/// A interação que a filha espera: o formulário da pergunta vence o menu, que é o mesmo pedido na tela.
+fn open_interaction(row: &SessionRow) -> Option<String> {
+    if row.state != "awaiting_input" { return None; }
+    row.ask_form.as_ref().and_then(|form| form["interaction_id"].as_str()).or(row.interaction_id.as_deref())
+        .filter(|id| !id.is_empty()).map(str::to_owned)
+}
+
+/// O tipo pela identidade publicada; vínculo ou ID ilegível é `None`, tratado como permissão.
+async fn interaction_kind(st: &AppState, child: &str, id: &str) -> Option<InteractionKind> {
+    let runtime = st.state.runtime.get()?;
+    let binding = runtime.interaction_binding_readonly(child).await.ok()?;
+    st.interactions.expected(&binding, Some(id)).ok().map(|expected| expected.target.kind)
+}
+
+fn cut(text: &str, max: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= max { return text.to_owned(); }
+    let mut cut: String = text.chars().take(max).collect();
+    cut.push('…');
+    cut
+}
+
+/// Perguntas abertas como (texto, opções): o formulário inteiro quando há, senão a pergunta da linha.
+fn asked_items(row: &SessionRow) -> Vec<(String, Vec<String>)> {
+    let form = row.ask_form.clone().and_then(|form| serde_json::from_value::<hangar_api::ask::AskQuestion>(form).ok());
+    match form.filter(|form| !form.questions.is_empty()) {
+        Some(form) => form.questions.into_iter().map(|q| (q.question, q.options.into_iter().map(|o| o.label).collect())).collect(),
+        None => vec![(row.question.clone().unwrap_or_default(), row.options.clone().unwrap_or_default())],
+    }
+}
+
+/// Só a pergunta (`Question`) convida o pai a responder; menu, plano e permissão são do dono.
+fn question_message(child: &str, id: &str, row: &SessionRow, kind: Option<&InteractionKind>) -> String {
+    if kind != Some(&InteractionKind::Question) {
+        let text = row.question.as_deref().or(row.label.as_deref()).filter(|t| !t.trim().is_empty()).unwrap_or("sem texto");
+        return format!("[de: {child}] pedido esperando o dono: {}. O dono decide no app.", cut(text, ASK_CHARS));
+    }
+    let items = asked_items(row);
+    let mut text = format!("[de: {child}] pergunta (interaction_id {id}):");
+    for (n, (question, options)) in items.iter().enumerate() {
+        if items.len() > 1 { text.push_str(&format!("\n{}) {}", n + 1, cut(question, ASK_CHARS))); } else { text.push_str(&format!(" {}", cut(question, ASK_CHARS))); }
+        for (i, option) in options.iter().enumerate() { text.push_str(&format!("\n{}. {}", i + 1, cut(option, ASK_CHARS))); }
+    }
+    text.push_str(&format!("\nResponda com child_answer (alvo {child}, interaction_id {id})."));
+    text
 }
 
 /// O que a decisão precisa saber da filha, já lido.
@@ -593,7 +759,7 @@ mod tests {
     #[test]
     fn reply_newer_than_link_and_last_return_and_under_two_hours() {
         let at = NOW - 60.0;
-        let link = |linked_at, returned_at| Some(LinkReturn { linked_at, returned_at, returned_key: None });
+        let link = |linked_at, returned_at| Some(LinkReturn { linked_at, returned_at, ..LinkReturn::default() });
         assert!(!settled(&Check { link: None, ..check() }));
         assert!(!settled(&Check { link: link(at + 1.0, None), ..check() }));
         assert!(!settled(&Check { link: link(0.0, Some(at)), ..check() }));
@@ -611,7 +777,7 @@ mod tests {
         events[3].id = "uuid-resposta".into();
         let (_, key) = decide(&check(), &turn(events.clone(), false)).unwrap();
         assert_eq!(key, "uuid-resposta");
-        let returned = Check { link: Some(LinkReturn { linked_at: 0.0, returned_at: Some(1.0), returned_key: Some(key) }), ..check() };
+        let returned = Check { link: Some(LinkReturn { linked_at: 0.0, returned_at: Some(1.0), returned_key: Some(key), ..LinkReturn::default() }), ..check() };
         // `last_reply_at` andou (mtime) mas a resposta é a mesma.
         assert_eq!(decide(&Check { last_reply_at: Some(NOW - 5.0), ..returned }, &turn(events, false)), Err(Refusal::AlreadyReturned));
         // Sem id: o texto com a pergunta.
@@ -688,7 +854,7 @@ mod tests {
         assert!(notice.text.starts_with("[de: f] (a resposta não voltou sozinha: "), "{}", notice.text);
         assert!(notice.text.ends_with("; abra a conversa de f)"), "{}", notice.text);
         // Avisado (a chave gravada como `returned_key`): não avisa de novo.
-        let notified = Check { link: Some(LinkReturn { linked_at: 0.0, returned_at: Some(1.0), returned_key: Some(key) }), ..check() };
+        let notified = Check { link: Some(LinkReturn { linked_at: 0.0, returned_at: Some(1.0), returned_key: Some(key), ..LinkReturn::default() }), ..check() };
         assert_eq!(decide(&notified, &turn(tool.clone(), false)), Err(Refusal::AlreadyReturned));
         // A identidade do aviso não colide com a de uma resposta: a resposta que vier depois volta.
         let mut answered = tool;
@@ -800,6 +966,126 @@ mod tests {
         let line = delivered_line("filha");
         assert_eq!((&line["evento"], &line["nivel"], &line["sessao"], &line["codigo"]),
             (&serde_json::json!("rust.link_return_delivered"), &serde_json::json!("ok"), &serde_json::json!("filha"), &serde_json::json!("link_return_delivered")));
+    }
+
+    fn waiting(id: &str, question: &str, options: &[&str]) -> SessionRow {
+        serde_json::from_value(serde_json::json!({"name": "f", "provider": "claude", "state": "awaiting_input", "linked_by": "pai",
+            "interaction_id": id, "question": question, "options": options})).unwrap()
+    }
+
+    fn linked() -> LinkReturn { LinkReturn { linked_at: 1.0, ..LinkReturn::default() } }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_question_goes_once_per_interaction_after_settle() {
+        let (mut w, t0) = (Watcher::default(), Instant::now());
+        let row = waiting("q1", "Qual pasta?", &["src", "docs"]);
+        let question = Some(&InteractionKind::Question);
+        assert_eq!(w.question_step(&row, &linked(), question, t0), QuestionStep::Wait);
+        assert_eq!(w.question_step(&row, &linked(), question, t0 + SETTLE - Duration::from_secs(1)), QuestionStep::Wait);
+        let QuestionStep::Send(text) = w.question_step(&row, &linked(), question, t0 + SETTLE) else { panic!("esperava Send") };
+        assert_eq!(text, "[de: f] pergunta (interaction_id q1): Qual pasta?\n1. src\n2. docs\nResponda com child_answer (alvo f, interaction_id q1).");
+        // Avisada (gravada como `asked_key`, também depois de reiniciar): não vai de novo.
+        let asked = LinkReturn { asked_key: Some("q1".into()), ..linked() };
+        assert_eq!(w.question_step(&row, &asked, question, t0 + SETTLE * 2), QuestionStep::Skip);
+        assert_eq!(Watcher::default().question_step(&row, &asked, question, t0), QuestionStep::Skip);
+        // Outra interação recomeça a espera.
+        assert_eq!(w.question_step(&waiting("q2", "E agora?", &[]), &linked(), question, t0 + SETTLE * 2), QuestionStep::Wait);
+        // Parada ou sem `interaction_id`: nada a avisar.
+        let mut idle = waiting("q1", "x", &[]);
+        idle.state = "idle".into();
+        assert_eq!(w.question_step(&idle, &linked(), question, t0 + SETTLE * 3), QuestionStep::Skip);
+        assert_eq!(w.question_step(&waiting("", "x", &[]), &linked(), question, t0 + SETTLE * 3), QuestionStep::Skip);
+        // O formulário da pergunta vence o menu da tela e traz o texto e as opções dele.
+        let mut form = waiting("menu1", "Do you want to proceed?", &["Yes", "No"]);
+        form.ask_form = Some(serde_json::json!({"interaction_id": "form1", "questions": [{"header": "h", "question": "Qual base?",
+            "options": [{"label": "dev"}, {"label": "qa"}]}]}));
+        let mut w = Watcher::default();
+        w.question_step(&form, &linked(), question, t0);
+        let QuestionStep::Send(text) = w.question_step(&form, &linked(), question, t0 + SETTLE) else { panic!("esperava Send") };
+        assert!(text.starts_with("[de: f] pergunta (interaction_id form1): Qual base?\n1. dev\n2. qa\n"), "{text}");
+    }
+
+    #[test]
+    fn a_long_question_is_cut_at_300_chars() {
+        let long = "é".repeat(ASK_CHARS + 10);
+        let row = waiting("q1", &long, &[]);
+        let text = question_message("f", "q1", &row, Some(&InteractionKind::Question));
+        assert!(text.contains(&format!("{}…", "é".repeat(ASK_CHARS))), "{text}");
+        assert!(!text.contains(&"é".repeat(ASK_CHARS + 1)));
+    }
+
+    fn only_notifies(text: &str, asked: &str) {
+        assert_eq!(text, format!("[de: f] pedido esperando o dono: {asked}. O dono decide no app."));
+        assert!(!text.contains("child_answer"), "{text}");
+    }
+
+    fn settled_step(row: &SessionRow, kind: Option<&InteractionKind>, t0: Instant) -> QuestionStep {
+        let mut w = Watcher::default();
+        w.question_step(row, &linked(), kind, t0);
+        w.question_step(row, &linked(), kind, t0 + SETTLE)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_permission_only_notifies() {
+        let row = waiting("p1", "Permitir Bash?", &["Sim", "Não"]);
+        let QuestionStep::Send(text) = settled_step(&row, Some(&InteractionKind::Approval), Instant::now()) else { panic!("esperava Send") };
+        only_notifies(&text, "Permitir Bash?");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_terminal_menu_only_notifies() {
+        // "Do you want to proceed?" e a aprovação de plano (`plan:<id>`) são `Menu` no Claude com terminal.
+        for id in ["m1", "plan:toolu_1"] {
+            let row = waiting(id, "Do you want to proceed?", &["Yes", "No"]);
+            let QuestionStep::Send(text) = settled_step(&row, Some(&InteractionKind::Menu), Instant::now()) else { panic!("esperava Send") };
+            only_notifies(&text, "Do you want to proceed?");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unknown_kind_is_a_permission() {
+        let row = waiting("x1", "Qual pasta?", &["src"]);
+        let QuestionStep::Send(text) = settled_step(&row, None, Instant::now()) else { panic!("esperava Send") };
+        only_notifies(&text, "Qual pasta?");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn three_notices_per_child_in_ten_minutes() {
+        let (mut w, t0) = (Watcher::default(), Instant::now());
+        let question = Some(&InteractionKind::Question);
+        let send = |w: &mut Watcher, id: &str, at: Instant| {
+            let row = waiting(id, "x", &[]);
+            w.question_step(&row, &linked(), question, at);
+            w.question_step(&row, &linked(), question, at + SETTLE)
+        };
+        for i in 0..RATE_MAX {
+            let at = t0 + Duration::from_secs(60 * i as u64);
+            assert!(matches!(send(&mut w, format!("q{i}").as_str(), at), QuestionStep::Send(_)), "{i}");
+            w.question_rate.record("f", at + SETTLE);
+        }
+        assert_eq!(send(&mut w, "q9", t0 + Duration::from_secs(300)), QuestionStep::Limited);
+        // As respostas têm limite próprio: o das perguntas não o gasta.
+        assert!(w.rate.allow("f", t0 + Duration::from_secs(300)));
+        let later = t0 + SETTLE + RATE_WINDOW + Duration::from_secs(60 * RATE_MAX as u64);
+        assert!(matches!(send(&mut w, "q10", later), QuestionStep::Send(_)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_resolved_question_cancels_the_waiting_line() {
+        let (mut w, t0) = (Watcher::default(), Instant::now());
+        let question = Some(&InteractionKind::Question);
+        let queued = LinkReturn { asked_key: Some("q1".into()), asked_queue_id: Some("row1".into()), ..linked() };
+        // Ainda aberta: a linha fica.
+        assert_eq!(w.question_step(&waiting("q1", "x", &[]), &queued, question, t0), QuestionStep::Skip);
+        // Respondida (a filha voltou a trabalhar ou parou): tira a linha se ainda espera.
+        let mut working = waiting("q1", "x", &[]);
+        working.state = "working".into();
+        assert_eq!(w.question_step(&working, &queued, question, t0), QuestionStep::Cancel("row1".into()));
+        // Trocada por outra: a do aviso antigo sai antes de avisar a nova.
+        assert_eq!(w.question_step(&waiting("q2", "y", &[]), &queued, question, t0 + SETTLE), QuestionStep::Cancel("row1".into()));
+        // Linha já tirada (ou entregue sem id): nada.
+        let done = LinkReturn { asked_queue_id: None, ..queued };
+        assert_eq!(w.question_step(&working, &done, question, t0), QuestionStep::Skip);
     }
 
     #[test]

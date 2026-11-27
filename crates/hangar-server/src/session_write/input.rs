@@ -330,6 +330,12 @@ async fn send(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer
 /// orientação sem `now`, que espera a ferramenta em curso acabar.
 #[allow(clippy::too_many_arguments)]
 async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer: bool, conversation: bool, expected_turn: Option<Value>, include_uncertain: bool) -> (StatusCode, Value) {
+    send_with_entry(st,name,target,text,steer,conversation,expected_turn,include_uncertain).await.0
+}
+
+/// Como `send_with_receipt`, com o id da operação: é o da linha que o recado (texto sem `/`) criou na fila.
+#[allow(clippy::too_many_arguments)]
+async fn send_with_entry(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer: bool, conversation: bool, expected_turn: Option<Value>, include_uncertain: bool) -> ((StatusCode, Value), String) {
     let operation_id = random_hex(16);
     // No Claude com terminal o Orientar aperta `ctrl+x ctrl+s`, que corta o turno: lá o próprio ator digita a
     // mensagem marcada mesmo com o Claude trabalhando.
@@ -350,7 +356,7 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
             let result = handle.control(random_hex(16), "steer_entry".into(), payload).await;
             let mut answer = terminal_input_answer(&sent, &result);
             if uncertain { answer.1["uncertain"] = json!(true); }
-            return answer;
+            return (answer, operation_id);
         }
         let promoted = target.handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::SteerQueue,
             payload }).await;
@@ -360,7 +366,7 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
     }
     let mut answer=input_answer(&sent, steered);
     if uncertain {answer.1["uncertain"]=json!(true);}
-    answer
+    (answer, operation_id)
 }
 
 /// No Claude, o ator terminal conduz o `/clear`; no Codex, ele é controle de conversa nova.
@@ -545,6 +551,12 @@ pub async fn deliver_reply(st: &AppState, name: &str, text: &str) -> (StatusCode
     write_input(st, name, text, false).await
 }
 
+/// O mesmo recado, com o id da linha que ele criou na fila de `name`, para tirá-la depois se ainda esperar.
+/// Só a entrada do Rust tem esse id; adormecida, abrindo ou sem dono voltam `None`.
+pub async fn deliver_reply_entry(st: &AppState, name: &str, text: &str) -> ((StatusCode, Value), Option<String>) {
+    write_input_entry(st, name, text, false).await
+}
+
 /// Entregue ou não, ninguém confirmou: o ator saiu depois de receber, o motor não respondeu, ou o `/clear`
 /// do Codex já foi digitado sem a conversa nova aparecer.
 fn unproven(sent: &Result<RuntimeReply, RuntimeError>) -> bool {
@@ -652,11 +664,15 @@ async fn queue_bound_input(st:&AppState,runtime:&crate::runtime::gateway::Runtim
 /// O `/input` do dono feito por dentro, com a resposta inteira (o recado do par externo devolve
 /// o que a entrega respondeu).
 pub async fn write_input(st: &AppState, name: &str, text: &str, steer: bool) -> (StatusCode, Value) {
+    write_input_entry(st, name, text, steer).await.0
+}
+
+async fn write_input_entry(st: &AppState, name: &str, text: &str, steer: bool) -> ((StatusCode, Value), Option<String>) {
     let route = match st.state.runtime.get() {
         Some(runtime) => route_write(runtime, name, WriteRoute::Input, st.write_gate_wait).await,
         None => Write::Unowned,
     };
-    match route {
+    let answer = match route {
         Write::Rust(held, target) if is_codex_clear(&target.provider, text) => {
             let result = super::codex::clear(&target, text, Some(st.term.clone())).await;
             drop(held);
@@ -669,9 +685,10 @@ pub async fn write_input(st: &AppState, name: &str, text: &str, steer: bool) -> 
             result
         }
         Write::Rust(held, target) => {
-            let result = send(st, name, &target, text, steer, None).await;
+            let (result, entry) = send_with_entry(st, name, &target, text, steer, false, None, false).await;
             drop(held);
-            result
+            let entry = (result.0.is_success() && queued(text)).then_some(entry);
+            return (result, entry);
         }
         Write::Busy => (StatusCode::CONFLICT, busy_body()),
         Write::Opening(key) => queue_opening(st, name, &key, text, steer).await,
@@ -683,7 +700,8 @@ pub async fn write_input(st: &AppState, name: &str, text: &str, steer: bool) -> 
             None => super::unowned::input_answer(super::unowned::send(st, name, text).await),
         },
         Write::Failed(error) => (super::failed_status(&error), detail_body(&error.code, &error.message, json!({}))),
-    }
+    };
+    (answer, None)
 }
 
 /// Corpo do `BroadcastBody` do FastAPI (estrito): `names` não vazio de textos e `text`.
