@@ -32,13 +32,13 @@ pub async fn route(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Respons
         return response;
     }
     let (method, headers) = (req.method().clone(), req.headers().clone());
-    let mut response = reply(&st, peer, req).await;
+    let mut response = reply(&st, peer, req, diary_base(&st), chrono::Local::now().fixed_offset()).await;
     hangar_core::http_cors::apply(&headers, &mut response);
     hangar_core::http_route_response::suppress_head(&method, &mut response);
     response
 }
 
-async fn reply(st: &AppState, peer: SocketAddr, req: Request) -> Response {
+async fn reply(st: &AppState, peer: SocketAddr, req: Request, base: Option<PathBuf>, now: chrono::DateTime<chrono::FixedOffset>) -> Response {
     if let Some(response) = hangar_core::http_body_limit::precheck(req.headers()) {
         return response;
     }
@@ -55,10 +55,11 @@ async fn reply(st: &AppState, peer: SocketAddr, req: Request) -> Response {
     if !guest && let Err(response) = crate::routes::owner_gate(st, peer, &req).await {
         return response;
     }
-    let base = diary_base(st);
     if req.method() == Method::POST {
-        let telemetry = screen_telemetry(st, &req, guest);
-        return record_screen_events(base, req, telemetry).await;
+        let telemetry = st.telemetry.clone().filter(|_| !guest && crate::telemetry_hooks::eligible_request(&req))
+            .and_then(screen_telemetry);
+        let telemetry = if telemetry.is_some() && matches!(st.edge().gate(peer, &req).await, Ok((_, true))) { telemetry } else { None };
+        return record_screen_events(base, req, telemetry, now).await;
     }
     // O pedido não atravessa a espera: `&Request` tiraria o `Send` do handler.
     let (headers, query) = (req.headers().clone(), req.uri().query().map(str::to_owned));
@@ -71,7 +72,7 @@ async fn reply(st: &AppState, peer: SocketAddr, req: Request) -> Response {
 }
 
 /// `diario/` nos logs do Hangar da conta-base. Prova com o ambiente nos logs reais não grava.
-fn diary_base(st: &AppState) -> Option<PathBuf> {
+pub(crate) fn diary_base(st: &AppState) -> Option<PathBuf> {
     let base = crate::runtime::local_policy::log_base_in(&st.accounts.env)?;
     if hangar_core::process::cargo_test_binary() && hangar_core::paths::log_base().is_some_and(|real| real == base) {
         return None;
@@ -79,27 +80,29 @@ fn diary_base(st: &AppState) -> Option<PathBuf> {
     Some(base.join("diario"))
 }
 
-/// Só o lote do dono conta: o convidado vai ao diário, mas não aceitou a telemetria.
-fn screen_telemetry(st: &AppState, req: &Request, guest: bool) -> Option<Arc<Telemetry>> {
-    st.telemetry.clone().filter(|t| t.enabled() && !guest && !crate::telemetry_routes::guest(req))
+/// A época vai com o pedido enquanto o corpo chega e aguarda a gravação no disco.
+fn screen_telemetry(telemetry: Arc<Telemetry>) -> Option<(Arc<Telemetry>, hangar_telemetry::Collection, u64)> {
+    let epoch = telemetry.consent_epoch();
+    let period = telemetry.collection()?;
+    (telemetry.consent_epoch() == epoch).then_some((telemetry, period, epoch))
 }
 
-async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Option<Arc<Telemetry>>) -> Response {
+async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Option<(Arc<Telemetry>, hangar_telemetry::Collection, u64)>,
+                              now: chrono::DateTime<chrono::FixedOffset>) -> Response {
     let body = match hangar_core::http_body_limit::read(req.into_body()).await {
         Ok(body) => body,
         Err(error) if hangar_core::http_body_limit::is_limit(&error) => return hangar_core::http_body_limit::rejected(),
         // Cliente que desistiu no meio do corpo: como corpo ilegível, nunca erro.
         Err(_) => return hangar_core::http_cors::json_guarded(StatusCode::OK, json!({"gravadas": 0})),
     };
-    let now = chrono::Local::now().fixed_offset();
     let written = tokio::task::spawn_blocking(move || {
         let written = match base {
-            Some(base) => hangar_usage_diary::record_screen(&base, &body, now),
+            Some(base) => hangar_usage_diary::record_screen_with_owner(&base, &body, now, telemetry.as_ref().map(|(_, period, _)| period.id.as_str())),
             None => Ok(0),
         };
-        // Só o que o diário gravou: o lote recusado a tela reenvia, e contaria duas vezes.
-        if let (Ok(accepted), Some(telemetry)) = (&written, &telemetry) {
-            crate::telemetry_routes::count_screen(telemetry, &body, *accepted);
+        // Só o que o diário confirmou: o cliente reenvia o lote recusado.
+        if let (Ok(accepted), Some((telemetry, period, epoch))) = (&written, &telemetry) {
+            crate::telemetry_routes::count_screen_in_period(telemetry, period, *epoch, now.to_utc(), &body, *accepted);
         }
         written
     }).await;
@@ -512,36 +515,45 @@ fn memory() -> Result<(u64, u64), &'static str> {
 mod telemetry_tests {
     use super::*;
     use hangar_telemetry::buckets::Bucket;
-    use hangar_telemetry::events::ClientKind;
     use hangar_telemetry::wire::Counter;
 
-    const BATCH: &str = r#"{"eventos": [{"evento": "app.visible_time", "ms": 900000, "cliente": "ios"}]}"#;
-
-    fn post(guest: bool) -> Request {
-        let mut req = axum::http::Request::builder().method(Method::POST).uri("/api/diag").header("content-type", "application/json");
-        if guest { req = req.header("x-hangar-guest", "1"); }
-        req.body(Body::from(BATCH)).unwrap()
-    }
-
     #[tokio::test]
-    async fn guest_batch_goes_to_the_diary_and_is_not_counted() {
+    async fn telemetry_diag_post_accepts_both_locally_but_only_projects_owner_rows() {
         let (home, diary) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let st = crate::telemetry_hooks::test_state(home.path(), true);
-        let telemetry = st.telemetry.clone().unwrap();
-
-        let req = post(true);
-        let counted = screen_telemetry(&st, &req, false);
-        assert!(counted.is_none());
-        assert_eq!(record_screen_events(Some(diary.path().to_owned()), req, counted).await.status(), StatusCode::OK);
-        assert_eq!(test_support::rows(diary.path()).iter().filter(|row| row["evento"] == "app.visible_time").count(), 1);
-        assert!(telemetry.counters().is_empty());
-        // Convidado que o porteiro já decidiu (`Caller::Guest`) também não conta.
-        assert!(screen_telemetry(&st, &post(false), true).is_none());
-
-        let req = post(false);
-        let counted = screen_telemetry(&st, &req, false);
-        record_screen_events(Some(diary.path().to_owned()), req, counted).await;
-        assert_eq!(telemetry.counters(), vec![Counter::new(Event::AppVisibleMinutes, Dims::new().with("client", ClientKind::Ios), None, 5)]);
+        let mut st = crate::telemetry_hooks::test_state(home.path(), false);
+        let accepted = "2026-11-27T00:00:00.001Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-26T21:01:00-03:00").unwrap();
+        let telemetry = Arc::new(Telemetry::for_test(home.path(), Arc::new(move || accepted)));
+        telemetry.set_consent(true).unwrap();
+        Arc::get_mut(&mut st).unwrap().telemetry = Some(telemetry.clone());
+        let collection = telemetry.collection().unwrap();
+        let post = |guest: bool, event: &str, ts: &str| {
+            let body = json!({"eventos": [{"evento": event, "nivel": "erro", "ts": ts, "tela": "chat",
+                "detalhe": "private_message_fixture", "sessao": "private_session_fixture", "pilha": "private_stack_fixture",
+                "telemetry_origin": "owner_http", "telemetry_collection": collection.id, "telemetry_at": now}]}).to_string();
+            let mut req = axum::http::Request::post("/api/diag").header("authorization", "Bearer owner")
+                .header("content-type", "application/json").body(Body::from(body)).unwrap();
+            if guest {
+                req.extensions_mut().insert(crate::share::caller::Caller::Guest(Arc::new(crate::share::caller::GuestGrant {
+                    token: "t".into(), token_hash: "h".into(), sessions: Default::default(), pair_roots: Vec::new(), invite: true })));
+            }
+            req
+        };
+        for (guest, event, ts) in [(true, "guest_fixture", "2026-11-26T21:00:00.900-03:00"),
+            (false, "sse.caiu", "2026-11-26T21:00:30-03:00"), (false, "before_fixture", "2026-11-26T20:59:59-03:00")] {
+            let response = reply(&st, "127.0.0.1:5000".parse().unwrap(), post(guest, event, ts), Some(diary.path().to_owned()), now).await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let rows = test_support::rows(diary.path());
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["evento"], "guest_fixture");
+        assert!(rows[0].get("telemetry_origin").is_none());
+        assert_eq!(rows[1]["telemetry_origin"], "owner_screen");
+        let projection = crate::telemetry_routes::diary_detail(diary.path(), "2026-11-27", &collection, now.to_utc()).unwrap();
+        assert_eq!(projection.records.len(), 1);
+        assert_eq!((projection.trail[0].t.as_str(), projection.records[0].event.as_str()), ("00:00:30", "sse.caiu"));
+        let wire = serde_json::to_string(&projection).unwrap();
+        assert!(!wire.contains("private_") && !wire.contains("guest_fixture") && !wire.contains("before_fixture"));
     }
 
     #[test]

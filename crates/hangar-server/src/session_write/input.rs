@@ -366,7 +366,7 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
 /// No Claude, o ator terminal conduz o `/clear`; no Codex, ele é controle de conversa nova.
 pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     // O `admit` só deixa passar o dono ou um convidado: fora as marcas de convidado, é o dono.
-    let owner = !crate::telemetry_routes::guest(&req);
+    let owner = crate::telemetry_hooks::eligible_request(&req);
     let (ctx, bytes) = match admit(&st, peer, req, WriteRoute::Input).await {
         Ok(admitted) => admitted,
         Err(response) => return response,
