@@ -919,6 +919,13 @@ pub fn main_repos<'a>(dirs: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     mains
 }
 
+/// URL do `origin` de uma raiz. Só sob pedido (balanceamento): a lista de worktrees não paga o `git`.
+pub fn origin_url(root: &str) -> Option<String> {
+    let out = git::command(Path::new(root), &["config", "--get", "remote.origin.url"]).ok()?;
+    let url = out.stdout.trim();
+    (out.code == 0 && !url.is_empty()).then(|| url.to_owned())
+}
+
 /// Repositórios autorizados, inclusive quando já não há conversa recente deles.
 pub fn discover_repositories(roots: &[String]) -> Discovery {
     let mut locations = roots.to_vec();
@@ -1472,6 +1479,20 @@ mod tests {
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
 
+    #[test]
+    fn origin_url_reads_only_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        fixture_git(&repo, &["init", "-b", "main"]);
+        assert_eq!(origin_url(&text(&repo)), None, "sem origin");
+        fixture_git(&repo, &["remote", "add", "team", "git@github.com:outro/repo.git"]);
+        assert_eq!(origin_url(&text(&repo)), None, "outro remote não é o origin");
+        fixture_git(&repo, &["remote", "add", "origin", "git@github.com:jeffer1312/hangar.git"]);
+        assert_eq!(origin_url(&text(&repo)).as_deref(), Some("git@github.com:jeffer1312/hangar.git"));
+        assert_eq!(origin_url(&text(&dir.path().join("sumiu"))), None, "pasta que não existe");
+    }
+
     fn published_fixture(root: &Path, source: &str, remote: &str) -> (PathBuf, PathBuf) {
         let repo = root.join("repo");
         let feature = root.join("feature");
@@ -1989,12 +2010,11 @@ mod tests {
         std::fs::write(path.join("b"), b"x").unwrap();
         let p = text(&path);
         assert!(disk_usage(&p, Some(1), true).is_none());
-        let size = (0..500)
-            .find_map(|_| {
-                std::thread::sleep(Duration::from_millis(10));
-                disk_usage(&p, Some(1), false)
-            })
-            .expect("medição");
+        // Espera a medição em segundo plano pela condição: medida pronta no cache.
+        let size = loop {
+            if let Some(size) = disk_usage(&p, Some(1), false) { break size; }
+            std::thread::yield_now();
+        };
         assert!(!size.error && !size.partial);
         assert!(size.bytes.unwrap() >= 64 * 1024);
         assert_eq!(size.biggest.unwrap()["name"], "big");

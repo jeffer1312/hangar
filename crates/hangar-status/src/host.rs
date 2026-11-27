@@ -1,4 +1,5 @@
-//! Memória, swap, carga, núcleos e disco desta máquina, para o bloco "Esta máquina".
+//! Memória, swap, carga, núcleos e disco desta máquina, para o bloco "Esta máquina", e a carga que
+//! o balanceamento lê na hora.
 use std::path::{Component, Path, PathBuf};
 
 use hangar_api::status::{DirSize, DiskUse, HostBlock};
@@ -52,6 +53,43 @@ fn load() -> Option<[f64; 3]> { None }
 fn load() -> Option<[f64; 3]> {
     let l = System::load_average();
     Some([l.one, l.five, l.fifteen])
+}
+
+/// Memória e processador de agora, para quem escolhe a máquina de uma sessão nova.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlacementLoad {
+    pub mem_total: u64,
+    pub mem_available: u64,
+    /// `None` quando a máquina não sabe medir.
+    pub cpu_pct: Option<f32>,
+}
+
+/// Lido na hora, sem medidor ligado: no Windows bloqueia o intervalo de duas amostras.
+pub fn placement_load() -> PlacementLoad {
+    let mut system = System::new();
+    system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
+    PlacementLoad { mem_total: system.total_memory(), mem_available: system.available_memory(), cpu_pct: cpu_pct(&mut system) }
+}
+
+/// O Windows não tem carga média: uso medido entre duas amostras.
+#[cfg(windows)]
+fn cpu_pct(system: &mut System) -> Option<f32> {
+    system.refresh_cpu_usage();
+    std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+    system.refresh_cpu_usage();
+    Some(system.global_cpu_usage())
+}
+
+/// Carga média de 5 min sobre os núcleos: o limite do dono fala dos últimos 5 min.
+#[cfg(not(windows))]
+fn cpu_pct(system: &mut System) -> Option<f32> {
+    system.refresh_cpu_list(CpuRefreshKind::nothing());
+    load_pct(System::load_average().five, system.cpus().len())
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+fn load_pct(five: f64, cpus: usize) -> Option<f32> {
+    (cpus > 0).then(|| (five / cpus as f64 * 100.0) as f32)
 }
 
 fn usage(disk: &sysinfo::Disk) -> DiskUse {
@@ -113,6 +151,20 @@ mod tests {
             assert!(host.load.is_some_and(|l| l.iter().all(|v| *v >= 0.0)));
         }
         assert_eq!((host.dir_hangar, host.dir_build_cache), (NONE, NONE), "tamanhos vêm de quem chama");
+    }
+
+    #[test]
+    fn load_over_cores_is_percent() {
+        assert_eq!(load_pct(4.0, 8), Some(50.0));
+        assert_eq!(load_pct(12.0, 8), Some(150.0), "carga acima dos núcleos passa de 100");
+        assert_eq!(load_pct(1.0, 0), None, "sem núcleos lidos não há medida");
+    }
+
+    #[test]
+    fn placement_load_measures_on_every_system() {
+        let load = placement_load();
+        assert!(load.mem_total > 0 && load.mem_available <= load.mem_total);
+        assert!(load.cpu_pct.is_some_and(|pct| pct >= 0.0), "{load:?}");
     }
 
     #[test]
