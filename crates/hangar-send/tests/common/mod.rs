@@ -286,6 +286,17 @@ impl Home {
     }
 }
 
+/// Host com uma máquina `id` no livro de peers (token `tok-<id>`) e o tmux que falha em tudo.
+pub fn peer_host(id: &str, base: &str) -> FakeHost {
+    let answer = |stdout: String| Answer { stdout, ..Answer::default() };
+    let server = BTreeMap::from([
+        (format!("peers config {id}"), answer(format!("{base}\ttok-{id}\n"))),
+        ("peers path".to_owned(), answer("/nao/existe/peers.json\n".into())),
+    ]);
+    let tmux = BTreeMap::from([("*".to_owned(), Answer { rc: 1, ..Answer::default() })]);
+    FakeHost::new(Some(server), tmux)
+}
+
 /// Host sem livro de peers e com o tmux que falha em tudo (fora de qualquer sessão).
 pub fn plain_host() -> FakeHost {
     let tmux = BTreeMap::from([("*".to_owned(), Answer { rc: 1, ..Answer::default() })]);

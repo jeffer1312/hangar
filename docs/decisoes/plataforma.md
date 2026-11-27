@@ -5857,8 +5857,9 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   dono quer ver máquinas por dono. Com volume pequeno e perguntas específicas, ficou um receptor
   axum + Postgres na VPS (`services/telemetry-ingest`), com workspace próprio para o driver do
   Postgres não entrar no `Cargo.lock` nem no portão do PR; ele reusa só o módulo `wire` do
-  `hangar-telemetry`. Para ver os dados, o próprio receptor serve `/panel` com senha
-  (`PANEL_PASSWORD`; sem ela a rota não existe), no lugar do Grafana que estava no plano: um serviço a
+  `hangar-telemetry`. Para ver os dados, o próprio receptor serve `/panel`, com conta de e-mail e senha
+  (argon2) e entrada só por convite de uso único; a primeira conta nasce pelo `telemetry-ingest
+  set-user`, com a senha na entrada padrão. Ficou no lugar do Grafana que estava no plano: um serviço a
   menos na VPS e a mesma tela no PC e no celular.
 - **Opt-out com aviso, e nenhum contador antes da resposta.** O padrão é ligado, mas `consent: null`
   não conta nem grava contador. A subida já cria o `~/.hangar/telemetry.json` com `consent: null` e
@@ -5890,3 +5891,14 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   branch é nome escolhido e sai `other`). O receptor recusa dia mais de 2 dias no futuro: a folga
   cobre relógio torto, e além dela o dia não existe ainda. O envio roda em laço separado da gravação de 15 min: receptor lento ou
   fora do ar não atrasa a gravação.
+- **Linhas de aviso e erro do servidor, limpas (27/11/2026).** O dono pediu a mensagem do erro, não só
+  o código: a contagem dizia que algo falhou, mas não o quê. Uma camada do `tracing`
+  (`telemetry_log.rs`) põe cada WARN/ERROR num canal limitado, sem esperar; a tarefa de
+  `telemetry_routes.rs` limpa em lote (`telemetry_scrub.rs`: as regras do "Reportar problema" e,
+  depois, caminho, URL, e-mail, nome de sessão viva e de máquina e número de 6 dígitos viram
+  marcador) e chama `Telemetry::log`, com o mesmo consentimento do `count`. Lote sem a lista de
+  sessões não sai: sem os nomes não há como tirá-los. O próprio módulo da telemetria fica fora, para
+  o aviso dela não virar outra linha. Teto de 100 linhas distintas por dia e 300 caracteres por
+  linha; o excesso só soma `log_dropped`. O campo `logs` é opcional no `schema: 1`, e o receptor
+  passou a aceitar 256 KB por pacote: as 100 linhas junto dos contadores passariam dos 64 KB, e o 413
+  apagaria o dia inteiro na máquina.

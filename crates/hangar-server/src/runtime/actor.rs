@@ -1416,6 +1416,13 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         registry.auth_failed(&target.name,target.metadata["config_dir"].as_str().map(std::path::PathBuf::from),&code);
                     }
                 },
+                Effect::TurnStopped { kind,line_id,at } => {
+                    if let Some(registry) = engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade) {
+                        // A vida é a da linha da lista (`lifecycle_id` = `k:<chave>`): a agenda desiste quando ela muda.
+                        registry.turn_stopped(hangar_auto_continue::StopHit { name:target.name.clone(),provider:target.provider.clone(),
+                            kind,line_id,at,life:format!("k:{}",target.key) });
+                    }
+                },
                 Effect::ReserveAsyncAnswer { operation_id,reservation,command } => {
                     let queue = queue.clone(); let generation = target.generation; let sample = clock(start);
                     jobs.spawn(async move {

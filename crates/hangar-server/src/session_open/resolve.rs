@@ -459,7 +459,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         worktree: request.branch.clone().map(|branch| WorktreeSpec { branch, new_branch: request.new_branch, base: request.base.clone(), path: None }),
         creator: request.creator.clone(), created_at: facts.now(), conversation: None,
         name_auto: Some(name_auto), rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
-        hooks_off: request.disable_hooks,
+        hooks_off: request.disable_hooks, auto_continue_off: false,
     };
     // Nascer já no plano sem terminal deixaria a sessão sem modo de base. O ilegível vale bypass, como o
     // `modo_da_conta` do Python: o modo pedido já está escolhido, só a volta do plano depende dele.

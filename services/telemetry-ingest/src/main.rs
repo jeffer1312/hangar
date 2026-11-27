@@ -1,5 +1,6 @@
 //! Receptor da telemetria: `POST /v1/batch` grava o pacote diário de cada máquina no Postgres.
 //! Não lê IP nem cabeçalho de origem; o limite de pedidos fica com a Cloudflare.
+mod accounts;
 mod panel;
 mod store;
 
@@ -16,7 +17,8 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use tokio::signal::unix::{SignalKind, signal};
 
-const MAX_BODY: usize = 64 * 1024;
+// As 100 linhas de log de até 300 caracteres cabem com folga junto dos contadores.
+const MAX_BODY: usize = 256 * 1024;
 
 fn app(pool: PgPool) -> Router {
     Router::new()
@@ -25,8 +27,8 @@ fn app(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
-fn app_with_panel(pool: PgPool, password: Option<String>) -> Router {
-    app(pool.clone()).merge(panel::router(pool, password))
+fn app_with_panel(pool: PgPool) -> Router {
+    app(pool.clone()).merge(panel::router(pool))
 }
 
 fn reply(status: StatusCode, body: String) -> Response {
@@ -44,9 +46,6 @@ async fn post_batch(State(pool): State<PgPool>, body: Bytes) -> Response {
     };
     if let Err(field) = batch.validate() {
         return refused(StatusCode::BAD_REQUEST, field);
-    }
-    if batch.counters.iter().any(|c| i64::try_from(c.count).is_err()) {
-        return refused(StatusCode::BAD_REQUEST, "count");
     }
     match store::insert(&pool, &batch).await {
         Ok(store::Insert::Accepted) => reply(StatusCode::OK, r#"{"ok":true}"#.to_owned()),
@@ -67,7 +66,25 @@ async fn retention(pool: PgPool) {
             Ok(removed) => eprintln!("telemetry-ingest: retention removed {removed} batches"),
             Err(error) => eprintln!("telemetry-ingest: retention: {error}"),
         }
+        if let Err(error) = accounts::prune(&pool).await {
+            eprintln!("telemetry-ingest: retention (panel): {error}");
+        }
     }
+}
+
+/// `telemetry-ingest set-user <email>` com a senha na entrada padrão: cria a conta ou troca a senha dela.
+/// A senha nunca vai na linha de comando, que aparece na lista de processos.
+async fn set_user(pool: &PgPool, email: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let email = accounts::normalize_email(email).ok_or("e-mail inválido")?;
+    let mut password = String::new();
+    std::io::stdin().read_line(&mut password)?;
+    let password = password.trim_end_matches(['\r', '\n']).to_owned();
+    if !accounts::password_fits(&password) {
+        return Err(format!("a senha precisa ter de {} a {} caracteres", accounts::MIN_PASSWORD, accounts::MAX_PASSWORD).into());
+    }
+    accounts::set_user(pool, &email, &accounts::hash_off_thread(password).await).await?;
+    eprintln!("telemetry-ingest: conta {email} pronta");
+    Ok(())
 }
 
 #[tokio::main]
@@ -76,6 +93,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen = std::env::var("LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
     let pool = PgPoolOptions::new().max_connections(5).connect(&database_url).await?;
     store::migrate(&pool).await?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.as_slice() {
+        [command, email] if command == "set-user" => return set_user(&pool, email).await,
+        [command, ..] if command == "set-user" => return Err("uso: telemetry-ingest set-user <email> (senha na entrada padrão)".into()),
+        [] => {}
+        _ => return Err(format!("argumento desconhecido: {}", args.join(" ")).into()),
+    }
     tokio::spawn(retention(pool.clone()));
     // Instalado antes de ouvir: falha aqui derruba a subida, não o desligamento.
     let mut terminate = signal(SignalKind::terminate())?;
@@ -88,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = terminate.recv() => {}
         }
     };
-    axum::serve(listener, app_with_panel(pool, std::env::var("PANEL_PASSWORD").ok())).with_graceful_shutdown(stop).await?;
+    axum::serve(listener, app_with_panel(pool)).with_graceful_shutdown(stop).await?;
     Ok(())
 }
 
@@ -97,7 +121,7 @@ mod tests {
     use std::hash::{BuildHasher, RandomState};
 
     use axum::body::Body;
-    use axum::http::Request;
+    use axum::http::{HeaderMap, Request};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -157,29 +181,88 @@ mod tests {
         send(pool, serde_json::to_vec(body).unwrap()).await
     }
 
-    async fn get_panel(router: Router, path: &str, password: Option<&str>) -> (StatusCode, String) {
-        let mut request = Request::get(path);
-        if let Some(password) = password {
-            use base64::Engine;
-            let encoded = base64::engine::general_purpose::STANDARD.encode(format!("dono:{password}"));
-            request = request.header(header::AUTHORIZATION, format!("Basic {encoded}"));
+    async fn call(router: Router, method: &str, path: &str, cookie: Option<&str>, body: Option<Value>) -> (StatusCode, HeaderMap, String) {
+        let mut request = Request::builder().method(method).uri(path).header(header::HOST, "telemetry.test");
+        if let Some(cookie) = cookie {
+            request = request.header(header::COOKIE, cookie);
         }
-        let response = router.oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
-        let status = response.status();
+        let request = match body {
+            Some(body) => request.header(header::CONTENT_TYPE, "application/json").body(Body::from(body.to_string())),
+            None => request.body(Body::empty()),
+        };
+        let response = router.oneshot(request.unwrap()).await.unwrap();
+        let (status, headers) = (response.status(), response.headers().clone());
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        (status, String::from_utf8(bytes.to_vec()).unwrap())
+        (status, headers, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    /// O par `nome=valor` do Set-Cookie, como o navegador o devolve.
+    fn session_of(headers: &HeaderMap) -> String {
+        headers[header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_owned()
     }
 
     #[tokio::test]
-    async fn panel_exists_only_with_a_password_and_asks_for_it() {
-        assert_eq!(get_panel(app_with_panel(offline(), None), "/panel", None).await.0, StatusCode::NOT_FOUND);
-        assert_eq!(get_panel(app_with_panel(offline(), Some(String::new())), "/panel", None).await.0, StatusCode::NOT_FOUND);
-        let with = || app_with_panel(offline(), Some("segredo".into()));
-        assert_eq!(get_panel(with(), "/panel", None).await.0, StatusCode::UNAUTHORIZED);
-        assert_eq!(get_panel(with(), "/panel/data", Some("errada")).await.0, StatusCode::UNAUTHORIZED);
-        let (status, page) = get_panel(with(), "/panel", Some("segredo")).await;
+    async fn without_a_session_the_panel_shows_the_login_and_hides_the_data() {
+        let (status, _, page) = call(app_with_panel(offline()), "GET", "/panel", None, None).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(page.contains("/panel/data"), "a página lê os dados da rota protegida");
+        assert!(page.contains("/panel/api/login") && !page.contains("/panel/data"), "sem sessão vem a entrada, não o painel");
+        assert_eq!(call(app_with_panel(offline()), "GET", "/panel/data", None, None).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(call(app_with_panel(offline()), "POST", "/panel/api/invites", None, None).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn account_login_invite_join_and_logout() {
+        let pool = online().await;
+        let owner = format!("dono-{}@example.test", fresh_id());
+        accounts::set_user(&pool, &owner, &accounts::hash_password("senha-do-dono-1")).await.unwrap();
+        let app = || app_with_panel(pool.clone());
+
+        let wrong = json!({"email": owner, "password": "senha-errada-99"});
+        assert_eq!(call(app(), "POST", "/panel/api/login", None, Some(wrong)).await.0, StatusCode::UNAUTHORIZED);
+        let unknown = json!({"email": "ninguem@example.test", "password": "senha-do-dono-1"});
+        assert_eq!(call(app(), "POST", "/panel/api/login", None, Some(unknown)).await.0, StatusCode::UNAUTHORIZED);
+        let right = json!({"email": owner.to_uppercase(), "password": "senha-do-dono-1"});
+        let (status, headers, _) = call(app(), "POST", "/panel/api/login", None, Some(right)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let cookie = session_of(&headers);
+        assert!(headers[header::SET_COOKIE].to_str().unwrap().contains("HttpOnly; Secure; SameSite=Strict"));
+
+        let (status, _, page) = call(app(), "GET", "/panel", Some(&cookie), None).await;
+        assert!(status == StatusCode::OK && page.contains("/panel/data"), "com sessão vem o painel");
+        assert_eq!(call(app(), "GET", "/panel/data?days=7", Some(&cookie), None).await.0, StatusCode::OK);
+
+        let (status, _, body) = call(app(), "POST", "/panel/api/invites", Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let invite = serde_json::from_str::<Value>(&body).unwrap()["path"].as_str().unwrap().split('#').nth(1).unwrap().to_owned();
+        let guest = format!("convidado-{}@example.test", fresh_id());
+        let short = json!({"invite": invite, "email": guest, "password": "curta"});
+        assert_eq!(call(app(), "POST", "/panel/api/join", None, Some(short)).await.0, StatusCode::BAD_REQUEST);
+        let taken = json!({"invite": invite, "email": owner, "password": "senha-do-convidado"});
+        assert_eq!(call(app(), "POST", "/panel/api/join", None, Some(taken)).await.0, StatusCode::CONFLICT);
+        let join = json!({"invite": invite, "email": guest, "password": "senha-do-convidado"});
+        let (status, headers, _) = call(app(), "POST", "/panel/api/join", None, Some(join.clone())).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, _, me) = call(app(), "GET", "/panel/api/me", Some(&session_of(&headers)), None).await;
+        assert!(me.contains(&guest), "{me}");
+        let again = json!({"invite": invite, "email": format!("outro-{}@example.test", fresh_id()), "password": "senha-do-convidado"});
+        assert_eq!(call(app(), "POST", "/panel/api/join", None, Some(again)).await.0, StatusCode::BAD_REQUEST, "convite é de uso único");
+
+        assert_eq!(call(app(), "POST", "/panel/api/logout", Some(&cookie), None).await.0, StatusCode::NO_CONTENT);
+        assert_eq!(call(app(), "GET", "/panel/data", Some(&cookie), None).await.0, StatusCode::UNAUTHORIZED, "sair encerra a sessão");
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn a_password_changed_during_login_opens_no_session() {
+        let pool = online().await;
+        let email = format!("troca-{}@example.test", fresh_id());
+        accounts::set_user(&pool, &email, &accounts::hash_password("senha-antiga-1")).await.unwrap();
+        let (id, old_hash) = accounts::login(&pool, &email, "senha-antiga-1").await.unwrap().unwrap();
+        accounts::set_user(&pool, &email, &accounts::hash_password("senha-nova-22")).await.unwrap();
+        assert_eq!(accounts::create_session(&pool, id, &old_hash).await.unwrap(), None);
+        let (id, hash) = accounts::login(&pool, &email, "senha-nova-22").await.unwrap().unwrap();
+        assert!(accounts::create_session(&pool, id, &hash).await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -191,20 +274,22 @@ mod tests {
         for body in [&first, &second] {
             assert_eq!(post_json(pool.clone(), body).await.0, StatusCode::OK);
         }
-        let (status, text) = get_panel(app_with_panel(pool, Some("segredo".into())), "/panel/data?days=7", Some("segredo")).await;
+        let email = format!("dados-{}@example.test", fresh_id());
+        accounts::set_user(&pool, &email, &accounts::hash_password("senha-dos-dados")).await.unwrap();
+        let login = json!({"email": email, "password": "senha-dos-dados"});
+        let (_, headers, _) = call(app_with_panel(pool.clone()), "POST", "/panel/api/login", None, Some(login)).await;
+        let (status, _, text) = call(app_with_panel(pool), "GET", "/panel/data?days=7", Some(&session_of(&headers)), None).await;
         assert_eq!(status, StatusCode::OK);
         let data: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(data["days"], 7);
-        let future = data["counters"].as_array().unwrap().iter()
-            .find(|c| c["event"] == "future_event" && c["dims"]["new_dim"] == "new_value" && c["bucket"] == "lt3s")
-            .unwrap();
+        let future = data["by_dims"].as_array().unwrap().iter().find(|c| c["event"] == "future_event" && c["dims"]["new_dim"] == "new_value").unwrap();
         // Outras rodadas no mesmo banco somam junto: confere o mínimo destas duas máquinas.
         assert!(future["count"].as_i64().unwrap() >= 14 && future["machines"].as_i64().unwrap() >= 2, "{future}");
         assert!(data["active"]["machines_7d"].as_i64().unwrap() >= 2);
     }
 
     #[tokio::test]
-    async fn body_over_64_kb_is_413() {
+    async fn body_over_the_limit_is_413() {
         let (status, _) = send(offline(), vec![b' '; MAX_BODY + 1]).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         // No limite ainda passa pelo leitor: espaço só não é JSON.
@@ -230,6 +315,70 @@ mod tests {
         body["counters"][0]["count"] = json!(u64::MAX);
         let (status, text) = post_json(offline(), &body).await;
         assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"count"}"#));
+        body["counters"][0]["count"] = json!(1);
+        body["logs"] = json!([{"level": "error", "target": "hangar_server::list", "message": "x", "count": u64::MAX}]);
+        let (status, text) = post_json(offline(), &body).await;
+        assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"log_count"}"#));
+        body["logs"][0]["count"] = json!(hangar_telemetry::wire::MAX_COUNT + 1);
+        let (status, text) = post_json(offline(), &body).await;
+        assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"log_count"}"#));
+        body["logs"][0]["count"] = json!(1);
+        body["counters"][0]["count"] = json!(hangar_telemetry::wire::MAX_COUNT + 1);
+        let (status, text) = post_json(offline(), &body).await;
+        assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"count"}"#));
+        body["counters"][0]["count"] = json!(1);
+        body["logs"][0]["level"] = json!("info");
+        let (status, text) = post_json(offline(), &body).await;
+        assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"log_level"}"#));
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn huge_counts_already_stored_do_not_break_the_summary() {
+        let pool = online().await;
+        let today = utc_day(&pool, 0).await;
+        // Gravado direto, sem o `validate`: como um pacote de antes do teto.
+        let (event, message) = (format!("huge_{}", fresh_id()), format!("enorme {}", fresh_id()));
+        for _ in 0..2 {
+            let mut body = batch_body(&fresh_id(), &today);
+            body["counters"] = json!([{"event": event, "bucket": "lt1s", "count": i64::MAX}]);
+            body["logs"] = json!([{"level": "error", "target": "hangar_server::list", "message": message, "count": i64::MAX}]);
+            let batch: Batch = serde_json::from_value(body).unwrap();
+            assert!(matches!(store::insert(&pool, &batch).await.unwrap(), store::Insert::Accepted));
+        }
+        let data = store::summary(&pool, 7).await.unwrap();
+        let find = |key: &str, field: &str, value: &str| data[key].as_array().unwrap().iter().find(|row| row[field] == json!(value)).unwrap()["count"].clone();
+        assert_eq!(find("counters", "event", &event), json!(i64::MAX));
+        assert_eq!(find("by_dims", "event", &event), json!(i64::MAX));
+        assert_eq!(find("by_bucket", "event", &event), json!(i64::MAX));
+        assert_eq!(find("logs", "message", &message), json!(i64::MAX));
+        assert_eq!(find("trend", "event", &event), json!(i64::MAX));
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn log_lines_of_two_machines_become_one_aggregated_row() {
+        let pool = online().await;
+        let today = utc_day(&pool, 0).await;
+        // Mensagem desta rodada: o banco é dividido entre rodadas.
+        let message = format!("lista não lida {}", fresh_id());
+        for (version, count) in [("0.42.0", 3), ("0.43.0", 2)] {
+            let mut body = batch_body(&fresh_id(), &today);
+            body["env"]["version"] = json!(version);
+            body["logs"] = json!([
+                {"level": "error", "target": "hangar_server::list", "message": message, "count": count},
+                {"level": "warn", "target": "hangar_server::list", "message": format!("{message} aviso"), "count": 1},
+            ]);
+            assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+        }
+        let data = store::summary(&pool, 7).await.unwrap();
+        let row = data["logs"].as_array().unwrap().iter().find(|l| l["message"] == json!(message)).unwrap().clone();
+        assert_eq!(row, json!({
+            "level": "error", "target": "hangar_server::list", "message": message, "count": 5, "machines": 2,
+            "first_day": today, "last_day": today, "versions": ["0.42.0", "0.43.0"],
+        }));
+        let warn = data["logs"].as_array().unwrap().iter().find(|l| l["message"] == json!(format!("{message} aviso"))).unwrap();
+        assert_eq!((&warn["level"], &warn["count"], &warn["machines"]), (&json!("warn"), &json!(2), &json!(2)));
     }
 
     #[tokio::test]

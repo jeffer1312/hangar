@@ -1,4 +1,5 @@
-import { Pressable, Text, View } from 'react-native';
+import { Linking, Pressable, Text, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type {
   IntegrationPreset,
@@ -10,9 +11,10 @@ import type {
   ToolAccess,
 } from '@hangar/core';
 import { MachineGroup, MachineRow } from '../machines/MachineRows';
-import { InfoNotice } from '../config/InfoNotice';
 import { useSettingsColors } from '../config/colors';
 import { haptic } from '../../ui/haptics';
+import { IntegrationIcon } from './IntegrationIcon';
+import { toast } from '../../ui/Toast';
 import * as m from '../../paraglide/messages';
 
 export function integrationStatusLabel(status: IntegrationStatus): string {
@@ -48,6 +50,8 @@ export function integrationProjectsLabel(projects: string[]): string {
 
 export function presetAuthLabel(preset: IntegrationPreset): string {
   switch (preset.auth_kind) {
+    case 'none': return m.integrations_auth_none();
+    case 'bearer': return m.integrations_auth_bearer();
     case 'oauth_dcr': return m.integrations_auth_oauth_dcr();
     case 'oauth_manual_client': return m.integrations_auth_oauth_manual();
     case 'oauth_dcr_or_bearer': return `${m.integrations_auth_oauth_dcr()} · ${m.integrations_auth_bearer()}`;
@@ -108,6 +112,14 @@ export function ConfiguredIntegrationRow({ integration, onPress }: {
 
   return (
     <MachineRow
+      leading={(
+        <IntegrationIcon
+          brand={integration.brand}
+          name={integration.name}
+          local={integration.transport.kind === 'local_stdio'}
+          status={integration.status}
+        />
+      )}
       title={integration.name}
       description={summary}
       value={integrationStatusLabel(integration.status)}
@@ -124,6 +136,7 @@ export function CatalogPresetRow({ preset, connectedCount, onPress }: {
 }) {
   return (
     <MachineRow
+      leading={<IntegrationIcon brand={preset.brand} name={preset.name} />}
       title={preset.name}
       description={`${presetAuthLabel(preset)} · ${preset.description}`}
       value={connectedCount > 0 ? m.integrations_add_account() : m.integrations_badge_official()}
@@ -200,20 +213,38 @@ export function ToolSummaryRow({ tool, policy, busy, onAllowAlways, onRevokeAlwa
   );
 }
 
-export function SetupGuideBlock({ guide, showGoogleTestingHint }: {
-  guide: IntegrationSetupGuide;
-  showGoogleTestingHint: boolean;
-}) {
+export function SetupGuideBlock({ guide }: { guide: IntegrationSetupGuide }) {
+  // Link vindo do servidor (pode ser outra máquina): só página https.
+  const docsUrl = guide.docs_url && /^https:\/\//i.test(guide.docs_url) ? guide.docs_url : null;
+  const redirectUri = guide.redirect_uri;
   return (
-    <>
-      <MachineGroup>
-        <MachineRow title={guide.title} description={guide.docs_hint ?? undefined} />
-        {guide.steps.map((step, idx) => (
-          <MachineRow key={idx} title={`${idx + 1}. ${step}`} />
-        ))}
-      </MachineGroup>
-      {showGoogleTestingHint ? <InfoNotice text={m.integrations_google_testing_hint()} /> : null}
-    </>
+    <MachineGroup>
+      <MachineRow title={guide.title} description={guide.docs_hint ?? undefined} />
+      {docsUrl ? (
+        <MachineRow
+          title={m.integrations_setup_open_docs()}
+          action
+          onPress={() => {
+            Linking.openURL(docsUrl).catch(() => toast.erro(m.integrations_open_failed()));
+          }}
+        />
+      ) : null}
+      {guide.steps.map((step, idx) => (
+        <MachineRow key={idx} title={`${idx + 1}. ${step}`} />
+      ))}
+      {redirectUri ? (
+        <MachineRow
+          title={redirectUri}
+          description={m.integrations_setup_redirect()}
+          value={m.integrations_copy()}
+          onPress={() => {
+            Clipboard.setStringAsync(redirectUri)
+              .then(() => toast.ok(m.integrations_copied()))
+              .catch(() => toast.erro(m.integrations_copy_failed()));
+          }}
+        />
+      ) : null}
+    </MachineGroup>
   );
 }
 

@@ -82,6 +82,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         Ok(closed) => closed,
         Err(error) => return close_failed(&st, &name, &error, req.headers()),
     };
+    // A espera e os tetos da continuação saem com ela: outra sessão com o nome nasce sem eles.
+    crate::auto_continue::forget(&st, &name);
     // Fechada de propósito não volta no próximo reboot, de qualquer agente; recusada, segue voltando.
     if let Some(dirs) = st.list.env().dirs.as_ref() { crate::session_open::restore::forget(&dirs.home, &name); }
     closed_line(&st, &name, owner, req.headers(), peer);

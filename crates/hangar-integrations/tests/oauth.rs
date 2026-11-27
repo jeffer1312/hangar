@@ -18,7 +18,7 @@ use hangar_integrations::{
     AuthConfig, ClientConfig, IntegrationConfig, IntegrationRegistry, IntegrationSecrets,
     IntegrationStatus, IntegrationUpdate, McpClientManager, MemoryKeyStore, OAUTH_CALLBACK_PATH,
     OAuthError, OAuthManager, OAuthOrigin, OAuthStartInput, OAuthStartOutcome, OAuthTokens,
-    PermissionPolicy, PresetAuthKind, SecretStore, TokenRefresher, ToolsCache, Transport, catalog,
+    PermissionPolicy, PresetAuthKind, SecretStore, TokenRefresher, ToolsCache, Transport, brand_for, catalog, catalog_for_port,
     compute_status, find_preset,
 };
 use ring::digest::{SHA256, digest};
@@ -794,7 +794,7 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
         (
             "github",
             "https://api.githubcopilot.com/mcp/",
-            PresetAuthKind::OAuthDcrOrBearer,
+            PresetAuthKind::Bearer,
             false,
             false,
             false,
@@ -802,7 +802,7 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
         (
             "cloudflare",
             "https://docs.mcp.cloudflare.com/mcp",
-            PresetAuthKind::OAuthDcr,
+            PresetAuthKind::None,
             true,
             false,
             false,
@@ -929,6 +929,46 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
         }
     }
     assert!(find_preset("nao-existe").is_none());
+}
+
+#[test]
+fn brand_comes_from_the_preset_or_from_a_known_service_address() {
+    let icon = |preset: Option<&str>, url: Option<&str>| brand_for(preset, url).map(|b| b.icon);
+    assert_eq!(icon(Some("notion"), None).as_deref(), Some("notion"));
+    assert_eq!(icon(Some("google-drive"), Some("https://example.com/mcp")).as_deref(), Some("googledrive"));
+    assert_eq!(icon(None, Some("https://mcp.linear.app/sse")).as_deref(), Some("linear"));
+    // Outro endpoint do mesmo serviço: o domínio basta quando só um preset o usa.
+    assert_eq!(icon(None, Some("https://bindings.mcp.cloudflare.com/mcp")).as_deref(), Some("cloudflare"));
+    // googleapis.com serve três presets: sem host exato, não dá para escolher.
+    assert_eq!(icon(None, Some("https://other.googleapis.com/mcp")), None);
+    assert_eq!(icon(None, Some("https://example.com/mcp")), None);
+    assert_eq!(icon(None, None), None);
+    assert!(catalog().iter().all(|p| p.brand.as_ref().is_some_and(|b| b.color.starts_with('#') && b.color.len() == 7)));
+}
+
+#[test]
+fn catalog_for_port_fills_this_machine_redirect_in_loopback_guides() {
+    let presets = catalog_for_port(8765);
+    let guide = |id: &str| presets.iter().find(|p| p.id == id).and_then(|p| p.setup_guide.clone());
+    let gmail = guide("google-gmail").unwrap();
+    assert_eq!(
+        gmail.redirect_uri.as_deref(),
+        Some("http://127.0.0.1:8765/api/integrations/oauth/callback")
+    );
+    assert!(gmail.steps.iter().all(|step| !step.contains("<porta>")));
+    assert!(gmail
+        .steps
+        .iter()
+        .any(|step| step.contains("http://127.0.0.1:8765/api/integrations/oauth/callback")));
+    assert_eq!(
+        guide("slack").unwrap().redirect_uri.as_deref(),
+        Some("http://localhost:8765/api/integrations/oauth/callback")
+    );
+    assert_eq!(guide("github").unwrap().redirect_uri, None);
+    assert!(catalog_for_port(0)
+        .iter()
+        .filter_map(|p| p.setup_guide.as_ref())
+        .all(|g| g.redirect_uri.is_none()));
 }
 
 #[tokio::test]

@@ -52,8 +52,8 @@ pub struct ClaudeEngine {
     rate_limit_info: Value,
     /// Limite do plano visto na mensagem sintética do turno; sai como efeito quando o turno termina.
     turn_limit: Option<UsageLimit>,
-    /// O `error` da mensagem sintética do turno; o `result` não traz esse código.
-    turn_error: Option<String>,
+    /// A mensagem sintética de erro do turno, inteira: o `result` não traz o código nem o `uuid` dela.
+    turn_error: Option<Value>,
     commands: Option<Value>,
     terminal_commands: Value,
     preview: LiveBuffer,
@@ -1018,7 +1018,9 @@ impl ClaudeEngine {
             }
             "assistant" => {
                 if let Some(limit) = usage_limit(&event,&self.rate_limit_info,self.clock.epoch_s) { self.turn_limit = Some(limit); }
-                if let Some(error) = event["error"].as_str() { self.turn_error = Some(error.to_owned()); }
+                if event["error"].is_string() || event["is_api_error_message"] == true || event["isApiErrorMessage"] == true {
+                    self.turn_error = Some(event.clone());
+                }
                 if !event["local_command_source"].is_null() {
                     let text = text_blocks(&event["message"]["content"]);
                     // A CLI de hoje põe a saída no `local_command_source`, sem o comando: a resposta do `/effort` é
@@ -1142,7 +1144,7 @@ impl ClaudeEngine {
                 }
                 let subtype = event["subtype"].as_str().unwrap_or("");
                 let turn_error = self.turn_error.take();
-                if let Some(code) = crate::session_write::limit_switch::auth_error(turn_error.as_deref(),event["api_error_status"].as_u64()) {
+                if let Some(code) = crate::session_write::limit_switch::auth_error(turn_error.as_ref().and_then(|line|line["error"].as_str()),event["api_error_status"].as_u64()) {
                     effects.push(Effect::AuthFailed { code });
                 }
                 let mut stop_reason = event["terminal_reason"].as_str().and_then(|reason|terminal_reason_text(reason,&event));
@@ -1168,7 +1170,7 @@ impl ClaudeEngine {
                 } else if let Some(reason) = &stop_reason {
                     // A resposta de erro gravada pela CLI já é o aviso do turno parado (os clientes a desenham como
                     // bloqueio); a faixa de cima continua com o motivo.
-                    let error_reply = turn_error.is_some() && event["terminal_reason"] == "api_error";
+                    let error_reply = turn_error.as_ref().is_some_and(|line|line["error"].is_string()) && event["terminal_reason"] == "api_error";
                     if !error_reply { self.cli_note(None,format!("⚙️ Turno parado: {reason}"),effects); }
                 }
                 if !failed && subtype == "success" && !local {
@@ -1185,6 +1187,10 @@ impl ClaudeEngine {
                 if cut { self.start_turn(); }
                 self.clear_streams(effects); self.changed(effects,true);
                 if !cut {
+                    if !local && !self.replaying {
+                        let (kind,line_id) = turn_stop(&event,failed,turn_error.as_ref());
+                        effects.push(Effect::TurnStopped { kind,line_id,at:self.clock.epoch_s });
+                    }
                     // Sem turno não há o que cortar: a guardada que sobrou sai sozinha como o turno seguinte.
                     self.gentle.clear();
                     if self.effort_intent.as_ref().is_some_and(|intent|intent["status"] == "prepared") { self.dispatch_effort(effects); }
@@ -1760,6 +1766,31 @@ impl ClaudeEngine {
 /// Por que o turno parou, quando não foi o fim normal nem a pessoa parando.
 const NORMAL_TERMINAL:[&str;5] = ["completed","aborted_streaming","aborted_tools","background_requested","tool_deferred"];
 
+/// Por que o turno parou, e a linha em que parou. Só a linha de erro da API passa pela lista do que é
+/// passageiro; a interrupção (`aborted_*`) não é resposta, e o resto que não acabou bem nunca continua.
+fn turn_stop(result:&Value,failed:bool,error_line:Option<&Value>) -> (hangar_auto_continue::StopKind,Option<String>) {
+    use hangar_auto_continue::StopKind;
+    let result_id = result["uuid"].as_str().map(str::to_owned);
+    let reason = result["terminal_reason"].as_str();
+    if reason == Some("api_error") {
+        let Some(line) = error_line else { return (StopKind::Other,result_id) };
+        let line_id = line["uuid"].as_str().map(str::to_owned).or(result_id);
+        return (hangar_auto_continue::classify_claude_line(&transcript_shape(line)),line_id);
+    }
+    let normal = result["subtype"] == "success" && !failed
+        && matches!(reason,None | Some("completed" | "background_requested" | "tool_deferred"));
+    (if normal { StopKind::Normal } else { StopKind::Other },result_id)
+}
+
+/// O stream manda os campos do erro em snake_case; o classificador lê os do transcript.
+fn transcript_shape(event:&Value) -> Value {
+    let mut line = event.clone();
+    for (stream,transcript) in [("is_api_error_message","isApiErrorMessage"),("api_error","apiError"),("api_error_status","apiErrorStatus")] {
+        if line[transcript].is_null() && !event[stream].is_null() { line[transcript] = event[stream].clone(); }
+    }
+    line
+}
+
 fn terminal_reason_text(reason:&str,result:&Value) -> Option<String> {
     Some(match reason {
         _ if NORMAL_TERMINAL.contains(&reason) => return None,
@@ -1884,5 +1915,70 @@ mod tests {
         assert_eq!(state.problema.as_deref(),Some("runtime_falhou"));
         assert_eq!(state.problema_detalhe.as_deref(),Some("erro_interacao_indisponivel"));
         assert!(state.codex_question.is_none() && state.interaction_id.is_none() && state.options.is_none());
+    }
+
+    use hangar_auto_continue::StopKind;
+
+    fn clock(seconds:f64) -> ClockSample { ClockSample { monotonic_s:seconds,epoch_s:1_800_000_000.0 + seconds } }
+
+    fn turn() -> ClaudeEngine {
+        let mut engine = ClaudeEngine::new(json!({"name":"session","session_id":"sid","initialized":true}),1,clock(10.0));
+        engine.command(RuntimeCommand { operation_id:"op-1".into(),kind:OperationKind::Input,payload:json!({"text":"faz"}) },clock(11.0)).unwrap();
+        engine
+    }
+
+    fn line(engine:&mut ClaudeEngine,value:Value,seconds:f64) -> Vec<Effect> { engine.apply(EngineInput::Line(value),clock(seconds)).unwrap() }
+
+    fn stops(effects:&[Effect]) -> Vec<(StopKind,Option<String>,f64)> {
+        effects.iter().filter_map(|effect|match effect {
+            Effect::TurnStopped { kind,line_id,at } => Some((*kind,line_id.clone(),*at)),
+            _ => None,
+        }).collect()
+    }
+
+    #[test]
+    fn a_connection_failed_turn_emits_a_network_stop() {
+        // O stream manda os campos em snake_case; o transcript, em camelCase. Os dois são a mesma queda.
+        let shapes = [json!({"is_api_error_message":true,"api_error":"connection_failed"}),
+            json!({"isApiErrorMessage":true,"apiError":"connection_failed"})];
+        for fields in shapes {
+            let mut engine = turn();
+            let mut error = json!({"type":"assistant","error":"server_error","uuid":"err-1","session_id":"sid",
+                "message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: Connection error."}]}});
+            for (key,value) in fields.as_object().unwrap() { error[key] = value.clone(); }
+            line(&mut engine,error,12.0);
+            let effects = line(&mut engine,json!({"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error",
+                "api_error_status":null,"result":"API Error: Connection error.","uuid":"res-1","session_id":"sid"}),14.0);
+            assert_eq!(stops(&effects),vec![(StopKind::Network,Some("err-1".to_owned()),1_800_000_014.0)],"{fields}");
+        }
+    }
+
+    #[test]
+    fn a_stop_hook_turn_emits_other() {
+        let mut engine = turn();
+        let effects = line(&mut engine,json!({"type":"result","subtype":"success","is_error":false,
+            "terminal_reason":"stop_hook_prevented","uuid":"res-1"}),14.0);
+        assert_eq!(stops(&effects),vec![(StopKind::Other,Some("res-1".to_owned()),1_800_000_014.0)]);
+    }
+
+    #[test]
+    fn a_success_emits_normal() {
+        let mut engine = turn();
+        let effects = line(&mut engine,json!({"type":"result","subtype":"success","is_error":false,
+            "terminal_reason":"completed","uuid":"res-1"}),14.0);
+        assert_eq!(stops(&effects),vec![(StopKind::Normal,Some("res-1".to_owned()),1_800_000_014.0)]);
+    }
+
+    #[test]
+    fn a_steer_cut_emits_no_stop() {
+        let mut engine = turn();
+        let effects = engine.command(RuntimeCommand { operation_id:"botao".into(),kind:OperationKind::Steer,
+            payload:json!({"text":"muda de rumo","now":true}) },clock(12.0)).unwrap();
+        let uuid = effects.iter().find_map(|effect|match effect { Effect::Write { frame,.. } => Some(frame["uuid"].clone()),_ => None }).unwrap();
+        let cut = line(&mut engine,json!({"type":"result","subtype":"success","terminal_reason":"aborted_tools","uuid":"res-1"}),13.0);
+        assert!(stops(&cut).is_empty(),"o corte não é parada: {cut:?}");
+        line(&mut engine,json!({"type":"command_lifecycle","command_uuid":uuid,"state":"started"}),13.1);
+        let done = line(&mut engine,json!({"type":"result","subtype":"success","terminal_reason":"completed","uuid":"res-2"}),20.0);
+        assert_eq!(stops(&done),vec![(StopKind::Normal,Some("res-2".to_owned()),1_800_000_020.0)]);
     }
 }

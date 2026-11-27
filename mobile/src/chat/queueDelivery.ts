@@ -1,5 +1,5 @@
 import {
-  comTeto, splitContextRefs, errorDetail, parseImageMessage, parsePeerMessage,
+  comTeto, splitContextRefs, failureWithCode, parseImageMessage, parsePeerMessage,
   probeServerResponse, sendInputForServer, type AnswerItem, type AskQuestionPayload, type ChatEvent, type Server,
 } from '@hangar/core';
 import * as m from '../paraglide/messages';
@@ -67,7 +67,7 @@ export function timingFeedback(note: string): DeliveryFeedback {
 
 async function request(server: Server, path: string, init: RequestInit): Promise<unknown> {
   const response = await probeServerResponse(server, path, init);
-  if (!response.ok) throw Object.assign(new Error(`${response.status}: ${await errorDetail(response)}`), { status: response.status });
+  if (!response.ok) throw await failureWithCode(response);
   try { return await response.json(); }
   catch (error) {
     if (error instanceof SyntaxError) throw new Error(m.mobile_machines_invalid_response(), { cause: error });

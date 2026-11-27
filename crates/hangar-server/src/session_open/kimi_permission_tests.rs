@@ -14,6 +14,7 @@ fn kimi_permissions_open_only_passes_flags_to_new_conversations() {
             subagent_model: None, customizations: None, jev: false, code_mode: false,
             read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
             name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
+            auto_continue_off: false,
         };
         let pane = agents::pane(&spec, agents::Conversation::New("new"), &ctx).unwrap();
         assert!(pane.command.iter().any(|arg| arg == flag));

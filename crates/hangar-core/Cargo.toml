@@ -33,6 +33,7 @@ subtle = { workspace = true }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
 tracing = { workspace = true }
+unicode-width.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

@@ -11,10 +11,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::future::BoxFuture;
+use hangar_auto_continue::{Facts, Ledger, Source, StopKind};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{AgentProvider, OpenCaller, Surface};
+use crate::auto_continue::EVENT as CONTINUE_EVENT;
 
 pub const FILE: &str = "session-restore.json";
 /// Ausente por mais que isto com o servidor de pé: fechada de propósito.
@@ -44,6 +47,12 @@ pub struct Entry {
     /// systemd o derrubou (`fallen`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
+    /// Trabalhando na última fotografia: o reboot pegou o turno no meio.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub turn_open: bool,
+    /// No Claude, a última linha da conversa principal vista com o turno aberto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_line: Option<String>,
 }
 
 /// O spec com que a sessão volta: o gravado, com o modo da hora em que caiu. No Codex o modo
@@ -309,12 +318,14 @@ async fn alive(st: &crate::routes::AppState, home: &Path, program: &std::ffi::Os
             },
         };
         let unit = units.remove(&row.name);
-        let conversation = row.jsonl.as_deref().filter(|_| row.tracked).and_then(|j| conversation_of(provider, j));
+        let jsonl = row.jsonl.as_deref().filter(|_| row.tracked);
+        let conversation = jsonl.and_then(|j| conversation_of(provider, j));
+        let (turn_open, last_line) = turn_mark(provider, &row.state, jsonl);
         let permission_mode = match (provider, &conversation, st.state.runtime.get()) {
             (AgentProvider::Claude, Some(sid), Some(runtime)) => runtime.observed_claude_mode(sid),
             _ => None,
         };
-        out.insert(key, Entry { name: row.name.clone(), provider, conversation, permission_mode, missing_since: None, unit });
+        out.insert(key, Entry { name: row.name.clone(), provider, conversation, permission_mode, missing_since: None, unit, turn_open, last_line });
     }
     Some(out)
 }
@@ -477,6 +488,176 @@ async fn mux_lost_event(previous: Option<u64>, current: MuxStart, sessions: usiz
         "journal": journal})
 }
 
+/// Folga do teste de reboot: no Windows o boot é "agora − tempo ligado" e varia um segundo entre leituras, e
+/// o servidor sem hora própria é gravado com o boot.
+const BOOT_SLACK_S: u64 = 60;
+
+/// O boot desta subida quando a máquina reiniciou depois do servidor da fotografia, o teste do
+/// `machine_rebooted` com folga. O multiplexador que caiu ou foi trocado com a máquina de pé dá `None`.
+pub fn rebooted(mux_started: Option<u64>, boot: u64) -> Option<u64> {
+    mux_started.filter(|before| boot > before.saturating_add(BOOT_SLACK_S)).map(|_| boot)
+}
+
+/// O turno da fotografia: aberto quando a sessão trabalhava. No Claude vai junto a última linha da conversa
+/// principal, para saber depois do reboot se a resposta final chegou antes da queda.
+fn turn_mark(provider: AgentProvider, state: &str, jsonl: Option<&str>) -> (bool, Option<String>) {
+    if state != "working" { return (false, None); }
+    let last = jsonl.filter(|_| provider == AgentProvider::Claude)
+        .and_then(|j| crate::session_write::limit_switch::file_tail(Path::new(j)))
+        .and_then(|tail| crate::session_write::limit_switch::last_main_line(&tail))
+        .and_then(|line| line["uuid"].as_str().map(str::to_owned));
+    (true, last)
+}
+
+/// A linha que fecha o turno: a resposta final, o erro da API, a resposta sintética da interrupção ou o
+/// "[Request interrupted by user" da pessoa. A sintética com `tool_use` é chamada no meio do turno (o REPL grava
+/// assim), não fim.
+fn closes_turn(line: &Value) -> bool {
+    let content = &line["message"]["content"];
+    if line["type"] == "user" {
+        let first = content.as_str().or_else(|| content.as_array().and_then(|parts| parts.iter().find_map(|p| p["text"].as_str())));
+        return first.is_some_and(|t| t.starts_with("[Request interrupted by user"));
+    }
+    let tool_call = content.as_array().is_some_and(|parts| parts.iter().any(|p| p["type"] == "tool_use"));
+    line["message"]["stop_reason"] == "end_turn" || line["isApiErrorMessage"] == true
+        || (line["message"]["model"] == "<synthetic>" && !tool_call)
+}
+
+/// O turno do Claude segue aberto no fim do transcript: nada depois de `last_line` o fechou. Sem a linha no
+/// fim lido (o turno escreveu muito depois dela), decide a última linha da conversa principal.
+fn claude_turn_open(tail: &str, last_line: Option<&str>) -> bool {
+    let main: Vec<Value> = tail.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(crate::session_write::limit_switch::is_main_line).collect();
+    if main.is_empty() { return false; }
+    let after = match last_line.and_then(|id| main.iter().rposition(|line| line["uuid"] == id)) {
+        Some(at) => &main[at + 1..],
+        None => &main[..],
+    };
+    after.last().is_none_or(|last| !closes_turn(last))
+}
+
+/// O que a continuação depois do reboot usa do servidor; nos testes, um falso.
+pub(crate) trait Resume: Send + Sync {
+    fn send<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), String>>;
+    /// `id` é o `entry_id` da nota; `call`, o id da chamada na fila.
+    fn note<'a>(&'a self, name: &'a str, id: &'a str, call: &'a str, text: String, meta: Value) -> BoxFuture<'a, Result<(), String>>;
+    fn diary(&self, name: &str, code: &str, reason: &'static str);
+    fn now(&self) -> f64;
+    fn hhmm(&self, at: f64) -> String;
+}
+
+pub(crate) struct LiveResume<'s>(pub(crate) &'s crate::routes::AppState);
+
+impl Resume for LiveResume<'_> {
+    fn send<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move { crate::auto_continue::send_text(self.0, name, text).await.map(|_| ()) })
+    }
+
+    fn note<'a>(&'a self, name: &'a str, id: &'a str, call: &'a str, text: String, meta: Value) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move { crate::notice_actions::note(self.0, name, id, call, &text, meta).await })
+    }
+
+    fn diary(&self, name: &str, code: &str, reason: &'static str) { self.0.diag.report(CONTINUE_EVENT, name, code, reason); }
+
+    fn now(&self) -> f64 { crate::state::monitor::wall_now() }
+
+    fn hhmm(&self, at: f64) -> String { crate::auto_continue::hhmm(at) }
+}
+
+/// O turno cortado pelo reboot continua uma vez por boot: a chave do registro é o boot e os tetos valem.
+/// A nota troca o texto da queda pelo do reboot (`cause`). `true`: o texto saiu.
+pub(crate) async fn continue_after_reboot(resume: &dyn Resume, ledger: &std::sync::Mutex<Ledger>, name: &str, boot: u64) -> bool {
+    let key = format!("boot:{boot}");
+    let lock = || ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let allowed = lock().allow(name, Source::Reboot, &key, StopKind::Other, resume.now());
+    if let Err(cap) = allowed {
+        resume.diary(name, &format!("auto_continue_capped:{}", cap.code()), "continuar depois do reboot: um teto do registro barrou");
+        return false;
+    }
+    let sent = resume.send(name, hangar_auto_continue::text::REBOOT).await;
+    let at = resume.now();
+    // A hora da parada não se sabe: a nota leva a do boot.
+    let mut meta = json!({"kind": "auto_continue", "cause": hangar_auto_continue::CAUSE_REBOOT, "stopped_at": boot as f64, "count": 1});
+    let (state, line) = match &sent {
+        Ok(()) => {
+            lock().record(name, Source::Reboot, &key, StopKind::Other, at);
+            resume.diary(name, "auto_continue_sent", "continuar depois do reboot: o turno cortado seguiu");
+            meta["continued_at"] = json!(at);
+            ("continued", format!("O computador reiniciou no meio do turno; continuei às {}.", resume.hhmm(at)))
+        }
+        Err(code) => {
+            resume.diary(name, &format!("auto_continue_failed:{code}"), "continuar depois do reboot: o envio do continue foi recusado");
+            meta["code"] = json!(code);
+            ("failed", format!("O computador reiniciou no meio do turno; não consegui continuar ({code})."))
+        }
+    };
+    meta["state"] = json!(state);
+    let id = format!("autocont:{key}");
+    if let Err(code) = resume.note(name, &id, &format!("{id}:{state}"), line, meta).await {
+        resume.diary(name, &format!("auto_continue_note_failed:{code}"), "continuar depois do reboot: a nota da conversa não foi escrita");
+    }
+    sent.is_ok()
+}
+
+/// Por que o turno aberto no reboot não continua, pelo que a agenda confere com o estado assentado (mensagem
+/// da pessoa na fila ou depois do boot, pergunta aberta, orquestração, troca de agente, turno andando); `None`:
+/// continua. Sessão fora da lista ou fatos que não se leem não provam nada e não continuam.
+fn reboot_blocked(facts: &Result<Option<Facts>, String>) -> Option<String> {
+    match facts {
+        Err(code) => Some(format!("facts_unavailable:{code}")),
+        Ok(None) => Some("not_listed".to_owned()),
+        Ok(Some(facts)) => facts.blocker(true).map(str::to_owned),
+    }
+}
+
+/// Lidos com o agente de pé. A linha da sessão recém-aberta pode faltar na lista de um tique atrás.
+async fn restored_facts(auto: &crate::auto_continue::AutoContinue, name: &str, boot: u64) -> Result<Option<Facts>, String> {
+    let mut facts = auto.restored_facts(name, boot as f64).await;
+    for _ in 0..LISTED_TRIES {
+        if !matches!(facts, Ok(None)) { break; }
+        tokio::time::sleep(LISTED_WAIT).await;
+        facts = auto.restored_facts(name, boot as f64).await;
+    }
+    facts
+}
+
+const LISTED_TRIES: u32 = 3;
+const LISTED_WAIT: Duration = Duration::from_secs(2);
+
+/// O agente subiu depois do reboot: confere o que a agenda conferiria e, sem nada barrando, continua.
+async fn continue_restored(st: &crate::routes::AppState, name: &str, boot: u64) {
+    let Some(auto) = st.auto_continue.get() else { return };
+    if let Some(why) = reboot_blocked(&restored_facts(auto, name, boot).await) {
+        st.diag.report(CONTINUE_EVENT, name, &format!("auto_continue_skipped:{why}"), "continuar depois do reboot: o turno não continua");
+        return;
+    }
+    continue_after_reboot(&LiveResume(st), &auto.ledger, name, boot).await;
+}
+
+/// O boot cujo turno cortado continua quando o agente subir; `None`: só reabre. Lido antes de reabrir: a vida
+/// nova escreve no mesmo transcript.
+fn reboot_resume(host: &super::server::ServerHost, st: &crate::routes::AppState, key: &str, entry: &Entry, reboot: Option<u64>) -> Option<u64> {
+    let boot = reboot.filter(|_| entry.turn_open)?;
+    let why = reboot_skip(super::open::OpenHost::home(host), &super::open::OpenHost::server_projects(host), key, entry);
+    if let Some(why) = why {
+        st.diag.report(CONTINUE_EVENT, &entry.name, &format!("auto_continue_skipped:{why}"), "continuar depois do reboot: o turno não continua");
+    }
+    why.is_none().then_some(boot)
+}
+
+/// Por que o turno aberto no reboot não continua, pelo spec e pelo fim do transcript; `None`: continua.
+fn reboot_skip(home: &Path, server_projects: &Path, key: &str, entry: &Entry) -> Option<&'static str> {
+    if !matches!(entry.provider, AgentProvider::Claude | AgentProvider::Codex) { return Some("provider"); }
+    let Ok(Some(spec)) = super::record::read(home, key) else { return Some("no_spec") };
+    if spec.auto_continue_off { return Some("off"); }
+    if entry.provider == AgentProvider::Claude {
+        let Some(conversation) = entry.conversation.as_deref() else { return Some("no_conversation") };
+        let tail = crate::session_write::limit_switch::file_tail(&super::claude::transcript(&spec, conversation, server_projects));
+        if !tail.is_some_and(|tail| claude_turn_open(&tail, entry.last_line.as_deref())) { return Some("turn_ended"); }
+    }
+    None
+}
+
 /// Reabre uma sessão e grava o resultado no diário.
 /// Quanto o restore espera o agente sair do shell depois de abrir.
 const AGENT_WAIT: Duration = Duration::from_secs(20);
@@ -493,7 +674,9 @@ fn agent_problem(st: &crate::routes::AppState, name: &str, shown: bool) {
     else { crate::runtime::terminal_status::clear_problem(&sender, AGENT_MISSING); }
 }
 
-pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry) -> Result<(), String> {
+/// O agente que demora fica para a reconferência; a continuação do turno cortado é de quem chama (`continue_later`).
+pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry)
+                                -> Result<(), String> {
     let mut result = reopen(host, key, entry).await;
     // Restaurada é o agente de pé: o `new-session` volta antes de o shell soltar o comando.
     if result.is_ok() && entry.provider != AgentProvider::Codex {
@@ -516,6 +699,12 @@ pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::ro
     result
 }
 
+/// Em tarefa própria: os fatos esperam a lista e a adoção, e a sessão seguinte não espera por eles.
+fn continue_later(st: &Arc<crate::routes::AppState>, name: &str, boot: u64) {
+    let (st, name) = (st.clone(), name.to_owned());
+    tokio::spawn(async move { continue_restored(&st, &name, boot).await });
+}
+
 /// A cada `EVERY`: com outro servidor do multiplexador que o da fotografia (a subida depois do reboot, ou o
 /// tmux que caiu com o Rust de pé), reabre o que ele perdeu; com o mesmo, fotografa. No Windows decide só
 /// na subida (`windows_startup`).
@@ -527,8 +716,8 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
     let mut windows: Option<bool> = None;
     // As sessões da versão antiga, sem spec, voltam uma vez por subida (`legacy_restore`).
     let mut legacy = false;
-    // As que abriram sem o agente aparecer: reconferidas a cada passada.
-    let mut waiting: Vec<(Entry, u32)> = Vec::new();
+    // As que abriram sem o agente aparecer: reconferidas a cada passada, com o boot do turno a continuar.
+    let mut waiting: Vec<LateAgent> = Vec::new();
     loop {
         waiting = recheck(&st, &program, std::mem::take(&mut waiting)).await;
         let (current, count) = mux_now(&program).await;
@@ -545,7 +734,9 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
                 if discovered && waiting.is_empty() {readiness.finish();}
                 last_count = count;
                 if let Some(alive) = alive(&st, &home, &program, &mut known).await {
-                    let mut next = observe(&snap, &alive, now(), snap.mux_started);
+                    // O psmux não decide o restore pela hora do servidor; ela fica para dizer depois se a máquina reiniciou.
+                    let started = match current { MuxStart::Started(at) if cfg!(windows) => Some(at), _ => snap.mux_started };
+                    let mut next = observe(&snap, &alive, now(), started);
                     let mut closed = CLOSED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     let fell = vanished(&snap, &next, &closed);
                     let gone: Vec<serde_json::Value> = fell.iter().map(|(_, entry)| json!({
@@ -584,11 +775,15 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
                     }
                 }
                 let mut results = Vec::new();
+                // Só o reboot da máquina continua o turno cortado; o multiplexador que caiu com ela de pé só reabre.
+                let reboot = rebooted(snap.mux_started, sysinfo::System::boot_time());
                 if !pending.is_empty() {
                     let host = super::server::ServerHost::new(st.clone()).await;
                     for (key, entry) in &pending {
+                        let resume = reboot_resume(&host, &st, key, entry, reboot);
                         let result = restore_one(&host, &st, &program, key, entry).await;
-                        if result.as_ref().err().is_some_and(|code| code == AGENT_MISSING || code == MUX_SILENT) { waiting.push((entry.clone(), 0)); }
+                        if result.is_ok() && let Some(boot) = resume { continue_later(&st, &entry.name, boot); }
+                        if result.as_ref().err().is_some_and(|code| code == AGENT_MISSING || code == MUX_SILENT) { waiting.push((entry.clone(), 0, resume)); }
                         results.push((key.clone(), result));
                     }
                 }
@@ -616,19 +811,25 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
     }
 }
 
-/// Reconfere quem abriu sem o agente: o que subiu vai ao diário como restaurada e perde o problema; o que
-/// esgotou as passadas vai como falha definitiva; o resto espera a próxima.
-async fn recheck(st: &crate::routes::AppState, program: &std::ffi::OsStr, waiting: Vec<(Entry, u32)>) -> Vec<(Entry, u32)> {
+/// A sessão que abriu sem o agente aparecer, as passadas já feitas e o boot do turno a continuar.
+type LateAgent = (Entry, u32, Option<u64>);
+
+/// Reconfere quem abriu sem o agente: o que subiu vai ao diário como restaurada, perde o problema e continua o
+/// turno do reboot; o que esgotou as passadas vai como falha definitiva; o resto espera a próxima.
+async fn recheck(st: &Arc<crate::routes::AppState>, program: &std::ffi::OsStr, waiting: Vec<LateAgent>) -> Vec<LateAgent> {
     let mut left = Vec::new();
-    for (entry, tries) in waiting {
+    for (entry, tries, resume) in waiting {
         let (event, code) = match agent_up(program, &entry.name, Duration::ZERO).await {
             Some(true) => { agent_problem(st, &entry.name, false); ("sessao.restaurada", "restore_agent_late") }
             _ if tries + 1 >= AGENT_TRIES => ("sessao.restauro_falhou", "restore_agent_never_started"),
-            _ => { left.push((entry, tries + 1)); continue; }
+            _ => { left.push((entry, tries + 1, resume)); continue; }
         };
         let nivel = if event == "sessao.restaurada" { "ok" } else { "erro" };
         crate::diag::record_blocking(crate::diag::diary_dir().as_deref(),
             &[json!({"evento": event, "nivel": nivel, "sessao": entry.name, "provider": entry.provider.name(), "codigo": code})], "restore");
+        let Some(boot) = resume else { continue };
+        if event == "sessao.restaurada" { continue_later(st, &entry.name, boot); }
+        else { st.diag.report(CONTINUE_EVENT, &entry.name, "auto_continue_skipped:agent_never_started", "continuar depois do reboot: o agente não subiu"); }
     }
     left
 }
@@ -663,7 +864,8 @@ mod tests {
     use super::*;
 
     fn entry(name: &str, conversation: Option<&str>) -> Entry {
-        Entry { name: name.into(), provider: AgentProvider::Claude, conversation: conversation.map(str::to_owned), permission_mode: None, missing_since: None, unit: None }
+        Entry { name: name.into(), provider: AgentProvider::Claude, conversation: conversation.map(str::to_owned), permission_mode: None, missing_since: None, unit: None,
+            turn_open: false, last_line: None }
     }
 
     fn recorded(home: &Path, key: &str, provider: AgentProvider, mode: super::super::PermissionMode) {
@@ -672,8 +874,177 @@ mod tests {
             else { super::super::Account::Default }, account_source: super::super::AccountSource::Default, model: None, effort: None,
             service_tier: None, permission_mode: Some(mode), subagent_model: None, customizations: None, jev: false, code_mode: false, read_only: false,
             worktree: None, creator: None, created_at: 1.0, conversation: Some("c1".into()),
-            name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false };
+            name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
+            auto_continue_off: false };
         super::super::record::write(home, &spec).unwrap();
+    }
+
+    /// O arquivo gravado antes destes campos lê como turno fechado: nada continua depois do reboot.
+    #[test]
+    fn an_old_snapshot_reads_without_turn_open() {
+        let old = json!({"mux_started": 10, "sessions": {"k1": {"name": "a", "provider": "claude", "conversation": "c1", "unit": "tmux-spawn-x.scope"}}});
+        let snap: Snapshot = serde_json::from_value(old).unwrap();
+        let entry = &snap.sessions["k1"];
+        assert!(!entry.turn_open);
+        assert_eq!(entry.last_line, None);
+        let written = serde_json::to_value(&snap).unwrap();
+        assert!(written["sessions"]["k1"].get("turn_open").is_none() && written["sessions"]["k1"].get("last_line").is_none(),
+            "turno fechado não engorda o arquivo");
+    }
+
+    fn line(kind: &str, uuid: &str, extra: Value) -> String {
+        let mut line = json!({"type": kind, "isSidechain": false, "entrypoint": "cli", "uuid": uuid, "message": {"role": kind, "content": []}});
+        for (key, value) in extra.as_object().unwrap() { line["message"][key] = value.clone(); }
+        format!("{line}\n")
+    }
+
+    /// Trabalhando, a sessão entra na fotografia com o turno aberto e, no Claude, a última linha da conversa
+    /// principal; parada, sem nenhum dos dois.
+    #[test]
+    fn a_working_session_is_recorded_with_its_last_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("c1.jsonl");
+        let side = json!({"type": "assistant", "isSidechain": true, "uuid": "side", "message": {"content": []}});
+        std::fs::write(&jsonl, format!("{}{}{side}\n{}\n", line("assistant", "a1", json!({"stop_reason": "tool_use"})),
+            line("user", "u1", json!({})), json!({"type": "mode", "mode": "x"}))).unwrap();
+        let path = jsonl.to_str();
+        assert_eq!(turn_mark(AgentProvider::Claude, "working", path), (true, Some("u1".to_owned())), "a linha do subagente e a de controle não contam");
+        assert_eq!(turn_mark(AgentProvider::Claude, "idle", path), (false, None));
+        assert_eq!(turn_mark(AgentProvider::Claude, "awaiting_input", path), (false, None));
+        assert_eq!(turn_mark(AgentProvider::Codex, "working", None), (true, None), "o Codex não tem a linha");
+        let observed = observe(&Snapshot::default(), &[("k1".into(), Entry { turn_open: true, last_line: Some("u1".into()), ..entry("a", Some("c1")) })].into(),
+            1.0, Some(1));
+        assert!(observed.sessions["k1"].turn_open);
+        let gone = observe(&observed, &BTreeMap::new(), 2.0, Some(1));
+        assert_eq!(gone.sessions["k1"].last_line.as_deref(), Some("u1"), "o desligamento derruba a sessão; a marca fica");
+    }
+
+    #[derive(Default)]
+    struct FakeResume {
+        sent: std::sync::Mutex<Vec<(String, String)>>,
+        notes: std::sync::Mutex<Vec<(String, String, String, Value)>>,
+        diary: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl Resume for FakeResume {
+        fn send<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), String>> {
+            self.sent.lock().unwrap().push((name.to_owned(), text.to_owned()));
+            Box::pin(async { Ok(()) })
+        }
+        fn note<'a>(&'a self, _name: &'a str, id: &'a str, call: &'a str, text: String, meta: Value) -> BoxFuture<'a, Result<(), String>> {
+            self.notes.lock().unwrap().push((id.to_owned(), call.to_owned(), text, meta));
+            Box::pin(async { Ok(()) })
+        }
+        fn diary(&self, _name: &str, code: &str, _reason: &'static str) { self.diary.lock().unwrap().push(code.to_owned()); }
+        fn now(&self) -> f64 { 2_000_000.0 }
+        fn hhmm(&self, _at: f64) -> String { "10:05".into() }
+    }
+
+    /// O turno que o reboot cortou continua uma vez por boot, com o texto do reboot e a nota trocada; o mesmo
+    /// boot visto de novo (outra passada, servidor reiniciado) não manda de novo. O turno que fechou antes da
+    /// queda não continua.
+    #[tokio::test]
+    async fn a_restored_turn_continues_once_per_boot() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = std::sync::Mutex::new(Ledger::load(hangar_auto_continue::ledger::path(dir.path())));
+        let fake = FakeResume::default();
+        assert!(continue_after_reboot(&fake, &ledger, "s1", 1_999_000).await);
+        assert!(!continue_after_reboot(&fake, &ledger, "s1", 1_999_000).await, "o mesmo boot");
+        let reloaded = std::sync::Mutex::new(Ledger::load(hangar_auto_continue::ledger::path(dir.path())));
+        assert!(!continue_after_reboot(&fake, &reloaded, "s1", 1_999_000).await, "o registro em disco vale depois de reiniciar");
+        assert_eq!(*fake.sent.lock().unwrap(), [("s1".to_owned(), hangar_auto_continue::text::REBOOT.to_owned())]);
+        let notes = fake.notes.lock().unwrap();
+        assert_eq!(notes.len(), 1);
+        let (id, call, text, meta) = &notes[0];
+        assert_eq!((id.as_str(), call.as_str()), ("autocont:boot:1999000", "autocont:boot:1999000:continued"));
+        assert_eq!(text, "O computador reiniciou no meio do turno; continuei às 10:05.");
+        assert_eq!(meta, &json!({"kind": "auto_continue", "cause": "reboot", "state": "continued", "stopped_at": 1_999_000.0,
+            "continued_at": 2_000_000.0, "count": 1}));
+        assert_eq!(*fake.diary.lock().unwrap(), ["auto_continue_sent", "auto_continue_capped:once", "auto_continue_capped:once"]);
+
+        // O fim do transcript: aberto sem nada depois da linha vista, ou com o turno ainda andando; fechado pela
+        // resposta final, pelo erro da API ou pela interrupção da pessoa.
+        let tool = line("assistant", "a1", json!({"stop_reason": "tool_use"}));
+        let result = line("user", "u1", json!({}));
+        let done = line("assistant", "a2", json!({"stop_reason": "end_turn"}));
+        assert!(claude_turn_open(&format!("{tool}{result}"), Some("u1")));
+        assert!(claude_turn_open(&format!("{tool}{result}"), Some("a1")), "o turno andou depois da linha vista, sem fechar");
+        assert!(!claude_turn_open(&format!("{tool}{result}{done}"), Some("u1")), "a resposta final chegou antes da queda");
+        assert!(!claude_turn_open(&format!("{tool}{result}{done}"), Some("sumiu")), "sem a linha no fim lido, decide a última");
+        let interrupted = format!("{}\n", json!({"type": "user", "isSidechain": false, "uuid": "u2",
+            "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]}}));
+        assert!(!claude_turn_open(&format!("{tool}{interrupted}"), Some("a1")), "a pessoa interrompeu");
+        let error = format!("{}\n", json!({"type": "assistant", "isSidechain": false, "uuid": "e1", "isApiErrorMessage": true,
+            "message": {"model": "<synthetic>", "content": []}}));
+        assert!(!claude_turn_open(&format!("{tool}{error}"), Some("a1")), "o erro da API é da agenda da queda");
+        let synthetic_tool = line("assistant", "a3", json!({"model": "<synthetic>", "stop_reason": "stop_sequence",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}]}));
+        assert!(claude_turn_open(&format!("{result}{synthetic_tool}"), Some("u1")), "a chamada sintética do REPL não fecha o turno");
+        let no_response = line("assistant", "a4", json!({"model": "<synthetic>", "stop_reason": "stop_sequence",
+            "content": [{"type": "text", "text": "No response requested."}]}));
+        assert!(!claude_turn_open(&format!("{result}{no_response}"), Some("u1")), "a resposta sintética da interrupção fecha");
+        assert!(!claude_turn_open("", None), "transcript vazio não prova turno aberto");
+    }
+
+    /// O multiplexador que caiu ou foi trocado com a máquina de pé reabre as sessões sem continuar o turno; só
+    /// o boot depois do servidor da fotografia continua.
+    #[test]
+    fn a_mux_restart_with_the_machine_up_does_not_continue() {
+        assert_eq!(rebooted(Some(1000), 900), None, "boot antes do servidor: o tmux caiu com a máquina de pé");
+        assert_eq!(rebooted(Some(1000), 1000), None, "o servidor caiu e voltou pela hora do boot");
+        assert_eq!(rebooted(None, 2000), None, "sem servidor conhecido não se prova o reboot");
+        assert_eq!(rebooted(Some(1000), 1001), None, "o boot do Windows relido um segundo depois não é reboot");
+        assert_eq!(rebooted(Some(1000), 2000), Some(2000));
+    }
+
+    /// Depois do agente de pé, o turno cortado só continua sem nada que a agenda também barraria: mensagem da
+    /// pessoa esperando na fila ou escrita depois do boot, pergunta aberta, orquestração, troca de agente, turno
+    /// já andando. Sessão fora da lista ou fatos ilegíveis não continuam.
+    #[test]
+    fn the_reboot_continue_checks_what_the_agenda_checks() {
+        let idle = Facts { life: "k:a".into(), state: "idle".into(), ..Facts::default() };
+        assert_eq!(reboot_blocked(&Ok(Some(idle.clone()))), None);
+        for (facts, why) in [
+            (Facts { queue_pending: true, ..idle.clone() }, "queue_pending"),
+            (Facts { user_after_stop: true, ..idle.clone() }, "user_after_stop"),
+            (Facts { question_open: true, ..idle.clone() }, "question_open"),
+            (Facts { orq: true, ..idle.clone() }, "orq"),
+            (Facts { handoff: true, ..idle.clone() }, "handoff"),
+            (Facts { off: true, ..idle.clone() }, "off"),
+            (Facts { state: "working".into(), ..idle.clone() }, "working"),
+        ] {
+            assert_eq!(reboot_blocked(&Ok(Some(facts))).as_deref(), Some(why));
+        }
+        assert_eq!(reboot_blocked(&Ok(None)).as_deref(), Some("not_listed"));
+        assert_eq!(reboot_blocked(&Err("runtime_binding".into())).as_deref(), Some("facts_unavailable:runtime_binding"));
+    }
+
+    /// Antes de reabrir: sem registro, com o interruptor desligado ou com o turno fechado no transcript, não
+    /// continua; o turno aberto continua. O Codex não tem a linha e decide só pelo registro.
+    #[test]
+    fn the_reboot_skip_reads_the_spec_and_the_transcript() {
+        use super::super::PermissionMode;
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join("projects");
+        let (key, codex) = ("a".repeat(32), "b".repeat(32));
+        let open = Entry { turn_open: true, last_line: Some("u1".into()), ..entry("s1", Some("c1")) };
+        assert_eq!(reboot_skip(home.path(), &projects, &key, &open), Some("no_spec"));
+        recorded(home.path(), &key, AgentProvider::Claude, PermissionMode::BypassPermissions);
+        let dir = projects.join(hangar_workspace::worktrees::sanitize_cwd("/w"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tool = line("assistant", "a1", json!({"stop_reason": "tool_use"}));
+        let result = line("user", "u1", json!({}));
+        std::fs::write(dir.join("c1.jsonl"), format!("{tool}{result}")).unwrap();
+        assert_eq!(reboot_skip(home.path(), &projects, &key, &open), None, "o turno ficou aberto");
+        std::fs::write(dir.join("c1.jsonl"), format!("{tool}{result}{}", line("assistant", "a2", json!({"stop_reason": "end_turn"})))).unwrap();
+        assert_eq!(reboot_skip(home.path(), &projects, &key, &open), Some("turn_ended"));
+        std::fs::write(dir.join("c1.jsonl"), format!("{tool}{result}")).unwrap();
+        assert!(super::super::record::write_auto_continue(home.path(), &key, true).unwrap());
+        assert_eq!(reboot_skip(home.path(), &projects, &key, &open), Some("off"));
+        assert_eq!(reboot_skip(home.path(), &projects, &key, &Entry { provider: AgentProvider::Pi, ..open.clone() }), Some("provider"));
+        recorded(home.path(), &codex, AgentProvider::Codex, PermissionMode::FullAccess);
+        let codex_entry = Entry { provider: AgentProvider::Codex, conversation: None, last_line: None, ..open.clone() };
+        assert_eq!(reboot_skip(home.path(), &projects, &codex, &codex_entry), None);
     }
 
     /// No Windows só a subida do Rust sem nenhum servidor psmux e com sessões na fotografia

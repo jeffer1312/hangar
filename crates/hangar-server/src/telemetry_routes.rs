@@ -10,12 +10,16 @@ use axum::body::to_bytes;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::response::Response;
-use hangar_telemetry::events::{ClientKind, Code, Dims, Event, PeerKind};
+use hangar_telemetry::events::{ClientKind, Code, Dims, Event, LogLevel, PeerKind};
 use hangar_telemetry::{Disabled, Failure, Telemetry};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::diag_report::Scrubber;
 use crate::groups::peers::PeerClient;
+use crate::telemetry_log::{ConsentGate, Line};
+use crate::telemetry_names::{NameBook, read_local};
+use crate::telemetry_scrub::Words;
 use crate::routes::AppState;
 use crate::session_write::{detail, json_response};
 
@@ -32,6 +36,10 @@ const ROUTES: &[&str] = &["principal", "rede_local", "tailscale", "connect"];
 const ROUTE_FAILURES: &[&str] = &["error", "timeouterror", "aborterror", "typeerror", "route_timeout", "erro"];
 /// `codigo` de `app.crash`, em minúsculas: nome do erro do JS, ou `panic` do nativo.
 const FATAL_CODES: &[&str] = &["error", "typeerror", "referenceerror", "rangeerror", "syntaxerror", "panic"];
+const LOG_BATCH: usize = 64;
+// ponytail: um lote por segundo, até 64 linhas; o resto espera no canal (256) ou é descartado e
+// contado. Aviso que a própria limpeza provoca não vira laço apertado.
+const LOG_EVERY: Duration = Duration::from_secs(1);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +96,9 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
             tokio::time::sleep(SNAPSHOT_EVERY).await;
         }
     }));
+    if let Some(lines) = crate::telemetry_log::take_lines() {
+        tasks.push(tokio::spawn(log_lines(st.clone(), telemetry.clone(), lines)));
+    }
     let peers = st.peers.clone();
     tasks.push(tokio::spawn(async move {
         loop {
@@ -96,6 +107,67 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
         }
     }));
     tasks
+}
+
+/// As linhas de aviso e erro do log, limpas lote a lote. Sem conjunto bom de nomes o lote não sai e
+/// conta em `log_dropped`, como o que o canal cheio jogou fora.
+async fn log_lines(st: Arc<AppState>, telemetry: Arc<Telemetry>, mut lines: tokio::sync::mpsc::Receiver<Line>) {
+    let scrubber = Scrubber::for_env(&st.accounts.env);
+    let started = std::time::Instant::now();
+    let mut book = NameBook::default();
+    let mut gate = ConsentGate::new(telemetry.consent_epoch());
+    let mut batch = Vec::with_capacity(LOG_BATCH);
+    while lines.recv_many(&mut batch, LOG_BATCH).await > 0 {
+        let mut dropped = crate::telemetry_log::take_dropped();
+        if telemetry.enabled() {
+            gate.update(telemetry.consent_epoch(), crate::telemetry_log::next_seq());
+            batch.retain(|line| gate.admits(line));
+            refresh_names(&st, &mut book, started.elapsed()).await;
+            match book.words() {
+                Some(words) => record_lines(&telemetry, &scrubber, &words, &batch),
+                None => {
+                    tracing::debug!(lines = batch.len(), "telemetria: linhas de log descartadas, sem conjunto de nomes");
+                    dropped += batch.len() as u64;
+                }
+            }
+            if dropped > 0 {
+                telemetry.count(Event::LogDropped, Dims::new(), dropped);
+            }
+        }
+        batch.clear();
+        tokio::time::sleep(LOG_EVERY).await;
+    }
+}
+
+/// O último retrato pronto da lista entra a cada lote, sem pedir outro; specs, contas e máquinas são
+/// relidos a cada 30 s. Sem retrato pronto, um pedido à lista na mesma cadência.
+async fn refresh_names(st: &AppState, book: &mut NameBook, now: Duration) {
+    let due = book.due(now);
+    let sessions: Option<Vec<String>> = match st.list.last_rows() {
+        Some(rows) => Some(rows.iter().map(|row| row.name.clone()).collect()),
+        None if due => st.list.snapshot().await.ok().map(|produced| produced.rows.iter().map(|row| row.name.clone()).collect()),
+        None => None,
+    };
+    if let Some(sessions) = sessions {
+        book.see(&chrono::Utc::now().format("%Y-%m-%d").to_string(), sessions);
+    }
+    if due {
+        let (home, peers, server_id) = local_inputs(st);
+        let read = tokio::task::spawn_blocking(move || read_local(&home, peers.ids(), &server_id, crate::pages::routes::machine_name())).await;
+        book.read(now, read.ok().and_then(Result::ok));
+    }
+}
+
+/// O que a releitura usa; o id é o atual, que muda sem reiniciar o servidor.
+fn local_inputs(st: &AppState) -> (std::path::PathBuf, Arc<PeerClient>, String) {
+    (st.accounts.env.home.clone(), st.peers.clone(), st.current_server_id())
+}
+
+pub(crate) fn record_lines(telemetry: &Telemetry, scrubber: &Scrubber, words: &Words, lines: &[Line]) {
+    for line in lines {
+        let level = if line.error { LogLevel::Error } else { LogLevel::Warn };
+        telemetry.log(level, &line.target, &crate::telemetry_scrub::clean(scrubber, &line.message, words));
+    }
 }
 
 /// Quantas máquinas do `peers.json` há de cada tipo, uma vez por dia (UTC). `Ok(true)` quando o dia já
@@ -413,6 +485,35 @@ mod tests {
     }
 
     #[test]
+    fn names_use_the_server_id_of_now() {
+        let home = tempfile::tempdir().unwrap();
+        let st = test_state(home.path(), false);
+        *st.machine_identity.write().unwrap() = Some("lab-novo".into());
+        assert_eq!(local_inputs(&st).2, "lab-novo");
+    }
+
+    #[test]
+    fn log_lines_are_cleaned_before_counting() {
+        let home = tempfile::tempdir().unwrap();
+        let telemetry = test_telemetry(home.path(), true);
+        let names = crate::telemetry_scrub::Names {
+            sessions: vec!["ajuste-login-Coordenadora".into()], accounts: Vec::new(), machines: vec!["estudio-02".into()],
+        };
+        let line = |error, message: &str| Line { seq: 0, error, target: "hangar_server::list".into(), message: message.into() };
+        let lines = [
+            line(true, "sessão ajuste-login-Coordenadora não abriu em /home/fulano/pessoal/x"),
+            line(false, "peer estudio-02 lento"),
+            line(true, "sessão ajuste-login-Coordenadora não abriu em /home/fulano/pessoal/y"),
+        ];
+        record_lines(&telemetry, &Scrubber::new(Some("/home/fulano".into()), None), &names.words().unwrap(), &lines);
+        let logs: Vec<(String, String, u64)> = telemetry.logs().into_iter().map(|l| (l.level, l.message, l.count)).collect();
+        assert_eq!(logs, vec![
+            ("error".into(), "sessão <sessão> não abriu em <caminho>".into(), 2),
+            ("warn".into(), "peer <máquina> lento".into(), 1),
+        ]);
+    }
+
+    #[test]
     fn peers_snapshot_whose_mark_cannot_be_written_is_not_done() {
         let home = tempfile::tempdir().unwrap();
         let telemetry = test_telemetry(home.path(), true);
@@ -432,7 +533,7 @@ mod tests {
     fn tailscale_address_is_counted_by_kind_only() {
         assert_eq!(classify("https://x.tail1.ts.net:8765"), Some(PeerKind::Tailscale));
         assert_eq!(classify("http://100.64.0.2:8765"), Some(PeerKind::Tailscale));
-        assert_eq!(classify("https://notebook.jeff.hangar.dev.br"), Some(PeerKind::Connect));
+        assert_eq!(classify("https://casa.exemplo.hangar.dev.br"), Some(PeerKind::Connect));
         assert_eq!(classify("http://192.168.0.10:8765"), Some(PeerKind::Lan));
         assert_eq!(classify("http://[fe80::1]:8765"), Some(PeerKind::Lan));
         assert_eq!(classify("http://notebook-tunel:8765"), Some(PeerKind::Lan));
@@ -445,7 +546,7 @@ mod tests {
         std::fs::write(&file, json!({
             "a": {"base_url": "https://x.tail1.ts.net:8765", "token": "t"},
             "b": {"base_url": "http://100.64.0.2:8765", "token": "t"},
-            "c": {"base_url": "https://notebook.jeff.hangar.dev.br", "token": "t"},
+            "c": {"base_url": "https://casa.exemplo.hangar.dev.br", "token": "t"},
             "d": {"base_url": "http://192.168.0.10:8765", "token": "t"},
             "e": {"base_url": "https://exemplo.com.br", "token": "t"},
             "f": {"base_url": "http://10.0.0.2:8765", "token": "t", "enabled": false},

@@ -35,6 +35,44 @@ export function noticeDetail(ev: ChatEvent): string | null {
   return detail && (ev.hook_error != null || detail !== noticeTitle(ev)) ? detail : null;
 }
 
+/** Nota do continuar sozinho (`kind: "auto_continue"`): a espera pela rede e o desfecho, trocados no lugar. */
+export const isAutoContinue = (ev: ChatEvent) => ev.notice_meta?.kind === 'auto_continue';
+
+/** O `cause` da nota do turno cortado pelo reboot (`hangar_auto_continue::CAUSE_REBOOT`). */
+const REBOOT_CAUSE = 'reboot';
+
+/** Horário local (HH:MM) de um campo em segundos do meta. */
+function metaClock(at: number | undefined): string | null {
+  if (typeof at !== 'number' || !Number.isFinite(at)) return null;
+  const date = new Date(at * 1000);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+/** O texto da nota pelas chaves, com os horários do meta; estado que este app não conhece fica com o texto do servidor. */
+export function autoContinueText(ev: ChatEvent): string {
+  const meta = ev.notice_meta;
+  const code = meta?.code ?? '';
+  const stopped = metaClock(meta?.stopped_at);
+  const continued = metaClock(meta?.continued_at);
+  let text: string | null = null;
+  if (meta?.cause === REBOOT_CAUSE) {
+    // Reboot: `stopped_at` é a hora do boot, o texto diz só quando continuou.
+    if (meta?.state === 'continued' && continued) text = m.auto_continue_reboot_line({ continued });
+    else if (meta?.state === 'failed') text = m.auto_continue_reboot_failed_line({ code });
+  } else if (stopped) {
+    if (meta?.state === 'waiting') text = m.auto_continue_waiting_line({ stopped });
+    else if (meta?.state === 'continued' && continued) text = m.auto_continue_line({ stopped, continued });
+    else if (meta?.state === 'failed') text = m.auto_continue_failed_line({ stopped, code });
+    else if (meta?.state === 'cancelled') text = m.auto_continue_cancelled_line({ stopped });
+    else if (meta?.state === 'skipped') text = m.auto_continue_skipped_line({ stopped });
+  }
+  return text ?? plainNotice(ev).trim();
+}
+
+/** Só a espera tem Cancelar: o desfecho já saiu, e a nota do reboot nasce com ele. */
+export const autoContinueCancellable = (ev: ChatEvent) =>
+  isAutoContinue(ev) && ev.notice_meta?.state === 'waiting' && ev.notice_meta?.cause == null;
+
 export type NoticeAction = { kind: 'reinstall'; plugin: string } | { kind: 'fix' };
 
 /** O botão que o servidor deu ao aviso. */

@@ -12,6 +12,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   fecha. `--yolo` e `--auto` só entram na conversa nova: retomar conserva a escolha persistida.
   Ver [permissões e envio direto do Kimi](#permissões-e-envio-direto-do-kimi-27112026).
 
+- **Continuação automática só depois de parada passageira, uma vez, por um registro só.** Rede, stream
+  perdido ou 5xx (este uma vez por corrente) continuam quando a sondagem compartilhada alcança o
+  provedor, até 2 h depois da parada. Toda continuação automática, inclusive a troca de conta no limite
+  e o login recusado, passa pelo `Ledger` de `hangar-auto-continue` antes de reabrir: uma por linha de
+  erro, 2 seguidas sem resposta real (a corrente expira em 30 min), 3 por hora. Na troca de conta o teto
+  só vale para o turno que o próprio Hangar começou com um "continue". A mensagem da pessoa pelo `/input`
+  (fora recado `[de: …]`/`[painel: …]` e o próprio "continue") zera a corrente. Barrada, nada reabre e
+  nenhuma conta fica gasta. A espera é nota neutra na conversa, nunca faixa; o Cancelar é marcado no
+  registro e responde na hora, e a agenda confere a marca antes de mandar. Reboot da máquina continua
+  uma vez com ressalva; falta de memória só pelo botão. O retorno da filha ligada pula o "continue"
+  automático ao decidir quem pediu o turno, e a linha de erro da API não volta como resposta. Ver
+  [continuar sozinho](#continuar-sozinho-depois-de-parada-passageira-27112026).
+
 - **O Kimi fica só com os provedores dele: motor nenhum vai ao `config.toml` do Kimi.** O espelho de
   credenciais (`engines/mirrors.rs`) leva motores só ao Pi e ao Codex (`SYNC_TARGETS`); "Sincronizar"
   e o reparo de credenciais da saúde não oferecem o Kimi, e a subida tira os blocos
@@ -329,7 +342,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   aviso de extensão de rascunho da pessoa, e comparar duas capturas não resolve.
 - **Statusline e prévia vêm de sidecar do agente, não do pane.** O pane corta na largura da
   janela. `""` é resposta ("nada em voo"), `None` é ausência. Sessão Pi já aberta só publica
-  depois de `/reload`.
+  depois de `/reload`. No Claude, arquivo da prévia que existe e envelheceu vale `""`, nunca a
+  volta ao pane; no pane, a prévia corta o painel de diff lateral do Claude Code pela régua dele.
+  [Motivo](#prévia-ao-vivo-sidecar-do-agente-primeiro-pane-depois).
 - **Estado da sessão Claude vem do registro nativo (`<config>/sessions/<pid>.json`) quando ele
   existe e o pid vive**; marcador de hook e pane são o fallback. `idle`/`busy`/`waiting` são o
   estado da TUI escrito por ela mesma; `waiting` inclui diálogo aberto (`/model`), que o pane
@@ -1273,6 +1288,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   não viu o despacho procura no arquivo, para trás. Chamada feita dentro do script grava `content`
   vazio: o resultado sai do `toolUseResult`. Os aparelhos não sabem de Code Mode, só chamam o `REPL`
   de "Script". Ver [Code Mode](#code-mode-do-claude-code-script-entrega-e-página-20112026).
+
+## Continuar sozinho depois de parada passageira (27/11/2026)
+
+Medido nas conversas desta máquina (Claude, 60 dias, 3 contas, 4.455 transcripts):
+
+- 56 episódios de "Can't reach the API". Antes de desistir a CLI já tenta ~10 vezes em ~3 min; em 37
+  deles o dono mandou "continua" ou parecido, com mediana de 14 min depois da parada.
+- 16 "continua" dele vieram depois de fim normal e 5 depois de interrupção: esses nunca continuam
+  sozinhos. Por isso a classificação é por lista do que é passageiro, e o resto cai em `Other`.
+- Em 13/11 o "Continue de onde parou." da troca por login recusado foi mandado 4 vezes em 38 s numa
+  sessão: cada recusa reabria e mandava de novo. O teto agora vem antes de reabrir, e o caso manda no
+  máximo 2.
+- Os tetos ficam em `~/.hangar/auto-continue.json`: reiniciar o servidor no meio do laço não os zera.
 
 ## Claude relançado como filho do próprio processo (24/11/2026)
 
@@ -4062,7 +4090,19 @@ prévia em voo descartava o `❯` da caixa como se fosse mensagem do usuário. A
   (3) a extensão coalesce em 150ms e `unref()` o timer, porque `message_update` dispara por token e
   um timer pendente não pode segurar o processo do Pi vivo; (4) teto de idade de 10min, pro caso da
   extensão morrer no meio do turno — aí o pane volta a mandar em vez de congelar a última frase.
-  Vale o mesmo aviso da statusline: **sessão Pi já aberta só publica depois de `/reload`**. O
+  Vale o mesmo aviso da statusline: **sessão Pi já aberta só publica depois de `/reload`**.
+
+  Em 27/11/2026 o teto de 10 min fez a prévia de uma sessão Claude pular no desktop nativo: um `scp`
+  de 13 min deixou velhos o arquivo da prévia e o marcador `working` (que só renova a cada
+  ferramenta), e o servidor voltou ao pane. O Claude Code estava com o painel de diff aberto à direita,
+  na mesma linha do terminal, e as linhas do código (`434 std::fs::create_dir_all…`) entraram na
+  prévia. Com o código grudado, o parágrafo já gravado não era reconhecido, e a prévia alternava entre
+  ele e o atual a cada rodada de 750 ms, com alturas diferentes. O hook do Claude roda um processo por
+  evento e não morre no meio do turno como a extensão do Pi: no Claude, arquivo que existe e envelheceu
+  vale `""`. O pane continua o plano B de sessão sem hook, e a prévia dele corta na coluna da régua
+  `─` do painel (a que vai da borda dele ao fim da linha). A faixa vazia entre conversa e painel não
+  serve de sinal: casava com o painel dos mods e com a caixa de prévia do AskUserQuestion nas capturas
+  dos testes. O
   **Claude Code também publica** desde 17/08/2026: `hooks/preview_hook.py` (instalado pelo
   `hook_installer.ensure_preview_hook_installed` no startup) escuta o evento `MessageDisplay`
   (Claude Code ≥ 2.1.152 — deltas INCREMENTAIS do texto em exibição, medido: 5 parágrafos = 6

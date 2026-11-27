@@ -385,6 +385,9 @@ export function IntegrationDetailSheet({
             onPress={() => void startOAuth()}
           />
         ) : null}
+        {view.auth.kind === 'bearer' && view.status === 'auth_required' ? (
+          <MachineRow title={m.integrations_add_token()} action disabled={busy} onPress={() => onEdit(view)} />
+        ) : null}
         <MachineRow
           title={testing ? m.integrations_testing() : m.integrations_test()}
           action

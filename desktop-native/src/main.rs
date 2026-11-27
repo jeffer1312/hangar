@@ -96,6 +96,15 @@ install_guide!("android-01-abrir-navegador.png", "android-02-baixando.png", "and
     "ios-sidestore-30-adicionar-fonte.png", "ios-sidestore-31-confirmar-fonte.png", "ios-sidestore-32-obter-hangar.png",
     "ios-sidestore-33-confirmar-instalar.png", "ios-sidestore-34-hangar-instalado-pela-fonte.png", "ios-sidestore-39-sair-sem-certificado.png");
 
+/// Logos dos serviços do catálogo de integrações (Simple Icons, CC0), pelo `brand.icon` que o servidor manda.
+fn integration_logo(path: &str) -> Option<&'static [u8]> {
+    macro_rules! logos { ($($name:literal),*) => {{ $(if path == concat!("integrations/", $name, ".svg") {
+        return Some(include_bytes!(concat!("../assets/integrations/", $name, ".svg")));
+    })* None }} }
+    logos!("gmail", "googledrive", "googlecalendar", "notion", "linear", "slack", "figma", "atlassian", "github", "cloudflare",
+        "sentry", "supabase")
+}
+
 struct AppAssets;
 
 impl AssetSource for AppAssets {
@@ -116,7 +125,7 @@ impl AssetSource for AppAssets {
             "providers/antigravity.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/antigravity.svg")))),
             _ => {}
         }
-        if let Some(bytes) = fileicons::load(path).or_else(|| install_guide(path)) { return Ok(Some(Cow::Borrowed(bytes))); }
+        if let Some(bytes) = fileicons::load(path).or_else(|| install_guide(path)).or_else(|| integration_logo(path)) { return Ok(Some(Cow::Borrowed(bytes))); }
         if let Some(bytes) = ExtraIcons.load(path)? { return Ok(Some(bytes)); }
         gpui_kit::assets::Assets.load(path)
     }

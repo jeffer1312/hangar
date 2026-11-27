@@ -416,6 +416,10 @@ pub struct SessionSpec {
     /// Nasceu sem hooks (`SessionOpenRequest::disable_hooks`): a reabertura mantém.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hooks_off: bool,
+    /// O dono desligou o continuar sozinho depois de queda passageira; propriedade da sessão, não opção
+    /// de abertura. Ausente = ligado.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_continue_off: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
