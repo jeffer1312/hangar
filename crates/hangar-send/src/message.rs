@@ -1,6 +1,7 @@
 //! Recado 1:1: nesta máquina, noutra do `peers.json` ou a um par externo. O transporte é do servidor;
 //! aqui só se entrega e se diz o que aconteceu.
 use std::io::Write;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value, json};
 
@@ -114,10 +115,24 @@ fn is_external_alias(body: &[u8], alias: &str) -> bool {
 fn deliver(cx: &Ctx, endpoint: &Endpoint, target: &str, session: &str, text: &str, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let body = json!({"text": text, "steer": true}).to_string();
     let path = format!("/api/sessions/{}/input", path_segment(session));
+    let started = unix_now();
     let fetched = cx.fetch(endpoint, "POST", &path, Some(&body));
     if matches!(fetched, Err(Failure::Cut)) {
-        maybe_delivered(endpoint, err);
-        return 2;
+        // Nunca um segundo POST: só a conversa do destino diz se o recado entrou.
+        return match check_arrival(cx, endpoint, session, text, started) {
+            Arrival::Arrived => {
+                let _ = writeln!(out, "chegou -> {target} (conferido na conversa depois do corte)");
+                0
+            }
+            Arrival::NotSeen => {
+                let _ = writeln!(err, "erro: sem resposta de {} no prazo e o recado não apareceu na conversa em {} s — não chegou; confira antes de reenviar", endpoint.base, cx.check_window());
+                3
+            }
+            Arrival::Unknown => {
+                maybe_delivered(endpoint, err);
+                4
+            }
+        };
     }
     match crate::http::report(endpoint, fetched, err) {
         Ok(response) => report_delivery(&response, target, out, err),
@@ -135,6 +150,103 @@ pub(crate) fn maybe_delivered(endpoint: &Endpoint, err: &mut dyn Write) {
 
 pub(crate) const MAYBE_DELIVERED: &str = "o recado pode ter chegado; confira com hangar-send --list antes de reenviar";
 
+/// O que a conversa do destino disse depois de um envio cortado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Arrival {
+    Arrived,
+    NotSeen,
+    Unknown,
+}
+
+/// Uma leitura da cauda da conversa.
+enum Tail {
+    Proof,
+    Absent,
+    Doubtful,
+    Unreadable,
+}
+
+fn unix_now() -> f64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |elapsed| elapsed.as_secs_f64())
+}
+
+/// Lê a conversa no mesmo servidor e com o mesmo token do envio, até a primeira prova ou o fim da
+/// janela. Sem uma leitura boa não se afirma nada: "não chegou" levaria a reenviar.
+pub(crate) fn check_arrival(cx: &Ctx, endpoint: &Endpoint, session: &str, text: &str, started: f64) -> Arrival {
+    let path = format!("/api/sessions/{}/history?limit=40", path_segment(session));
+    let deadline = Instant::now() + Duration::from_secs_f64(cx.check_window());
+    let (mut seen, mut doubtful) = (false, false);
+    loop {
+        let round = Instant::now();
+        let left = deadline.saturating_duration_since(round).as_secs_f64();
+        if left <= 0.0 {
+            break;
+        }
+        if let Ok((200, body)) = cx.fetch(&endpoint.with_total(left.min(5.0)), "GET", &path, None) {
+            match read_tail(&body, text, started) {
+                Tail::Proof => return Arrival::Arrived,
+                Tail::Absent => seen = true,
+                Tail::Doubtful => doubtful = true,
+                Tail::Unreadable => {}
+            }
+        }
+        let next = round + Duration::from_secs(1);
+        if next >= deadline {
+            break;
+        }
+        std::thread::sleep(next.saturating_duration_since(Instant::now()));
+    }
+    if doubtful || !seen { Arrival::Unknown } else { Arrival::NotSeen }
+}
+
+/// Prova é a linha da fila (`queued-…`), o horário depois do envio (com folga para o relógio do
+/// outro lado) ou, sem horário, a única fala com esse corpo: repetida, pode ser a de antes.
+fn read_tail(body: &[u8], sent: &str, started: f64) -> Tail {
+    let Some(Value::Array(events)) = parse(body) else { return Tail::Unreadable };
+    if events.is_empty() {
+        return Tail::Unreadable;
+    }
+    let (mut same, mut untimed) = (0usize, 0usize);
+    for event in &events {
+        let Value::Object(event) = event else { continue };
+        if event.get("kind").and_then(Value::as_str) != Some("user_msg") {
+            continue;
+        }
+        let Some(said) = event.get("text").and_then(Value::as_str) else { continue };
+        if !same_recado(said, sent) {
+            continue;
+        }
+        same += 1;
+        if event.get("id").and_then(Value::as_str).is_some_and(|id| id.starts_with("queued-")) {
+            return Tail::Proof;
+        }
+        match event.get("ts").and_then(Value::as_f64) {
+            Some(ts) if ts >= started - 30.0 => return Tail::Proof,
+            Some(_) => {}
+            None => untimed += 1,
+        }
+    }
+    match untimed {
+        0 => Tail::Absent,
+        _ if same == 1 => Tail::Proof,
+        _ => Tail::Doubtful,
+    }
+}
+
+/// O servidor pode escrever o remetente de outro jeito (`servidor::sessao` resolvido): vale o corpo.
+pub(crate) fn same_recado(event_text: &str, sent: &str) -> bool {
+    let (said, sent) = (event_text.trim(), sent.trim());
+    if said == sent {
+        return true;
+    }
+    matches!((without_sender(said), without_sender(sent)), (Some(a), Some(b)) if a == b)
+}
+
+fn without_sender(text: &str) -> Option<&str> {
+    let (_, body) = text.strip_prefix("[de: ")?.split_once("] ")?;
+    Some(body.trim())
+}
+
 fn send_external(cx: &Ctx, target: &str, sender: &str, text: &str, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let mut body = Map::new();
     body.insert("sender".into(), sender.into());
@@ -147,9 +259,10 @@ fn send_external(cx: &Ctx, target: &str, sender: &str, text: &str, out: &mut dyn
             let _ = writeln!(err, "erro: backend inacessível em {} (hangar rodando?)", endpoint.base);
             return 1;
         }
+        // O par externo não tem leitura da conversa daqui: fica incerto, sem reenviar.
         Err(Failure::Cut) => {
             maybe_delivered(&endpoint, err);
-            return 1;
+            return 4;
         }
         Err(Failure::Invalid(detail)) => {
             let _ = writeln!(err, "erro: {detail}");
