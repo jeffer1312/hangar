@@ -432,6 +432,8 @@ pub(super) enum CreateReply {
     Repos(u64, Result<Value, Failure>),
     /// "Em todas as minhas máquinas": o resultado de uma máquina (chave) na rodada `u64`.
     Spread(choices::SpreadOf, u64, String, choices::Applied),
+    /// A máquina sugerida pelo balanceamento e o motivo, no pedido `u64`.
+    Placement(u64, Result<Option<(String, String)>, Failure>),
 }
 
 /// A regra do backend (`names.sanitize_session_name`): acento vira a letra sem ele, o que não for letra, número, `_` ou `-` vira `-`,
@@ -756,6 +758,11 @@ pub(in crate::app) struct NewSession {
     pub(in crate::app) room: Rc<Cell<[f32; 5]>>,
     /// As recentes só entram se couberem sem empurrar o compositor para fora da área.
     pub(in crate::app) recents_fit: bool,
+    /// A máquina que o balanceamento sugeriu (`ServerChoice::key`) e o motivo, para a dica da pílula.
+    placement: Option<(String, String)>,
+    placement_seq: u64,
+    /// A pessoa trocou a máquina à mão: a sugestão que chega depois não a desfaz.
+    machine_touched: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -838,7 +845,8 @@ impl NewSession {
             preview_scroll: ScrollHandle::new(), resuming: false, baton, baton_by_model: false, baton_open: false,
             baton_preview: Remote::default(), suggested_name: String::new(), prewarm, tags: HashMap::new(),
             recent: Vec::new(), repos: Remote::default(), copies_open: HashSet::new(), merged_open: HashSet::new(),
-            room: Rc::new(Cell::new([0.; 5])), recents_fit: true, _subscriptions: subscriptions,
+            room: Rc::new(Cell::new([0.; 5])), recents_fit: true, placement: None, placement_seq: 0, machine_touched: false,
+            _subscriptions: subscriptions,
         };
         dialog.start_prewarm(cx);
         dialog
@@ -983,6 +991,7 @@ impl NewSession {
     /// Escolher outra máquina troca só o destino deste diálogo e relê o que é dela (raízes, pastas, contas, modelos); o app
     /// continua na máquina ativa até a sessão nascer, como o `targetServer` do web.
     fn pick_machine(&mut self, key: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.machine_touched = true;
         self.menu.set(None);
         if self.creating || self.account_busy || self.baton.is_some() { return; }
         let Some(choice) = self.servers.ok().and_then(|list| list.iter().find(|c| c.key == key)).cloned() else { return };
@@ -1081,6 +1090,18 @@ impl NewSession {
         if self.compact { self.load_repos(cx); }
     }
 
+    /// A Nova conversa abre na máquina que o balanceamento sugere ao servidor ativo (`active`), com o motivo na dica da pílula.
+    /// Com pasta já escolhida nada muda: trocar de máquina a tiraria.
+    pub(in crate::app) fn ask_placement(&mut self, active: Api, cx: &mut Context<Self>) {
+        self.placement_seq += 1;
+        (self.placement, self.machine_touched) = (None, false);
+        if self.picked.is_some() || self.baton.is_some() { return; }
+        let (seq, machines) = (self.placement_seq, self.link.servers.clone());
+        self.request(cx, move |_, send| Box::pin(async move {
+            send(CreateReply::Placement(seq, super::placement::suggestion(active, machines).await)).await
+        }));
+    }
+
     /// Uma leitura por máquina escolhida, sem medir o disco: o menu de pasta não mostra espaço.
     fn load_repos(&mut self, cx: &mut Context<Self>) {
         let seq = self.repos.start();
@@ -1092,7 +1113,7 @@ impl NewSession {
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.load_servers(window, cx);
         self.load_target(cx);
-        if self.compact { return; }
+        if self.compact { self.ask_placement(self.link.api.clone(), cx); return; }
         // A continuação trabalha na mesma árvore: a pasta da origem já vem escolhida. Sem pasta conhecida, o nome sai já e a
         // pasta fica por escolher.
         match self.baton.as_ref().map(|b| (b.cwd.clone().filter(|c| !c.is_empty()), b.name.clone())) {
@@ -1665,6 +1686,21 @@ impl NewSession {
                 if seq != self.worktrees.seq { return None; }
                 let list = self.folder_worktrees(result);
                 self.worktrees.finish(seq, list);
+            }
+            CreateReply::Placement(seq, result) => {
+                // Troca à mão ou pasta escolhida enquanto a sugestão vinha: a escolha da pessoa vence.
+                if seq != self.placement_seq || self.machine_touched || self.picked.is_some() { return None; }
+                match result {
+                    Err(error) => eprintln!("[nova-conversa] sugestão de máquina não lida: {}", error.detail),
+                    Ok(None) => {}
+                    Ok(Some((key, text))) => {
+                        if key != super::servers::norm(&self.link.api.identity()) {
+                            self.pick_machine(key.clone(), window, cx);
+                            self.machine_touched = false;
+                        }
+                        self.placement = Some((key, text));
+                    }
+                }
             }
             CreateReply::Repos(seq, result) => {
                 // Falha aqui só tira as cópias e a dobra das recentes: a escolha da pasta segue igual, e o motivo vai ao log.
@@ -2897,13 +2933,22 @@ impl NewSession {
         let text = place.map_or_else(|| machine.clone(), |place| format!("{machine} · {place}"));
         div().flex().items_center().gap(px(2.)).pt(px(2.)).pl(px(6.))
             .child(mark_pill(Menu::Machine, open == Some(Menu::Machine), machine_mark(tag.as_ref(), &self.machine_id(), 14.), text, None, tr("new_chat_where"),
-                self.branch_pill_label(cx).filter(|_| !self.no_project()), false, cx))
+                self.machine_pill_tip(cx), false, cx))
             .children(account.map(|(label, aria)| {
                 let label = badge.as_ref().map(|b| b.name.trim()).filter(|n| !n.is_empty()).map_or(label, str::to_owned);
                 mark_pill(Menu::Account, open == Some(Menu::Account), account_mark(badge.as_ref(), self.provider, 14.), label, forced.clone(), aria, None,
                     self.configs.loading || self.codex.loading || self.agy.loading, cx)
             }))
             .children(self.render_mode_pill(open == Some(Menu::Mode), cx))
+    }
+
+    /// A dica da pílula de máquina: o motivo da sugestão, enquanto a máquina é a sugerida, e a branch.
+    fn machine_pill_tip(&self, cx: &App) -> Option<String> {
+        let here = super::servers::norm(&self.link.api.identity());
+        let reason = self.placement.as_ref().filter(|(key, _)| *key == here)
+            .map(|(_, text)| tr("new_chat_machine_suggested").replace("{motivo}", text));
+        let lines = [reason, self.branch_pill_label(cx).filter(|_| !self.no_project())].into_iter().flatten().collect::<Vec<_>>();
+        (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
     /// Com ou sem terminal, só para esta conversa; antes da escolha mostra o padrão do servidor.

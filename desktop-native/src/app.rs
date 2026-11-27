@@ -81,6 +81,7 @@ mod mention;
 mod server_config;
 mod scheduled;
 mod worktree_settings;
+mod placement;
 mod auto_hide;
 mod invite;
 mod pair_accept;
@@ -1048,6 +1049,7 @@ pub struct Hangar {
     server_config: server_config::ServerConfig,
     scheduled: scheduled::Scheduled,
     worktree_settings: worktree_settings::WorktreeSettings,
+    placement: placement::PlacementSettings,
     auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
     guests: guests::Guests,
@@ -1414,7 +1416,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
-            worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
+            worktree_settings: worktree_settings::WorktreeSettings::default(), placement: Default::default(), auto_hide: Default::default(),
             server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), guests: guests::Guests::default(), sign_in: sign_in::SignIn::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
             costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), whatsapp: whatsapp::WhatsApp::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
@@ -1983,7 +1985,11 @@ impl Hangar {
         self.stash_view_draft(cx);
         self.close_open_session(window, cx);
         self.reopen = None;
-        if !home { self.load_view_draft(window, cx); }
+        if !home {
+            self.load_view_draft(window, cx);
+            // Voltar à nova conversa é abri-la de novo: a máquina volta a ser a sugerida.
+            if let (Some(view), Some(api)) = (self.new_chat.clone(), self.api.clone()) { view.update(cx, |view, cx| view.ask_placement(api, cx)); }
+        }
         self.composer.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
