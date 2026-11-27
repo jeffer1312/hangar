@@ -186,6 +186,20 @@ fn an_old_identical_message_does_not_prove_arrival() {
     assert_eq!(posts(&server), 1);
 }
 
+/// Fala igual sem horário pode ser um recado de antes: não prova a chegada, nem a nega (4).
+#[test]
+fn an_untimed_identical_message_leaves_the_send_uncertain() {
+    let line = r#"[{"kind": "user_msg", "id": "u1", "text": "[de: cli] oi"}]"#;
+    let (server, done) = cut_send(history(200, line));
+    assert_eq!(done.code, 4, "{}", done.stderr);
+    assert_eq!(done.stdout, "");
+    assert_eq!(
+        done.stderr,
+        format!("erro: sem resposta de http://127.0.0.1:{} no prazo — o recado pode ter chegado; confira com hangar-send --list antes de reenviar\n", server.port)
+    );
+    assert_eq!(posts(&server), 1);
+}
+
 /// Sem leitura boa da conversa não se afirma nada: segue a frase de "pode ter chegado" (4).
 #[test]
 fn a_cut_send_whose_history_cannot_be_read_stays_uncertain() {

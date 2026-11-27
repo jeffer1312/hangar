@@ -1445,8 +1445,8 @@ regra, não de volume: por isso a chave de envio (idempotência) ficou de fora.
   `code` no erro (`failureWithCode`).
 - **`hangar-send` cortado confere na conversa do destino, nunca reenvia.** Lê
   `/history?limit=40` no mesmo servidor e token do envio, por `HANGAR_SEND_CHECK_SECONDS` (padrão
-  6 s): prova é a linha `queued-…` ou `ts >= início − 30 s`; sem `ts`, só a única fala com aquele
-  corpo. Saída 0 "chegou", 3 não apareceu, 4 não deu para conferir (par externo sempre 4).
+  6 s): prova é a linha `queued-…` ou `ts >= início − 30 s`; fala igual sem `ts` não prova e deixa
+  incerto (4). Saída 0 "chegou", 3 não apareceu, 4 não deu para conferir (par externo sempre 4).
 
 Fora do conserto, notado: sem terminal, `Disposition::Unknown` ou `runtime_reply_lost` no
 `session_write/input.rs` volta 400 `erro_envio_falhou`, que os clientes tratam como recusa (0 casos

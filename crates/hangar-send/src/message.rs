@@ -199,14 +199,14 @@ pub(crate) fn check_arrival(cx: &Ctx, endpoint: &Endpoint, session: &str, text: 
     if doubtful || !seen { Arrival::Unknown } else { Arrival::NotSeen }
 }
 
-/// Prova é a linha da fila (`queued-…`), o horário depois do envio (com folga para o relógio do
-/// outro lado) ou, sem horário, a única fala com esse corpo: repetida, pode ser a de antes.
+/// Prova é a linha da fila (`queued-…`) ou o horário depois do envio (com folga para o relógio do
+/// outro lado). Fala igual sem horário pode ser um recado de antes: não prova nem nega.
 fn read_tail(body: &[u8], sent: &str, started: f64) -> Tail {
     let Some(Value::Array(events)) = parse(body) else { return Tail::Unreadable };
     if events.is_empty() {
         return Tail::Unreadable;
     }
-    let (mut same, mut untimed) = (0usize, 0usize);
+    let mut untimed = false;
     for event in &events {
         let Value::Object(event) = event else { continue };
         if event.get("kind").and_then(Value::as_str) != Some("user_msg") {
@@ -216,21 +216,16 @@ fn read_tail(body: &[u8], sent: &str, started: f64) -> Tail {
         if !same_recado(said, sent) {
             continue;
         }
-        same += 1;
         if event.get("id").and_then(Value::as_str).is_some_and(|id| id.starts_with("queued-")) {
             return Tail::Proof;
         }
         match event.get("ts").and_then(Value::as_f64) {
             Some(ts) if ts >= started - 30.0 => return Tail::Proof,
             Some(_) => {}
-            None => untimed += 1,
+            None => untimed = true,
         }
     }
-    match untimed {
-        0 => Tail::Absent,
-        _ if same == 1 => Tail::Proof,
-        _ => Tail::Doubtful,
-    }
+    if untimed { Tail::Doubtful } else { Tail::Absent }
 }
 
 /// O servidor pode escrever o remetente de outro jeito (`servidor::sessao` resolvido): vale o corpo.

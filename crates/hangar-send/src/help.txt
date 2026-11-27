@@ -153,8 +153,8 @@ SAÍDA do recado 1:1 (hangar-send <sessao> <mensagem...>):
   1  recusa ou erro (a frase diz qual)
   2  nada saiu: servidor inacessível ou uso errado
   3  o servidor não respondeu no prazo e o recado não apareceu na conversa do destino: não chegou
-  4  o servidor não respondeu no prazo e não deu para conferir (par externo incluído): pode ter
-     chegado
+  4  o servidor não respondeu no prazo e não deu para conferir (par externo incluído, ou recado
+     igual sem horário na conversa): pode ter chegado
   O comando nunca reenvia sozinho. Com 3 ou 4, confira com hangar-send --list antes de reenviar.
 
 PRAZOS: API_TIMEOUT (padrão 30) e API_CONNECT_TIMEOUT (padrão 3), em segundos, mudam o prazo de
