@@ -1690,8 +1690,15 @@ async fn mcp_shared_guard_blocks_all_sharing_vectors_and_rechecks_mid_flight() {
     .expect("prazo de shared_guard excedido");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn mcp_project_filter_is_fail_closed_by_slug_path_sibling_and_git_worktree() {
+// Em debug no Windows o list_tools com o filtro de projeto passa dos 2 MiB de pilha do worker do tokio.
+#[test]
+fn mcp_project_filter_is_fail_closed_by_slug_path_sibling_and_git_worktree() {
+    const STACK: usize = 8 << 20;
+    let rt = tokio::runtime::Builder::new_multi_thread().thread_stack_size(STACK).enable_all().build().unwrap();
+    std::thread::Builder::new().stack_size(STACK).spawn(move || rt.block_on(project_filter_body())).unwrap().join().unwrap();
+}
+
+async fn project_filter_body() {
     tokio::time::timeout(TEST_TIMEOUT, async {
         let mock = MockMcpServer::start(MockMcpHooks::default()).await;
         let dir = crate::physical_tempdir();
