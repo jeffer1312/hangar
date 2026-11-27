@@ -91,6 +91,11 @@ que já guarda para as novidades da atualização, e esse id fica no `once.json`
 pacote. Preferência fora da tabela é descartada; valor fora da lista sai `other`. Nome de fonte, cor
 escolhida, modelo e qualquer número não saem.
 
+As contagens de preferências são por máquina servidora, não por pessoa nem por aparelho único: cada
+servidor conta os retratos que chegaram a ele e os manda no pacote dele. O celular manda o retrato a
+cada máquina que fica ativa no dia, então um celular ligado a três máquinas aparece nas três. O app
+do PC manda uma vez por dia, à máquina ativa naquele momento.
+
 | `setting` | Valores | De onde |
 |---|---|---|
 | `theme` | `auto`, `light`, `dark`, `desktop` | PC, celular (`system` do celular sai `auto`) |
@@ -199,7 +204,7 @@ Fim de turno, erros, quedas e troca por limite contam para todas as sessões da 
   exatamente como vão sair (o dia de hoje está lá desde a última gravação).
 - `~/.hangar/telemetry.json`: sua resposta (`consent`) e os dois números aleatórios.
 - `~/.hangar/telemetry/once.json`: marcas do que só conta uma vez (o retrato do dia das máquinas
-  e das preferências, cada atualização).
+  e das preferências, cada atualização). As marcas com dia somem depois de ontem.
 
 No Windows, `~` é a pasta do seu usuário.
 

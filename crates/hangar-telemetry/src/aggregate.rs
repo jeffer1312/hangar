@@ -255,7 +255,8 @@ impl Telemetry {
     /// `Ok(false)`. Marca que não se lê nem se grava volta `Err`: quem chama não conta nem dá o
     /// feito por feito. Arquivo ilegível recomeça vazio e vai ao diário. Lê e grava disco.
     pub fn once(&self, key: &str) -> io::Result<bool> {
-        const KEEP: usize = 64;
+        // ponytail: a poda é pelo dia no fim da chave; o teto só segura chave sem dia que cresça sem fim.
+        const CAP: usize = 4096;
         if !self.enabled() {
             return Ok(false);
         }
@@ -275,8 +276,14 @@ impl Telemetry {
         if keys.iter().any(|known| known == key) {
             return Ok(false);
         }
+        // Ontem fica: o dia é UTC, e a marca de quem mandou perto da meia-noite ainda vale.
+        let yesterday = (self.clock)().date_naive().pred_opt();
+        keys.retain(|known| {
+            let day = known.get(known.len().saturating_sub(10)..).and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+            day.zip(yesterday).is_none_or(|(day, yesterday)| day >= yesterday)
+        });
         keys.push(key.to_owned());
-        let excess = keys.len().saturating_sub(KEEP);
+        let excess = keys.len().saturating_sub(CAP);
         keys.drain(..excess);
         queue::write_once(&self.home, &keys)?;
         Ok(true)
@@ -705,6 +712,25 @@ pub(crate) mod tests {
         assert!(telemetry.once("x").is_err());
         std::fs::remove_dir(fx.home.path().join(".hangar/telemetry/once.json")).unwrap();
         assert!(telemetry.once("x").unwrap(), "a marca não ficou dada por feita");
+    }
+
+    #[test]
+    fn once_prunes_marks_by_day_not_by_count() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        assert!(telemetry.once("peers:2026-11-26").unwrap());
+        for n in 0..100 {
+            assert!(telemetry.once(&format!("settings:native:d{n}:2026-11-26")).unwrap());
+        }
+        assert!(!telemetry.once("peers:2026-11-26").unwrap(), "muitos aparelhos não apagam a marca de hoje");
+        assert!(telemetry.once("update:a->b:2026-11-20T10:00:00+00:00").unwrap());
+        fx.next_day();
+        assert!(!telemetry.once("peers:2026-11-26").unwrap(), "a de ontem ainda vale");
+        fx.next_day();
+        assert!(telemetry.once("peers:2026-11-28").unwrap());
+        let keys = queue::read_once(fx.home.path()).unwrap();
+        assert!(!keys.iter().any(|k| k.ends_with("2026-11-26")), "{keys:?}");
+        assert!(keys.iter().any(|k| k.starts_with("update:")), "marca sem dia no fim fica");
     }
 
     #[test]

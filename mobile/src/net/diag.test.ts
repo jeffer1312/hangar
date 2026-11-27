@@ -4,7 +4,8 @@ import { hmacSha256Hex } from '../../../packages/core/src/hmac';
 
 const estado = vi.hoisted(() => ({
   base: 'https://a.test',
-  servidores: [{ id: 'a', label: 'fixture-a', baseUrl: 'https://a.test', token: 'token-a' }] as Server[],
+  servidores: [{ id: 'a', label: 'fixture-a', baseUrl: 'https://a.test', token: 'token-a' },
+    { id: 'b', label: 'fixture-b', baseUrl: 'https://b.test', token: 'token-b' }] as Server[],
   appState: vi.fn(),
 }));
 vi.mock('react-native', () => ({ Platform: { OS: 'android' }, AppState: { addEventListener: estado.appState } }));
@@ -53,6 +54,17 @@ it('instala sink uma vez, grava plataforma e eventos no destino capturado', asyn
     .filter((e: { evento: string }) => e.evento === 'settings.snapshot'));
   expect(snapshots()).toEqual([expect.objectContaining({ valores: { theme: 'dark' }, aparelho: 'dev-1', cliente: 'android' })]);
   fetchMock.mockClear();
+  await vi.advanceTimersByTimeAsync(300_000);
+  expect(snapshots()).toEqual([]);
+
+  // Cada máquina conta os aparelhos dela: trocar de servidor ativo manda o retrato a ele no mesmo dia.
+  estado.base = 'https://b.test';
+  await vi.advanceTimersByTimeAsync(300_000);
+  const sentTo = (base: string) => fetchMock.mock.calls.filter(([url]) => url === `${base}/api/diag`)
+    .flatMap(([, init]) => JSON.parse(init!.body as string).eventos).filter((e: { evento: string }) => e.evento === 'settings.snapshot');
+  expect(sentTo('https://b.test')).toEqual([expect.objectContaining({ aparelho: 'dev-1' })]);
+  fetchMock.mockClear();
+  estado.base = 'https://a.test';
   await vi.advanceTimersByTimeAsync(300_000);
   expect(snapshots()).toEqual([]);
 });

@@ -37,6 +37,8 @@ const ROUTE_FAILURES: &[&str] = &["error", "timeouterror", "aborterror", "typeer
 /// `codigo` de `app.crash`, em minúsculas: nome do erro do JS, ou `panic` do nativo.
 const FATAL_CODES: &[&str] = &["error", "typeerror", "referenceerror", "rangeerror", "syntaxerror", "panic"];
 const LOG_BATCH: usize = 64;
+/// As CLIs da descoberta do provedor padrão; presas, o retrato do dia sai sem ele.
+const DISCOVER_TIMEOUT: Duration = Duration::from_secs(30);
 // ponytail: um lote por segundo, até 64 linhas; o resto espera no canal (256) ou é descartado e
 // contado. Aviso que a própria limpeza provoca não vira laço apertado.
 const LOG_EVERY: Duration = Duration::from_secs(1);
@@ -85,12 +87,14 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
         loop {
             let today = snapshot.today();
             if done.as_deref() != Some(today.as_str()) {
-                let (st, env, diag) = (snapshot_st.clone(), snapshot_st.accounts.env.clone(), snapshot_diag.clone());
+                let (st, read_st, diag) = (snapshot_st.clone(), snapshot_st.clone(), snapshot_diag.clone());
                 let discover = move || async move { default_provider(&st).await };
                 let read = move |provider: Option<String>| {
-                    server_settings(&env.home, &crate::runtime::codex_launch::runtime_config(&env), provider.as_deref(), &diag)
+                    let runtime = crate::config_sync::runtime::RuntimeConfig::from_state(&read_st).ok()
+                        .and_then(|config| effective_runtime(&config, crate::voice::settings::env_jev_key()).ok());
+                    server_settings(&read_st.accounts.env.home, runtime.as_ref(), provider.as_deref(), &diag)
                 };
-                match daily_snapshot(snapshot.clone(), book.clone(), discover, read).await {
+                match daily_snapshot(snapshot.clone(), book.clone(), snapshot_diag.clone(), discover, read).await {
                     Ok(Ok(true)) => done = Some(today),
                     Ok(Ok(false)) => {}
                     Ok(Err(e)) => report(&snapshot_diag, Failure::Disk(e)),
@@ -195,9 +199,11 @@ pub(crate) fn peers_snapshot(telemetry: &Telemetry, peers: &PeerClient) -> std::
 
 /// O retrato do dia: máquinas e, se o do servidor ainda não saiu hoje, as preferências dele. `discover` roda as
 /// CLIs, por isso só depois da marca do dia gravada: marca que não se grava não descobre nada. `Ok(Ok(true))` = dia feito.
+/// Descoberta que passa de `DISCOVER_TIMEOUT` sai sem provedor, com o código no diário.
 async fn daily_snapshot<Fut: std::future::Future<Output = Option<String>>>(
     telemetry: Arc<Telemetry>,
     peers: Arc<PeerClient>,
+    diag: crate::diag::DiagClient,
     discover: impl FnOnce() -> Fut,
     read: impl FnOnce(Option<String>) -> Vec<(&'static str, String)> + Send + 'static,
 ) -> Result<std::io::Result<bool>, tokio::task::JoinError> {
@@ -208,10 +214,14 @@ async fn daily_snapshot<Fut: std::future::Future<Output = Option<String>>>(
     }).await?;
     let (done, due) = match step { Ok(step) => step, Err(e) => return Ok(Err(e)) };
     if due {
-        let provider = discover().await;
+        let provider = tokio::time::timeout(DISCOVER_TIMEOUT, discover()).await.unwrap_or_else(|_| {
+            diag.report("telemetry.settings", "", "telemetry_settings_provider_timeout", "telemetria: descoberta do provedor padrão passou do prazo");
+            None
+        });
         tokio::task::spawn_blocking(move || {
             let values = read(provider);
-            count_settings(&telemetry, ClientKind::Server, values.iter().map(|(name, value)| (*name, value.as_str())));
+            let dropped = count_settings(&telemetry, ClientKind::Server, values.iter().map(|(name, value)| (*name, value.as_str())));
+            report_dropped(&diag, dropped);
         }).await?;
     }
     Ok(Ok(done))
@@ -228,9 +238,24 @@ async fn default_provider(st: &AppState) -> Option<String> {
     }
 }
 
+/// O ditado e o Jev como os leitores deles resolvem: o `runtime-config.json`, senão o ambiente (`.env`,
+/// `TYPESAFE_API_KEY`, `settings.json`). `Err` quando o arquivo existe e não se lê. Bloqueante.
+pub(crate) fn effective_runtime(config: &crate::config_sync::runtime::RuntimeConfig, env_jev_key: Option<String>)
+    -> Result<Value, crate::config_sync::runtime_error::RuntimeError> {
+    let get = |key: &str| config.get_checked(key);
+    let jev = crate::voice::settings::read_gate(&config.env.home, &config.env.claude_base, env_jev_key).jev.is_some();
+    Ok(json!({
+        "dictation_organization_mode": get("dictation_organization_mode")?,
+        "transcription_providers": get("transcription_providers")?,
+        "groq_api_key": get("groq_api_key")?,
+        "jev": jev,
+    }))
+}
+
 /// O que o servidor guarda das escolhas do dono, já nos nomes de `events::SETTINGS`. Arquivo que não se lê deixa a
-/// preferência dele de fora, com o código no diário; sem provedor, saem de fora ele e o esforço. Bloqueante.
-pub(crate) fn server_settings(home: &Path, runtime: &Value, provider: Option<&str>, diag: &crate::diag::DiagClient) -> Vec<(&'static str, String)> {
+/// preferência dele de fora, com o código no diário (`runtime` `None`: o ditado e o Jev); sem provedor, saem de fora
+/// ele e o esforço. Bloqueante.
+pub(crate) fn server_settings(home: &Path, runtime: Option<&Value>, provider: Option<&str>, diag: &crate::diag::DiagClient) -> Vec<(&'static str, String)> {
     let on = |on: bool| if on { "on" } else { "off" }.to_owned();
     let unreadable = |code: &str| diag.report("telemetry.settings", "", code, "telemetria: preferência do servidor ilegível, fora do retrato");
     let mut values = Vec::new();
@@ -256,13 +281,19 @@ pub(crate) fn server_settings(home: &Path, runtime: &Value, provider: Option<&st
         Ok(consent) => values.push(("auto_report", consent.map_or("unanswered".to_owned(), on))),
         Err(_) => unreadable("telemetry_settings_auto_report_unreadable"),
     }
-    let text = |key: &str| runtime[key].as_str().map(str::trim).unwrap_or_default().to_owned();
-    let organization = text("dictation_organization_mode");
-    values.push(("dictation_org", if organization.is_empty() { "none".to_owned() } else { organization }));
-    // O primeiro serviço da lista é o que transcreve; sem lista, a chave Groq antiga.
-    let provider = runtime["transcription_providers"][0]["kind"].as_str().map(str::to_owned)
-        .or_else(|| (!text("groq_api_key").is_empty()).then(|| "groq".to_owned()));
-    values.push(("dictation_provider", provider.unwrap_or_else(|| "none".to_owned())));
+    match runtime {
+        Some(runtime) => {
+            let text = |key: &str| runtime[key].as_str().map(str::trim).unwrap_or_default().to_owned();
+            let organization = text("dictation_organization_mode");
+            values.push(("dictation_org", if organization.is_empty() { "none".to_owned() } else { organization }));
+            // O primeiro serviço da lista é o que transcreve; sem lista, a chave Groq antiga.
+            let provider = runtime["transcription_providers"][0]["kind"].as_str().map(str::to_owned)
+                .or_else(|| (!text("groq_api_key").is_empty()).then(|| "groq".to_owned()));
+            values.push(("dictation_provider", provider.unwrap_or_else(|| "none".to_owned())));
+            values.push(("jev", if runtime["jev"].as_bool() == Some(true) { "configured" } else { "no" }.to_owned()));
+        }
+        None => unreadable("telemetry_settings_runtime_unreadable"),
+    }
     match crate::connect::state::read(&home.join(".hangar").join("connect")) {
         Ok(linked) => values.push(("connect", on(linked.is_some()))),
         Err(_) => unreadable("telemetry_settings_connect_unreadable"),
@@ -274,29 +305,55 @@ pub(crate) fn server_settings(home: &Path, runtime: &Value, provider: Option<&st
     }
     let whatsapp = hangar_whatsapp::install::current(&hangar_whatsapp::install::Paths::new(home)).is_some();
     values.push(("whatsapp", if whatsapp { "installed" } else { "no" }.to_owned()));
-    values.push(("jev", if text("jev_api_key").is_empty() { "no" } else { "configured" }.to_owned()));
     values
 }
 
-fn count_settings<'a>(telemetry: &Telemetry, client: ClientKind, values: impl IntoIterator<Item = (&'a str, &'a str)>) {
+/// Conta os pares conhecidos e devolve as preferências que ficaram de fora, no nome da lista ou `other`.
+fn count_settings<'a>(telemetry: &Telemetry, client: ClientKind, values: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<&'static str> {
+    let mut dropped = Vec::new();
     for (name, value) in values {
-        let Some((setting, value)) = events::setting(name, value) else { continue };
+        let Some((setting, value)) = events::setting(name, value) else { dropped.push(known_setting(name)); continue };
         telemetry.count(Event::Settings, Dims::new().with("client", client).with("setting", setting).with("value", value), 1);
     }
+    dropped
+}
+
+fn known_setting(name: &str) -> &'static str {
+    events::SETTINGS.iter().find(|(known, _)| *known == name).map_or("other", |(known, _)| *known)
+}
+
+/// Uma linha por retrato, com até 8 nomes distintos da lista fechada.
+fn report_dropped(diag: &crate::diag::DiagClient, mut dropped: Vec<&'static str>) {
+    if dropped.is_empty() { return; }
+    let count = dropped.len();
+    dropped.sort_unstable();
+    dropped.dedup();
+    dropped.truncate(8);
+    diag.report_with("telemetry.settings", "", "telemetry_settings_dropped", "telemetria: preferência do retrato fora da lista ou sem texto",
+        json!({"settings": dropped.join(","), "count": count}));
 }
 
 /// `settings.snapshot` de um app: um por dia por cliente e aparelho (`aparelho`, o id que o app já guarda); sem id
 /// válido, um por dia por cliente. O id fica só no `once.json` desta máquina.
-fn settings_snapshot(telemetry: &Telemetry, client: ClientKind, item: &Value) {
+fn settings_snapshot(telemetry: &Telemetry, diag: &crate::diag::DiagClient, client: ClientKind, item: &Value) {
     let Some(values) = item["valores"].as_object() else { return };
     let device = item["aparelho"].as_str()
-        .filter(|id| (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
-        .unwrap_or_default();
-    // ponytail: um id novo por envio enche o `once.json` (64 marcas); só o próprio dono manda aqui.
-    match telemetry.once(&format!("settings:{}:{device}:{}", client.as_str(), telemetry.today())) {
-        Ok(true) => count_settings(telemetry, client, values.iter().filter_map(|(name, value)| Some((name.as_str(), value.as_str()?)))),
+        .filter(|id| (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+    if device.is_none() {
+        diag.report("telemetry.settings", "", "telemetry_settings_device_invalid", "telemetria: retrato sem id de aparelho válido, contado como um só");
+    }
+    match telemetry.once(&format!("settings:{}:{}:{}", client.as_str(), device.unwrap_or_default(), telemetry.today())) {
+        Ok(true) => {
+            let mut dropped = Vec::new();
+            let texts = values.iter().filter_map(|(name, value)| match value.as_str() {
+                Some(value) => Some((name.as_str(), value)),
+                None => { dropped.push(known_setting(name)); None }
+            }).collect::<Vec<_>>();
+            dropped.extend(count_settings(telemetry, client, texts));
+            report_dropped(diag, dropped);
+        }
         Ok(false) => {}
-        Err(e) => tracing::warn!(code = "telemetry_disk_failed", kind = ?e.kind(), "telemetria: retrato de preferências sem marca do dia"),
+        Err(e) => report(diag, Failure::Disk(e)),
     }
 }
 
@@ -333,16 +390,16 @@ fn ip_kind(ip: IpAddr) -> PeerKind {
 
 /// Conta as linhas da tela que a telemetria conhece, das `accepted` primeiras que o diário gravou
 /// (o resto a tela reenvia). Campo fora da lista vira `other`; texto nunca sai.
-pub(crate) fn count_screen(telemetry: &Telemetry, body: &[u8], accepted: usize) {
+pub(crate) fn count_screen(telemetry: &Telemetry, diag: &crate::diag::DiagClient, body: &[u8], accepted: usize) {
     let Ok(batch) = serde_json::from_slice::<Value>(body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body)) else { return };
     let items = match &batch { Value::Object(fields) => fields.get("eventos"), other => Some(other) };
     let Some(Value::Array(items)) = items else { return };
     for item in items.iter().take(accepted) {
-        screen_event(telemetry, item);
+        screen_event(telemetry, diag, item);
     }
 }
 
-fn screen_event(telemetry: &Telemetry, item: &Value) {
+fn screen_event(telemetry: &Telemetry, diag: &crate::diag::DiagClient, item: &Value) {
     let text = |key: &str| item[key].as_str().unwrap_or_default();
     let client = ClientKind::parse(text("cliente")).filter(|c| *c != ClientKind::Server).unwrap_or(ClientKind::Other);
     let took = item["ms"].as_u64();
@@ -368,7 +425,7 @@ fn screen_event(telemetry: &Telemetry, item: &Value) {
             let code = Code::known(&text("codigo").to_ascii_lowercase(), FATAL_CODES);
             telemetry.count(Event::ClientFatal, dims.with("code", code), 1);
         }
-        "settings.snapshot" => settings_snapshot(telemetry, client, item),
+        "settings.snapshot" => settings_snapshot(telemetry, diag, client, item),
         _ => {}
     }
 }
@@ -583,7 +640,7 @@ mod tests {
             // Fora das linhas que o diário gravou: a tela reenvia, e aqui não conta.
             {"evento": "app.visible_time", "ms": 900_000, "cliente": "ios"},
         ]}).to_string();
-        count_screen(&telemetry, body.as_bytes(), 7);
+        count_screen(&telemetry, &crate::diag::DiagClient::new(), body.as_bytes(), 7);
         let android = || Dims::new().with("client", ClientKind::Android);
         assert!(has(&telemetry, Event::AppVisibleMinutes, Dims::new().with("client", ClientKind::Ios), None, 5), "teto de 5 min");
         assert!(has(&telemetry, Event::ClientRoute, android().with("failed", false).with("route", Code::known("tailscale", ROUTES)), Some(Bucket::Lt300ms), 1));
@@ -608,7 +665,8 @@ mod tests {
         let snapshot = |client: &str, device: &str| json!({"evento": "settings.snapshot", "cliente": client, "aparelho": device,
             "valores": {"theme": "dark", "font": "Fira Code", "modelo": "opus", "tool_look": 3}});
         let body = |items: Vec<Value>| json!({"eventos": items}).to_string();
-        count_screen(&telemetry, body(vec![snapshot("native", "a-1"), snapshot("native", "a-1"), snapshot("native", "b-2"),
+        let diag = crate::diag::DiagClient::new();
+        count_screen(&telemetry, &diag, body(vec![snapshot("native", "a-1"), snapshot("native", "a-1"), snapshot("native", "b-2"),
             snapshot("ios", "a-1"), snapshot("server", "c-3")]).as_bytes(), 5);
         let count = |client: &str, setting: &str, value: &str| telemetry.counters().into_iter()
             .find(|c| c.event == "settings" && c.dims.get("client").map(String::as_str) == Some(client)
@@ -620,7 +678,7 @@ mod tests {
         assert_eq!(count("native", "font", "other"), 2, "nome de fonte sai other");
         assert_eq!(telemetry.counters().len(), 6, "preferência desconhecida e valor que não é texto ficam fora");
         now.fetch_add(24 * 60 * 60, Ordering::SeqCst);
-        count_screen(&telemetry, body(vec![snapshot("native", "a-1")]).as_bytes(), 1);
+        count_screen(&telemetry, &diag, body(vec![snapshot("native", "a-1")]).as_bytes(), 1);
         let wire = serde_json::to_string(&telemetry.counters()).unwrap();
         assert!(!wire.contains("Fira") && !wire.contains("a-1"), "{wire}");
         assert_eq!(telemetry.counters().len(), 2, "o dia novo é outro pacote, e o aparelho conta de novo");
@@ -635,25 +693,94 @@ mod tests {
         std::fs::write(hangar.join("auto-report.json"), r#"{"auto_report": false}"#).unwrap();
         let key = crate::session_defaults::scope_key("codex", "", "").unwrap();
         std::fs::write(hangar.join("session-defaults.json"), json!({key: {"model": "gpt-6.1-sol", "effort": "xhigh", "permission": ""}}).to_string()).unwrap();
-        let runtime = json!({"dictation_organization_mode": "harness", "groq_api_key": "gsk-segredo", "jev_api_key": "sk-segredo"});
+        let runtime = json!({"dictation_organization_mode": "harness", "groq_api_key": "gsk-segredo", "jev": true});
         let diag = crate::diag::DiagClient::new();
-        let values: BTreeMap<&str, String> = server_settings(home.path(), &runtime, Some("codex"), &diag).into_iter().collect();
+        let values: BTreeMap<&str, String> = server_settings(home.path(), Some(&runtime), Some("codex"), &diag).into_iter().collect();
         let expected: BTreeMap<&str, String> = [("conversation_beta", "on"), ("code_mode", "off"), ("default_provider", "codex"),
             ("default_effort", "xhigh"), ("auto_report", "off"), ("dictation_org", "harness"), ("dictation_provider", "groq"),
             ("connect", "off"), ("computer_use", "off"), ("whatsapp", "no"), ("jev", "configured")]
             .into_iter().map(|(k, v)| (k, v.to_owned())).collect();
         assert_eq!(values, expected);
-        let bare: BTreeMap<&str, String> = server_settings(home.path(), &json!({}), None, &diag).into_iter().collect();
+        let bare: BTreeMap<&str, String> = server_settings(home.path(), Some(&json!({})), None, &diag).into_iter().collect();
         assert_eq!((bare.get("default_provider"), bare["dictation_org"].as_str(), bare["dictation_provider"].as_str(), bare["jev"].as_str()),
             (None, "none", "none", "no"));
 
         let telemetry = test_telemetry(home.path(), true);
-        let values = server_settings(home.path(), &runtime, Some("codex"), &diag);
+        let values = server_settings(home.path(), Some(&runtime), Some("codex"), &diag);
         count_settings(&telemetry, ClientKind::Server, values.iter().map(|(name, value)| (*name, value.as_str())));
         assert_eq!(telemetry.counters().len(), values.len(), "nenhum valor sai other");
         assert!(telemetry.counters().iter().any(|c| c.dims["setting"] == "dictation_provider" && c.dims["value"] == "groq"));
         assert!(telemetry.counters().iter().all(|c| c.dims.get("client").map(String::as_str) == Some("server")));
         assert!(!serde_json::to_string(&telemetry.counters()).unwrap().contains("segredo"));
+    }
+
+    /// Os códigos que `diag` gravou em `dir`.
+    async fn diary_codes(diag: &crate::diag::DiagClient, dir: &Path) -> Vec<Value> {
+        diag.flush().await;
+        crate::diag::test_support::rows(dir).into_iter().filter(|row| row["codigo"].as_str().is_some_and(|c| c.starts_with("telemetry_"))).collect()
+    }
+
+    #[tokio::test]
+    async fn settings_snapshot_reports_what_it_drops_and_a_missing_device() {
+        let (home, diary) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let telemetry = test_telemetry(home.path(), true);
+        let diag = crate::diag::DiagClient::new().with_diary(Some(diary.path().to_owned()));
+        let body = json!({"eventos": [{"evento": "settings.snapshot", "cliente": "native",
+            "valores": {"theme": "dark", "modelo": "opus", "tool_look": 3}}]}).to_string();
+        count_screen(&telemetry, &diag, body.as_bytes(), 1);
+        let rows = diary_codes(&diag, diary.path()).await;
+        let row = |code: &str| rows.iter().find(|row| row["codigo"] == code).cloned();
+        assert!(row("telemetry_settings_device_invalid").is_some(), "{rows:?}");
+        let dropped = row("telemetry_settings_dropped").expect("o que saiu do retrato vai ao diário");
+        assert_eq!((dropped["settings"].as_str(), dropped["count"].as_u64()), (Some("other,tool_look"), Some(2)), "nome fora da lista sai other");
+        assert!(!rows.iter().any(|row| row.to_string().contains("modelo") || row.to_string().contains("opus")));
+
+        // Marca do dia que não se grava vai ao diário, como a fila.
+        let marks = home.path().join(".hangar/telemetry/once.json");
+        std::fs::remove_file(&marks).unwrap();
+        std::fs::create_dir_all(&marks).unwrap();
+        let body = json!({"eventos": [{"evento": "settings.snapshot", "cliente": "ios", "aparelho": "b-2", "valores": {"theme": "dark"}}]}).to_string();
+        count_screen(&telemetry, &diag, body.as_bytes(), 1);
+        assert!(diary_codes(&diag, diary.path()).await.iter().any(|row| row["codigo"] == "telemetry_disk_failed"));
+    }
+
+    #[tokio::test]
+    async fn runtime_settings_come_from_the_environment_and_an_unreadable_file_leaves_them_out() {
+        let (home, diary) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        // Impede que a descoberta da instalação leia o .env do checkout da máquina.
+        std::fs::create_dir_all(home.path().join(".hangar/current")).unwrap();
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        std::fs::write(home.path().join(".claude/settings.json"), r#"{"env": {"TYPESAFE_API_KEY": "tsk-segredo"}}"#).unwrap();
+        let env = crate::accounts::environment::AccountEnvironment::from_map([
+            ("HOME".into(), home.path().display().to_string()), ("USERPROFILE".into(), home.path().display().to_string()),
+            ("CP_GROQ_API_KEY".into(), "gsk-segredo".into()), ("CP_DICTATION_ORGANIZATION_MODE".into(), "harness".into()),
+        ].into());
+        let config = crate::config_sync::runtime::RuntimeConfig::new(env).unwrap();
+        let diag = crate::diag::DiagClient::new().with_diary(Some(diary.path().to_owned()));
+        let runtime = effective_runtime(&config, None).unwrap();
+        let values: BTreeMap<&str, String> = server_settings(home.path(), Some(&runtime), None, &diag).into_iter().collect();
+        assert_eq!((values["dictation_org"].as_str(), values["dictation_provider"].as_str(), values["jev"].as_str()),
+            ("harness", "groq", "configured"));
+
+        std::fs::write(&config.path, "{").unwrap();
+        assert!(effective_runtime(&config, None).is_err());
+        let values: BTreeMap<&str, String> = server_settings(home.path(), None, None, &diag).into_iter().collect();
+        assert!(!values.contains_key("dictation_org") && !values.contains_key("dictation_provider") && !values.contains_key("jev"));
+        assert!(values.contains_key("connect"), "o resto do retrato sai");
+        assert!(diary_codes(&diag, diary.path()).await.iter().any(|row| row["codigo"] == "telemetry_settings_runtime_unreadable"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn provider_discovery_that_hangs_times_out_without_provider() {
+        let (home, diary) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let telemetry = test_telemetry(home.path(), true);
+        let peers = Arc::new(PeerClient::new(PeerBook::new(None)));
+        let diag = crate::diag::DiagClient::new().with_diary(Some(diary.path().to_owned()));
+        let seen = Arc::new(std::sync::Mutex::new(Some("não lido".to_owned())));
+        let read = { let seen = seen.clone(); move |p: Option<String>| { *seen.lock().unwrap() = p; Vec::new() } };
+        assert!(daily_snapshot(telemetry, peers, diag.clone(), || std::future::pending::<Option<String>>(), read).await.unwrap().unwrap());
+        assert_eq!(*seen.lock().unwrap(), None, "o retrato sai sem o provedor");
+        assert!(diary_codes(&diag, diary.path()).await.iter().any(|row| row["codigo"] == "telemetry_settings_provider_timeout"));
     }
 
     #[test]
@@ -695,7 +822,7 @@ mod tests {
         let round = || {
             let calls = calls.clone();
             let discover = move || { calls.fetch_add(1, Ordering::SeqCst); async { Some("codex".to_owned()) } };
-            daily_snapshot(telemetry.clone(), peers.clone(), discover, |p: Option<String>| vec![("default_provider", p.unwrap_or_default())])
+            daily_snapshot(telemetry.clone(), peers.clone(), crate::diag::DiagClient::new(), discover, |p: Option<String>| vec![("default_provider", p.unwrap_or_default())])
         };
         let marks = home.path().join(".hangar/telemetry/once.json");
         std::fs::create_dir_all(&marks).unwrap();

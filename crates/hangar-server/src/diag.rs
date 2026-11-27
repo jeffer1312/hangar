@@ -58,7 +58,7 @@ async fn reply(st: &AppState, peer: SocketAddr, req: Request) -> Response {
     let base = diary_base(st);
     if req.method() == Method::POST {
         let telemetry = screen_telemetry(st, &req, guest);
-        return record_screen_events(base, req, telemetry).await;
+        return record_screen_events(base, req, telemetry, st.diag.clone()).await;
     }
     // O pedido não atravessa a espera: `&Request` tiraria o `Send` do handler.
     let (headers, query) = (req.headers().clone(), req.uri().query().map(str::to_owned));
@@ -84,7 +84,7 @@ fn screen_telemetry(st: &AppState, req: &Request, guest: bool) -> Option<Arc<Tel
     st.telemetry.clone().filter(|t| t.enabled() && !guest && !crate::telemetry_routes::guest(req))
 }
 
-async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Option<Arc<Telemetry>>) -> Response {
+async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Option<Arc<Telemetry>>, diag: DiagClient) -> Response {
     let body = match hangar_core::http_body_limit::read(req.into_body()).await {
         Ok(body) => body,
         Err(error) if hangar_core::http_body_limit::is_limit(&error) => return hangar_core::http_body_limit::rejected(),
@@ -99,7 +99,7 @@ async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Op
         };
         // Só o que o diário gravou: o lote recusado a tela reenvia, e contaria duas vezes.
         if let (Ok(accepted), Some(telemetry)) = (&written, &telemetry) {
-            crate::telemetry_routes::count_screen(telemetry, &body, *accepted);
+            crate::telemetry_routes::count_screen(telemetry, &diag, &body, *accepted);
         }
         written
     }).await;
@@ -532,7 +532,7 @@ mod telemetry_tests {
         let req = post(true);
         let counted = screen_telemetry(&st, &req, false);
         assert!(counted.is_none());
-        assert_eq!(record_screen_events(Some(diary.path().to_owned()), req, counted).await.status(), StatusCode::OK);
+        assert_eq!(record_screen_events(Some(diary.path().to_owned()), req, counted, DiagClient::new()).await.status(), StatusCode::OK);
         assert_eq!(test_support::rows(diary.path()).iter().filter(|row| row["evento"] == "app.visible_time").count(), 1);
         assert!(telemetry.counters().is_empty());
         // Convidado que o porteiro já decidiu (`Caller::Guest`) também não conta.
@@ -540,7 +540,7 @@ mod telemetry_tests {
 
         let req = post(false);
         let counted = screen_telemetry(&st, &req, false);
-        record_screen_events(Some(diary.path().to_owned()), req, counted).await;
+        record_screen_events(Some(diary.path().to_owned()), req, counted, DiagClient::new()).await;
         assert_eq!(telemetry.counters(), vec![Counter::new(Event::AppVisibleMinutes, Dims::new().with("client", ClientKind::Ios), None, 5)]);
     }
 

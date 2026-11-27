@@ -102,12 +102,14 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'valores' | 'apare
     if (ms > 0) registrar({ evento: 'app.visible_time', ms });
   };
   // A fila do transporte reenvia até o servidor gravar: o dia fica marcado quando o retrato entra nela.
-  let settingsDay = '';
+  // Um dia por máquina: cada servidor conta os aparelhos dele, e trocar a ativa manda o retrato a ela.
+  const settingsDay = new Map<string, string>();
   const settingsSnapshot = () => {
     const today = new Date().toISOString().slice(0, 10);
-    if (!settings || settingsDay === today || !ativaPropria()) return;
-    settingsDay = today;
-    registrar({ evento: 'settings.snapshot', ...settings() });
+    const destino = ativaPropria()?.replace(/\/+$/, '');
+    if (!settings || !destino || settingsDay.get(destino) === today) return;
+    settingsDay.set(destino, today);
+    registrar({ evento: 'settings.snapshot', ...settings() }, destino);
   };
   setInterval(() => { visibleTime(); settingsSnapshot(); void transporte.enviar(); }, VISIBLE_EVERY_MS);
   useServers.subscribe(() => { settingsSnapshot(); void transporte.enviar(); replay(); });
