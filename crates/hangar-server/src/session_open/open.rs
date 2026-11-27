@@ -376,7 +376,7 @@ impl WorktreeUndo {
     pub async fn undo(self) -> Result<(), OpenError> {
         let failed = |detail: String| OpenError::new(500, "erro_criacao_sessao", format!("falha ao desfazer a worktree: {detail}"));
         tokio::task::spawn_blocking(move || {
-            let made = hangar_workspace::git::Worktree { path: self.path.clone(), created: true, branch_created: self.branch_created };
+            let made = hangar_workspace::git::Worktree { path: self.path.clone(), branch: self.branch.clone(), created: true, branch_created: self.branch_created };
             hangar_workspace::git::undo_worktree(Path::new(&self.source), &made, &self.branch)
                 .map_err(|e| e.detail.as_str().map_or_else(|| e.detail.to_string(), str::to_owned))
         }).await.map_err(|e| failed(e.to_string()))?.map_err(failed)
@@ -455,11 +455,11 @@ async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCal
         }).await.map_err(|_| creation("a criação da worktree não terminou"))?
             .map_err(|e| OpenError::new(e.status, "erro_criacao_sessao", e.detail.as_str().map_or_else(|| e.detail.to_string(), str::to_owned)))?;
         if made.created {
-            undo = Some(WorktreeUndo { source: spec.cwd.clone(), path: made.path.clone(), branch: spec.worktree.as_ref().unwrap().branch.clone(),
+            undo = Some(WorktreeUndo { source: spec.cwd.clone(), path: made.path.clone(), branch: made.branch.clone(),
                 branch_created: made.branch_created });
         }
         spec.cwd = made.path.clone();
-        if let Some(w) = spec.worktree.as_mut() { w.path = Some(made.path); }
+        if let Some(w) = spec.worktree.as_mut() { w.path = Some(made.path); w.branch = made.branch; }
         if read_only.is_some() {
             match read_only_prefix(host, &spec.cwd, read_only_home.as_deref()).await {
                 Ok(prefix) => read_only = Some(prefix),

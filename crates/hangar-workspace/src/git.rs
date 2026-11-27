@@ -421,11 +421,14 @@ pub fn create_worktree_at(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Worktree {
     pub path: String,
+    /// A branch em que a worktree abriu: a pedida, ou ela com o sufixo quando o nome já existia.
+    pub branch: String,
     pub created: bool,
     pub branch_created: bool,
 }
 /// Texto que separa "pasta ocupada" das outras recusas 409 (o Python compara o mesmo).
 pub const TARGET_TAKEN: &str = "destino da worktree já existe";
+const BRANCH_TAKEN: &str = "já existe uma branch com esse nome";
 fn create_worktree_in(
     cwd: &Path, branch: &str, name: &str, root: &Path,
     new_branch: bool, base: Option<&str>, location: &Path,
@@ -452,7 +455,7 @@ fn create_worktree_in(
             return Err(error(400, "nome de branch inválido"));
         }
         if known(branch) {
-            return Err(error(409, "já existe uma branch com esse nome"));
+            return Err(error(409, BRANCH_TAKEN));
         }
         start = base
             .filter(|b| !b.is_empty())
@@ -467,7 +470,7 @@ fn create_worktree_in(
             return Err(error(400, "branch inexistente"));
         }
         if current.as_deref() == Some(branch) {
-            return Ok(Worktree { path: cwd.to_string_lossy().into_owned(), created: false, branch_created: false });
+            return Ok(Worktree { path: cwd.to_string_lossy().into_owned(), branch: branch.to_owned(), created: false, branch_created: false });
         }
     }
     if name.is_empty() || name.contains(['/', '\\', '\0']) || matches!(name, "." | "..") {
@@ -526,7 +529,7 @@ fn create_worktree_in(
         }
     }
     copy_ignored(&main, &target);
-    Ok(Worktree { path: text.into_owned(), created: true, branch_created })
+    Ok(Worktree { path: text.into_owned(), branch: branch.to_owned(), created: true, branch_created })
 }
 /// As branches que a criação confere, num `git` só: cada processo custa caro no Windows carregado,
 /// e o `branches()` da tela ainda roda `status` e `worktree list`, que aqui não servem.
@@ -556,7 +559,7 @@ fn refs(cwd: &Path) -> Result<(Vec<String>, Vec<String>, Option<String>)> {
     Ok((local, remotes, current))
 }
 /// `create_branch_worktree`: a pasta leva o nome da branch (`stem`, já saneado); ocupada, ganha
-/// `-2`, `-3`… até `-99`. Só a pasta ocupada provoca nova tentativa.
+/// `-2`, `-3`… até `-99`. Branch nova com nome já usado ganha o mesmo sufixo: o nome não importa.
 pub fn create_branch_worktree(
     cwd: &Path,
     branch: &str,
@@ -566,10 +569,13 @@ pub fn create_branch_worktree(
     base: Option<&str>,
     location: &Path,
 ) -> Result<Worktree> {
+    let mut branch_taken = false;
     for n in 1..100 {
-        let name = if n == 1 { stem.to_owned() } else { format!("{stem}-{n}") };
-        match create_worktree_in(cwd, branch, &name, root, new_branch, base, location) {
+        let suffixed = |s: &str| if n == 1 { s.to_owned() } else { format!("{s}-{n}") };
+        let wanted = if branch_taken { suffixed(branch) } else { branch.to_owned() };
+        match create_worktree_in(cwd, &wanted, &suffixed(stem), root, new_branch, base, location) {
             Err(e) if e.detail == TARGET_TAKEN => continue,
+            Err(e) if new_branch && e.detail == BRANCH_TAKEN => branch_taken = true,
             other => return other,
         }
     }
