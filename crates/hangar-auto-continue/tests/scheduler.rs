@@ -25,6 +25,8 @@ struct Note {
 struct Fake {
     start: Instant,
     facts: Mutex<Option<Facts>>,
+    /// A lista não se lê, com este código.
+    facts_error: Mutex<Option<String>>,
     /// Quanto o servidor demora a dar os fatos.
     facts_delay: Mutex<Duration>,
     send: Mutex<Result<bool, String>>,
@@ -43,6 +45,7 @@ impl Fake {
         Arc::new(Self {
             start: Instant::now(),
             facts: Mutex::new(Some(Facts { life: "L1".into(), state: "idle".into(), ..Facts::default() })),
+            facts_error: Mutex::new(None),
             facts_delay: Mutex::new(Duration::ZERO),
             send: Mutex::new(Ok(true)),
             fails_left: Mutex::new(0),
@@ -84,13 +87,16 @@ impl Fake {
 }
 
 impl Host for Fake {
-    fn facts<'a>(&'a self, _name: &'a str) -> BoxFuture<'a, Option<Facts>> {
+    fn facts<'a>(&'a self, _name: &'a str) -> BoxFuture<'a, Result<Option<Facts>, String>> {
         Box::pin(async move {
             let delay = *self.facts_delay.lock().unwrap();
             if !delay.is_zero() {
                 tokio::time::sleep(delay).await;
             }
-            self.facts.lock().unwrap().clone()
+            if let Some(code) = self.facts_error.lock().unwrap().clone() {
+                return Err(code);
+            }
+            Ok(self.facts.lock().unwrap().clone())
         })
     }
     fn probe_target(&self, _name: &str) -> Option<String> {
@@ -521,4 +527,27 @@ async fn a_busy_session_gives_up() {
         assert!(fake.probes().is_empty(), "{code}");
         assert_eq!(fake.diary(), [format!("auto_continue_skipped:{code}")]);
     }
+}
+
+/// Lista ilegível por um instante não é sessão sumida: a parada segue esperando e continua quando a lista volta.
+#[tokio::test(start_paused = true)]
+async fn an_unreadable_list_keeps_the_wait() {
+    let fake = Fake::new();
+    *fake.facts_error.lock().unwrap() = Some("mux_unavailable".into());
+    let run = start(&fake);
+    run.send(Command::Stop(hit("s", "line-1", StopKind::Network, fake.clock())));
+    settle().await;
+    assert_eq!(fake.last_note().meta["state"], "waiting");
+    wait(60).await;
+    assert!(fake.probes().is_empty(), "sem os fatos não sonda");
+    assert!(fake.sends().is_empty());
+    assert_eq!(fake.last_note().meta["state"], "waiting");
+    assert!(fake.diary().iter().all(|code| code == "auto_continue_facts_unreadable:mux_unavailable"), "{:?}", fake.diary());
+    assert!(!fake.diary().is_empty());
+    *fake.facts_error.lock().unwrap() = None;
+    wait(60).await;
+    assert_eq!(fake.sends().len(), 1);
+    assert_eq!(fake.sends()[0].2, text::TRANSIENT);
+    assert_eq!(fake.last_note().meta["state"], "continued");
+    assert!(!fake.diary().iter().any(|code| code.starts_with("auto_continue_skipped")), "{:?}", fake.diary());
 }

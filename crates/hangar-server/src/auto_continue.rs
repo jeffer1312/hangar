@@ -118,16 +118,16 @@ impl Native {
     }
 
     /// As linhas da lista do dono; a assinatura recém-nascida espera a primeira produção, e a lista em erro
-    /// cai na produção avulsa.
-    async fn rows(&self) -> Option<Arc<Vec<SessionRow>>> {
+    /// cai na produção avulsa. `Err` com o código quando nenhuma das duas se leu.
+    async fn rows(&self) -> Result<Arc<Vec<SessionRow>>, String> {
         let sub = self.subscription();
         let start = tokio::time::Instant::now();
         loop {
-            if let Some(rows) = sub.rows() { return Some(rows) }
+            if let Some(rows) = sub.rows() { return Ok(rows) }
             if start.elapsed() >= FIRST_LIST { break }
             tokio::time::sleep(POLL).await;
         }
-        self.st.list.snapshot().await.ok().map(|produced| produced.rows)
+        self.st.list.snapshot().await.map(|produced| produced.rows).map_err(|error| error.code.to_owned())
     }
 
     /// O endereço do motor da sessão, quando ela roda num.
@@ -177,10 +177,10 @@ fn loopback(host: &str) -> bool {
 }
 
 impl Host for Native {
-    fn facts<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Option<Facts>> {
+    fn facts<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<Facts>, String>> {
         Box::pin(async move {
             let rows = self.rows().await?;
-            let row = rows.iter().find(|row| row.name == name)?;
+            let Some(row) = rows.iter().find(|row| row.name == name) else { return Ok(None) };
             let id = format!("autocont-load:{}", crate::mods::state::random_hex(8));
             // Fila que não se lê (sessão adormecida, sem ator) não prova mensagem nenhuma esperando.
             let queue = match self.runtime.queue_action(name, id, crate::runtime::queue::Action::Load).await {
@@ -188,7 +188,7 @@ impl Host for Native {
                 _ => Vec::new(),
             };
             let stopped_at = lock(&self.stops).get(name).map(|(at, _)| *at);
-            Some(facts_of(row, &rows, &queue, stopped_at, self.runtime.handoff_held(name)))
+            Ok(Some(facts_of(row, &rows, &queue, stopped_at, self.runtime.handoff_held(name))))
         })
     }
 

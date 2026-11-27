@@ -183,6 +183,12 @@ impl Ledger {
         self.save();
     }
 
+    /// A pessoa escreveu: as continuações antes da mensagem dela não são seguidas. A janela da hora e as
+    /// chaves seguem valendo.
+    pub fn person_wrote(&mut self, session: &str) {
+        self.real_reply(session);
+    }
+
     /// Grava a parada que espera a rede; a da sessão, se havia, é trocada.
     pub fn park(&mut self, session: &str, waiting: Waiting) {
         self.doc.sessions.entry(session.to_owned()).or_default().waiting = Some(waiting);
@@ -377,6 +383,18 @@ mod tests {
         assert_eq!(ledger.allow("old", Source::Transient, "c", StopKind::Network, 20.0), Ok(()));
         let mut ledger = Ledger::load(file);
         assert_eq!(ledger.allow("new", Source::Transient, "a", StopKind::Network, 20.0), Err(Cap::Once));
+    }
+
+    #[test]
+    fn a_person_message_breaks_the_chain_but_not_the_hour() {
+        let (_home, mut ledger) = ledger();
+        try_continue(&mut ledger, Source::LoginRetry, "a", StopKind::Other, 0.0).unwrap();
+        try_continue(&mut ledger, Source::LoginRetry, "b", StopKind::Other, 10.0).unwrap();
+        assert_eq!(ledger.allow("s", Source::LoginRetry, "c", StopKind::Other, 20.0), Err(Cap::Chain));
+        ledger.person_wrote("s");
+        assert_eq!(try_continue(&mut ledger, Source::LoginRetry, "c", StopKind::Other, 30.0), Ok(()));
+        ledger.person_wrote("s");
+        assert_eq!(ledger.allow("s", Source::LoginRetry, "d", StopKind::Other, 40.0), Err(Cap::Hourly));
     }
 
     /// O caso de 13/11: quatro logins recusados em 38 s, cada um com sua linha.

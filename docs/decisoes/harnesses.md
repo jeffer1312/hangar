@@ -9,8 +9,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   perdido ou 5xx (este uma vez por corrente) continuam quando a sondagem compartilhada alcança o
   provedor, até 2 h depois da parada. Toda continuação automática, inclusive a troca de conta no limite
   e o login recusado, passa pelo `Ledger` de `hangar-auto-continue` antes de reabrir: uma por linha de
-  erro, 2 seguidas sem resposta real (a corrente expira em 30 min), 3 por hora. Barrada, nada reabre e
-  nenhuma conta fica gasta. A espera é nota neutra na conversa, nunca faixa. Reboot da máquina continua
+  erro, 2 seguidas sem resposta real (a corrente expira em 30 min), 3 por hora. Na troca de conta o teto
+  só vale para o turno que o próprio Hangar começou com um "continue", e a mensagem da pessoa zera a
+  corrente. Barrada, nada reabre e nenhuma conta fica gasta. A espera é nota neutra na conversa, nunca faixa. Reboot da máquina continua
   uma vez com ressalva; falta de memória só pelo botão. O retorno da filha ligada pula o "continue"
   automático ao decidir quem pediu o turno. Ver
   [continuar sozinho](#continuar-sozinho-depois-de-parada-passageira-27112026).

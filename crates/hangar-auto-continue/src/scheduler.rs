@@ -63,8 +63,9 @@ pub struct Facts {
 
 /// O que a agenda usa do servidor; nos testes, um falso que registra as chamadas.
 pub trait Host: Send + Sync {
-    /// `None`: a sessão não está mais na lista.
-    fn facts<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Option<Facts>>;
+    /// `Ok(None)`: a sessão não está mais na lista. `Err` com o código: a lista não se leu, o que não prova
+    /// que a sessão mudou.
+    fn facts<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<Facts>, String>>;
     /// Quem a sessão precisa alcançar: `api.anthropic.com:443`, o endereço do motor… `None` não espera a rede.
     fn probe_target(&self, name: &str) -> Option<String>;
     /// `Ok(true)`: entregue; `Ok(false)`: na fila da sessão, esperando a vez.
@@ -244,11 +245,14 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
         }
         // Na hora da parada o estado ao vivo ainda pode estar virando; trabalhando, fila e pergunta são
         // conferidos no tique e antes do envio.
-        let facts = self.host.facts(&name).await;
-        if let Some(why) = give_up(&hit, facts.as_ref(), false) {
-            self.skip_diary(&name, why);
-            self.ledger().end(&name, &key, now);
-            return;
+        match self.host.facts(&name).await {
+            Ok(facts) => if let Some(why) = give_up(&hit, facts.as_ref(), false) {
+                self.skip_diary(&name, why);
+                self.ledger().end(&name, &key, now);
+                return;
+            },
+            // Espera assim mesmo: o tique relê antes de sondar.
+            Err(code) => self.unreadable(&name, &code),
         }
         let allowed = self.ledger().allow(&name, Source::Transient, &key, hit.kind, now);
         if let Err(cap) = allowed {
@@ -291,8 +295,14 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
             let why = if self.host.now() - parked.hit.at > STALE_S {
                 Some("stale")
             } else {
-                let facts = self.host.facts(&name).await;
-                self.parked.get(&name).and_then(|parked| give_up(&parked.hit, facts.as_ref(), true))
+                match self.host.facts(&name).await {
+                    Ok(facts) => self.parked.get(&name).and_then(|parked| give_up(&parked.hit, facts.as_ref(), true)),
+                    // Sem os fatos não sonda nem desiste: o próximo tique relê.
+                    Err(code) => {
+                        self.unreadable(&name, &code);
+                        continue;
+                    }
+                }
             };
             if let Some(why) = why {
                 if let Some(parked) = self.parked.remove(&name) {
@@ -334,6 +344,17 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
         if self.due_key(name).as_ref() != Some(&key) {
             return;
         }
+        let facts = match facts {
+            Ok(facts) => facts,
+            // Sem os fatos não dá para saber se a pessoa escreveu ou se o turno andou: volta a esperar o tique.
+            Err(code) => {
+                self.unreadable(name, &code);
+                if let Some(parked) = self.parked.get_mut(name) {
+                    parked.send_at = None;
+                }
+                return;
+            }
+        };
         let Some(parked) = self.parked.remove(name) else { return };
         if let Some(why) = give_up(&parked.hit, facts.as_ref(), true) {
             return self.finish(name, parked, End::Skipped(why.to_owned())).await;
@@ -387,6 +408,10 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
         };
         meta["state"] = json!(state);
         self.note(name, &mut parked, state, text, meta).await;
+    }
+
+    fn unreadable(&self, name: &str, code: &str) {
+        self.host.diary(name, &format!("auto_continue_facts_unreadable:{code}"), "continuar sozinho: a lista não se leu; a parada segue esperando");
     }
 
     fn skip_diary(&self, name: &str, why: &str) {
