@@ -205,7 +205,7 @@ impl Hangar {
 
     pub(super) fn apply_preview_update(&mut self,update: ChatUpdate,cx: &mut Context<Self>) {
         match update {
-            ChatUpdate::Message(event)=>{self.confirm_chat_message(&event);self.chat.apply(event);}
+            ChatUpdate::Message(event)=>{self.confirm_chat_message(&event,None,cx);self.chat.apply(event);}
             // Como na conversa aberta: só troca a nota que a prévia já mostra.
             ChatUpdate::NoticeUpdate(event)=>{if self.chat.events.iter().any(|known|known.id==event.id) {self.chat.apply(event);}}
             ChatUpdate::Preview(preview)=>{self.chat.update_preview(preview);self.visible_preview=self.chat.preview.clone();}
@@ -605,7 +605,9 @@ impl Hangar {
                     }
                     if let Some(events) = history.events {
                         this.has_older = events.len() >= limit;
-                        if let Some(key) = this.selected_key() { this.delivery.confirm_history(&key, &events); }
+                        if let Some(key) = this.selected_key() && let Some(arrived) = this.delivery.confirm_history(&key, &events) {
+                            this.uncertain_arrived(&key, arrived, None, cx);
+                        }
                         this.chat.merge_history(events);
                     }
                     (this.loading, this.history_installed) = (false, true);
