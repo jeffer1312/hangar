@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path as UrlPath, State};
 use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::delete;
 use hangar_server::accounts::{AccountService, environment::AccountEnvironment};
 use hangar_server::connect::devices::Store;
@@ -28,12 +29,20 @@ struct Account {
     removed: Mutex<Vec<String>>,
 }
 
-async fn remove(State(account): State<Arc<Account>>, UrlPath(id): UrlPath<String>, headers: HeaderMap) -> StatusCode {
+/// `sumida`: a conta já não tem a máquina e responde como o serviço; `fora-do-servico`: 404 de quem está no caminho.
+async fn remove(State(account): State<Arc<Account>>, UrlPath(id): UrlPath<String>, headers: HeaderMap) -> Response {
     if !headers.get(header::AUTHORIZATION).is_some_and(|value| value.as_bytes() == format!("Bearer {MACHINE_KEY}").as_bytes()) {
-        return StatusCode::UNAUTHORIZED;
+        return StatusCode::UNAUTHORIZED.into_response();
     }
-    account.removed.lock().unwrap().push(id);
-    StatusCode::NO_CONTENT
+    match id.as_str() {
+        "sumida" => (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "application/json")],
+            json!({"error": "não encontrado", "reason": null}).to_string()).into_response(),
+        "fora-do-servico" => (StatusCode::NOT_FOUND, "<html>404 Not Found</html>").into_response(),
+        _ => {
+            account.removed.lock().unwrap().push(id);
+            StatusCode::NO_CONTENT.into_response()
+        }
+    }
 }
 
 async fn spawn_service() -> (Arc<Account>, SocketAddr) {
@@ -150,6 +159,26 @@ async fn every_entry_the_account_list_shows_as_added_goes() {
     assert!(peers.get("lab").is_some(), "{peers}");
 }
 
+/// Só o 404 do serviço vale como "já saiu da conta"; outro 404 não prova nada e deixa o peers.json como estava.
+#[tokio::test]
+async fn only_the_service_not_found_counts_as_already_removed() {
+    let m = machine().await;
+    let peers = json!({
+        "sumida": {"base_url": "https://sumida.acme.hangar.dev.br", "token": "senha-da-sumida"},
+        "fora-do-servico": {"base_url": "https://fora-do-servico.acme.hangar.dev.br", "token": "senha-da-outra"}});
+    m.write_peers(&peers);
+
+    let (status, body) = remove_machine(&m, "fora-do-servico").await;
+    assert_eq!(status, 502, "{body}");
+    assert_eq!(body["detail"]["code"], "connect_machine_remove_unavailable");
+    assert_eq!(m.peers(), peers, "a remoção não foi atendida: a lista fica");
+
+    let (status, body) = remove_machine(&m, "sumida").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["peers_removed"], json!(["sumida"]), "já fora da conta: só falta tirar daqui");
+    assert!(m.peers().get("fora-do-servico").is_some());
+}
+
 #[tokio::test]
 async fn a_peer_list_that_cannot_be_changed_says_the_machine_is_still_there() {
     let m = machine().await;
@@ -172,10 +201,12 @@ async fn the_device_list_tells_which_credential_went_to_which_machine() {
     let row = |id: &str| rows.iter().find(|row| row["device_id"] == id).cloned().unwrap();
     assert_eq!(row(&issued)["peer"], "notebook");
     assert!(row(&app).get("peer").is_none(), "app não ganha o campo: {}", row(&app));
+    assert!(rows.iter().all(|row| row["peers_checked"] == true), "peers.json lido: a falta de peer quer dizer app: {rows:?}");
 
     std::fs::write(m.peers_path(), "{quebrado").unwrap();
     let (status, rows) = devices(&m).await;
     assert_eq!(status, 200, "peers.json ilegível não derruba a lista");
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|row| row.get("peer").is_none()), "{rows:?}");
+    assert!(rows.iter().all(|row| row["peers_checked"] == false), "sem peers.json ninguém é dado como app: {rows:?}");
 }

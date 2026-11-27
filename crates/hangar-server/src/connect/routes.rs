@@ -142,7 +142,8 @@ async fn status(State(st): State<Arc<AppState>>, req: Request) -> Response {
 }
 
 /// `peer`: a entrada do `peers.json` para a qual esta máquina emitiu a credencial. É o que separa as
-/// credenciais dadas a outros computadores dos apps.
+/// credenciais dadas a outros computadores dos apps. `peers_checked` diz que o `peers.json` foi lido: sem ele,
+/// a falta de `peer` não prova que a credencial é de um app.
 async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
     if let Err(response) = owner_gate(&st, peer, &req).await {
@@ -150,8 +151,9 @@ async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<So
     }
     let issued = issued_to_peers(&st);
     let rows: Vec<Value> = st.connect_devices.list().into_iter().map(|row| {
-        let peer = issued.get(&row.device_id).cloned();
+        let peer = issued.as_ref().and_then(|issued| issued.get(&row.device_id).cloned());
         let mut value = json!(row);
+        value["peers_checked"] = json!(issued.is_some());
         if let Some(peer) = peer {
             value["peer"] = json!(peer);
         }
@@ -160,20 +162,20 @@ async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<So
     reply(&headers, StatusCode::OK, json!(rows))
 }
 
-/// `connect_return_device` de cada entrada → id dela. Sem `peers.json` legível a lista sai sem o campo: os
-/// aparelhos não dependem dele.
-fn issued_to_peers(st: &Arc<AppState>) -> HashMap<String, String> {
-    let store = match crate::machine_peers::Service::from_state(st) {
-        Ok(service) => service.store,
+/// `connect_return_device` de cada entrada → id dela. Sem `peers.json` legível, `None`: a lista sai assim
+/// mesmo, porque os aparelhos não dependem dele.
+fn issued_to_peers(st: &Arc<AppState>) -> Option<HashMap<String, String>> {
+    let read = crate::machine_peers::Service::from_state(st).and_then(|service| service.store.read());
+    let book = match read {
+        Ok(book) => book,
         Err(failure) => {
             tracing::warn!(code = failure.code, "aparelhos do Connect listados sem as máquinas: {}", failure.msg);
-            return HashMap::new();
+            return None;
         }
     };
-    let book = store.tolerant();
-    (&book).into_iter()
+    Some((&book).into_iter()
         .filter_map(|(key, entry)| Some((entry["connect_return_device"].as_str()?.to_owned(), key.clone())))
-        .collect()
+        .collect())
 }
 
 async fn approve(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {

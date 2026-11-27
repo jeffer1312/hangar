@@ -544,6 +544,34 @@ describe('remover um computador da conta', () => {
 
     expect(servers().map((server) => server.id)).toEqual(['pc1', 'pc9']);
   });
+
+  it('já fora da conta (404) conta como feito: tira o servidor dele e relê a lista', async () => {
+    await seed([entry, other]);
+    const calls = network({ route: (call) => {
+      if (call.url.pathname === '/v1/machines/pc1' && call.method === 'DELETE') return json({ error: 'não encontrado', reason: null }, 404);
+      if (call.url.pathname === '/v1/machines') return json([]);
+      return undefined;
+    } });
+
+    await connect().removeMachine(online);
+
+    expect(servers().map((server) => server.id)).toEqual(['pc9']);
+    const remove = calls.findIndex((call) => call.method === 'DELETE' && call.url.pathname === '/v1/machines/pc1');
+    expect(calls.slice(remove).some((call) => call.method === 'GET' && call.url.pathname === '/v1/machines')).toBe(true);
+    expect(connect().machines).toEqual([]);
+  });
+
+  it('sessão que o serviço recusou (401) derruba a conta e não tira o servidor', async () => {
+    await seed([entry, other]);
+    network({ route: (call) => (call.method === 'DELETE' && call.url.pathname === '/v1/machines/pc1' ? json({ error: 'sessão' }, 401) : undefined) });
+
+    await expect(connect().removeMachine(online)).rejects.toThrow(m.connect_session_ended());
+
+    expect(connect().account).toBeNull();
+    expect(connect().notice).toBe(m.connect_session_ended());
+    expect(vault.has(ACCOUNT_KEY)).toBe(false);
+    expect(servers().map((server) => server.id)).toEqual(['pc1', 'pc9']);
+  });
 });
 
 describe('aparelho da conta', () => {

@@ -505,7 +505,14 @@ export const useConnect = create<ConnectState>((set, get) => {
       const { account } = get();
       if (!account) throw new Error(m.connect_session_ended());
       try { await removeAccountMachine(sessionOf(account), machine.machine_id); }
-      catch (error) { throw new Error(failure(error, 'machine')); }
+      catch (error) {
+        // 404: outro aparelho já o tirou da conta; falta só a limpeza daqui.
+        if (statusOf(error) === 401) {
+          if (get().account?.token === account.token) await dropAccount(m.connect_session_ended());
+          throw new Error(m.connect_session_ended());
+        }
+        if (statusOf(error) !== 404) throw new Error(failure(error, 'machine'));
+      }
       // Fora da conta ele deixa de abrir pelo Connect: a entrada guardada só ficaria recusando.
       const servers = useServers.getState();
       for (const server of ownServers(servers.servers).filter((candidate) => sameMachine(candidate, machine))) servers.remove(server.id);

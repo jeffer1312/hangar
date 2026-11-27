@@ -6621,6 +6621,8 @@
   "native_connect_computer_remove_title": "Remove {name} from the account?",
   "native_connect_computer_remove_body": "It stops opening from outside and leaves this app. To bring it back, turn on Connect on it again with the account password.",
   "native_connect_computer_removing": "Removing…",
+  "native_connect_machine_peer_left": "{name} left the account but is still in this app's list of computers. Remove it in Servers.",
+  "native_connect_machine_remove_unavailable": "The Connect service did not handle the removal. Try again in a moment.",
   "native_connect_off_this": "Turn off Connect",
   "native_connect_phones_title": "Phones with access",
   "native_connect_phones_help": "They get into all your computers. A new phone asks through the app, and the request shows up at the top.",

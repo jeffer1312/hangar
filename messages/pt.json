@@ -6621,6 +6621,8 @@
   "native_connect_computer_remove_title": "Remover {name} da conta?",
   "native_connect_computer_remove_body": "Ele deixa de abrir de fora e sai deste app. Para voltar, ligue o Connect nele de novo com a senha da conta.",
   "native_connect_computer_removing": "Removendo…",
+  "native_connect_machine_peer_left": "{name} saiu da conta, mas continua na lista de computadores deste app. Tire-o em Servidores.",
+  "native_connect_machine_remove_unavailable": "O serviço do Connect não atendeu a remoção. Tente de novo daqui a pouco.",
   "native_connect_off_this": "Desligar o Connect",
   "native_connect_phones_title": "Celulares com acesso",
   "native_connect_phones_help": "Entram em todos os seus computadores. Celular novo pede pelo app, e o pedido aparece no topo.",

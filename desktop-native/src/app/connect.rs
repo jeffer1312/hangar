@@ -89,6 +89,8 @@ pub(super) struct LocalDevice {
     #[serde(default)] created_at: Option<u64>,
     /// O computador a quem esta máquina deu a chave ao adicioná-lo; sem ele, é um app.
     #[serde(default)] peer: Option<String>,
+    /// O servidor leu o peers.json: só aí a falta de `peer` prova que é app. Servidor antigo não manda.
+    #[serde(default)] peers_checked: bool,
 }
 
 /// Só os que não vieram pela conta; recusado só fica guardado para o aparelho ler a recusa. Pendente primeiro.
@@ -139,9 +141,11 @@ fn local_groups(devices: &[LocalDevice]) -> LocalGroups<'_> {
 /// Um dia: antes disso o app que acabou de receber a chave pode só não ter aberto ainda.
 const UNUSED_AFTER: u64 = 24 * 60 * 60;
 
-/// Os apps que nunca entraram e nasceram há mais de um dia. Sem a data de criação, fica.
+/// Os apps que nunca entraram e nasceram há mais de um dia. Sem a data de criação, fica; sem `peers_checked` também,
+/// porque a chave pode ser de outro computador.
 fn never_used(apps: &[&LocalDevice], now: u64) -> Vec<String> {
-    apps.iter().filter(|device| device.last_seen.is_none() && device.created_at.is_some_and(|at| now.saturating_sub(at) > UNUSED_AFTER))
+    apps.iter().filter(|device| device.peers_checked && device.last_seen.is_none()
+        && device.created_at.is_some_and(|at| now.saturating_sub(at) > UNUSED_AFTER))
         .map(|device| device.device_id.clone()).collect()
 }
 
@@ -265,6 +269,22 @@ fn error_of(error: &Option<(String, String)>, id: &str) -> Option<String> {
     error.as_ref().filter(|(who, _)| who == id).map(|(_, text)| text.clone())
 }
 
+/// O erro da remoção cujo computador não está na grade: o bloco sumiu com ele (saiu da conta e ficou neste app),
+/// então ele vai para o aviso da seção. Lista sem leitura boa também não tem o bloco.
+fn loose_remove_error<'a>(error: &'a Option<(String, String)>, machines: Option<&AccountList>) -> Option<&'a str> {
+    let (id, text) = error.as_ref()?;
+    let in_grid = machines.is_some_and(|list| list.machines.iter().any(|machine| &machine.machine_id == id));
+    (!in_grid).then_some(text.as_str())
+}
+
+/// A frase da remoção que falhou; a que tirou da conta e não daqui diz o nome, porque aparece fora do bloco.
+fn remove_failure_text(error: &Failure, name: &str) -> String {
+    match error.code.as_deref() {
+        Some("connect_machine_peer_left") => tr("connect_machine_peer_left").replace("{name}", name),
+        _ => failure_text(error),
+    }
+}
+
 fn list_row(icon: IconName, name: String, caption: String, first: bool, right: AnyElement) -> AnyElement {
     div().flex().items_center().gap_3().px_3().py_2().when(!first, |el| el.border_t_1().border_color(theme::border()))
         .child(chrome::small_icon(icon, 16., theme::muted()))
@@ -294,6 +314,7 @@ fn failure_text(error: &Failure) -> String {
         Some("connect_account_machine_pending") => tr_shared("connect_device_waiting_release", &[]),
         Some("connect_account_machine_unknown" | "connect_account_machine_revoked") => tr("connect_account_machine_unknown"),
         Some("connect_account_device_unknown" | "connect_account_device_revoked") => tr("connect_account_device_gone"),
+        Some("connect_machine_remove_unavailable") => tr("connect_machine_remove_unavailable"),
         _ => Hangar::fetch_failure(error),
     }
 }
@@ -616,7 +637,7 @@ impl Hangar {
     fn add_account_machine(&mut self, id: String, cx: &mut Context<Self>) {
         if self.connect.linking.is_some() { return; }
         let Some(api) = self.api.clone() else { return };
-        (self.connect.linking, self.connect.link_error) = (Some(id.clone()), None);
+        (self.connect.linking, self.connect.link_error, self.connect.remove_error) = (Some(id.clone()), None, None);
         let done = self.connect_send_later();
         self.runtime.spawn(async move {
             done(ConnectReply::LinkStarted(api.server_send(reqwest::Method::POST, &["connect", "peers", &id, "link"], None, 15).await)).await
@@ -904,7 +925,10 @@ impl Hangar {
             }
             ConnectReply::MachineRemoved(machine, result) => {
                 self.connect.removing = None;
-                self.connect.remove_error = result.err().map(|error| (machine, failure_text(&error)));
+                // O nome sai da lista de antes da releitura: depois dela o computador pode já não estar lá.
+                let name = self.connect.machines.ok().and_then(|list| list.machines.iter().find(|m| m.machine_id == machine))
+                    .map_or_else(|| machine.clone(), |m| m.name.clone());
+                self.connect.remove_error = result.err().map(|error| { let text = remove_failure_text(&error, &name); (machine, text) });
                 self.load_account_machines(cx);
                 self.load_peer_links();
             }
@@ -1207,7 +1231,9 @@ impl Hangar {
             .children(self.connect.link_error.clone().map(|error| div().id("connect-link-error").role(Role::Alert)
                 .text_sm().text_color(theme::danger()).whitespace_normal().child(error)))
             .children(self.connect.machines_error.clone().map(|error| div().id("connect-machines-stale")
-                .text_xs().text_color(theme::muted()).whitespace_normal().child(error)));
+                .text_xs().text_color(theme::muted()).whitespace_normal().child(error)))
+            .children(loose_remove_error(&self.connect.remove_error, self.connect.machines.ok()).map(|error| div().id("connect-remove-error")
+                .role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error.to_owned())));
         let list = match &self.connect.machines.value {
             None => return section.child(div().text_sm().text_color(theme::muted()).child(tr("loading"))),
             Some(Err(error)) => return section
@@ -1407,16 +1433,45 @@ mod tests {
         let now: u64 = 1_000_000;
         let day: u64 = 24 * 60 * 60;
         let devices = parse_local_devices(json!([
-            {"device_id": "old", "name": "a", "status": "approved", "last_seen": null, "created_at": now - day - 1},
-            {"device_id": "edge", "name": "b", "status": "approved", "last_seen": null, "created_at": now - day},
-            {"device_id": "new", "name": "c", "status": "approved", "last_seen": null, "created_at": now - 60},
-            {"device_id": "used", "name": "d", "status": "approved", "last_seen": now - 2 * day, "created_at": now - 3 * day},
-            {"device_id": "undated", "name": "e", "status": "approved", "last_seen": null},
-            {"device_id": "peer", "name": "f", "status": "approved", "last_seen": null, "created_at": 1, "peer": "casa"}])).unwrap();
+            {"device_id": "old", "name": "a", "status": "approved", "last_seen": null, "created_at": now - day - 1, "peers_checked": true},
+            {"device_id": "edge", "name": "b", "status": "approved", "last_seen": null, "created_at": now - day, "peers_checked": true},
+            {"device_id": "new", "name": "c", "status": "approved", "last_seen": null, "created_at": now - 60, "peers_checked": true},
+            {"device_id": "used", "name": "d", "status": "approved", "last_seen": now - 2 * day, "created_at": now - 3 * day, "peers_checked": true},
+            {"device_id": "undated", "name": "e", "status": "approved", "last_seen": null, "peers_checked": true},
+            {"device_id": "peer", "name": "f", "status": "approved", "last_seen": null, "created_at": 1, "peer": "casa", "peers_checked": true}])).unwrap();
         let groups = local_groups(&devices);
         assert_eq!(never_used(&groups.apps, now), ["old"], "exatamente 24 h ainda não conta");
         assert_eq!(never_used(&groups.apps, now + day), ["old", "edge", "new"]);
         assert!(never_used(&groups.apps, 0).is_empty(), "relógio atrás da criação não tira ninguém");
+    }
+
+    /// Sem peers.json lido (ou servidor antigo), a chave sem `peer` pode ser de outro computador: o botão não a conta.
+    #[test]
+    fn never_used_skips_rows_whose_peers_were_not_checked() {
+        let devices = parse_local_devices(json!([
+            {"device_id": "unchecked", "name": "a", "status": "approved", "last_seen": null, "created_at": 1, "peers_checked": false},
+            {"device_id": "old-server", "name": "b", "status": "approved", "last_seen": null, "created_at": 1},
+            {"device_id": "checked", "name": "c", "status": "approved", "last_seen": null, "created_at": 1, "peers_checked": true}])).unwrap();
+        let groups = local_groups(&devices);
+        assert_eq!(groups.apps.len(), 3, "continuam na lista de apps");
+        assert_eq!(never_used(&groups.apps, 10 * 24 * 60 * 60), ["checked"]);
+    }
+
+    /// O erro fica no bloco enquanto o computador está na grade; saído dela, vai para o aviso da seção.
+    #[test]
+    fn a_remove_error_without_its_block_goes_to_the_section() {
+        let list = parse_account(json!({"this": {"machine_id": "a", "host": "a.j.hangar.dev.br"},
+            "machines": [{"machine_id": "b", "name": "Casa", "host": "b.j.hangar.dev.br", "online": true, "added": true}]})).unwrap();
+        let error = |id: &str| Some((id.to_owned(), "falhou".to_owned()));
+        assert_eq!(super::loose_remove_error(&error("b"), Some(&list)), None, "no bloco de b");
+        assert_eq!(super::loose_remove_error(&error("c"), Some(&list)), Some("falhou"), "c saiu da lista na releitura");
+        assert_eq!(super::loose_remove_error(&error("b"), None), Some("falhou"), "sem lista boa não há bloco");
+        assert_eq!(super::loose_remove_error(&None, None), None);
+        let failure = |code: &str| crate::api::Failure { status: Some(500), detail: "do servidor".into(), retry_after: None, uncertain: false,
+            code: Some(code.into()) };
+        let left = super::remove_failure_text(&failure("connect_machine_peer_left"), "Casa");
+        assert!(left.contains("Casa") && left != "connect_machine_peer_left", "{left}");
+        assert_ne!(super::remove_failure_text(&failure("connect_machine_remove_unavailable"), "Casa"), "do servidor");
     }
 
     /// O Parar só aparece com prévia aberta ou com a leitura do estado falhando.
