@@ -916,8 +916,9 @@ where
 {
     let file = paths.restore_pending();
     let stuck: Vec<Stuck> = match std::fs::read(&file) {
-        Ok(body) => serde_json::from_slice(&body)
-            .map_err(|e| Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display())))?,
+        // A gravação é atômica: ilegível é mão de fora, e sem os pares não há como saber onde estão os arquivos.
+        Ok(body) => serde_json::from_slice(&body).map_err(|e| Failure::new(RESTORE_PENDING, format!(
+            "{}: {e}; confira os messages.db.migrated* em {} e apague esse registro", file.display(), paths.data.display())))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display()))),
     };
@@ -926,8 +927,9 @@ where
         let _ = write_pending(paths, &left);
         return Err(Failure::new(RESTORE_PENDING, format!("arquivos do banco fora do lugar desde uma volta anterior: {}", stuck_list(&left))));
     }
-    std::fs::remove_file(&file).map_err(|e| Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display())))?;
+    // O marcador só sai com o serviço de pé: religar que falha fica para a próxima, que acha tudo no lugar e só religa.
     up().await.map_err(Failure::from)?;
+    std::fs::remove_file(&file).map_err(|e| Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display())))?;
     tracing::info!("whatsapp: os arquivos do banco voltaram ao lugar e o serviço subiu");
     Ok(true)
 }
@@ -1540,6 +1542,9 @@ mod tests {
         std::fs::create_dir_all(&paths.data).unwrap();
         write_db_file(&at, "migrated");
         write_pending(&paths, &[Stuck { name: name.clone(), at }]).unwrap();
+        let refused = || async { Err(service::Error { step: "systemctl restart".into(), detail: "recusou".into() }) };
+        assert!(recover_with(&paths, refused).await.is_err());
+        assert!(paths.restore_pending().exists(), "religar falhou e a pendência sumiu");
         let up = std::cell::Cell::new(false);
         assert_eq!(recover_with(&paths, || async { up.set(true); Ok(()) }).await, Ok(true));
         assert_eq!(read(&name), "migrated");

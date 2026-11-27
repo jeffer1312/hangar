@@ -353,10 +353,16 @@ pub async fn set_autostart(home: &Path, id: &ServiceId, on: bool) -> Result<(), 
         return run("launchctl enable", "launchctl", &[if on { "enable" } else { "disable" }, &target]).await;
     }
     if cfg!(windows) {
-        let verb = if on { "Enable-ScheduledTask" } else { "Disable-ScheduledTask" };
-        return powershell(verb, &format!("$ErrorActionPreference = 'Stop'\n{verb} -TaskName {} | Out-Null\n", ps_quote(id.task))).await;
+        return powershell(if on { "Enable-ScheduledTask" } else { "Disable-ScheduledTask" }, &windows_autostart_script(id, on)).await;
     }
     systemd_autostart(home, id, on, "systemctl").await
+}
+
+/// Sem a tarefa registrada não há o que ligar nem desligar; o que ela recusar é erro.
+fn windows_autostart_script(id: &ServiceId, on: bool) -> String {
+    let verb = if on { "Enable-ScheduledTask" } else { "Disable-ScheduledTask" };
+    let task = ps_quote(id.task);
+    format!("$ErrorActionPreference = 'Stop'\nif (Get-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue) {{ {verb} -TaskName {task} | Out-Null }}\n")
 }
 
 async fn systemd_autostart(home: &Path, id: &ServiceId, on: bool, systemctl: &str) -> Result<(), Error> {
@@ -700,6 +706,14 @@ mod tests {
         systemd_autostart(home.path(), &WHATSAPP, true, &fake).await.unwrap();
         assert_eq!(std::fs::read_to_string(&seen).unwrap(), "--user disable hangar-whatsapp.service\n--user enable hangar-whatsapp.service\n");
         assert_eq!(systemd_autostart(home.path(), &WHATSAPP, false, "false").await.unwrap_err().step, "systemctl disable");
+    }
+
+    /// No Windows, tarefa que não existe não é erro; a que existe é ligada ou desligada sem engolir a recusa.
+    #[test]
+    fn the_windows_autostart_skips_a_missing_task() {
+        let off = windows_autostart_script(&WHATSAPP, false);
+        assert!(off.starts_with("$ErrorActionPreference = 'Stop'\nif (Get-ScheduledTask -TaskName 'hangar-whatsapp' -ErrorAction SilentlyContinue) { Disable-ScheduledTask -TaskName 'hangar-whatsapp'"), "{off}");
+        assert!(windows_autostart_script(&WHATSAPP, true).contains("{ Enable-ScheduledTask -TaskName 'hangar-whatsapp'"));
     }
 
     /// Sem a unit no disco não se pergunta ao `systemctl`; o que sai com erro é erro.
