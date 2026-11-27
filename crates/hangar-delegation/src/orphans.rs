@@ -55,10 +55,11 @@ pub fn clear(hangar_dir: &Path, children: &[String]) -> io::Result<()> {
     })
 }
 
-/// Filha renomeada leva a marca junto: sem isso a lista deixaria de dizer de quem ela era.
+/// Filha renomeada leva a marca junto: sem isso a lista deixaria de dizer de quem ela era. A marca
+/// velha que o nome novo ainda tinha era de outra vida e sai, também quando o nome antigo não tem marca.
 pub fn rename(hangar_dir: &Path, old: &str, new: &str) -> io::Result<()> {
     modify(hangar_dir, |all| match all.remove(old) {
         Some(entry) => { all.insert(new.to_owned(), entry); true }
-        None => false,
+        None => all.remove(new).is_some(),
     })
 }

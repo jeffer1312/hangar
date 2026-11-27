@@ -45,6 +45,20 @@ fn rename_moves_the_mark_to_the_new_name() {
 }
 
 #[test]
+fn rename_drops_a_stale_mark_left_on_the_new_name() {
+    let dir = tempfile::tempdir().unwrap();
+    record(dir.path(), "pai", &["velha".to_owned(), "b".to_owned()], 3.0).unwrap();
+    // O nome antigo sem marca: a do nome novo era de outra vida e sai.
+    rename(dir.path(), "sem-marca", "velha").unwrap();
+    assert_eq!(names(dir.path()), ["b"]);
+    // Com marca: ela vence a que o nome novo tinha.
+    record(dir.path(), "outro", &["velha".to_owned()], 4.0).unwrap();
+    rename(dir.path(), "b", "velha").unwrap();
+    assert_eq!(names(dir.path()), ["velha"]);
+    assert_eq!(read(dir.path()).unwrap()["velha"], Orphan { parent: "pai".into(), at: 3.0 });
+}
+
+#[test]
 fn an_unreadable_file_is_an_error_and_is_not_overwritten() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(path(dir.path()), "{torto").unwrap();

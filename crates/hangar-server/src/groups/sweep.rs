@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use super::exit::leave_and_notify;
+use super::exit::leave_dead_member;
 use super::service::{BoxFuture, GroupError, GroupService};
 use super::store::file_stem;
 use crate::list::bridge::Produced;
@@ -98,6 +98,8 @@ impl Sweeper {
             return;
         }
         let live = match self.env.live_names().await {
+            // Só marcas de órfã: a lista vazia pode ser todas fechadas, e não é falha a registrar. As marcas ficam.
+            Ok(names) if names.is_empty() && referenced.is_empty() => return,
             Ok(names) if names.is_empty() => return self.failed(EMPTY_LIST),
             Ok(names) => names,
             Err(code) => return self.failed(&code),
@@ -178,7 +180,7 @@ impl SweepEnv for AppEnv {
 
     fn leave<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Vec<String>, GroupError>> {
         Box::pin(async move {
-            let (ex, warnings) = leave_and_notify(&self.st, &self.groups, name, "sweep_dead_member").await?;
+            let (ex, warnings) = leave_dead_member(&self.st, &self.groups, name).await?;
             if !warnings.is_empty() {
                 tracing::warn!(code = "groups_dead_member_peer_not_notified", session = name, count = warnings.len(), "groups: a saída não avisou todos os ex-companheiros de fora");
             }

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use hangar_server::groups::exit::leave_and_notify;
+use hangar_server::groups::exit::{leave_and_notify, leave_dead_member};
 use hangar_server::groups::orq::OrqVault;
 use hangar_server::groups::service::{BoxFuture, GroupError, GroupService, JoinOwned};
 use hangar_server::groups::store::PairDir;
@@ -121,28 +121,75 @@ async fn an_unconfirmed_kill_leaves_the_children_linked() {
     assert!(!e.python.diag().iter().any(|l| l["evento"] == "rust.link_cascade_failed"), "ninguém foi interrompido: {:?}", e.python.diag());
 }
 
-/// A varredura conhece só o stem saneado do pai morto (`pai-um`); a órfã guarda o nome que a filha conhecia.
-#[tokio::test]
+/// A varredura de verdade (`leave_dead_member`) sobre uma lista falsa.
+struct DeadEnv { st: Arc<hangar_server::routes::AppState>, groups: Arc<GroupService>, live: Vec<String> }
+
+impl SweepEnv for DeadEnv {
+    fn live_names(&self) -> BoxFuture<'_, Result<Vec<String>, String>> { let live = self.live.clone(); Box::pin(async move { Ok(live) }) }
+    fn leave<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Vec<String>, GroupError>> {
+        Box::pin(async move { leave_dead_member(&self.st, &self.groups, name).await.map(|(ex, _)| ex) })
+    }
+    fn report(&self, _: &'static str, _: &str) {}
+}
+
+/// O pai morto `pai:um` tem o sidecar `pai-um.json`; a varredura passa pelo stem antes do nome cru, e a
+/// saída pelo stem desfaz o grupo de dois. A órfã guarda o nome que a filha conhecia.
+#[tokio::test(start_paused = true)]
 async fn the_dead_member_sweep_marks_the_children_orphan() {
     let tmp = tempfile::tempdir().unwrap();
     let pair = tmp.path().join("pair");
     std::fs::create_dir_all(&pair).unwrap();
-    let harness = json!({"pai um": "claude", "filha": "claude"});
+    let harness = json!({"pai:um": "claude", "filha": "claude"});
     std::fs::write(pair.join("pai-um.json"), json!({"peers": ["filha"], "task": "", "gid": "g2", "harness": harness}).to_string()).unwrap();
-    std::fs::write(pair.join("filha.json"), json!({"peers": ["pai um"], "task": "", "gid": "g2", "harness": harness, "linked_by": "pai um"}).to_string()).unwrap();
+    std::fs::write(pair.join("filha.json"), json!({"peers": ["pai:um"], "task": "", "gid": "g2", "harness": harness, "linked_by": "pai:um"}).to_string()).unwrap();
     let mut state = hangar_server::routes::AppState::new(fake::config(""));
     state.hangar_dir = tmp.path().join("hangar");
     let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), tmp.path().join("arquivo")), Arc::new(OrqVault::from_state(&state)), "casa".into()));
     state.groups = Some(groups.clone());
-    let (_, warnings) = leave_and_notify(&state, &groups, "pai-um", "sweep_dead_member").await.unwrap();
-    assert!(warnings.is_empty(), "{warnings:?}");
-    let marks = hangar_delegation::orphans::read(&state.hangar_dir).unwrap();
-    assert_eq!(marks.get("filha").map(|o| o.parent.as_str()), Some("pai um"));
+    let st = Arc::new(state);
+    let mut sweeper = Sweeper::new(groups.clone(), Arc::new(DeadEnv { st: st.clone(), groups, live: vec!["filha".into()] }));
+    sweeper.round().await;
+    assert!(pair.join("filha.json").exists(), "ausente há menos que o prazo, o grupo fica");
+    tokio::time::advance(MIN_ABSENCE).await;
+    sweeper.round().await;
+    let marks = hangar_delegation::orphans::read(&st.hangar_dir).unwrap();
+    assert_eq!(marks.get("filha").map(|o| o.parent.as_str()), Some("pai:um"), "{marks:?}");
     assert!(!pair.join("filha.json").exists(), "o grupo de dois acabou: a filha sai sem pai");
 }
 
+/// Quem fecha sabe o nome cru: `a-b` não leva as filhas de `a b`, que divide o stem com ele e segue ligada.
+#[tokio::test]
+async fn closing_by_the_raw_name_does_not_mark_the_children_of_a_same_stem_session() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pair = tmp.path().join("pair");
+    std::fs::create_dir_all(&pair).unwrap();
+    let harness = json!({"a b": "claude", "f": "claude", "g": "claude"});
+    std::fs::write(pair.join("a-b.json"), json!({"peers": ["f", "g"], "task": "", "gid": "g3", "harness": harness}).to_string()).unwrap();
+    std::fs::write(pair.join("f.json"), json!({"peers": ["a b", "g"], "task": "", "gid": "g3", "harness": harness, "linked_by": "a b"}).to_string()).unwrap();
+    std::fs::write(pair.join("g.json"), json!({"peers": ["a b", "f"], "task": "", "gid": "g3", "harness": harness}).to_string()).unwrap();
+    let mut state = hangar_server::routes::AppState::new(fake::config(""));
+    state.hangar_dir = tmp.path().join("hangar");
+    let groups = Arc::new(GroupService::new(PairDir::new(pair.clone(), tmp.path().join("arquivo")), Arc::new(OrqVault::from_state(&state)), "casa".into()));
+    state.groups = Some(groups.clone());
+    leave_and_notify(&state, &groups, "a-b", "test").await.unwrap();
+    assert!(hangar_delegation::orphans::read(&state.hangar_dir).unwrap().is_empty(), "sem órfã");
+    let child: Value = serde_json::from_slice(&std::fs::read(pair.join("f.json")).unwrap()).unwrap();
+    assert_eq!(child["linked_by"], "a b", "{child}");
+}
+
+/// O nome reusado por uma sessão nova não herda a marca da vida que acabou; as outras ficam.
+#[tokio::test]
+async fn a_reused_name_drops_the_old_orphan_mark() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut state = hangar_server::routes::AppState::new(fake::config(""));
+    state.hangar_dir = tmp.path().join("hangar");
+    hangar_delegation::orphans::record(&state.hangar_dir, "pai", &["filha".to_owned(), "irma".to_owned()], 1.0).unwrap();
+    hangar_server::groups::link_orphans::reused(&state, "filha").await;
+    assert_eq!(hangar_delegation::orphans::read(&state.hangar_dir).unwrap().into_keys().collect::<Vec<_>>(), ["irma"]);
+}
+
 /// Lista falsa e marcas de órfã fixas: só a marca de quem sumiu da lista por `MIN_ABSENCE` sai.
-struct OrphanEnv { live: Vec<String>, marked: Vec<String>, forgot: Mutex<Vec<String>> }
+struct OrphanEnv { live: Vec<String>, marked: Vec<String>, forgot: Mutex<Vec<String>>, reported: Mutex<Vec<String>> }
 
 impl SweepEnv for OrphanEnv {
     fn live_names(&self) -> BoxFuture<'_, Result<Vec<String>, String>> { let live = self.live.clone(); Box::pin(async move { Ok(live) }) }
@@ -152,7 +199,7 @@ impl SweepEnv for OrphanEnv {
         self.forgot.lock().unwrap().extend(names.iter().cloned());
         Box::pin(async {})
     }
-    fn report(&self, _: &'static str, _: &str) {}
+    fn report(&self, event: &'static str, code: &str) { self.reported.lock().unwrap().push(format!("{event} {code}")); }
 }
 
 #[tokio::test(start_paused = true)]
@@ -160,7 +207,8 @@ async fn the_sweep_forgets_an_orphan_only_after_it_is_gone_from_the_list() {
     let tmp = tempfile::tempdir().unwrap();
     let groups = Arc::new(GroupService::new(PairDir::new(tmp.path().join("pair"), tmp.path().join("arquivo")),
         Arc::new(OrqVault::from_state(&hangar_server::routes::AppState::new(fake::config("")))), "casa".into()));
-    let env = Arc::new(OrphanEnv { live: vec!["viva".into()], marked: vec!["viva".into(), "sumiu".into()], forgot: Mutex::default() });
+    let env = Arc::new(OrphanEnv { live: vec!["viva".into()], marked: vec!["viva".into(), "sumiu".into()], forgot: Mutex::default(),
+        reported: Mutex::default() });
     let mut sweeper = Sweeper::new(groups, env.clone());
     sweeper.round().await;
     tokio::time::advance(MIN_ABSENCE - Duration::from_secs(1)).await;
@@ -169,4 +217,19 @@ async fn the_sweep_forgets_an_orphan_only_after_it_is_gone_from_the_list() {
     tokio::time::advance(Duration::from_secs(1)).await;
     sweeper.round().await;
     assert_eq!(*env.forgot.lock().unwrap(), ["sumiu"], "a da lista viva fica marcada");
+}
+
+/// Só marcas de órfã e a lista vazia: nenhuma linha de "lista indisponível" no diário, e as marcas ficam.
+#[tokio::test(start_paused = true)]
+async fn an_empty_list_with_only_orphan_marks_is_not_a_list_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let groups = Arc::new(GroupService::new(PairDir::new(tmp.path().join("pair"), tmp.path().join("arquivo")),
+        Arc::new(OrqVault::from_state(&hangar_server::routes::AppState::new(fake::config("")))), "casa".into()));
+    let env = Arc::new(OrphanEnv { live: Vec::new(), marked: vec!["sumiu".into()], forgot: Mutex::default(), reported: Mutex::default() });
+    let mut sweeper = Sweeper::new(groups, env.clone());
+    sweeper.round().await;
+    tokio::time::advance(MIN_ABSENCE).await;
+    sweeper.round().await;
+    assert!(env.reported.lock().unwrap().is_empty(), "{:?}", env.reported.lock().unwrap());
+    assert!(env.forgot.lock().unwrap().is_empty(), "lista vazia nunca tira marca");
 }

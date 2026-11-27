@@ -263,6 +263,8 @@ impl OpenHost for ServerHost {
     fn release_name<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), OpenError>> {
         Box::pin(async move {
             self.st.list.forget(name);
+            // A marca de filha sem pai era da vida que acabou; a falha fica no diário e não impede abrir.
+            crate::groups::link_orphans::reused(&self.st, name).await;
             self.st.list.invalidate();
             let (base, owned) = (self.env.claude_base.clone(), name.to_owned());
             if let Err(error) = tokio::task::spawn_blocking(move || forget_queue(&base, &owned)).await

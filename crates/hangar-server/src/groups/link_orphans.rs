@@ -24,13 +24,17 @@ pub(crate) fn linked_parents(all: &[(String, Sidecar)]) -> BTreeMap<String, Stri
 }
 
 /// As filhas que vão perder o pai `name`, lidas antes da saída dele, que apaga o `linked_by` delas.
-/// `name` pode ser o stem saneado (a varredura só o conhece): o pai sai com o nome que a filha guardou.
+/// O pai sai com o nome que a filha guardou.
 pub(crate) struct Leaving { parent: String, children: Vec<String> }
 
-pub(crate) async fn leaving(groups: &GroupService, name: &str) -> Result<Leaving, ()> {
+/// `by_stem`: só a varredura, que pode conhecer só o stem saneado do pai morto. Quem fecha sabe o nome
+/// cru, e pelo stem levaria as filhas de outra sessão viva (`a b` para `a-b`).
+pub(crate) async fn leaving(groups: &GroupService, name: &str, by_stem: bool) -> Result<Leaving, ()> {
     let all = groups.sidecars().await.map_err(|_| ())?;
+    let links = linked_parents(&all);
+    let exact = !by_stem || links.values().any(|p| p == name);
     let mut parent = name.to_owned();
-    let children = linked_parents(&all).into_iter().filter(|(_, p)| p == name || file_stem(p) == name)
+    let children = links.into_iter().filter(|(_, p)| if exact { p == name } else { file_stem(p) == name })
         .map(|(child, p)| { parent = p; child }).collect();
     Ok(Leaving { parent, children })
 }
@@ -52,6 +56,15 @@ pub(crate) async fn mark(st: &AppState, name: &str, leaving: Result<Leaving, ()>
 pub(crate) async fn closed(st: &AppState, name: &str) -> Option<Value> {
     let (dir, names) = (st.hangar_dir.clone(), vec![name.to_owned()]);
     blocking(move || orphans::clear(&dir, &names)).await.err().map(|_| failed(st, name, "link_orphans_clear_failed", "a marca de filha sem pai não saiu no fechamento"))
+}
+
+/// Nome reusado por uma sessão nova: a marca da vida que acabou não passa para ela. Falha só vai ao
+/// diário: a abertura segue.
+pub async fn reused(st: &AppState, name: &str) {
+    let (dir, names) = (st.hangar_dir.clone(), vec![name.to_owned()]);
+    if blocking(move || orphans::clear(&dir, &names)).await.is_err() {
+        st.diag.report(FAILED_EVENT, name, "link_orphans_clear_failed", "a marca de filha sem pai do nome reusado não saiu");
+    }
 }
 
 /// Religadas a um pai novo: a marca antiga sai. Falha só vai ao diário: a ligação já valeu.
