@@ -17,8 +17,8 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use tokio::signal::unix::{SignalKind, signal};
 
-// As 100 linhas de log de até 300 caracteres cabem com folga junto dos contadores.
-const MAX_BODY: usize = 256 * 1024;
+// Os 200 registros de falha de até 40 campos e os 5000 passos do dia cabem com folga junto dos contadores.
+const MAX_BODY: usize = 2 * 1024 * 1024;
 
 fn app(pool: PgPool) -> Router {
     Router::new()
@@ -208,6 +208,7 @@ mod tests {
         assert!(page.contains("/panel/api/login") && !page.contains("/panel/data"), "sem sessão vem a entrada, não o painel");
         assert_eq!(call(app_with_panel(offline()), "GET", "/panel/data", None, None).await.0, StatusCode::UNAUTHORIZED);
         assert_eq!(call(app_with_panel(offline()), "POST", "/panel/api/invites", None, None).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(call(app_with_panel(offline()), "GET", "/panel/trail?machine=x&day=y", None, None).await.0, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -455,5 +456,168 @@ mod tests {
         assert_eq!(left, vec![recent]);
         let orphans: i64 = sqlx::query_scalar("SELECT count(*) FROM counters WHERE batch_id = $1").bind(&old).fetch_one(&pool).await.unwrap();
         assert_eq!(orphans, 0);
+    }
+
+    /// Entra com uma conta nova e devolve o cookie da sessão.
+    async fn logged_in(pool: &PgPool) -> String {
+        let email = format!("painel-{}@example.test", fresh_id());
+        accounts::set_user(pool, &email, &accounts::hash_password("senha-do-painel")).await.unwrap();
+        let login = json!({"email": email, "password": "senha-do-painel"});
+        let (_, headers, _) = call(app_with_panel(pool.clone()), "POST", "/panel/api/login", None, Some(login)).await;
+        session_of(&headers)
+    }
+
+    /// Apaga os pacotes do teste: os cortes do resumo (300 assinaturas, 50 passagens) são do banco inteiro.
+    async fn forget(pool: &PgPool, ids: &[String]) {
+        sqlx::query("DELETE FROM batches WHERE batch_id = ANY($1)").bind(ids).execute(pool).await.unwrap();
+    }
+
+    fn record(event: &str, level: &str, codigo: &str, count: u64, first: &str, last: &str, detalhe: &str) -> Value {
+        json!({"level": level, "event": event, "count": count, "first": first, "last": last,
+               "fields": {"codigo": codigo, "etapa": "abrir", "detalhe": detalhe}, "trail": ["app.visivel", "sessao.nova"]})
+    }
+
+    fn step(t: &str, event: &str, level: &str) -> Value { json!({"t": t, "event": event, "level": level, "screen": "chat", "count": 1}) }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn the_same_batch_id_again_replaces_what_the_batch_had() {
+        let pool = online().await;
+        let id = fresh_id();
+        let event = format!("falha.{}", &fresh_id()[..8]);
+        let mut body = batch_body(&id, &utc_day(&pool, 0).await);
+        body["partial"] = json!(true);
+        body["counters"] = json!([{"event": "peers", "count": 3}]);
+        body["logs"] = json!([{"level": "error", "target": "hangar_server::list", "message": "x", "count": 1}]);
+        body["records"] = json!([record(&event, "error", "erro_pasta", 1, "10:00:00", "10:00:00", "a")]);
+        body["trail"] = json!([step("10:00:00", "app.visivel", "ok"), step("10:00:05", &event, "error")]);
+        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+
+        // O envio final do dia: mais passos, contagens maiores, sem log.
+        body["partial"] = json!(false);
+        body["counters"] = json!([{"event": "peers", "count": 5}]);
+        body["logs"] = json!([]);
+        body["records"] = json!([record(&event, "error", "erro_pasta", 4, "10:00:00", "12:00:00", "b")]);
+        body["trail"] = json!([step("10:00:00", "app.visivel", "ok"), step("10:00:05", &event, "error"), step("12:00:00", "app.oculto", "ok")]);
+        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+
+        let stored = |pool: PgPool, id: String| async move {
+            let one = |sql: &'static str| { let (pool, id) = (pool.clone(), id.clone()); async move {
+                sqlx::query_scalar::<_, i64>(sql).bind(id).fetch_one(&pool).await.unwrap() } };
+            (
+                one("SELECT coalesce(sum(count), 0)::bigint FROM counters WHERE batch_id = $1").await,
+                one("SELECT count(*) FROM logs WHERE batch_id = $1").await,
+                one("SELECT coalesce(sum(count), 0)::bigint FROM records WHERE batch_id = $1").await,
+                one("SELECT count(*) FROM trail_steps WHERE batch_id = $1").await,
+                one("SELECT count(*) FILTER (WHERE partial) FROM batches WHERE batch_id = $1").await,
+            )
+        };
+        assert_eq!(stored(pool.clone(), id.clone()).await, (5, 0, 4, 3, 0), "o final troca o retrato, não soma");
+
+        // Um retrato atrasado (repetição de antes do final) não desfaz o final.
+        body["partial"] = json!(true);
+        body["counters"] = json!([{"event": "peers", "count": 1}]);
+        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+        assert_eq!(stored(pool.clone(), id.clone()).await, (5, 0, 4, 3, 0));
+        forget(&pool, &[id]).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn failure_records_of_two_machines_become_one_row_per_signature() {
+        let pool = online().await;
+        let (yesterday, today) = (utc_day(&pool, -1).await, utc_day(&pool, 0).await);
+        let event = format!("sessao.abrir_{}", &fresh_id()[..8]);
+        let mut ids = Vec::new();
+        for (day, version, os, level, count, first, last, detalhe) in [
+            (&yesterday, "0.42.0", "linux", "warn", 2, "10:00:00", "11:00:00", "antes"),
+            (&today, "0.43.0", "windows", "error", 3, "08:00:00", "09:00:00", "depois"),
+        ] {
+            let id = fresh_id();
+            let mut body = batch_body(&id, day);
+            body["env"]["version"] = json!(version);
+            body["env"]["os"] = json!(os);
+            // A outra assinatura também em duas máquinas: o teste do corte divide o banco e só tem uma por assinatura.
+            body["records"] = json!([record(&event, level, "erro_pasta", count, first, last, detalhe),
+                                     record(&event, "warn", "erro_outro", 1, first, last, "x")]);
+            assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+            ids.push(id);
+        }
+        let data = store::summary(&pool, 7).await.unwrap();
+        let rows: Vec<&Value> = data["records"].as_array().unwrap().iter().filter(|r| r["event"] == json!(event)).collect();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        let row = rows.iter().find(|r| r["codigo"] == json!("erro_pasta")).unwrap();
+        assert_eq!(**row, json!({
+            "level": "error", "event": event, "codigo": "erro_pasta", "etapa": "abrir", "erro_tipo": null,
+            "count": 5, "machines": 2, "versions": ["0.42.0", "0.43.0"], "os": ["linux", "windows"],
+            "first": format!("{yesterday} 10:00:00"), "last": format!("{today} 09:00:00"),
+            "fields": {"codigo": "erro_pasta", "etapa": "abrir", "detalhe": "depois"}, "trail": ["app.visivel", "sessao.nova"],
+        }));
+        assert!(data["records_total"].as_i64().unwrap() >= 2);
+        forget(&pool, &ids).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn failure_records_stop_at_300_and_say_the_real_total() {
+        let pool = online().await;
+        let today = utc_day(&pool, 0).await;
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let id = fresh_id();
+            let mut body = batch_body(&id, &today);
+            body["records"] = json!((0..151).map(|_| record(&format!("corte.{}", &fresh_id()[..12]), "warn", "c", 1, "01:00:00", "01:00:00", "x")).collect::<Vec<_>>());
+            assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+            ids.push(id);
+        }
+        let data = store::summary(&pool, 7).await.unwrap();
+        assert_eq!(data["records"].as_array().unwrap().len(), 300);
+        assert!(data["records_total"].as_i64().unwrap() >= 302, "{}", data["records_total"]);
+        forget(&pool, &ids).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn the_trail_gives_common_transitions_and_the_day_of_one_machine() {
+        let pool = online().await;
+        let today = utc_day(&pool, 0).await;
+        let tag = &fresh_id()[..8];
+        let (a, b, c) = (format!("a.{tag}"), format!("b.{tag}"), format!("c.{tag}"));
+        // Muitas voltas a → b: a passagem fica entre as 50 mais comuns mesmo com outros dados no banco.
+        let mut first: Vec<Value> = (0..400).map(|i| step(&format!("10:{:02}:{:02}", i / 60 % 60, i % 60), if i % 2 == 0 { &a } else { &b }, "ok")).collect();
+        first.push(json!({"t": "11:00:00", "event": c, "level": "error", "count": 2}));
+        let mut ids = Vec::new();
+        let mut machine = String::new();
+        for trail in [first, vec![step("09:00:00", &a, "ok"), step("09:00:01", &b, "warn")]] {
+            let id = fresh_id();
+            let body = { let mut body = batch_body(&id, &today); body["trail"] = json!(trail); body };
+            if machine.is_empty() { machine = body["machine_id"].as_str().unwrap().to_owned(); }
+            assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+            ids.push(id);
+        }
+        let data = store::summary(&pool, 7).await.unwrap();
+        let find = |from: &str, to: &str| data["transitions"].as_array().unwrap().iter().find(|t| t["from"] == json!(from) && t["to"] == json!(to)).cloned();
+        assert_eq!(find(&a, &b), Some(json!({"from": a, "to": b, "count": 201, "machines": 2})));
+        assert_eq!(find(&b, &c).map(|t| t["count"].clone()), Some(json!(1)));
+        let day = data["trail_days"].as_array().unwrap().iter().find(|d| d["machine"] == json!(machine)).unwrap();
+        assert_eq!(*day, json!({"machine": machine, "label": &machine[..8], "day": today, "os": "linux", "version": "0.42.0", "steps": 401, "problems": 1}));
+
+        let cookie = logged_in(&pool).await;
+        let app = || app_with_panel(pool.clone());
+        let path = format!("/panel/trail?machine={machine}&day={today}");
+        assert_eq!(call(app(), "GET", &path, None, None).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(call(app(), "GET", "/panel/trail?machine=x", None, None).await.0, StatusCode::UNAUTHORIZED, "sem sessão nem diz o que está torto");
+        let (status, _, text) = call(app(), "GET", &path, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let steps = serde_json::from_str::<Value>(&text).unwrap()["steps"].as_array().unwrap().clone();
+        assert_eq!(steps.len(), 401);
+        assert_eq!(steps[0], json!({"t": "10:00:00", "event": a, "level": "ok", "screen": "chat", "count": 1}));
+        assert_eq!(steps[400], json!({"t": "11:00:00", "event": c, "level": "error", "screen": null, "count": 2}));
+        for bad in ["/panel/trail?machine=NOT-HEX&day=2026-11-27", "/panel/trail?day=2026-11-27", &format!("/panel/trail?machine={machine}&day=2026-02-31")] {
+            assert_eq!(call(app(), "GET", bad, Some(&cookie), None).await.0, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        let (_, _, empty) = call(app(), "GET", &format!("/panel/trail?machine={}&day={today}", fresh_id()), Some(&cookie), None).await;
+        assert_eq!(serde_json::from_str::<Value>(&empty).unwrap()["steps"], json!([]));
+        forget(&pool, &ids).await;
     }
 }
