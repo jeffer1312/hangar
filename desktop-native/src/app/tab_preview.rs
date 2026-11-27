@@ -552,6 +552,8 @@ impl Hangar {
                         if installed {if let Some(preview)=self.tab_preview.as_mut() {preview.error=None;}}
                         else {self.fetch_tab_preview(cx);}
                     }
+                    // A prévia mostra a conversa como chegar; não espera o stream assentar.
+                    Update::CaughtUp=>{}
                     Update::Offline(error)=>{
                         if let Some(preview)=self.tab_preview.as_mut().filter(|p|!p.loaded) {preview.error=Some(Hangar::fetch_failure(&error));}
                         self.with_tab_preview_slot(cx,|this,_|this.chat_online=false);

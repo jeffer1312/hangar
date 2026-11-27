@@ -202,6 +202,8 @@ const COLUMN: f32 = 780.;
 /// Abrir a sessão pede só a cauda que enche a tela: o backend lê o transcript de trás para a frente, e a janela
 /// inteira (`HISTORY_PAGE`) custa muito mais em transcript grande. Ela vem logo depois, por baixo.
 const FIRST_PAGE: usize = 60;
+/// Teto da espera do histórico pelo stream da conversa: um stream que não assenta não segura a conversa.
+const HISTORY_HOLD_MAX: Duration = Duration::from_millis(400);
 const HISTORY_PAGE: usize = 400;
 
 /// Conexão, máquina e nome da sessão aberta (`session_owner`).
@@ -785,6 +787,11 @@ pub struct Hangar {
     loading: bool,
     history_started: bool,
     history_installed: bool,
+    /// O stream da conversa aberta já entregou o que o servidor tinha guardado (`Update::CaughtUp`).
+    stream_caught_up: bool,
+    /// A primeira página do histórico esperando o stream assentar: entra junto com o estado, o mod e a fila, num quadro
+    /// só, em vez de aparecer e ser empurrada por eles.
+    held_history: Option<Envelope>,
     pending_chat: Vec<ChatUpdate>,
     history_limit: usize,
     has_older: bool,
@@ -1377,7 +1384,7 @@ impl Hangar {
             chat: Chat::default(), list_task: None, session_task: None, history_task: None,
             address, token, unsaved_connection: None, connection_focus, root_focus, composer, composer_placeholder: String::new(), _input_subscription: input_subscription, _keyboard_subscription: keyboard_subscription,
             connection_dialog: true, list_online: false, chat_online: false, loading: false, history_started: false,
-            history_installed: false, pending_chat: Vec::new(),
+            history_installed: false, stream_caught_up: false, held_history: None, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None, list_down_since: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), downloads: Default::default(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
@@ -1798,6 +1805,7 @@ impl Hangar {
         self.loading = false;
         self.history_started = false;
         self.history_installed = false;
+        (self.stream_caught_up, self.held_history) = (false, None);
         self.pending_chat.clear();
         self.composer.update(cx, |input, cx| input.set_value("", window, cx));
         self.sync_rows(cx);
@@ -1886,6 +1894,7 @@ impl Hangar {
         self.loading = opens_chat;
         self.history_started = false;
         self.history_installed = false;
+        (self.stream_caught_up, self.held_history) = (false, None);
         self.pending_chat.clear();
         self.chat_online = false;
         self.history_limit = FIRST_PAGE;
@@ -2055,6 +2064,14 @@ impl Hangar {
             let _ = tx.send(Envelope { connection, selection: Some(selection), payload: Payload::History(revision, limit, result) }).await;
         }));
         cx.notify();
+    }
+
+    /// Instala o histórico que esperava o stream assentar; sem nada guardado, não faz nada.
+    fn release_held_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(envelope) = self.held_history.take() {
+            api::open_trace(|| "history released".into());
+            self.receive(envelope, window, cx);
+        }
     }
 
     fn receive(&mut self, envelope: Envelope, window: &mut Window, cx: &mut Context<Self>) {
@@ -2355,7 +2372,17 @@ impl Hangar {
                     self.refresh_voice_gate(cx);
                 }
             }
+            Payload::Stream(Update::CaughtUp) => {
+                if is_chat {
+                    api::open_trace(|| "sse caught up".into());
+                    self.stream_caught_up = true;
+                    self.release_held_history(window, cx);
+                }
+                visible = false;
+            }
             Payload::Stream(Update::Offline(error)) => {
+                // Sem stream, nada mais vem assentar a conversa: o histórico guardado entra já.
+                if is_chat { self.release_held_history(window, cx); }
                 if if is_chat { self.chat_auth_lost(&error) } else { self.auth_lost(&error) } {
                     self.open_connection(window, cx);
                     self.error = Some(Self::failure(&error));
@@ -2466,6 +2493,18 @@ impl Hangar {
                 }
                 else { visible = false; true };
                 let _ = frame.applied.send(applied);
+            }
+            Payload::History(revision, limit, result) if revision == self.revision && limit == self.history_limit
+                && !self.history_installed && !self.stream_caught_up && self.chat_online && self.held_history.is_none() => {
+                api::open_trace(|| "history held".into());
+                self.held_history = Some(Envelope { connection: envelope.connection, selection: envelope.selection,
+                    payload: Payload::History(revision, limit, result) });
+                let selection = self.selection;
+                cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor().timer(HISTORY_HOLD_MAX).await;
+                    let _ = this.update_in(cx, |this, window, cx| if this.selection == selection { this.release_held_history(window, cx) });
+                }).detach();
+                visible = false;
             }
             Payload::History(revision, limit, result) if revision == self.revision && limit == self.history_limit => {
                 rows = true;
