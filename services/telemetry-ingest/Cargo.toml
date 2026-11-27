@@ -15,6 +15,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Senha das contas do painel; o sha2 guarda só o hash dos tokens de sessão e convite.
 argon2 = "0.5"
+# Hash dos scripts da página na Content-Security-Policy.
+base64 = "0.22"
 sha2 = "0.10"
 # A mesma rand_core que o argon2 usa, com o gerador do sistema ligado (sal e tokens).
 rand_core = { version = "0.6", features = ["getrandom"] }

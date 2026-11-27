@@ -1385,6 +1385,7 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "axum",
+ "base64",
  "hangar-telemetry",
  "rand_core 0.6.4",
  "serde",

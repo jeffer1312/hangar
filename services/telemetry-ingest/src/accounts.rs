@@ -11,6 +11,10 @@ use sqlx::PgPool;
 pub const SESSION_DAYS: i32 = 30;
 pub const INVITE_DAYS: i32 = 7;
 pub const MIN_PASSWORD: usize = 10;
+/// Teto da senha: o argon2 gasta tempo proporcional ao tamanho, e ninguém digita mais que isso.
+pub const MAX_PASSWORD: usize = 256;
+
+pub fn password_fits(password: &str) -> bool { (MIN_PASSWORD..=MAX_PASSWORD).contains(&password.chars().count()) }
 
 pub fn hash_password(password: &str) -> String {
     let salt = SaltString::generate(&mut OsRng);
@@ -46,6 +50,9 @@ pub fn normalize_email(email: &str) -> Option<String> {
 /// Conferida quando o e-mail não existe, para a resposta levar o mesmo tempo e não dizer quem tem conta.
 static DECOY: LazyLock<String> = LazyLock::new(|| hash_password("decoy-que-nunca-casa"));
 
+/// Calcula o hash de engano na subida: a primeira resposta a e-mail desconhecido não fica mais lenta que as outras.
+pub fn warm() { LazyLock::force(&DECOY); }
+
 pub async fn login(pool: &PgPool, email: &str, password: &str) -> Result<Option<i64>, sqlx::Error> {
     let row: Option<(i64, String)> = sqlx::query_as("SELECT id, password_hash FROM panel_users WHERE email = $1")
         .bind(email)
@@ -56,7 +63,10 @@ pub async fn login(pool: &PgPool, email: &str, password: &str) -> Result<Option<
         None => (None, DECOY.clone()),
     };
     let password = password.to_owned();
-    let ok = tokio::task::spawn_blocking(move || verify(&password, &hash)).await.unwrap_or(false);
+    // Falha da tarefa é erro do servidor (503), nunca "senha errada".
+    let ok = tokio::task::spawn_blocking(move || verify(&password, &hash))
+        .await
+        .map_err(|e| sqlx::Error::Protocol(format!("argon2: {e}")))?;
     Ok(id.filter(|_| ok))
 }
 
@@ -95,6 +105,14 @@ pub async fn create_invite(pool: &PgPool, by: i64) -> Result<String, sqlx::Error
         .execute(pool)
         .await?;
     Ok(token)
+}
+
+/// Convite que ainda vale; conferido antes do argon2, que é caro, para quem não tem convite não gastar CPU.
+pub async fn invite_open(pool: &PgPool, invite: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM panel_invites WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now())")
+        .bind(digest(invite))
+        .fetch_one(pool)
+        .await
 }
 
 pub enum Join {
@@ -171,6 +189,14 @@ mod tests {
         assert!(verify("uma senha longa", &hash));
         assert!(!verify("outra senha longa", &hash));
         assert!(!verify("uma senha longa", "não é hash"));
+    }
+
+    #[test]
+    fn password_length_has_a_floor_and_a_ceiling() {
+        assert!(!password_fits("curta"));
+        assert!(password_fits("dez-letras"));
+        assert!(password_fits(&"x".repeat(MAX_PASSWORD)));
+        assert!(!password_fits(&"x".repeat(MAX_PASSWORD + 1)));
     }
 
     #[test]

@@ -81,8 +81,8 @@ async fn set_user(pool: &PgPool, email: &str) -> Result<(), Box<dyn std::error::
     let mut password = String::new();
     std::io::stdin().read_line(&mut password)?;
     let password = password.trim_end_matches(['\r', '\n']).to_owned();
-    if password.chars().count() < accounts::MIN_PASSWORD {
-        return Err(format!("a senha precisa de pelo menos {} caracteres", accounts::MIN_PASSWORD).into());
+    if !accounts::password_fits(&password) {
+        return Err(format!("a senha precisa ter de {} a {} caracteres", accounts::MIN_PASSWORD, accounts::MAX_PASSWORD).into());
     }
     accounts::set_user(pool, &email, &accounts::hash_off_thread(password).await).await?;
     eprintln!("telemetry-ingest: conta {email} pronta");
@@ -96,10 +96,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = PgPoolOptions::new().max_connections(5).connect(&database_url).await?;
     store::migrate(&pool).await?;
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let [command, email] = args.as_slice()
-        && command == "set-user"
-    {
-        return set_user(&pool, email).await;
+    match args.as_slice() {
+        [command, email] if command == "set-user" => return set_user(&pool, email).await,
+        [command, ..] if command == "set-user" => return Err("uso: telemetry-ingest set-user <email> (senha na entrada padrão)".into()),
+        [] => {}
+        _ => return Err(format!("argumento desconhecido: {}", args.join(" ")).into()),
     }
     tokio::spawn(retention(pool.clone()));
     // Instalado antes de ouvir: falha aqui derruba a subida, não o desligamento.
