@@ -1645,6 +1645,69 @@ describe('send vai ao servidor da conversa', () => {
     const err = await chatStore('srv1', 'sess').send('oi').catch((e: unknown) => e);
     expect((err as { status?: number }).status).toBe(404);
   });
+
+  const coded503 = (code: string) => new Response(JSON.stringify({ detail: { code, params: {}, msg: 'x' } }), { status: 503 });
+
+  test('503 com código devolve o texto como recusado', async () => {
+    const fetchMock = vi.fn(async () => coded503('runtime_unhealthy'));
+    vi.stubGlobal('fetch', fetchMock);
+    const chat = chatStore('srv1', 'sess');
+    await expect(chat.send('oi')).rejects.toMatchObject({ status: 503, code: 'runtime_unhealthy' });
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'oi', submission: { status: 'rejected' } });
+    expect(chat.use.getState().pending).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('503 server_starting devolve o texto como recusado', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"detail":"server_starting"}', { status: 503 })));
+    const chat = chatStore('srv1', 'sess');
+    await expect(chat.send('oi')).rejects.toMatchObject({ status: 503, code: 'server_starting' });
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'oi', submission: { status: 'rejected' } });
+    expect(chat.use.getState().pending).toEqual([]);
+  });
+
+  test('503 runtime_reply_lost continua incerto', async () => {
+    const fetchMock = vi.fn(async () => coded503('runtime_reply_lost'));
+    vi.stubGlobal('fetch', fetchMock);
+    const chat = chatStore('srv1', 'sess');
+    await expect(chat.send('oi')).rejects.toMatchObject({ status: 503, code: 'runtime_reply_lost' });
+    expect(readDraft('srv1', 'sess')?.submission?.status).toBe('unknown');
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['oi']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('503 sem corpo continua incerto', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const chat = chatStore('srv1', 'sess');
+    await expect(chat.send('oi')).rejects.toMatchObject({ status: 503 });
+    expect(readDraft('srv1', 'sess')?.submission?.status).toBe('unknown');
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['oi']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('503 com código no modo Jev devolve o texto como recusado', async () => {
+    const fetchMock = vi.fn(async (_url: string) => coded503('runtime_unhealthy'));
+    vi.stubGlobal('fetch', fetchMock);
+    const chat = chatStore('srv1', 'sess');
+    await expect(chat.send('usar azul', undefined, { kind: 'jev', task: 'criar tela', message: 'usar azul' }))
+      .rejects.toMatchObject({ status: 503, code: 'runtime_unhealthy' });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('http://10.0.0.1:8765/api/sessions/sess/input');
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'usar azul', submission: { status: 'rejected' } });
+    expect(chat.use.getState().pending).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('503 com código no /steer continua incerto', async () => {
+    const fetchMock = vi.fn(async (_url: string) => coded503('runtime_unhealthy'));
+    vi.stubGlobal('fetch', fetchMock);
+    const chat = chatStore('srv1', 'sess');
+    await expect(chat.send('usar azul', undefined, { kind: 'direct', terminalClaude: false })).rejects.toMatchObject({ status: 503 });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('http://10.0.0.1:8765/api/sessions/sess/steer');
+    expect(readDraft('srv1', 'sess')?.submission?.status).toBe('unknown');
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['usar azul']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 type Pedido = {
