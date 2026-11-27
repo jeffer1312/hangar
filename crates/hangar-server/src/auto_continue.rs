@@ -7,7 +7,7 @@ use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use axum::extract::{ConnectInfo, Request, State};
@@ -44,7 +44,10 @@ type Stops = Arc<Mutex<HashMap<String, (f64, String)>>>;
 pub struct AutoContinue {
     commands: UnboundedSender<Command>,
     stops: Stops,
-    host: Arc<Native>,
+    /// Fraca: o `AppState` guarda esta peça e o `Native` guarda o `AppState`; a forte fechava o ciclo, e o
+    /// estado (com os vigias de arquivo dele) sobrevivia ao servidor. Quem segura o `Native` são as tarefas.
+    host: Weak<Native>,
+    diag: DiagClient,
     pub ledger: Arc<Mutex<Ledger>>,
 }
 
@@ -66,7 +69,7 @@ impl AutoContinue {
 
     fn scheduler_gone(&self, name: &str, command: &Command) {
         tracing::error!(session = name, ?command, "continuar sozinho: a agenda parou; o comando se perdeu");
-        self.host.st.diag.report(EVENT, name, "auto_continue_scheduler_gone", "continuar sozinho: a agenda parou e nao recebe comandos");
+        self.diag.report(EVENT, name, "auto_continue_scheduler_gone", "continuar sozinho: a agenda parou e nao recebe comandos");
     }
 
     /// O Cancelar da nota, respondido na hora; a nota trocada chega pela conversa quando a agenda a escrever.
@@ -88,7 +91,8 @@ impl AutoContinue {
     /// Os fatos da sessão recém-restaurada, para continuar o turno cortado pelo reboot. `since` é a hora do
     /// boot: mensagem da pessoa depois dele conta como escrita depois da parada.
     pub async fn restored_facts(&self, name: &str, since: f64) -> Result<Option<Facts>, String> {
-        self.host.restored_facts(name, since).await
+        let Some(host) = self.host.upgrade() else { return Err("auto_continue_unavailable".to_owned()) };
+        host.restored_facts(name, since).await
     }
 
     pub fn rename(&self, old: &str, new: &str) {
@@ -130,7 +134,7 @@ pub fn spawn(st: Arc<AppState>) -> Vec<JoinHandle<()>> {
         .map(|waiting| (waiting.hit.name, (waiting.hit.at, waiting.hit.provider))).collect()));
     let host = Arc::new(Native { st: st.clone(), runtime: runtime.clone(), stops: stops.clone(), sub: Mutex::new(None) });
     let (commands, scheduler) = hangar_auto_continue::spawn(host.clone(), ledger.clone());
-    let auto = Arc::new(AutoContinue { commands, stops, host: host.clone(), ledger: ledger.clone() });
+    let auto = Arc::new(AutoContinue { commands, stops, host: Arc::downgrade(&host), diag: st.diag.clone(), ledger: ledger.clone() });
     if st.auto_continue.set(auto.clone()).is_err() { return Vec::new() }
     let (sink, mut hits) = tokio::sync::mpsc::unbounded_channel();
     runtime.set_stop_sink(sink);
@@ -614,6 +618,23 @@ mod tests {
         assert_eq!(utc_hhmm(10 * 3600 + 5 * 60 + 59), "10:05 UTC");
         assert_eq!(utc_hhmm(86_400 + 3600), "01:00 UTC");
         assert!(!hhmm(1_800_000_000.0).is_empty());
+    }
+
+    /// Servidor que saiu (tarefas abortadas) solta o estado: preso, os vigias de arquivo de cada servidor dos
+    /// testes se acumulavam até "Too many open files".
+    #[tokio::test]
+    async fn the_state_is_released_when_the_tasks_stop() {
+        let home = tempfile::tempdir().unwrap();
+        let st = crate::loops::tests::invalid_config_state(home.path());
+        assert!(st.state.runtime.set(Arc::new(RuntimeRegistry::new("fixture".into()))).is_ok());
+        let tasks = spawn(st.clone());
+        assert_eq!(tasks.len(), 3);
+        assert!(st.auto_continue.get().is_some());
+        for task in &tasks { task.abort(); }
+        for task in tasks { let _ = task.await; }
+        let weak = Arc::downgrade(&st);
+        drop(st);
+        assert!(weak.upgrade().is_none(), "o continuar sozinho segurou o estado do servidor");
     }
 
     #[tokio::test]
