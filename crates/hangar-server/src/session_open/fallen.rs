@@ -50,7 +50,7 @@ impl Fallen {
     /// A entrada da fotografia com que o restore a reabre.
     pub fn entry(&self, name: &str) -> Entry {
         Entry { name: name.to_owned(), provider: self.provider, conversation: self.conversation.clone(),
-            permission_mode: self.permission_mode.clone(), missing_since: None, unit: None }
+            permission_mode: self.permission_mode.clone(), missing_since: None, unit: None, turn_open: false, last_line: None }
     }
 }
 
@@ -183,7 +183,7 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     let task = tokio::spawn(async move {
         let _reopening = reopening;
         let host = super::server::ServerHost::new(st.clone()).await;
-        super::restore::restore_one(&host, &st, &program, &fallen.key, &entry).await
+        super::restore::restore_one(&host, &st, &program, &fallen.key, &entry, None).await
     });
     match task.await {
         Ok(Ok(())) => answer(&headers, StatusCode::OK, json!({"ok": true})),
