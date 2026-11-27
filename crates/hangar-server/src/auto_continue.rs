@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
+use crate::diag::DiagClient;
 use crate::list::hub::InternalSubscription;
 use crate::list::mux::Mux;
 use crate::routes::{AppState, cors};
@@ -33,6 +34,8 @@ const HOLD_CHECK: Duration = Duration::from_secs(60);
 /// Espera pela primeira produção da lista quando a assinatura acabou de nascer.
 const FIRST_LIST: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(250);
+/// O índice do interruptor não se leu: a agenda não decide sem saber se a pessoa desligou.
+const SWITCH_UNREADABLE: &str = "auto_continue_switch_unreadable";
 
 /// Hora e agente da última parada de cada sessão: a fila diz se a pessoa escreveu depois dela.
 type Stops = Arc<Mutex<HashMap<String, (f64, String)>>>;
@@ -48,22 +51,38 @@ pub struct AutoContinue {
 impl AutoContinue {
     pub fn stop(&self, hit: StopHit) {
         lock(&self.stops).insert(hit.name.clone(), (hit.at, hit.provider.clone()));
-        let _ = self.commands.send(Command::Stop(hit));
+        let name = hit.name.clone();
+        self.send(&name, Command::Stop(hit));
     }
 
     pub fn cancel(&self, name: &str, why: &'static str) {
-        let _ = self.commands.send(Command::Cancel { name: name.to_owned(), why });
+        self.send(name, Command::Cancel { name: name.to_owned(), why });
+    }
+
+    /// A agenda que morreu (pânico) não recebe mais nada: o comando perdido vai ao log e ao diário.
+    fn send(&self, name: &str, command: Command) {
+        if let Err(lost) = self.commands.send(command) { self.scheduler_gone(name, &lost.0); }
+    }
+
+    fn scheduler_gone(&self, name: &str, command: &Command) {
+        tracing::error!(session = name, ?command, "continuar sozinho: a agenda parou; o comando se perdeu");
+        self.host.st.diag.report(EVENT, name, "auto_continue_scheduler_gone", "continuar sozinho: a agenda parou e nao recebe comandos");
     }
 
     /// O Cancelar da nota, respondido na hora; a nota trocada chega pela conversa quando a agenda a escrever.
     /// `false`: a sessão não esperava a rede.
     pub fn cancel_waiting(&self, name: &str) -> bool {
-        hangar_auto_continue::scheduler::cancel(&self.ledger, &self.commands, name)
+        let cancelled = hangar_auto_continue::scheduler::cancel(&self.ledger, &self.commands, name);
+        // A marca ficou gravada e vale na volta da agenda, mas a nota não troca até lá.
+        if cancelled && self.commands.is_closed() {
+            self.scheduler_gone(name, &Command::Cancel { name: name.to_owned(), why: hangar_auto_continue::scheduler::CANCELLED });
+        }
+        cancelled
     }
 
     pub fn forget(&self, name: &str) {
         lock(&self.stops).remove(name);
-        let _ = self.commands.send(Command::Forget(name.to_owned()));
+        self.send(name, Command::Forget(name.to_owned()));
     }
 
     /// Os fatos da sessão recém-restaurada, para continuar o turno cortado pelo reboot. `since` é a hora do
@@ -76,7 +95,7 @@ impl AutoContinue {
         let mut stops = lock(&self.stops);
         if let Some(stop) = stops.remove(old) { stops.insert(new.to_owned(), stop); }
         drop(stops);
-        let _ = self.commands.send(Command::Rename { old: old.to_owned(), new: new.to_owned() });
+        self.send(old, Command::Rename { old: old.to_owned(), new: new.to_owned() });
     }
 }
 
@@ -128,8 +147,16 @@ async fn hold(host: Arc<Native>, ledger: Arc<Mutex<Ledger>>) {
     loop {
         let waiting = !lock(&ledger).parked().is_empty();
         let need = if waiting { Some(true) } else {
-            // Descoberta que falha não decide: fica como estava.
-            host.st.list.discover(None).await.ok().map(|rows| rows.iter().any(|row| row.provider == "claude" && !row.headless))
+            match host.st.list.discover(None).await {
+                Ok(rows) => Some(rows.iter().any(|row| row.provider == "claude" && !row.headless)),
+                // Descoberta que falha não decide: fica como estava.
+                Err(error) => {
+                    if crate::warn_limit::allow(None, error.code) {
+                        tracing::warn!(code = error.code, "continuar sozinho: a lista não se descobriu; a assinatura fica como estava");
+                    }
+                    None
+                }
+            }
         };
         match need {
             Some(true) => { host.subscription(); }
@@ -175,7 +202,18 @@ impl Native {
             return Err(error.code);
         }
         let queue = self.queue(name).await?;
-        Ok(Some(facts_of(row, &rows, &queue, Some(since), self.runtime.handoff_held(name))))
+        let mut facts = facts_of(row, &rows, &queue, Some(since), self.runtime.handoff_held(name));
+        facts.off |= self.switch_off(row).await?;
+        Ok(Some(facts))
+    }
+
+    /// O interruptor relido do índice: a rodada da lista em que o índice falhou deixou a linha "ligada".
+    async fn switch_off(&self, row: &SessionRow) -> Result<bool, String> {
+        let env = self.st.list.env();
+        let Some(home) = env.dirs.as_ref().map(|dirs| dirs.home.clone()) else { return Err("list_dirs_missing".to_owned()) };
+        let off = off_keys(&home).await.map_err(|_| SWITCH_UNREADABLE.to_owned())?;
+        if off.is_empty() { return Ok(false) }
+        Ok(row_key(&env.mux, row).await.is_some_and(|key| off.contains(&key)))
     }
 
     async fn queue(&self, name: &str) -> Result<Vec<Value>, String> {
@@ -198,6 +236,14 @@ impl Native {
 fn in_orq(row: &SessionRow, rows: &[SessionRow]) -> bool {
     row.orq_arbiter.is_some() || row.pair_gid.as_deref()
         .is_some_and(|gid| rows.iter().any(|r| r.provider == "orq" && r.pair_gid.as_deref() == Some(gid)))
+}
+
+/// Fila que não se lê é erro, salvo na sessão adormecida: sem ator não há fila, e a escrita a acorda onde estava.
+fn queue_unless_asleep(row: &SessionRow, read: Result<Vec<Value>, String>) -> Result<Vec<Value>, String> {
+    match read {
+        Err(_) if row.asleep => Ok(Vec::new()),
+        read => read,
+    }
 }
 
 /// Mensagem de alguém na fila; a nota da conversa e o próprio "continue" não contam.
@@ -237,10 +283,11 @@ impl Host for Native {
         Box::pin(async move {
             let rows = self.rows().await?;
             let Some(row) = rows.iter().find(|row| row.name == name) else { return Ok(None) };
-            // Fila que não se lê (sessão adormecida, sem ator) não prova mensagem nenhuma esperando.
-            let queue = self.queue(name).await.unwrap_or_default();
+            let queue = queue_unless_asleep(row, self.queue(name).await)?;
             let stopped_at = lock(&self.stops).get(name).map(|(at, _)| *at);
-            Ok(Some(facts_of(row, &rows, &queue, stopped_at, self.runtime.handoff_held(name))))
+            let mut facts = facts_of(row, &rows, &queue, stopped_at, self.runtime.handoff_held(name));
+            facts.off |= self.switch_off(row).await?;
+            Ok(Some(facts))
         })
     }
 
@@ -273,42 +320,90 @@ pub(crate) async fn send_text(st: &AppState, name: &str, text: &str) -> Result<b
     Err(reply["detail"]["code"].as_str().unwrap_or("auto_continue_send_refused").to_owned())
 }
 
-pub(crate) fn hhmm(at: f64) -> String { crate::runtime::local_policy::local_hhmm(at.floor() as i64).unwrap_or_default() }
+/// Sem a hora local, a de UTC marcada: a nota nunca sai com a hora vazia.
+pub(crate) fn hhmm(at: f64) -> String {
+    let secs = at.floor() as i64;
+    crate::runtime::local_policy::local_hhmm(secs).unwrap_or_else(|| utc_hhmm(secs))
+}
+
+fn utc_hhmm(secs: i64) -> String {
+    let day = secs.rem_euclid(86_400);
+    format!("{:02}:{:02} UTC", day / 3600, day % 3600 / 60)
+}
 
 /// As chaves de registro com o interruptor desligado, por casa: a lista não relê os registros a cada rodada.
-/// Lidas uma vez, na primeira consulta da casa; a rota mantém o índice.
+/// Lidas uma vez, na primeira consulta da casa que deu certo; a rota mantém o índice.
 static OFF: LazyLock<Mutex<HashMap<PathBuf, HashSet<String>>>> = LazyLock::new(Mutex::default);
 const OFF_MARK: &[u8] = b"auto_continue_off";
 
-fn with_off<R>(home: &Path, change: impl FnOnce(&mut HashSet<String>) -> R) -> R {
+/// Leitura que falhou não fica guardada: a consulta seguinte lê de novo.
+fn with_off<R>(home: &Path, change: impl FnOnce(&mut HashSet<String>) -> R) -> io::Result<R> {
     let mut all = lock(&OFF);
-    change(all.entry(home.to_owned()).or_insert_with(|| scan_off(&record::dir(home))))
+    let keys = match all.entry(home.to_owned()) {
+        std::collections::hash_map::Entry::Occupied(found) => found.into_mut(),
+        std::collections::hash_map::Entry::Vacant(slot) => slot.insert(scan_off(&record::dir(home))?),
+    };
+    Ok(change(keys))
 }
 
-fn scan_off(dir: &Path) -> HashSet<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return HashSet::new() };
-    entries.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "json")).filter_map(|entry| {
-        let bytes = crate::runtime::queue::read_replaced(&entry.path()).ok()?;
-        if !bytes.windows(OFF_MARK.len()).any(|w| w == OFF_MARK) { return None; }
-        let spec: SessionSpec = serde_json::from_slice(&bytes).ok()?;
-        spec.auto_continue_off.then_some(spec.key)
-    }).collect()
+/// Pasta ausente: nenhuma desligada. Pasta ou registro que não se lê é erro. Registro estragado fica de fora
+/// com aviso: reler não o conserta, e travar o índice pararia o continuar de todas as sessões.
+fn scan_off(dir: &Path) -> io::Result<HashSet<String>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) => return Err(error),
+    };
+    let mut off = HashSet::new();
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().is_none_or(|x| x != "json") { continue; }
+        let bytes = match crate::runtime::queue::read_replaced(&path) {
+            Ok(bytes) => bytes,
+            // Apagado entre a listagem e a leitura.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if !bytes.windows(OFF_MARK.len()).any(|w| w == OFF_MARK) { continue; }
+        match serde_json::from_slice::<SessionSpec>(&bytes) {
+            Ok(spec) => { if spec.auto_continue_off { off.insert(spec.key); } }
+            Err(error) => tracing::warn!(path = %path.display(), %error, "continuar sozinho: registro ilegível fica fora do índice do interruptor"),
+        }
+    }
+    Ok(off)
+}
+
+async fn off_keys(home: &Path) -> io::Result<HashSet<String>> {
+    let at = home.to_owned();
+    let read = crate::groups::link_state::blocking(move || with_off(&at, |off| off.clone())).await;
+    if let Err(error) = &read && crate::warn_limit::allow(None, SWITCH_UNREADABLE) {
+        tracing::warn!(code = SWITCH_UNREADABLE, %error, "continuar sozinho: o índice do interruptor não se leu");
+    }
+    read
+}
+
+/// A chave de registro da linha: a da vida `k:`, ou a `CP_SESSION_KEY` do pane na sessão com terminal.
+async fn row_key(mux: &Mux, row: &SessionRow) -> Option<String> {
+    match crate::list::links::runtime_key(row.lifecycle_id.as_deref()) {
+        Some(key) => Some(key.to_owned()),
+        None if !row.headless => crate::session_visibility::fill::pane_key(mux, row).await,
+        None => None,
+    }
 }
 
 /// O interruptor de cada linha, pelo spec. A chave vem da vida `k:`; a sessão com terminal sem ela pergunta
-/// a `CP_SESSION_KEY` ao pane só quando alguma sessão está desligada.
-pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow]) {
+/// a `CP_SESSION_KEY` ao pane só quando alguma sessão está desligada. Índice que não se lê deixa a linha
+/// ligada e vai ao diário; quem decide continuar relê o índice (`switch_off`) e espera.
+pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow], diag: &DiagClient) {
     for row in rows.iter_mut() { row.auto_continue_off = false; }
-    let at = home.to_owned();
-    let off = tokio::task::spawn_blocking(move || with_off(&at, |off| off.clone())).await.unwrap_or_default();
+    let off = match off_keys(home).await {
+        Ok(off) => off,
+        Err(_) => return diag.report(EVENT, "", SWITCH_UNREADABLE, "continuar sozinho: o indice do interruptor nao se leu"),
+    };
     if off.is_empty() { return; }
     for row in rows.iter_mut() {
-        let key = match crate::list::links::runtime_key(row.lifecycle_id.as_deref()) {
-            Some(key) => Some(key.to_owned()),
-            None if !row.headless => crate::session_visibility::fill::pane_key(mux, row).await,
-            None => None,
-        };
-        row.auto_continue_off = key.is_some_and(|key| off.contains(&key));
+        let switched_off = row_key(mux, row).await.is_some_and(|key| off.contains(&key));
+        row.auto_continue_off = switched_off;
     }
 }
 
@@ -392,7 +487,7 @@ fn store_off(home: &Path, key: &str, off: bool) -> io::Result<bool> {
         if !record::write_auto_continue(home, key, off)? { return Ok(false) }
         if off { keys.insert(key.to_owned()); } else { keys.remove(key); }
         Ok(true)
-    })
+    })?
 }
 
 #[cfg(test)]
@@ -466,15 +561,59 @@ mod tests {
         record::write(home.path(), &spec(off.as_str(), json!({"auto_continue_off": true}))).unwrap();
         record::write(home.path(), &spec(on.as_str(), json!({}))).unwrap();
         let mux = Mux::with_program("hangar-mux-ausente", Duration::from_secs(1));
+        let diag = DiagClient::new();
         let mut rows = vec![row(json!({"name": "s", "headless": true, "lifecycle_id": format!("k:{off}")})),
             row(json!({"name": "t", "headless": true, "lifecycle_id": format!("k:{on}")}))];
-        fill_rows(home.path(), &mux, &mut rows).await;
+        fill_rows(home.path(), &mux, &mut rows, &diag).await;
         assert!(rows[0].auto_continue_off && !rows[1].auto_continue_off);
         assert!(store_off(home.path(), &off, false).unwrap(), "religar pela rota");
-        fill_rows(home.path(), &mux, &mut rows).await;
+        fill_rows(home.path(), &mux, &mut rows, &diag).await;
         assert!(!rows[0].auto_continue_off, "o índice segue a rota sem reler os registros");
         assert!(!record::read(home.path(), &off).unwrap().unwrap().auto_continue_off);
         assert!(!store_off(home.path(), &"c".repeat(32), true).unwrap(), "sem registro não há onde guardar");
+    }
+
+    /// Falha passageira na primeira leitura não pode deixar ligada para sempre a sessão que a pessoa desligou.
+    #[tokio::test]
+    async fn an_unreadable_switch_index_is_read_again() {
+        let home = tempfile::tempdir().unwrap();
+        let key = "d".repeat(32);
+        let specs = record::dir(home.path());
+        std::fs::create_dir_all(specs.parent().unwrap()).unwrap();
+        // Um arquivo no lugar da pasta: a listagem falha sem ser "pasta ausente".
+        std::fs::write(&specs, b"x").unwrap();
+        assert!(off_keys(home.path()).await.is_err());
+        let mux = Mux::with_program("hangar-mux-ausente", Duration::from_secs(1));
+        let mut rows = vec![row(json!({"name": "s", "headless": true, "lifecycle_id": format!("k:{key}")}))];
+        fill_rows(home.path(), &mux, &mut rows, &DiagClient::new()).await;
+        assert!(!rows[0].auto_continue_off);
+        std::fs::remove_file(&specs).unwrap();
+        std::fs::create_dir_all(&specs).unwrap();
+        let spec = json!({"version": 1, "key": key, "name": "s", "cwd": "/w", "provider": "claude", "surface": "headless",
+            "account": {"kind": "default"}, "account_source": "default", "jev": false, "read_only": false, "created_at": 1.0,
+            "auto_continue_off": true});
+        std::fs::write(specs.join(format!("{key}.json")), serde_json::to_vec(&spec).unwrap()).unwrap();
+        assert!(off_keys(home.path()).await.unwrap().contains(&key), "a falha não ficou guardada");
+        fill_rows(home.path(), &mux, &mut rows, &DiagClient::new()).await;
+        assert!(rows[0].auto_continue_off);
+    }
+
+    #[test]
+    fn a_queue_that_does_not_read_only_counts_as_empty_when_asleep() {
+        let awake = row(json!({"name": "s"}));
+        let asleep = row(json!({"name": "s", "asleep": true}));
+        let failed = || Err::<Vec<Value>, String>("runtime_binding".to_owned());
+        assert_eq!(queue_unless_asleep(&awake, failed()), Err("runtime_binding".to_owned()));
+        assert_eq!(queue_unless_asleep(&asleep, failed()), Ok(Vec::new()));
+        let queue = vec![json!({"id": "q1", "text": "segue", "delivered": false})];
+        assert_eq!(queue_unless_asleep(&awake, Ok(queue.clone())), Ok(queue));
+    }
+
+    #[test]
+    fn the_note_hour_falls_back_to_utc() {
+        assert_eq!(utc_hhmm(10 * 3600 + 5 * 60 + 59), "10:05 UTC");
+        assert_eq!(utc_hhmm(86_400 + 3600), "01:00 UTC");
+        assert!(!hhmm(1_800_000_000.0).is_empty());
     }
 
     #[tokio::test]

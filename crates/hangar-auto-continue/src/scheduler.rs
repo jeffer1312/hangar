@@ -98,8 +98,9 @@ pub enum Command {
 /// chegar a vez dela. `false`: a sessão não esperava.
 pub fn cancel(ledger: &Mutex<Ledger>, commands: &UnboundedSender<Command>, name: &str) -> bool {
     let waiting = ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel(name);
-    if waiting {
-        let _ = commands.send(Command::Cancel { name: name.to_owned(), why: CANCELLED });
+    // A agenda parada não troca a nota; a marca gravada vale quando ela voltar.
+    if waiting && commands.send(Command::Cancel { name: name.to_owned(), why: CANCELLED }).is_err() {
+        tracing::error!(session = name, "continuar sozinho: a agenda parou; o Cancelar não troca a nota");
     }
     waiting
 }
@@ -161,6 +162,7 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
         }
         self.arm_tick();
         loop {
+            self.report_ledger();
             let wake = self.next_wake();
             let far = Instant::now() + Duration::from_secs(3600);
             // Comando antes do relógio: um Cancelar que chegou enquanto a agenda esperava o servidor não
@@ -447,6 +449,14 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
         };
         meta["state"] = json!(state);
         self.note(name, &mut parked, state, text, meta).await;
+    }
+
+    /// Falha de leitura ou gravação do registro: os tetos podem não valer depois de reiniciar.
+    fn report_ledger(&self) {
+        let problem = self.ledger().take_problem();
+        if let Some(code) = problem {
+            self.host.diary("", code, "continuar sozinho: o registro dos tetos nao se leu ou nao se gravou");
+        }
     }
 
     fn unreadable(&self, name: &str, code: &str) {

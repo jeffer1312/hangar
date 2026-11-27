@@ -172,12 +172,20 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId, sessio
 
 type Cancel = 'idle' | 'cancelling' | { failed: string };
 
+/** Sem a nota trocada nesse prazo (conversa sem conexão), o giro para e o Cancelar volta para tentar de novo. */
+export const AUTO_CONTINUE_CANCEL_SETTLE_MS = 15_000;
+
 /** Nota do continuar sozinho: linha neutra entre fios, com o Cancelar enquanto espera a rede. */
 function AutoContinueLine({ event, serverId, sessionName }: { event: ChatEvent; serverId?: string; sessionName?: string }) {
   const [cancel, setCancel] = useState<Cancel>('idle');
   // Cancelou: o giro fica até a nota trocada pelo desfecho chegar, e o botão sai com ela.
   const state = event.notice_meta?.state;
   useEffect(() => setCancel('idle'), [state]);
+  useEffect(() => {
+    if (cancel !== 'cancelling') return;
+    const timer = setTimeout(() => setCancel('idle'), AUTO_CONTINUE_CANCEL_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [cancel]);
   const cancellable = autoContinueCancellable(event) && !!serverId && !!sessionName;
   const doCancel = () => {
     if (!serverId || !sessionName) return;

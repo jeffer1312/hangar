@@ -618,3 +618,17 @@ async fn an_unreadable_list_keeps_the_wait() {
     assert_eq!(fake.last_note().meta["state"], "continued");
     assert!(!fake.diary().iter().any(|code| code.starts_with("auto_continue_skipped")), "{:?}", fake.diary());
 }
+
+/// Registro estragado na subida: os tetos recomeçam do zero, e isso vai ao diário em vez de só ao log.
+#[tokio::test(start_paused = true)]
+async fn a_broken_ledger_goes_to_the_diary() {
+    let fake = Fake::new();
+    let home = tempfile::tempdir().unwrap();
+    let file = ledger::path(home.path());
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, b"{nao e json").unwrap();
+    let shared = Arc::new(Mutex::new(Ledger::load(file)));
+    let (_commands, _task) = spawn_with_probe(fake.clone(), shared, fake.clone());
+    settle().await;
+    assert!(fake.diary().contains(&ledger::UNREADABLE.to_owned()), "{:?}", fake.diary());
+}

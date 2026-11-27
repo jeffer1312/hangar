@@ -664,7 +664,7 @@ impl ListBridge {
         self.flush_notes();
         let Some((mut changed, effects)) = done else { return Ok(Partial::Unchanged) };
         crate::dictation::rename_suggestion::fill_rows(&self.dirs()?.home, &self.env.mux, &mut changed).await;
-        crate::auto_continue::fill_rows(&self.dirs()?.home, &self.env.mux, &mut changed).await;
+        crate::auto_continue::fill_rows(&self.dirs()?.home, &self.env.mux, &mut changed, &self.facts.diag).await;
         let plugins = self.plugin_facts(&changed).await;
         self.project_plugins(&mut changed, &plugins);
         public_problems(&mut changed);
@@ -841,7 +841,7 @@ impl ListBridge {
         self.demote(effects);
         let mut rows = rows;
         crate::dictation::rename_suggestion::fill_rows(&self.dirs()?.home, &self.env.mux, &mut rows).await;
-        crate::auto_continue::fill_rows(&self.dirs()?.home, &self.env.mux, &mut rows).await;
+        crate::auto_continue::fill_rows(&self.dirs()?.home, &self.env.mux, &mut rows, &self.facts.diag).await;
         self.project_plugins(&mut rows, &plugins);
         public_problems(&mut rows);
         rows.extend(aside);

@@ -26,6 +26,9 @@ pub const SERVER_5XX_MAX: usize = 1;
 const KEY_KEEP_S: f64 = 7.0 * 24.0 * 3600.0;
 /// Paradas encerradas lembradas por sessão: só serve à mesma linha reemitida logo depois.
 const ENDED_MAX: usize = 32;
+/// Os códigos que a agenda leva ao diário (`take_problem`).
+pub const UNREADABLE: &str = "auto_continue_ledger_unreadable";
+pub const SAVE_FAILED: &str = "auto_continue_ledger_save_failed";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -126,24 +129,39 @@ struct Doc {
 pub struct Ledger {
     path: PathBuf,
     doc: Doc,
+    /// A última falha de leitura ou gravação, até a agenda a levar ao diário.
+    problem: Option<&'static str>,
 }
 
 impl Ledger {
-    /// Arquivo ausente é registro vazio. Ilegível também, com aviso no log: travar a continuação por um
-    /// arquivo estragado deixaria a sessão parada, e os tetos voltam a valer na gravação seguinte.
+    /// Arquivo ausente é registro vazio. Ilegível também, com aviso no log e no diário (`take_problem`):
+    /// travar a continuação por um arquivo estragado deixaria a sessão parada. O estragado fica ao lado,
+    /// como `.bad`, antes que a gravação seguinte o cubra.
     pub fn load(path: PathBuf) -> Self {
+        let mut problem = None;
         let doc = match hangar_core::fs::read_replaced(&path) {
             Ok(raw) => serde_json::from_slice(&raw).unwrap_or_else(|error| {
                 tracing::warn!(path = %path.display(), %error, "registro de continuação ilegível; recomeça vazio");
+                let bad = path.with_extension("json.bad");
+                if let Err(error) = std::fs::rename(&path, &bad) {
+                    tracing::warn!(path = %bad.display(), %error, "registro de continuação ilegível não foi guardado à parte");
+                }
+                problem = Some(UNREADABLE);
                 Doc::default()
             }),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Doc::default(),
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "registro de continuação sem leitura; recomeça vazio");
+                problem = Some(UNREADABLE);
                 Doc::default()
             }
         };
-        Self { path, doc }
+        Self { path, doc, problem }
+    }
+
+    /// A falha guardada desde a última consulta; a agenda a leva ao diário.
+    pub fn take_problem(&mut self) -> Option<&'static str> {
+        self.problem.take()
     }
 
     /// Pode continuar? Não grava nada: quem continua de fato chama `record` depois de mandar o texto.
@@ -263,10 +281,12 @@ impl Ledger {
         self.save();
     }
 
-    /// Falha na gravação fica no log e o registro em memória segue valendo até o servidor parar.
-    fn save(&self) {
+    /// Falha na gravação fica no log e no diário (`take_problem`); o registro em memória segue valendo até o
+    /// servidor parar.
+    fn save(&mut self) {
         if let Err(error) = self.write() {
             tracing::warn!(path = %self.path.display(), %error, "registro de continuação não gravado");
+            self.problem = Some(SAVE_FAILED);
         }
     }
 
@@ -392,6 +412,32 @@ mod tests {
         std::fs::write(&file, b"{nao e json").unwrap();
         let mut ledger = Ledger::load(file);
         assert_eq!(ledger.allow("s", Source::Transient, "a", StopKind::Network, 20.0), Ok(()));
+    }
+
+    #[test]
+    fn a_broken_ledger_is_kept_aside_and_reported() {
+        let home = tempfile::tempdir().unwrap();
+        let file = path(home.path());
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"{nao e json").unwrap();
+        let mut ledger = Ledger::load(file.clone());
+        assert_eq!(ledger.take_problem(), Some(UNREADABLE));
+        assert_eq!(ledger.take_problem(), None, "vai ao diário uma vez");
+        assert_eq!(std::fs::read(file.with_extension("json.bad")).unwrap(), b"{nao e json");
+        assert!(!file.exists());
+        assert_eq!(Ledger::load(file).take_problem(), None, "ausente não é falha");
+    }
+
+    #[test]
+    fn a_failed_save_is_reported() {
+        let home = tempfile::tempdir().unwrap();
+        // Um arquivo no lugar da pasta: a gravação não tem onde criar o registro.
+        std::fs::write(home.path().join(".hangar"), b"x").unwrap();
+        let mut ledger = Ledger::load(path(home.path()));
+        let _ = ledger.take_problem();
+        ledger.record("s", Source::Transient, "a", StopKind::Network, 0.0);
+        assert_eq!(ledger.take_problem(), Some(SAVE_FAILED));
+        assert_eq!(ledger.allow("s", Source::Transient, "a", StopKind::Network, 10.0), Err(Cap::Once), "a memória segue valendo");
     }
 
     #[test]
