@@ -221,7 +221,8 @@ No Windows, `~` é a pasta do seu usuário.
 - O "Pode enviar" antigo não inclui preferências. Ao atualizar, a máquina deixa de enviar e pede
   o novo aceite, sem importar a fila anterior. O "Não enviar" continua valendo.
 - Para mudar depois: linha "Contagens anônimas de uso" nas Configurações da máquina.
-- "Não enviar" apaga a fila na hora, sem apagar o que o receptor já recebeu.
+- "Não enviar" apaga a fila na hora (também a da versão anterior, em `~/.hangar/telemetry/`), sem
+  apagar o que o receptor já recebeu.
 
 Sem resposta, nenhum contador é contado nem gravado: só existe o `telemetry.json`, com `consent: null` e
 os dois números aleatórios.

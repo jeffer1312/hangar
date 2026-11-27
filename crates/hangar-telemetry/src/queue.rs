@@ -84,9 +84,14 @@ pub(crate) fn cap(home: &Path) -> io::Result<usize> {
     Ok(excess.len())
 }
 
-pub(crate) fn wipe(home: &Path) -> io::Result<()> {
-    let root = root(home);
-    match std::fs::remove_dir_all(&root) {
+pub(crate) fn wipe(home: &Path) -> io::Result<()> { remove_tree(&root(home)) }
+
+/// A fila e as marcas da versão sem escopo (`~/.hangar/telemetry/`): só a recusa as apaga; o aceite as deixa
+/// para o binário revertido.
+pub(crate) fn wipe_legacy(home: &Path) -> io::Result<()> { remove_tree(&home.join(".hangar").join("telemetry")) }
+
+fn remove_tree(root: &Path) -> io::Result<()> {
+    match std::fs::remove_dir_all(root) {
         Err(e) if e.kind() == io::ErrorKind::NotFound && !root.try_exists()? => Ok(()),
         outcome => outcome,
     }

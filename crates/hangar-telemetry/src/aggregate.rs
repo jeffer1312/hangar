@@ -532,6 +532,7 @@ impl Telemetry {
         *lock(&self.live)? = Live::new(Day::new(today), false);
         if consent == Some(false) || disabled.is_some() {
             queue::wipe(&self.home)?;
+            queue::wipe_legacy(&self.home)?;
         }
         Ok(())
     }
@@ -660,6 +661,7 @@ pub(crate) mod tests {
         let telemetry = fx.start_as_is();
         assert_eq!(telemetry.consent(), Some(false));
         assert!(!telemetry.enabled());
+        assert!(!fx.home.path().join(".hangar/telemetry").exists(), "o \"Não enviar\" apaga também a fila do binário legado");
     }
 
     #[test]
