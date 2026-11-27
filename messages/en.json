@@ -5556,7 +5556,7 @@
   "native_no_safe_delivery": "Waiting: Hangar cannot confirm the terminal's conversation and types nothing. It reopens Claude when the session goes idle.",
   "native_delivery_uncertain": "Delivery could not be confirmed. Check the conversation before resending.",
   "native_send_not_sent": "The message was not sent: the server did not answer. The text is back in the field.",
-  "native_server_starting": "The server is still starting and the message was not sent. Try again in a moment.",
+  "native_server_starting": "The server is still starting. Try again in a moment.",
   "native_network_error": "The server did not respond.",
   "native_list_stale": "Session list is out of date. The current state could not be loaded.",
   "native_invalid_response": "The server returned invalid data.",

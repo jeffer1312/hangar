@@ -1376,12 +1376,18 @@ async fn failed_response(response: Response, post: bool, method: &str, identity:
 /// Corte depois de conectar fica incerto: o servidor pode ter gravado.
 fn input_not_sent(error: &reqwest::Error) -> bool { error.is_connect() || error.is_builder() }
 
-/// A regra "não saiu" do `/input`, a mesma do `isInputRefusal` do core: 503 com código o servidor dá antes de gravar,
-/// menos `runtime_reply_lost`, que pode vir depois do append. 408 é prazo de quem estava no meio: incerto.
+/// Os 503 do `/input` que o servidor só dá antes de gravar. Lista fechada: a fila da sessão que ainda abre grava e
+/// depois pode falhar com o código do ator (`other_terminal_life_changed`, `queue_io`), e isso fica incerto.
+const INPUT_REFUSED_BEFORE_WRITE: &[&str] = &["runtime_unhealthy", "runtime_unavailable", "runtime_watcher",
+    "orq_runs_unavailable", "codex_terminal_unadopted", "codex_sidecar_invalid", "claude_sidecar_invalid",
+    "antigravity_sidecar_invalid", "erro_lista_indisponivel", "erro_mux_indisponivel"];
+
+/// A regra "não saiu" do `/input`, a mesma do `isInputRefusal` do core: só o 503 de código que vem antes de gravar
+/// é recusa; o resto (`runtime_reply_lost` incluído) fica incerto. 408 é prazo de quem estava no meio: incerto.
 fn settle_input_refusal(mut failure: Failure) -> Failure {
     match failure.status {
         Some(503) if failure.detail == "server_starting"
-            || failure.code.as_deref().is_some_and(|code| code != "runtime_reply_lost") => failure.uncertain = false,
+            || failure.code.as_deref().is_some_and(|code| INPUT_REFUSED_BEFORE_WRITE.contains(&code)) => failure.uncertain = false,
         Some(408) => failure.uncertain = true,
         _ => {}
     }
@@ -2074,6 +2080,10 @@ mod tests {
         assert_eq!(unhealthy.status, Some(503));
         assert_eq!(unhealthy.code.as_deref(), Some("runtime_unhealthy"));
         assert_eq!(Some(unhealthy.detail), crate::i18n::tr_web("runtime_unhealthy", &std::collections::HashMap::new()));
+        let no_runtime = send_through(input_reply("503 Service Unavailable",
+            r#"{"detail":{"code":"runtime_unavailable","params":{},"msg":"sem registro"}}"#)).await;
+        assert!(!no_runtime.uncertain, "{no_runtime:?}");
+        assert_eq!(no_runtime.code.as_deref(), Some("runtime_unavailable"));
         let starting = send_through(input_reply("503 Service Unavailable", r#"{"detail":"server_starting"}"#)).await;
         assert!(!starting.uncertain, "{starting:?}");
         assert_eq!(starting.status, Some(503));
@@ -2094,5 +2104,16 @@ mod tests {
         assert!(proxy.uncertain, "503 sem código: {proxy:?}");
         let timeout = send_through(input_reply("408 Request Timeout", "")).await;
         assert!(timeout.uncertain, "408: {timeout:?}");
+    }
+
+    /// A fila da Pi/omp/Kimi que ainda abre grava a linha e depois pode falhar com o código do ator: reenviar duplicaria.
+    #[tokio::test]
+    async fn send_503_with_a_code_from_after_the_write_stays_uncertain() {
+        for code in ["other_terminal_life_changed", "queue_io"] {
+            let body = format!(r#"{{"detail":{{"code":"{code}","params":{{}},"msg":"x"}}}}"#);
+            let failure = send_through(input_reply("503 Service Unavailable", &body)).await;
+            assert!(failure.uncertain, "{code}: {failure:?}");
+            assert_eq!(failure.code.as_deref(), Some(code));
+        }
     }
 }

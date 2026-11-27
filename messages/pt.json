@@ -5556,7 +5556,7 @@
   "native_no_safe_delivery": "Esperando: o Hangar não consegue confirmar a conversa do terminal e não digita nada. Ele reabre o Claude quando a sessão parar.",
   "native_delivery_uncertain": "Não foi possível confirmar a entrega. Confira a conversa antes de reenviar.",
   "native_send_not_sent": "A mensagem não saiu: o servidor não atendeu. O texto voltou ao campo.",
-  "native_server_starting": "O servidor ainda está subindo e a mensagem não saiu. Tente de novo em instantes.",
+  "native_server_starting": "O servidor ainda está subindo. Tente de novo em instantes.",
   "native_network_error": "Sem resposta do servidor.",
   "native_list_stale": "Lista desatualizada. Não foi possível buscar o estado atual das sessões.",
   "native_invalid_response": "O servidor retornou dados inválidos.",
