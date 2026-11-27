@@ -509,11 +509,16 @@ fn consent_body(kind: Consent, on: bool) -> Value {
 struct ConsentSetting { remote: Remote<Option<ConsentChoice>>, saving: bool, seq: u64, error: Option<String> }
 
 impl ConsentSetting {
-    /// Falha na gravação deixa o valor de antes e mostra o motivo.
+    /// Falha na gravação deixa o valor de antes e mostra o motivo, também a recusa que a leitura leria como
+    /// servidor sem a escolha: a revogação que não gravou fica à vista para repetir.
     fn saved(&mut self, kind: Consent, seq: u64, result: Result<Value, Failure>) {
         if seq != self.seq { return; }
         self.saving = false;
-        match consent_value(kind, result) {
+        let saved = match result {
+            Err(error) => Err(Hangar::setting_failure(&error)),
+            reply => consent_value(kind, reply),
+        };
+        match saved {
             Ok(saved) => { self.remote.set(Ok(saved)); self.error = None; }
             Err(error) => self.error = Some(error),
         }
@@ -1072,8 +1077,11 @@ impl Hangar {
         static ASKED: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
         if ASKED[kind as usize].swap(true, Ordering::SeqCst) { return; }
         let entries: Vec<_> = self.servers.iter().filter(|s| !s.disabled && !s.invite && !s.ephemeral).cloned().collect();
+        // A máquina recém-conectada só entra em `servers` com a primeira lista: sem ela, ficaria sem a pergunta.
+        let current = self.api.clone().filter(|api| !self.active_invite() && self.server_entry(&servers::norm(&api.identity())).is_none())
+            .map(|api| (servers::default_label(&api.identity()), api));
         let task = self.runtime.spawn(async move {
-            let mut machines: Vec<(String, Api)> = Vec::new();
+            let mut machines: Vec<(String, Api)> = current.into_iter().collect();
             for entry in entries {
                 let Ok(api) = Api::new(&entry.address, &entry.token) else { continue };
                 if !machines.iter().any(|(_, known)| known.identity() == api.identity()) { machines.push((entry.label.clone(), api)); }
@@ -2764,5 +2772,16 @@ mod telemetry_tests {
         assert_eq!(auto(Ok(json!({"consent": true}))), Err(tr("invalid_response")));
         assert_eq!(super::consent_body(Consent::Telemetry, true), json!({"consent": true}));
         assert_eq!(super::consent_body(Consent::AutoReport, false), json!({"auto_report": false}));
+    }
+
+    #[test]
+    fn telemetry_refused_save_keeps_the_choice_and_shows_why() {
+        let on = ConsentChoice { answer: Some(true), disabled: false };
+        let mut setting = super::ConsentSetting::default();
+        setting.remote.set(Ok(Some(on)));
+        (setting.seq, setting.saving) = (1, true);
+        setting.saved(Consent::Telemetry, 1, Err(refused(503, "telemetry_unavailable")));
+        assert_eq!(setting.remote.ok().copied().flatten(), Some(on), "a escolha de antes fica");
+        assert!(setting.error.is_some(), "a revogação recusada aparece");
     }
 }

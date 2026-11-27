@@ -1299,8 +1299,14 @@ impl ClientTelemetry {
             self.visible += now.saturating_duration_since(*since);
             *since = now;
         }
+        self.take_slice()
+    }
+    /// O servidor corta cada evento em 5 min: o resto espera o próximo.
+    fn take_slice(&mut self) -> Duration {
         self.visible += self.returned_visible();
-        std::mem::take(&mut self.visible)
+        let sent = self.visible.min(VISIBLE_EVERY);
+        self.visible -= sent;
+        sent
     }
     /// O tempo à vista que um envio que falhou devolveu.
     fn returned_visible(&self) -> Duration { Duration::from_millis(self.unsent.ms.swap(0, Ordering::SeqCst)) }
@@ -1319,18 +1325,26 @@ fn telemetry_batch(mut event: Value) -> Value {
 /// Inteiro: o servidor descarta `ms` fracionário.
 fn millis(took: Duration) -> u64 { u64::try_from(took.as_millis()).unwrap_or(u64::MAX) }
 
-/// Sem retorno na tela: a falha (servidor sem a rota, fora do ar) devolve o valor por `give_back` e vai ao `native.log`.
+/// Sem retorno na tela: a falha (servidor sem a rota, fora do ar, lote não gravado) devolve o valor por `give_back`
+/// e vai ao `native.log`.
 fn send_telemetry(runtime: &tokio::runtime::Runtime, api: Api, body: Value, unsent: Arc<Unsent>, give_back: impl FnOnce(&Unsent) + Send + 'static) {
+    let events = body["eventos"].as_array().map_or(0, Vec::len);
     drop(runtime.spawn(async move {
-        match api.server_send(reqwest::Method::POST, &["diag"], Some(body), 10).await {
-            Ok(_) => unsent.failing.store(false, Ordering::SeqCst),
-            Err(failure) => if unsent.failed(give_back) {
-                let status = failure.status.map_or_else(|| "sem resposta".to_owned(), |status| status.to_string());
-                crate::log_line(&format!("telemetria: evento do app não chegou ao servidor ({status}); sai no próximo envio"));
+        let why = match api.server_send(reqwest::Method::POST, &["diag"], Some(body), 10).await {
+            Ok(reply) => (!written_all(&reply, events)).then(|| "lote não gravado".to_owned()),
+            Err(failure) => Some(failure.status.map_or_else(|| "sem resposta".to_owned(), |status| status.to_string())),
+        };
+        match why {
+            None => unsent.failing.store(false, Ordering::SeqCst),
+            Some(why) => if unsent.failed(give_back) {
+                crate::log_line(&format!("telemetria: evento do app não chegou ao servidor ({why}); sai no próximo envio"));
             },
         }
     }));
 }
+
+/// O servidor responde 200 com `gravadas` menor quando o diário não gravou o lote.
+fn written_all(reply: &Value, events: usize) -> bool { reply["gravadas"].as_u64() == Some(events as u64) }
 
 impl Hangar {
     pub(super) fn start_client_telemetry(&mut self, cx: &mut Context<Self>) {
@@ -1401,6 +1415,23 @@ mod telemetry_tests {
         assert!(telemetry.take_crash().is_some(), "a queda sai de novo");
         assert_eq!(telemetry.returned_visible(), Duration::from_secs(90));
         assert_eq!(telemetry.returned_visible(), Duration::ZERO);
+    }
+
+    #[test]
+    fn telemetry_visible_time_leaves_in_slices_of_five_minutes() {
+        let mut telemetry = ClientTelemetry::new(None);
+        telemetry.unsent.ms.store(300_000, Ordering::SeqCst);
+        telemetry.visible = Duration::from_secs(240);
+        assert_eq!(telemetry.take_slice(), Duration::from_secs(300));
+        assert_eq!(telemetry.take_slice(), Duration::from_secs(240), "o resto sai no envio seguinte");
+        assert_eq!(telemetry.take_slice(), Duration::ZERO);
+    }
+
+    #[test]
+    fn telemetry_partial_ack_is_a_failure() {
+        assert!(super::written_all(&serde_json::json!({"gravadas": 2}), 2));
+        assert!(!super::written_all(&serde_json::json!({"gravadas": 0}), 2));
+        assert!(!super::written_all(&serde_json::json!({}), 1));
     }
 
     #[test]

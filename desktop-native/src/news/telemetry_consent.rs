@@ -5,16 +5,16 @@ use gpui_kit::{component::switch::Switch, *};
 use crate::{app::{self, Consent, ConsentChoice}, i18n::tr_shared, theme};
 
 const CYCLE: f32 = 6.;
-/// O interruptor é ligado.
+/// Quando o interruptor liga no ciclo.
 const ON: f32 = 1.6;
 
 /// A resposta no instante `t` do ciclo: sem resposta até o interruptor ser ligado.
 fn frame(t: f32) -> Option<bool> { (t >= ON).then_some(true) }
 
-/// Segundos até o próximo instante em que o quadro muda: o roteiro anda em degraus, não a cada quadro.
+/// Segundos até o quadro mudar: o roteiro anda em degraus.
 fn until_next_step(t: f32) -> f32 { if t < ON { ON - t } else { CYCLE - t } }
 
-/// Abaixo desta largura (o cartão deitado do "Atualizar?") a linha das Configurações não cabe: ficam o título e o interruptor.
+/// Abaixo disto, a linha das Configurações não cabe.
 const COMPACT_BELOW: f32 = 240.;
 
 pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
