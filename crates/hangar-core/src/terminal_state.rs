@@ -4,6 +4,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::LazyLock;
+use unicode_width::UnicodeWidthChar;
 
 const SPINNERS: &str = "✻✽✶✺✢·∗✳✦✧";
 pub const STALE_LIMIT: u32 = 3;
@@ -422,9 +423,86 @@ fn tool_header(lines: &[&str], i: usize) -> bool {
     lines[i + 1..].iter().find(|l| trim(l).is_empty() || boundary(l)).is_some_and(|l| left(l).starts_with('⎿'))
 }
 
+/// Painel mais estreito que isto não existe; o limite evita confundir recuo de código com painel.
+const PANEL_MIN_COLUMN: usize = 20;
+
+/// Cada caractere com a largura que ocupa na tela; o seletor de emoji (U+FE0F) põe o anterior em
+/// duas células, como o terminal desenha `⚠️`.
+fn widths(line: &str) -> impl Iterator<Item = (usize, char, usize)> + '_ {
+    let mut chars = line.char_indices().peekable();
+    std::iter::from_fn(move || {
+        let (at, c) = chars.next()?;
+        let mut width = c.width().unwrap_or(1);
+        if chars.peek().is_some_and(|&(_, next)| next == '\u{FE0F}') {
+            chars.next();
+            width = width.max(2);
+        }
+        Some((at, c, width))
+    })
+}
+
+/// Células ocupadas da linha, na largura do terminal.
+fn cells(line: &str) -> Vec<bool> {
+    let mut out = Vec::with_capacity(line.len());
+    for (_, c, width) in widths(line) {
+        out.extend(std::iter::repeat_n(!whitespace(c), width));
+    }
+    out
+}
+
+/// A linha até a coluna `column`, sem o espaço que sobra no fim.
+fn cells_before(line: &str, column: usize) -> String {
+    let mut used = 0;
+    let end = widths(line).find(|&(_, _, width)| {
+        used += width;
+        used > column
+    }).map_or(line.len(), |(at, _, _)| at);
+    right(&line[..end]).to_owned()
+}
+
+/// Onde começa o painel de diff que o Claude Code abre ao lado da conversa, na mesma linha do
+/// terminal: a régua `─` que vai da borda dele até a borda direita da tela, duas colunas vazias antes
+/// dela em todas as linhas e texto do painel nessa coluna em outras linhas. Régua da resposta não
+/// tem as duas coisas; as da caixa de digitar começam na coluna 0 e ficam de fora.
+fn side_panel_column(lines: &[&str]) -> Option<usize> {
+    let screen = lines.iter().map(|l| cells(right(l)).len()).max()?;
+    let lines: Vec<&str> = lines.iter().copied().filter(|l| !l.starts_with('─')).collect();
+    let rows: Vec<Vec<bool>> = lines.iter().map(|l| cells(l)).collect();
+    let blank = |row: &Vec<bool>, column: usize| !row.get(column).copied().unwrap_or(false);
+    lines.iter().enumerate().find_map(|(i, line)| {
+        let line = right(line);
+        let prefix = line.trim_end_matches('─');
+        let column = cells(prefix).len();
+        if line[prefix.len()..].chars().count() < 10 || column < PANEL_MIN_COLUMN || !prefix.ends_with(whitespace)
+            || cells(line).len() + 2 < screen || !rows.iter().all(|r| blank(r, column - 1) && blank(r, column - 2))
+        {
+            return None;
+        }
+        let beside = rows.iter().enumerate().filter(|&(j, r)| j != i && r.get(column..).is_some_and(|rest| rest.contains(&true))).count();
+        (beside >= 2).then_some(column)
+    })
+}
+
+/// As linhas da conversa: acima da caixa de digitar e da faixa dos mods.
+fn conversation<'a, 'b>(lines: &'a [&'b str], anchor: Option<&str>) -> &'a [&'b str] {
+    let end = lines.iter().rposition(|l| P.rule.is_match(l) || P.overlay_rule.is_match(l) || P.pi_box.is_match(l))
+        .unwrap_or(lines.len());
+    let end = anchor.filter(|a| !a.is_empty()).and_then(|a| lines[..end].iter().rposition(|l| l.contains(a))).unwrap_or(end);
+    &lines[..end]
+}
+
+/// A prévia sem o painel lateral do Claude Code: sem o corte, as linhas dele entram grudadas na prosa.
+fn preview(lines: &[&str], anchor: Option<&str>, skip: impl Fn(&[&str], usize, &str) -> bool, stop: impl Fn(&str) -> bool) -> String {
+    let Some(column) = side_panel_column(conversation(lines, anchor)) else { return preview_rows(lines, anchor, skip, stop) };
+    // A régua da caixa de digitar e a linha da faixa ficam inteiras: cortadas, deixariam de ser achadas.
+    let whole = |l: &str| l.starts_with('─') || anchor.is_some_and(|a| !a.is_empty() && l.contains(a));
+    let cut: Vec<String> = lines.iter().map(|l| if whole(l) { (*l).to_owned() } else { cells_before(l, column) }).collect();
+    preview_rows(&cut.iter().map(String::as_str).collect::<Vec<_>>(), anchor, skip, stop)
+}
+
 /// `anchor`: começo da faixa dos mods, que fica entre a conversa e a caixa de digitar e pode
 /// começar com ●; a ocorrência mais baixa dela fecha a conversa.
-fn preview(lines: &[&str], anchor: Option<&str>, skip: impl Fn(&[&str], usize, &str) -> bool, stop: impl Fn(&str) -> bool) -> String {
+fn preview_rows(lines: &[&str], anchor: Option<&str>, skip: impl Fn(&[&str], usize, &str) -> bool, stop: impl Fn(&str) -> bool) -> String {
     let mut end = lines.iter().rposition(|l| P.rule.is_match(l) || P.overlay_rule.is_match(l) || P.pi_box.is_match(l))
         .unwrap_or(lines.len());
     // Só a faixa corta a continuação: o `end` do quadro pode ser a borda de uma caixa da própria resposta.
@@ -957,6 +1035,44 @@ mod tests {
     }
 
     const RULE: &str = "────────────────────────────────────────";
+
+    /// Uma linha do terminal com a conversa à esquerda e o painel lateral do Claude Code a partir da coluna 111.
+    fn beside(conversation: &str, panel: &str) -> String { format!("{conversation:<111}{panel}") }
+
+    #[test]
+    fn the_side_diff_panel_is_not_part_of_the_reply() {
+        let rows = [
+            beside("● Com pilha de 8 MB o teste passa, então a recursão termina: no Windows, em debug, esse caminho só",
+                "3 files changed +21 -12                                                      ✕"),
+            beside("  precisa de mais de 2 MB de pilha.", "crates/hangar-server/src/mcp/integrations.rs   +9 -7"),
+            beside("", ""),
+            beside("  Thought for 23s, searched for 1 pattern, listed 1 directory · 1 failed", &"─".repeat(89)),
+            beside("", " 434         std::fs::create_dir_all(run.join(\"hypr/morta_1\")).unwrap();"),
+            beside("● Com 8 MB de pilha o teste passa, então a recursão é só o caminho list_tools → filtro de projeto,",
+                " 435         let vars = vec![(\"HYPRLAND_INSTANCE_SIGNATURE\".to_owned(), \"morta\""),
+            beside("  ⚠️ que estoura no debug do Windows com os 2 MB padrão do tokio.", " 437 -       assert_eq!(register(&home.paths, || O"),
+            beside("", " 438         assert!(!home.paths.main_file().exists());"),
+            "● Running scp -q -o BatchMode=yes /tmp/x.patch".to_owned(),
+        ];
+        let wide = "─".repeat(200);
+        let pane = format!("{}\n✻ Puzzling… (29m 39s · ↓ 21.4k tokens)\n{wide}\n❯ \n{wide}\n", rows.join("\n"));
+        assert_eq!(pane_preview(&pane, None).0,
+            "Com 8 MB de pilha o teste passa, então a recursão é só o caminho list_tools → filtro de projeto,\n  ⚠️ que estoura no debug do Windows com os 2 MB padrão do tokio.");
+    }
+
+    #[test]
+    fn a_rule_inside_the_reply_is_not_a_side_panel() {
+        let wide = "─".repeat(200);
+        let pane = format!("● Antes                       ────────────\n  depois da régua, texto que passa da coluna trinta\n{wide}\n❯ \n{wide}\n");
+        assert_eq!(pane_preview(&pane, None).0, "Antes                       ────────────\n  depois da régua, texto que passa da coluna trinta");
+    }
+
+    #[test]
+    fn the_named_input_rule_is_not_a_side_panel() {
+        let reply = "● Resposta longa que passa da coluna vinte e cinco com espaço simples entre as palavras.";
+        let pane = format!("{reply}\n  src/a.rs     | 3 +-\n  src/bb.rs    | 9 ++++----\n──────────── minha-sessao {}\n❯ \n{}\n", "─".repeat(170), "─".repeat(200));
+        assert_eq!(pane_preview(&pane, None).0, "Resposta longa que passa da coluna vinte e cinco com espaço simples entre as palavras.\n  src/a.rs     | 3 +-\n  src/bb.rs    | 9 ++++----");
+    }
 
     #[test]
     fn the_mods_band_is_not_part_of_the_reply() {
