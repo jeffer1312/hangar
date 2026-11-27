@@ -687,6 +687,7 @@ pub(crate) async fn cancel_waiting(st: &AppState, name: &str, entry_id: &str) ->
     {
         // A porta aberta segura o acordar até a ação terminar, como no painel.
         let Ok(_pass) = runtime.ingress().enter(name, st.write_gate_wait).await else { return Err("busy".into()) };
+        if runtime.waking_key(name).is_some() { return Err("asleep_waking".into()); }
         if runtime.writable(name).await.is_none() && let Some(mark) = runtime.asleep(name).await {
             return cancelled(runtime.asleep_queue_action(name, &mark.key, &random_hex(16), cancel()).await);
         }

@@ -16,7 +16,8 @@ pub struct LinkReturn {
     /// Qual resposta voltou: `last_reply_at` muda com qualquer escrita no transcript, a resposta não.
     #[serde(default)]
     pub returned_key: Option<String>,
-    /// `interaction_id` da última pergunta avisada ao pai: sobrevive ao reinício e não deixa avisar de novo.
+    /// Última interação avisada ao pai: a pergunta pelo `interaction_id`, menu e permissão pelo texto do aviso
+    /// (`notice:<hash>`). O ID nasce outro depois de reiniciar: só a pergunta vai de novo, com o novo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_key: Option<String>,
     /// Linha do aviso na fila do pai: some a pergunta, ela sai se ainda espera.

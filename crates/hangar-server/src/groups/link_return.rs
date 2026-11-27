@@ -229,6 +229,9 @@ struct Watcher {
     open_asks: HashSet<String>,
     /// O arquivo já foi lido uma vez nesta vigia: aviso pendente de antes do reinício entra em `open_asks`.
     asks_seeded: bool,
+    /// Última interação avisada (ou já avisada antes do reinício) por filha, nesta vigia: dois menus com o
+    /// mesmo texto são avisos distintos, e falha ao gravar o registro não reavisa.
+    notified: HashMap<String, String>,
 }
 
 impl Watcher {
@@ -254,6 +257,7 @@ impl Watcher {
         self.asking.retain(|n, _| present(n));
         self.question_retry_at.retain(|n, _| present(n));
         self.open_asks.retain(|n| present(n));
+        self.notified.retain(|n, _| present(n));
         self.rate.forget_old(now);
         self.question_rate.forget_old(now);
         // Já na primeira vista: o registro criado aqui só deixa voltar resposta posterior a ele.
@@ -271,7 +275,11 @@ impl Watcher {
             }
         }
         let mut links: Option<LinkReturns> = None;
-        let asks = !self.asks_seeded || children.iter().any(|r| open_interaction(r).is_some() || self.open_asks.contains(&r.name));
+        // Interação já avisada nesta vigia não relê o arquivo; só a que fechou com aviso ainda na fila.
+        let asks = !self.asks_seeded || children.iter().any(|r| match open_interaction(r) {
+            Some(id) => self.notified.get(&r.name) != Some(&id),
+            None => self.open_asks.contains(&r.name),
+        });
         if asks {
             let dir = st.hangar_dir.clone();
             let read = match blocking(move || link_state::read(&dir)).await {
@@ -341,22 +349,31 @@ impl Watcher {
             Some((since, seen)) if *seen == id => *since,
             _ => { self.asking.insert(child.clone(), (now, id.clone())); now }
         };
-        let asked = link.asked_key.as_deref() == Some(id.as_str());
-        if !asked && let Some(queued) = &link.asked_queue_id { return QuestionStep::Cancel(queued.clone()); }
-        if asked { return QuestionStep::Skip; }
+        let text = question_message(child, &id, row, kind);
+        let asked = match self.notified.get(child) {
+            Some(notified) => *notified == id,
+            // Vigia nova (reinício): o ID antigo morreu, vale a chave gravada, que o reinício não muda.
+            None => link.asked_key.as_deref() == Some(ask_key(&id, kind, &text).as_str()),
+        };
+        if asked {
+            self.notified.insert(child.clone(), id);
+            return QuestionStep::Skip;
+        }
+        if let Some(queued) = &link.asked_queue_id { return QuestionStep::Cancel(queued.clone()); }
         if now - since < SETTLE { return QuestionStep::Wait; }
         if !self.question_rate.allow(child, now) { return QuestionStep::Limited; }
-        QuestionStep::Send(question_message(child, &id, row, kind))
+        QuestionStep::Send(text)
     }
 
     /// Avisa o pai da interação aberta da filha, ou tira da fila dele o aviso que perdeu o sentido.
     async fn ask(&mut self, st: &AppState, row: &SessionRow, link: &LinkReturn, now: Instant) {
         let child = row.name.as_str();
         let parent = row.linked_by.as_deref().unwrap_or_default();
-        if parent.is_empty() || self.question_retry_at.get(child).is_some_and(|t| now < *t) { return; }
         let id = open_interaction(row);
+        // Na espera da nova tentativa só o cancelamento da linha que perdeu o sentido segue.
+        if parent.is_empty() || (id.is_some() && self.question_retry_at.get(child).is_some_and(|t| now < *t)) { return; }
         let kind = match id.as_deref() {
-            Some(id) if link.asked_key.as_deref() != Some(id) => interaction_kind(st, child, id).await,
+            Some(id) if self.notified.get(child).map(String::as_str) != Some(id) => interaction_kind(st, child, id).await,
             _ => None,
         };
         match self.question_step(row, link, kind.as_ref(), now) {
@@ -374,25 +391,38 @@ impl Watcher {
             }
             QuestionStep::Send(text) => {
                 let Some(id) = id else { return };
+                let key = ask_key(&id, kind.as_ref(), &text);
                 let ((status, answer), queued) = crate::session_write::input::deliver_reply_entry(st, parent, &text).await;
                 if !status.is_success() {
                     let code = answer["detail"]["code"].as_str().unwrap_or("erro_envio_falhou_desconhecida");
                     report(st, child, code, "pergunta da filha não chegou ao pai", &status.as_u16().to_string());
                     if transient(status) { self.question_retry_at.insert(child.to_owned(), now + BACKOFF); return; }
                     // Recusa de vez (pai sumiu, pedido recusado): esta pergunta não insiste.
-                    record_ask(st, child, move |entry| { entry.asked_key = Some(id); entry.asked_queue_id = None; }).await;
+                    self.notified.insert(child.to_owned(), id);
+                    record_ask(st, child, move |entry| { entry.asked_key = Some(key); entry.asked_queue_id = None; }).await;
                     return;
                 }
                 self.question_rate.record(child, now);
                 if queued.is_some() { self.open_asks.insert(child.to_owned()); }
-                record_ask(st, child, move |entry| { entry.asked_key = Some(id); entry.asked_queue_id = queued; }).await;
+                self.notified.insert(child.to_owned(), id);
+                record_ask(st, child, move |entry| { entry.asked_key = Some(key); entry.asked_queue_id = queued; }).await;
                 st.diag.record_line(forwarded_line(child));
             }
         }
     }
 }
 
-/// Grava a pergunta avisada no registro da filha; falha vai ao diário (o limite segura o reaviso).
+/// Chave gravada do aviso, que vale depois de reiniciar, quando o `interaction_id` nasce outro. A pergunta
+/// fica pelo ID: o antigo morreu e o pai precisa do novo para o `child_answer`, então ela vai de novo uma
+/// vez. Menu e permissão ficam pelo texto do aviso, que não cita o ID: não se repetem.
+fn ask_key(id: &str, kind: Option<&InteractionKind>, text: &str) -> String {
+    if kind == Some(&InteractionKind::Question) { return id.to_owned(); }
+    let digest = ring::digest::digest(&ring::digest::SHA256, text.as_bytes());
+    let hex: String = digest.as_ref()[..16].iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("notice:{hex}")
+}
+
+/// Grava a pergunta avisada no registro da filha; falha vai ao diário (`notified` segura o reaviso).
 async fn record_ask(st: &AppState, child: &str, change: impl FnOnce(&mut LinkReturn) + Send + 'static) {
     let (dir, name) = (st.hangar_dir.clone(), child.to_owned());
     let written = blocking(move || link_state::update(&dir, |all| { if let Some(entry) = all.get_mut(&name) { change(entry); } })).await;
@@ -984,7 +1014,7 @@ mod tests {
         assert_eq!(w.question_step(&row, &linked(), question, t0 + SETTLE - Duration::from_secs(1)), QuestionStep::Wait);
         let QuestionStep::Send(text) = w.question_step(&row, &linked(), question, t0 + SETTLE) else { panic!("esperava Send") };
         assert_eq!(text, "[de: f] pergunta (interaction_id q1): Qual pasta?\n1. src\n2. docs\nResponda com child_answer (alvo f, interaction_id q1).");
-        // Avisada (gravada como `asked_key`, também depois de reiniciar): não vai de novo.
+        // Avisada (o mesmo ID gravado como `asked_key`): não vai de novo.
         let asked = LinkReturn { asked_key: Some("q1".into()), ..linked() };
         assert_eq!(w.question_step(&row, &asked, question, t0 + SETTLE * 2), QuestionStep::Skip);
         assert_eq!(Watcher::default().question_step(&row, &asked, question, t0), QuestionStep::Skip);
@@ -1068,6 +1098,35 @@ mod tests {
         assert!(w.rate.allow("f", t0 + Duration::from_secs(300)));
         let later = t0 + SETTLE + RATE_WINDOW + Duration::from_secs(60 * RATE_MAX as u64);
         assert!(matches!(send(&mut w, "q10", later), QuestionStep::Send(_)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn after_a_restart_a_notice_is_not_repeated_but_a_question_is() {
+        let t0 = Instant::now();
+        let approval = Some(&InteractionKind::Approval);
+        // Menu e permissão: o reinício troca o ID, o texto gravado segura o reaviso, com a linha na fila.
+        let QuestionStep::Send(text) = settled_step(&waiting("p1", "Permitir Bash?", &[]), approval, t0) else { panic!("esperava Send") };
+        let asked = LinkReturn { asked_key: Some(ask_key("p1", approval, &text)), asked_queue_id: Some("row1".into()), ..linked() };
+        let reborn = waiting("p2", "Permitir Bash?", &[]);
+        let mut w = Watcher::default();
+        assert_eq!(w.question_step(&reborn, &asked, approval, t0), QuestionStep::Skip);
+        assert_eq!(w.question_step(&reborn, &asked, approval, t0 + SETTLE), QuestionStep::Skip);
+        assert_eq!(w.question_step(&reborn, &asked, None, t0 + SETTLE), QuestionStep::Skip);
+        // Sem reinício, outro pedido de mesmo texto é outro aviso.
+        let mut w = Watcher::default();
+        w.notified.insert("f".into(), "p1".into());
+        let done = LinkReturn { asked_queue_id: None, ..asked.clone() };
+        assert_eq!(w.question_step(&reborn, &done, approval, t0), QuestionStep::Wait);
+        assert!(matches!(w.question_step(&reborn, &done, approval, t0 + SETTLE), QuestionStep::Send(_)));
+        // A pergunta vai de novo com o ID novo: a linha do aviso antigo sai antes.
+        let question = Some(&InteractionKind::Question);
+        let asked = LinkReturn { asked_key: Some("q1".into()), asked_queue_id: Some("row1".into()), ..linked() };
+        let reborn = waiting("q2", "Qual pasta?", &[]);
+        let mut w = Watcher::default();
+        assert_eq!(w.question_step(&reborn, &asked, question, t0), QuestionStep::Cancel("row1".into()));
+        let cleared = LinkReturn { asked_queue_id: None, ..asked };
+        let QuestionStep::Send(text) = w.question_step(&reborn, &cleared, question, t0 + SETTLE) else { panic!("esperava Send") };
+        assert!(text.contains("interaction_id q2"), "{text}");
     }
 
     #[tokio::test(start_paused = true)]
