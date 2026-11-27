@@ -15,8 +15,13 @@ pub struct Frame {
 pub enum Update {
     Online,
     Frame(Frame),
+    /// Entrega inicial concluída: o que o servidor guardou já chegou.
+    CaughtUp,
     Offline(Failure),
 }
+
+/// O servidor escreve o que guardou de uma vez; o silêncio depois disso marca o fim da entrega inicial.
+const QUIET: Duration = Duration::from_millis(30);
 
 pub async fn run(api: Api, name: Option<String>, tx: Sender<Update>) {
     let mut cursor = String::new();
@@ -29,9 +34,23 @@ pub async fn run(api: Api, name: Option<String>, tx: Sender<Update>) {
             if tx.send(Update::Online).await.is_err() { return Ok(()); }
             let mut events = response.bytes_stream().eventsource();
             let mut wire_id = cursor.clone();
+            // Só o que vem depois do primeiro ping é a conversa: o ping sai antes de o servidor lê-la, e o `nav` antes do ping.
+            let (mut pinged, mut started, mut caught_up) = (false, false, name.is_none());
             loop {
-                let next = tokio::time::timeout(Duration::from_secs(25), events.next()).await
-                    .map_err(|_| Failure::local("network_error"))?;
+                let next = if started && !caught_up {
+                    match tokio::time::timeout(QUIET, events.next()).await {
+                        Ok(next) => next,
+                        Err(_) => {
+                            caught_up = true;
+                            if tx.send(Update::CaughtUp).await.is_err() { return Ok(()); }
+                            tokio::time::timeout(Duration::from_secs(25), events.next()).await
+                                .map_err(|_| Failure::local("network_error"))?
+                        }
+                    }
+                } else {
+                    tokio::time::timeout(Duration::from_secs(25), events.next()).await
+                        .map_err(|_| Failure::local("network_error"))?
+                };
                 let item = match next {
                     Some(Ok(item)) => item,
                     Some(Err(_)) => return Err(Failure::local("invalid_response")),
@@ -46,6 +65,8 @@ pub async fn run(api: Api, name: Option<String>, tx: Sender<Update>) {
                     Some(item.id.clone())
                 } else { None };
                 wire_id = item.id;
+                started |= pinged && item.event != "ping";
+                pinged |= item.event == "ping";
                 let (applied, received) = oneshot::channel();
                 if tx.send(Update::Frame(Frame { event: item.event.clone(), data, applied })).await.is_err() { return Ok(()); }
                 if !received.await.unwrap_or(false) { return Err(Failure::local("invalid_response")); }

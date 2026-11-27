@@ -214,6 +214,8 @@ impl Hangar {
                 changed = !list.online || list.error.is_some();
                 list.online = true; list.error = None; list.unreachable = false;
             }
+            // Só o stream de uma sessão avisa; o da lista nunca chega aqui com isto.
+            RemoteUpdate::Stream(Update::CaughtUp) => {}
             RemoteUpdate::Stream(Update::Offline(error)) => {
                 let before = (list.online, list.sessions.len(), list.error.take());
                 list.online = false;
