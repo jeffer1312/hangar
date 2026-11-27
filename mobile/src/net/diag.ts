@@ -44,7 +44,7 @@ export function iniciarDiag(): void {
   globalThis.fetch = withMachineRequestDiagnostics(globalThis.fetch.bind(globalThis));
   const cli = Math.random().toString(36).slice(2, 8);
   // A telemetria do servidor separa o tempo de tela e as rotas por cliente; o diário descarta o campo.
-  const cliente = Platform.OS === 'ios' ? 'ios' : 'android';
+  const client = Platform.OS === 'ios' ? 'ios' : 'android';
   let seq = 0;
   const destinos = new Set<string>();
   const transporte = criarTransporteDiag((destino) => {
@@ -63,7 +63,7 @@ export function iniciarDiag(): void {
         ts: new Date().toISOString(), so: Platform.OS, navegador: 'Expo', vista: 'celular',
         versao: Constants.expoConfig?.version, detalhe: updateId ?? 'embutido' });
     }
-    transporte.registrar(base, { ...evento, cliente, cli, seq: ++seq, ts: new Date().toISOString() });
+    transporte.registrar(base, { ...evento, cliente: client, cli, seq: ++seq, ts: new Date().toISOString() });
   };
   configureDiag({ registrar, novoReq: () => `${cli}-${(++seq).toString(36)}` });
   const replay = () => {
@@ -76,7 +76,7 @@ export function iniciarDiag(): void {
         pilha: (report.stack || report.componentStack).slice(0, 300),
         operacao: [report.metadata.runtime, report.metadata.updateId].filter(Boolean).join(' · '),
       };
-      const eventos = [event, { ...fatalTelemetryEvent(report), cliente, cli, seq: ++seq }];
+      const eventos = [event, { ...fatalTelemetryEvent(report), cliente: client, cli, seq: ++seq }];
       const response = await fetch(`${baseOf(server).replace(/\/+$/, '')}/api/diag`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${server.token}` },
         body: JSON.stringify({ eventos }), signal: AbortSignal.timeout(8000),

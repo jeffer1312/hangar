@@ -44,9 +44,9 @@ it('instala sink uma vez, grava plataforma e eventos no destino capturado', asyn
   fetchMock.mockImplementation(async (_url, init) =>
     new Response(JSON.stringify({ gravadas: JSON.parse(init!.body as string).eventos.length })));
   await vi.advanceTimersByTimeAsync(300_000 - 4000);
-  const tempo = fetchMock.mock.calls.flatMap(([url, init]) => JSON.parse(init!.body as string).eventos
+  const visibleTime = fetchMock.mock.calls.flatMap(([url, init]) => JSON.parse(init!.body as string).eventos
     .filter((e: { evento: string }) => e.evento === 'app.tempo').map((e: object) => [url, e]));
-  expect(tempo).toEqual([['https://a.test/api/diag', expect.objectContaining({ ms: 300_000, cliente: 'android' })]]);
+  expect(visibleTime).toEqual([['https://a.test/api/diag', expect.objectContaining({ ms: 300_000, cliente: 'android' })]]);
 });
 
 it.each(['401', 'timeout', 'network', 'cancelled'] as const)('registra falha %s do pedido sem token, corpo ou query', async (kind) => {

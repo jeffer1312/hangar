@@ -1,29 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Alert } from 'react-native';
 import { getAutoReportEm, putAutoReportEm, type Server } from '@hangar/core';
 import { Notice, useMachineAction } from './parts';
 import { MachineGroup, MachineRow } from './MachineRows';
-import { toast } from '../../ui/Toast';
 import * as m from '../../paraglide/messages';
-
-/** Grava a resposta de um aviso em todas as máquinas de `pending`; as que recusarem saem num toast. */
-export function saveAll(pending: readonly Server[], put: (server: Server) => Promise<unknown>): void {
-  void Promise.allSettled(pending.map(put)).then((results) => {
-    const failed = pending.filter((_, i) => results[i].status === 'rejected');
-    if (failed.length) toast.erro(m.auto_report_save_failed({ machines: failed.map((s) => s.label).join(', ') }));
-  });
-}
-
-/** O aviso da abertura do relatório automático; resolve quando a pessoa responde. */
-export function askAutoReport(pending: readonly Server[]): Promise<void> {
-  return new Promise((done) => {
-    const answer = (value: boolean) => { done(); saveAll(pending, (server) => putAutoReportEm(server, value)); };
-    Alert.alert(m.auto_report_question_title(), m.auto_report_question_body({ machines: pending.map((s) => s.label).join(', ') }), [
-      { text: m.auto_report_no(), style: 'cancel', onPress: () => answer(false) },
-      { text: m.auto_report_yes(), onPress: () => answer(true) },
-    ]);
-  });
-}
 
 // Relatório automático da atualização desta máquina. `null` = ainda não respondido.
 export function AutoReportSetting({ server }: { server: Server }) {

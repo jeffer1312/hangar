@@ -11,7 +11,8 @@ vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ ch
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock('../../ui/Toast', () => ({ toast: { erro: mocks.erro, ok: vi.fn() } }));
-import { TELEMETRY_DOC_URL, TelemetrySetting, askTelemetry } from './TelemetrySetting';
+import { TelemetrySetting } from './TelemetrySetting';
+import { TELEMETRY_DOC_URL, askTelemetry } from './startupQuestions';
 import * as m from '../../paraglide/messages';
 
 const server = { id: 'tel-a', label: 'fixture-a', baseUrl: 'https://tel-a.test', token: 'secret-a' };

@@ -109,18 +109,18 @@ test('conversa aberta registra chat.aberto com o tempo até o primeiro quadro, e
   vi.useFakeTimers();
   const registrar = vi.fn();
   configureDiag({ registrar, novoReq: () => 'req-chat' });
-  const lista = createEventSource('https://chat-aberto.test/api/sessions/events', { withCredentials: false });
-  lista.addEventListener('ping', () => {});
+  const source = createEventSource('https://chat-aberto.test/api/sessions/events', { withCredentials: false });
+  source.addEventListener('ping', () => {});
   ultimo!.listeners.ping[0]({ data: '' });
   const chat = createEventSource('https://chat-aberto.test/api/sessions/nome-privado/events', { withCredentials: false });
   chat.addEventListener('ping', () => {});
   vi.advanceTimersByTime(700);
   ultimo!.listeners.ping[0]({ data: '' });
   ultimo!.listeners.ping[0]({ data: '' });
-  const abertos = registrar.mock.calls.filter(([e]) => e.evento === 'chat.aberto');
-  expect(abertos).toEqual([[expect.objectContaining({ ms: 700 }), 'https://chat-aberto.test']]);
-  expect(JSON.stringify(abertos)).not.toContain('nome-privado');
-  lista.close(); chat.close();
+  const opened = registrar.mock.calls.filter(([e]) => e.evento === 'chat.aberto');
+  expect(opened).toEqual([[expect.objectContaining({ ms: 700 }), 'https://chat-aberto.test']]);
+  expect(JSON.stringify(opened)).not.toContain('nome-privado');
+  source.close(); chat.close();
 });
 
 test('registra silêncio de 25s sem tratar fechamento voluntário como falha', () => {

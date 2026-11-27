@@ -41,9 +41,9 @@ it('espera credenciais próprias e confirma o diário depois do ACK do servidor'
   expect(body.eventos).toEqual([expect.objectContaining({ evento: 'js.fatal', ts: report.timestamp,
     detalhe: report.message, pilha: report.stack, tela: report.route }), expect.anything()]);
   // A queda para a telemetria: só o nome do erro e o modelo da rota.
-  const { cli, seq, ...queda } = body.eventos[1];
+  const { cli, seq, ...crash } = body.eventos[1];
   expect(typeof cli).toBe('string'); expect(typeof seq).toBe('number');
-  expect(queda).toEqual({ evento: 'app.queda', ts: report.timestamp, codigo: 'TypeError', tela: report.route, cliente: 'ios' });
+  expect(crash).toEqual({ evento: 'app.queda', ts: report.timestamp, codigo: 'TypeError', tela: report.route, cliente: 'ios' });
   expect(JSON.stringify(body)).not.toContain('private-token');
   expect(JSON.parse(disk.get('diagnostics.lastFatalError')!).pending).toBe(false);
 }, 20000);

@@ -28,8 +28,7 @@ import * as m from '../src/paraglide/messages';
 import { installNotificationHandler, pushRegistrationKey, registerExpoPush, retryExpoPushIfDenied, useNotificationNavigation } from '../src/features/push/expoPush';
 import { getLocale } from '../src/paraglide/runtime';
 import { autoReportUnanswered, registrarDiag, telemetryUnanswered } from '@hangar/core';
-import { askAutoReport } from '../src/features/machines/AutoReportSetting';
-import { askTelemetry } from '../src/features/machines/TelemetrySetting';
+import { askAutoReport, askTelemetry } from '../src/features/machines/startupQuestions';
 import { dropLegacyPendingNews, loadArrivedNews, whatsNewHref } from '../src/features/updates/pending';
 import { configureVideoCache } from '../src/features/attachments/videoCache';
 
