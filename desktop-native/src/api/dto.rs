@@ -193,6 +193,8 @@ pub struct SessionInfo {
     #[serde(default)] pub linked_by: Option<String>,
     /// Pai que esta filha ligada perdeu (fechou ou morreu); ela segue aberta, sem `linked_by`.
     #[serde(default)] pub orphaned_from: Option<String>,
+    /// O dono desligou o continuar sozinho depois de queda passageira nesta sessão.
+    #[serde(default)] pub auto_continue_off: bool,
     /// Sessão que formou o grupo (`--pair`/`--link`), na visão da máquina desta; o servidor só manda enquanto vale.
     #[serde(default)] pub pair_lead: Option<String>,
     /// Há convite ativo desta sessão (pendente ou já usado): o 🔗 da linha.

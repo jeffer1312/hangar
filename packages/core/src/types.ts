@@ -127,6 +127,7 @@ export interface SessionInfo {
   pair_owner?: string | null;   // identificador da máquina dona do grupo entre máquinas; ausente = grupo de uma máquina só
   linked_by?: string | null;    // sessão que abriu esta como filha ligada (está em pair_peers)
   orphaned_from?: string;       // pai que esta filha ligada perdeu (fechou ou morreu); ela segue aberta, sem linked_by
+  auto_continue_off?: boolean;  // o dono desligou o continuar sozinho depois de queda passageira; ausente = ligado
   pair_lead?: string | null;    // sessão que formou o grupo (é esta ou está em pair_peers): a principal da aba
   // Linha do orquestrador sem LLM: nome da sessão do árbitro atual, para onde o botão
   // "Falar com o árbitro" leva. null enquanto o árbitro não está registrado.
@@ -270,6 +271,8 @@ export interface ChatEvent {
     action?: string; plugin?: string;
     /** Nota de conserto de hook: de qual aviso, de qual tentativa, em que estado e em qual sessão. */
     fix_of?: string; attempt?: number; state?: string; child?: string;
+    /** Nota do continuar sozinho (`kind: "auto_continue"`): horários em segundos, `code` do desfecho, `cause` do reboot. */
+    kind?: string; stopped_at?: number; continued_at?: number; code?: string; cause?: string;
   } | null;
   /** Só em notice `skill_loaded`: a skill que o harness injetou como fala do usuário. */
   skill?: { name: string; path?: string | null; body: string } | null;

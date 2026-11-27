@@ -2670,6 +2670,11 @@ impl Engine {
                     .map(|(id,_)|id.clone()).collect();
                 for id in &ended { self.answering.remove(id); self.request_epochs.remove(id); }
                 self.server_requests.retain(|(id,_)|!ended.contains(id));
+                // O porquê do fim vai à agenda de continuar. Lido cru não tem o detalhe: nunca continua nem zera a corrente.
+                let stop = if from_raw { hangar_auto_continue::StopKind::Other } else {
+                    hangar_auto_continue::classify_codex_turn(&n.turn.status,n.turn.error.as_ref().and_then(|error|error.codex_error_info.as_ref()))
+                };
+                let stop_turn = Some(n.turn.id.clone()).filter(|id|!id.is_empty());
                 // Status lido cru não é confiável: não apaga nem cria problema, só fecha o turno.
                 if from_raw {
                     // Sem o detalhe (não decodificou), mas um turno que falhou não pode parecer concluído.
@@ -2689,6 +2694,7 @@ impl Engine {
                 if std::mem::take(&mut self.usage_limited) && n.turn.status == "failed" {
                     effects.push(Effect::UsageLimit { limit:codex_usage_limit(&self.rate_limits) });
                 }
+                effects.push(Effect::TurnStopped { kind:stop,line_id:stop_turn,at:self.clock.epoch_s });
                 self.changed(effects,true); effects.push(Effect::WakeQueue); return Ok(());
             }
             N::ThreadStatusChanged(n) => {

@@ -20,6 +20,7 @@ import {
   machinesAllDown,
   renameSession,
   setPairAccess,
+  setSessionAutoContinue,
   reopenFallenSession,
   resumeSession,
   showSession,
@@ -35,6 +36,7 @@ import { LiveVoiceChatButton } from '../voice/LiveVoiceChatButton';
 import { Icon } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
 import { SessionRow, type PairAction } from './SessionRow';
+import { autoContinueCappedLabel } from '../../chat/SessionProblem';
 import { buildSessionSections, HIDDEN_SECTION_ID, sessionGroupKey, type SessionSection } from './sessionSections';
 import { setHiddenSectionOpen, useHiddenSectionOpen } from './hiddenSectionPref';
 import { GroupBlockHeader, SessionSectionCard, SessionSectionHeader } from './SessionSection';
@@ -270,16 +272,29 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   // Fala com o servidor da linha, sem trocar o ativo; a linha morta some quando a lista chega.
   // O servidor responde quando o agente sobe: o segundo toque não manda outro pedido.
   const reopening = useRef(new Set<string>());
-  const reopen = useCallback((s: AggSession) => {
+  const reopen = useCallback((s: AggSession, opts?: { continue?: boolean }) => {
     const server = useServers.getState().servers.find((x) => x.id === s.serverId);
     if (!server) { toast.erro(m.servidor_nao_existe()); return; }
     const key = `${s.serverId}::${s.name}`;
     if (reopening.current.has(key)) return;
     reopening.current.add(key);
-    reopenFallenSession(s.name, server)
-      .then(() => toast.ok(s.name))
+    reopenFallenSession(s.name, server, opts)
+      .then((r) => {
+        // Reabriu, mas o continue não saiu: o motivo aparece, com a frase do teto; a sessão já está de pé.
+        if (opts?.continue && r?.continued === false) {
+          toast.aviso(autoContinueCappedLabel(r.code) ?? m.session_reopen_continue_failed({ code: r.code ?? '' }));
+        } else toast.ok(s.name);
+      })
       .catch((e: unknown) => toast.erro(mensagemDe(e)))
       .finally(() => reopening.current.delete(key));
+  }, []);
+
+  // A linha muda quando a lista seguinte trouxer o `auto_continue_off` novo; só a falha avisa.
+  const toggleAutoContinue = useCallback((s: AggSession, enabled: boolean) => {
+    const server = useServers.getState().servers.find((x) => x.id === s.serverId && !x.invite);
+    if (!server) { toast.erro(m.servidor_nao_existe()); return; }
+    setSessionAutoContinue(s.name, enabled, server)
+      .catch((e: unknown) => toast.erro(m.auto_continue_toggle_failed({ why: mensagemDe(e) })));
   }, []);
 
   // Sem confirmação: não há processo para matar, só a linha e o registro para reabrir. Rota própria, não o
@@ -626,6 +641,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               onWorktree={proprios.has(item.serverId) ? abrirWorktree : undefined}
               onPair={proprios.has(item.serverId) || item.outside ? fazerPar : undefined}
               onHidden={proprios.has(item.serverId) && !item.outside ? toggleHidden : undefined}
+              onAutoContinue={proprios.has(item.serverId) && !item.outside ? toggleAutoContinue : undefined}
               crossBadgeText={crossBadges.get(pickKey(item.serverId, item.name))?.text}
               crossBadgeMachines={crossBadges.get(pickKey(item.serverId, item.name))?.machines}
             />}

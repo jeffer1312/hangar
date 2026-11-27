@@ -62,6 +62,7 @@ mod devices;
 mod diag_report;
 mod diag_routes;
 mod auto_report;
+mod auto_continue_routes;
 mod install_root;
 mod web_ui;
 mod update_routes;

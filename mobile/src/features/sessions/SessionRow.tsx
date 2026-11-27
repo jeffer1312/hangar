@@ -65,8 +65,8 @@ interface Props {
   onExcluir?: (s: AggSession) => void;
   onRenomear?: (s: AggSession) => void;
   onResume?: (s: AggSession) => void;
-  // Só na linha que o sistema derrubou (`isFallenSession`).
-  onReopen?: (s: AggSession) => void;
+  // Só na linha que o sistema derrubou (`isFallenSession`). `continue`: o "Reabrir e continuar".
+  onReopen?: (s: AggSession, opts?: { continue?: boolean }) => void;
   onDismiss?: (s: AggSession) => void;
   // Ausente em servidor de convite: o backend recusa worktrees ao convidado, e o chip é só texto.
   onWorktree?: (s: AggSession, path: string) => void;
@@ -74,6 +74,8 @@ interface Props {
   onPair?: (s: AggSession, action: PairAction) => void;
   // Ocultar (true) ou mostrar (false) na lista; ausente onde a pessoa não é dona da sessão.
   onHidden?: (s: AggSession, hide: boolean) => void;
+  // Interruptor do continuar sozinho (Claude e Codex); ausente onde a pessoa não é dona da sessão.
+  onAutoContinue?: (s: AggSession, enabled: boolean) => void;
   // Marca "Oculta" na linha, para quem mostra as ocultas no meio das outras (seletor).
   hiddenBadge?: boolean;
   // Selo do grupo entre máquinas pelo modelo global (`groupBadges` da lista), em valores soltos para o memo; ausente =
@@ -89,7 +91,7 @@ const isDisabled = (a: { id: string; attributes?: { disabled?: boolean; destruct
 const vibrarAoAbrir =
   Platform.OS === 'android' ? () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {}) : undefined;
 
-export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor, compact = false, selected, onPress, onGit, onWorkReview, onExcluir, onRenomear, onResume, onReopen, onDismiss, onWorktree, onPair, onHidden, hiddenBadge, crossBadgeText, crossBadgeMachines }: Props) {
+export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor, compact = false, selected, onPress, onGit, onWorkReview, onExcluir, onRenomear, onResume, onReopen, onDismiss, onWorktree, onPair, onHidden, onAutoContinue, hiddenBadge, crossBadgeText, crossBadgeMachines }: Props) {
   const { theme } = useUnistyles();
   // O orquestrador não se renomeia nem se fecha: o backend recusa, então a linha nem oferece.
   const orq = isOrq(s);
@@ -107,6 +109,11 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   const donoDo = (p: PairExternal) => (pares.length > 1 ? `${p.owner} · ${p.session}` : p.owner);
   // Esperando você, a oculta voltaria na rodada seguinte da lista: ocultar fica desabilitado, com o motivo no título.
   const waiting = s.state === 'awaiting_input' || (s.pending_questions ?? 0) > 0;
+  const fallen = isFallenSession(s);
+  // O continuar sozinho depois de queda passageira vale para Claude e Codex; o ✓ é o que vale na sessão.
+  const autoContinue = !!onAutoContinue && !fallen && !orq && !fora && !s.serverInvite && (s.provider === 'claude' || s.provider === 'codex');
+  const autoContinueOn = !s.auto_continue_off;
+  const autoContinueLabel = `${m.auto_continue_toggle()} · ${autoContinueOn ? m.comum_ligado() : m.comum_desligado()}`;
   // Sem o arrasto, o menu é o único caminho visível pro Git: o orquestrador fica só com ele.
   // A sessão de fora é de outra pessoa: nem renomear, nem fechar, só sair do par.
   const acoesMenu = useMemo(
@@ -119,6 +126,12 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         { id: 'pair-accept', title: m.native_par_menu(), image: Platform.select({ ios: 'link.badge.plus' }) },
         ...pares.map((p, i) => ({ id: `undo:${i}`, title: m.pair_undo_own({ dono: donoDo(p) }) })),
       ] : []),
+      ...(autoContinue ? [{
+        id: 'auto-continue',
+        // A folha de ações do iOS não tem marca: o estado vai no título.
+        title: Platform.OS === 'ios' ? autoContinueLabel : m.auto_continue_toggle(),
+        state: (autoContinueOn ? 'on' : 'off') as 'on' | 'off',
+      }] : []),
       ...(!onHidden ? [] : s.hidden_from_list
         ? [{ id: 'show', title: m.session_show_in_list(), image: Platform.select({ ios: 'eye' }) }]
         : [{
@@ -134,7 +147,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         attributes: { destructive: true },
       }]),
     ],
-    [s.cwd, s.serverInvite, s.hidden_from_list, waiting, orq, fora, parAtivo, pares, wtAcao, onPair, onRenomear, onGit, onExcluir, onHidden],
+    [s.cwd, s.serverInvite, s.hidden_from_list, waiting, orq, fora, parAtivo, pares, wtAcao, autoContinue, autoContinueOn, autoContinueLabel, onPair, onRenomear, onGit, onExcluir, onHidden],
   );
   const acao = (nome: string) => {
     if (nome === 'rename') onRenomear?.(s);
@@ -149,6 +162,8 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
     else if (nome === 'group') onPair?.(s, { kind: 'group' });
     else if (nome === 'work-review' && canReview) onWorkReview?.(s);
     else if (nome === 'reopen') onReopen?.(s);
+    else if (nome === 'reopen-continue') onReopen?.(s, { continue: true });
+    else if (nome === 'auto-continue' && autoContinue) onAutoContinue?.(s, !autoContinueOn);
     else if (nome === 'dismiss') onDismiss?.(s);
     else if (nome.startsWith('undo:')) {
       const pair = pares[Number(nome.slice(5))];
@@ -162,16 +177,16 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   const groupTitle = badge && onPair && !fora ? m.par_grupo_titulo({ n: (s.pair_peers?.length ?? 0) + 1 }) : null;
   // O desabilitado não vira ação do leitor de tela: o rótulo da linha já diz que ela espera você.
   // A linha caída não abre ao toque: Reabrir e Dispensar são o que ela faz, também no leitor de tela.
-  const fallen = isFallenSession(s);
   const acoesA11y = useMemo(
     () => [
-      ...(fallen && onReopen ? [{ name: 'reopen', label: m.session_reopen() }] : []),
+      ...(fallen && onReopen ? [{ name: 'reopen', label: m.session_reopen() }, { name: 'reopen-continue', label: m.session_reopen_continue() }] : []),
       ...(fallen && onDismiss ? [{ name: 'dismiss', label: m.session_dismiss() }] : []),
-      ...acoesMenu.filter((a) => !isDisabled(a)).map((a) => ({ name: a.id, label: a.title })),
+      // O leitor de tela ouve o estado do interruptor, que no Android só a marca do menu mostra.
+      ...acoesMenu.filter((a) => !isDisabled(a)).map((a) => ({ name: a.id, label: a.id === 'auto-continue' ? autoContinueLabel : a.title })),
       ...(groupTitle ? [{ name: 'group', label: groupTitle }] : []),
       ...(canReview && reviewBadge ? [{ name: 'work-review', label: reviewBadge.text }] : []),
     ],
-    [fallen, onReopen, onDismiss, acoesMenu, groupTitle, canReview, reviewBadge],
+    [fallen, onReopen, onDismiss, acoesMenu, autoContinueLabel, groupTitle, canReview, reviewBadge],
   );
   const pendentes = pares.filter((p) => p.pending);
   const untracked = s.tracked === false;
@@ -365,6 +380,12 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
                 <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.session_reopen()}</Text>
               </Pressable>
             ) : null}
+            {onReopen ? (
+              <Pressable onPress={() => onReopen(s, { continue: true })} style={styles.resume} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.session_reopen_continue()}>
+                <Icon name="Play" size={12} color={theme.tokens.text.secondary} />
+                <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.session_reopen_continue()}</Text>
+              </Pressable>
+            ) : null}
             {onDismiss ? (
               <Pressable onPress={() => onDismiss(s)} style={styles.resume} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.session_dismiss()}>
                 <Icon name="X" size={12} color={theme.tokens.text.secondary} />
@@ -417,5 +438,5 @@ const styles = StyleSheet.create((theme) => ({
   faixa: { position: 'absolute', left: 0, top: 6, bottom: 6, width: 2, borderRadius: 1 },
   release: { minHeight: 24, justifyContent: 'center' },
   resume: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], marginTop: theme.base.space[1], minHeight: 32, alignSelf: 'flex-start' },
-  fallenActions: { flexDirection: 'row', gap: theme.base.space[4] },
+  fallenActions: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.base.space[4] },
 }));

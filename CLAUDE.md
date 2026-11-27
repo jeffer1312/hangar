@@ -407,7 +407,8 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 ### Harnesses — Claude, Codex, Pi, omp, Kimi, Antigravity → [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md)
 
 **Antes de mexer em** `backend/app/adapters/codex/`, `codex_*.py`, `crates/hangar-server/src/harness_setup/`,
-`crates/hangar-antigravity/`, `crates/hangar-server/src/runtime/` (atores Claude/Codex,
+`crates/hangar-antigravity/`, `crates/hangar-auto-continue/`, `crates/hangar-server/src/session_write/limit_switch.rs`,
+`crates/hangar-server/src/runtime/` (atores Claude/Codex,
 lançamento, relançamento e religação ao mesmo cano em `cano_reconnect.rs`), statusline/prévia, hooks de estado, ou em sessão sem terminal:
 **leia a seção "Regras vigentes" de `docs/decisoes/harnesses.md`**. Cada regra ali já custou um
 bug calado.
@@ -1081,7 +1082,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   [plataforma.md](docs/decisoes/plataforma.md#tempo-da-sessão-parada-vem-da-conversa-não-do-mtime-05112026).
 - **A lista do dono é do Rust; o estado vem dos atores em processo.** `GET /api/sessions` e
   `/api/sessions/events` do dono saem do `ListHub` (`list/hub.rs`): um produtor por servidor,
-  ligado enquanto houver lista aberta, tique de 1,5 s, JSON só quando a assinatura muda; cada
+  ligado enquanto houver lista aberta ou assinatura interna (filha ligada; continuar sozinho com sessão
+  Claude com terminal ativa há pouco ou à espera da rede), tique de 1,5 s, JSON só quando a assinatura muda; cada
   conexão só lê o publicado. Escrita nas pastas de estado das contas (marcador, registro nativo,
   pergunta aberta) reclassifica só a sessão afetada sobre a última rodada boa, juntada em 150 ms;
   observador que falha vai ao diário e o tique continua valendo. Pi/omp/Kimi usam o estado

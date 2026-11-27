@@ -5,6 +5,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Continuação automática só depois de parada passageira, uma vez, por um registro só.** Rede, stream
+  perdido ou 5xx (este uma vez por corrente) continuam quando a sondagem compartilhada alcança o
+  provedor, até 2 h depois da parada. Toda continuação automática, inclusive a troca de conta no limite
+  e o login recusado, passa pelo `Ledger` de `hangar-auto-continue` antes de reabrir: uma por linha de
+  erro, 2 seguidas sem resposta real (a corrente expira em 30 min), 3 por hora. Na troca de conta o teto
+  só vale para o turno que o próprio Hangar começou com um "continue". A mensagem da pessoa pelo `/input`
+  (fora recado `[de: …]`/`[painel: …]` e o próprio "continue") zera a corrente. Barrada, nada reabre e
+  nenhuma conta fica gasta. A espera é nota neutra na conversa, nunca faixa; o Cancelar é marcado no
+  registro e responde na hora, e a agenda confere a marca antes de mandar. Reboot da máquina continua
+  uma vez com ressalva; falta de memória só pelo botão. O retorno da filha ligada pula o "continue"
+  automático ao decidir quem pediu o turno, e a linha de erro da API não volta como resposta. Ver
+  [continuar sozinho](#continuar-sozinho-depois-de-parada-passageira-27112026).
+
 - **O Kimi fica só com os provedores dele: motor nenhum vai ao `config.toml` do Kimi.** O espelho de
   credenciais (`engines/mirrors.rs`) leva motores só ao Pi e ao Codex (`SYNC_TARGETS`); "Sincronizar"
   e o reparo de credenciais da saúde não oferecem o Kimi, e a subida tira os blocos
@@ -1268,6 +1281,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   não viu o despacho procura no arquivo, para trás. Chamada feita dentro do script grava `content`
   vazio: o resultado sai do `toolUseResult`. Os aparelhos não sabem de Code Mode, só chamam o `REPL`
   de "Script". Ver [Code Mode](#code-mode-do-claude-code-script-entrega-e-página-20112026).
+
+## Continuar sozinho depois de parada passageira (27/11/2026)
+
+Medido nas conversas desta máquina (Claude, 60 dias, 3 contas, 4.455 transcripts):
+
+- 56 episódios de "Can't reach the API". Antes de desistir a CLI já tenta ~10 vezes em ~3 min; em 37
+  deles o dono mandou "continua" ou parecido, com mediana de 14 min depois da parada.
+- 16 "continua" dele vieram depois de fim normal e 5 depois de interrupção: esses nunca continuam
+  sozinhos. Por isso a classificação é por lista do que é passageiro, e o resto cai em `Other`.
+- Em 13/11 o "Continue de onde parou." da troca por login recusado foi mandado 4 vezes em 38 s numa
+  sessão: cada recusa reabria e mandava de novo. O teto agora vem antes de reabrir, e o caso manda no
+  máximo 2.
+- Os tetos ficam em `~/.hangar/auto-continue.json`: reiniciar o servidor no meio do laço não os zera.
 
 ## Claude relançado como filho do próprio processo (24/11/2026)
 

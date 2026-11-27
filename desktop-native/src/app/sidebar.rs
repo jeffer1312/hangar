@@ -126,7 +126,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, Provider { label: String, request: hangar_api::session::ClaudeProviderSwitch }, DismissRename, AnotherRename, Hide, Show, Reopen, Dismiss }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, Provider { label: String, request: hangar_api::session::ClaudeProviderSwitch }, DismissRename, AnotherRename, Hide, Show, Reopen { continue_turn: bool }, AutoContinue(bool), Dismiss }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -1077,9 +1077,10 @@ impl Hangar {
     }
 
     /// Reabre a sessão que o sistema derrubou, com o mesmo nome e a mesma conversa; a linha volta viva pela lista.
-    pub(super) fn reopen_target(&mut self, target: Target, cx: &mut Context<Self>) {
+    /// `continue_turn`: o "Reabrir e continuar", que manda o turno cortado seguir, uma vez por queda (o servidor confere).
+    pub(super) fn reopen_with(&mut self, target: Target, continue_turn: bool, cx: &mut Context<Self>) {
         if !self.sidebar.reopening.insert(target.clone()) { return; }
-        self.write(target, Write::Reopen, cx);
+        self.write(target, Write::Reopen { continue_turn }, cx);
     }
 
     /// Tira a caída da lista pela rota própria: se o nome já voltou vivo (menu aberto sobre a linha velha), o
@@ -1116,7 +1117,12 @@ impl Hangar {
                 Write::Show => api.server_send(reqwest::Method::DELETE, &["sessions", name.as_str(), "hidden"], None, 15).await,
                 Write::Mode(terminal) => api.act(name, &["modo-execucao"], Some(json!({"terminal": terminal})), false, crate::api::REOPEN_SECONDS).await,
                 Write::Reload => api.act(name, &["recarregar"], None, false, crate::api::REOPEN_SECONDS).await,
-                Write::Reopen => api.act(name, &["reopen"], None, false, crate::api::REOPEN_SECONDS).await,
+                Write::Reopen { continue_turn: false } => api.act(name, &["reopen"], None, false, crate::api::REOPEN_SECONDS).await,
+                Write::Reopen { continue_turn: true } =>
+                    api.request(name, reqwest::Method::POST, &["reopen"], Some(("continue", "1")), None, crate::api::REOPEN_SECONDS).await,
+                // A linha muda quando a lista seguinte trouxer o `auto_continue_off` novo.
+                Write::AutoContinue(enabled) => api.server_send(reqwest::Method::PUT, &["sessions", name.as_str(), "auto-continue"],
+                    Some(json!({"enabled": enabled})), 15).await,
                 Write::Dismiss => api.act(name, &["dismiss"], None, false, 15).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
                 Write::Provider { request, .. } => api.act(name, &["engine", "provider"], Some(json!(request)), false, crate::api::REOPEN_SECONDS).await,
@@ -1653,10 +1659,18 @@ impl Hangar {
                         self.sidebar.deleting.remove(&target);
                         Some(Notification::error(failed("sidebar_close_failed", &error)))
                     }
-                    (Write::Reopen, result) => {
+                    (Write::Reopen { continue_turn }, result) => {
                         self.sidebar.reopening.remove(&target);
-                        result.err().map(|error| Notification::error(format!("{}: {}", tr("session_reopen"), Self::fetch_failure(&error))))
+                        let label = if *continue_turn { tr_shared("session_reopen_continue", &[]) } else { tr("session_reopen") };
+                        match result {
+                            // Reabriu, mas o continue não saiu: o motivo aparece, a sessão já está de pé.
+                            Ok(value) => reopen_continue_refused(&value).map(Notification::warning),
+                            Err(error) => Some(Notification::error(format!("{label}: {}", Self::fetch_failure(&error)))),
+                        }
                     }
+                    (Write::AutoContinue(_), Ok(_)) => None,
+                    (Write::AutoContinue(_), Err(error)) =>
+                        Some(Notification::error(tr_shared("auto_continue_toggle_failed", &[("why", &Self::fetch_failure(&error))]))),
                     (Write::Dismiss, Ok(_)) => None,
                     (Write::Dismiss, Err(error)) => {
                         self.sidebar.deleting.remove(&target);
@@ -1918,11 +1932,17 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
         PopupMenuItem::element(move |_, _| div().text_color(theme::danger()).child(label.clone())).disabled((invite && access.active) || busy)
             .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| if fell { this.dismiss_target(target.clone(), cx) } else { this.close_target(target.clone(), window, cx) }); })
     };
-    let reopen = fell.then(|| {
-        let label = if busy { format!("{}…", tr("session_reopen")) } else { tr("session_reopen") };
-        let (hangar, target) = (hangar.clone(), target.clone());
+    let reopens: Vec<PopupMenuItem> = if invite { &[][..] } else { reopen_choices(session) }.iter().map(|choice| {
+        let label = if busy { format!("{}…", choice.label()) } else { choice.label() };
+        let (hangar, target, continue_turn) = (hangar.clone(), target.clone(), choice.continues());
         PopupMenuItem::new(label).disabled(busy)
-            .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.reopen_target(target.clone(), cx)); })
+            .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.reopen_with(target.clone(), continue_turn, cx)); })
+    }).collect();
+    // O ✓ é o que vale na sessão; o clique grava o contrário e a linha seguinte da lista traz a marca nova.
+    let auto_continue = (!fell && auto_continue_offered(session)).then(|| {
+        let (hangar, target, on) = (hangar.clone(), target.clone(), !session.auto_continue_off);
+        PopupMenuItem::new(tr_shared("auto_continue_toggle", &[])).checked(on)
+            .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.write(target.clone(), Write::AutoContinue(!on), cx)); })
     });
     let pairs = session.outside_pairs().into_owned();
     let (undo_weak, undo_target) = (hangar.clone(), target.clone());
@@ -1990,6 +2010,7 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
             .separator()
             .when_some(mode, |menu, mode| menu.item(mode))
             .when_some(reload, |menu, reload| menu.item(reload))
+            .when_some(auto_continue, |menu, auto_continue| menu.item(auto_continue))
             .submenu(tr("sidebar_baton"), window, cx, move |menu, window, cx| {
                 let (hangar, target, cwd) = (baton_weak.clone(), baton_target.clone(), baton_cwd.clone());
                 let menu = menu_style(menu).min_w(px(200.)).item(PopupMenuItem::new(tr("sidebar_baton_summary")).on_click(move |_, window, cx| {
@@ -2005,13 +2026,39 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
                 menu.when(shows, |menu| menu.submenu(tr("sidebar_same"), window, cx, move |menu, window, cx| accounts_menu(menu, &weak, &target, idle, window, cx)))
             }))
         .separator()
-        .when_some(reopen, |menu, reopen| menu.item(reopen))
+        .map(|menu| reopens.into_iter().fold(menu, |menu, reopen| menu.item(reopen)))
         .item(close)
 }
 
 /// Sessão de terminal que o sistema derrubou (falta de memória ou queda): a linha fica para reabrir ou dispensar.
 pub(super) fn fallen(session: &SessionInfo) -> bool {
     session.state == "dead" && matches!(session.problema.as_deref(), Some("terminal_out_of_memory" | "terminal_died"))
+}
+
+/// O continuar sozinho depois de queda passageira vale para Claude e Codex.
+fn auto_continue_offered(session: &SessionInfo) -> bool { matches!(session.provider.as_str(), "claude" | "codex") }
+
+/// Os jeitos de reabrir a caída: o Reabrir e o "Reabrir e continuar", que manda o turno cortado seguir.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReopenChoice { Reopen, ReopenAndContinue }
+
+impl ReopenChoice {
+    pub(super) fn label(self) -> String {
+        match self { Self::Reopen => tr("session_reopen"), Self::ReopenAndContinue => tr_shared("session_reopen_continue", &[]) }
+    }
+
+    pub(super) fn continues(self) -> bool { self == Self::ReopenAndContinue }
+}
+
+pub(super) fn reopen_choices(session: &SessionInfo) -> &'static [ReopenChoice] {
+    if fallen(session) { &[ReopenChoice::Reopen, ReopenChoice::ReopenAndContinue] } else { &[] }
+}
+
+/// O "Reabrir e continuar" reabriu, mas o continue não saiu (`continued: false` com `code`): o motivo, com a frase do teto.
+fn reopen_continue_refused(value: &Value) -> Option<String> {
+    if value.get("continued").and_then(Value::as_bool) != Some(false) { return None; }
+    let code = value.get("code").and_then(Value::as_str).unwrap_or_default();
+    Some(super::auto_continue_capped_text(code).unwrap_or_else(|| tr_shared("session_reopen_continue_failed", &[("code", code)])))
 }
 
 /// O item que tira a linha da lista: o convite para de acompanhar; a caída é só dispensada.
@@ -2427,6 +2474,33 @@ mod tests {
         }
         // No convite a sessão é do dono: segue "Parar de acompanhar".
         assert_eq!(exit_label(&row("dead", Some("terminal_died")), true), crate::i18n::tr_shared("convite_parar", &[]));
+    }
+
+    #[test]
+    fn auto_continue_oom_row_offers_reopen_and_continue() {
+        use super::{ReopenChoice, auto_continue_offered, reopen_choices, reopen_continue_refused};
+        crate::i18n::english_in_this_thread(false);
+        let row = |state: &str, problema: Option<&str>| SessionInfo { name: "s".into(), provider: "claude".into(), state: state.into(),
+            problema: problema.map(Into::into), ..Default::default() };
+        for code in ["terminal_out_of_memory", "terminal_died"] {
+            assert_eq!(reopen_choices(&row("dead", Some(code))), [ReopenChoice::Reopen, ReopenChoice::ReopenAndContinue], "{code}");
+        }
+        assert_eq!(ReopenChoice::ReopenAndContinue.label(), "Reabrir e continuar");
+        assert!(ReopenChoice::ReopenAndContinue.continues() && !ReopenChoice::Reopen.continues());
+        for other in [row("dead", Some("headless_processo_caiu")), row("dead", None), row("idle", Some("terminal_died"))] {
+            assert!(reopen_choices(&other).is_empty(), "sem queda do sistema não há o que reabrir");
+        }
+        // O interruptor do continuar sozinho vale para Claude e Codex.
+        assert!(auto_continue_offered(&row("idle", None)));
+        assert!(auto_continue_offered(&SessionInfo { provider: "codex".into(), ..row("idle", None) }));
+        assert!(!auto_continue_offered(&SessionInfo { provider: "pi".into(), ..row("idle", None) }));
+        // Reabriu, mas o continue não saiu: o teto tem a frase dele; outro motivo leva o código.
+        assert_eq!(reopen_continue_refused(&serde_json::json!({"ok": true, "continued": true})), None);
+        assert_eq!(reopen_continue_refused(&serde_json::json!({"ok": true})), None, "Reabrir sem continuar");
+        assert_eq!(reopen_continue_refused(&serde_json::json!({"ok": true, "continued": false, "code": "auto_continue_capped:once"})).as_deref(),
+            Some("Já continuei sozinho depois deste mesmo aviso e parei para não virar laço. Mande uma mensagem para seguir."));
+        assert_eq!(reopen_continue_refused(&serde_json::json!({"ok": true, "continued": false, "code": "erro_envio_falhou"})).as_deref(),
+            Some("A sessão reabriu, mas o turno não continuou (erro_envio_falhou)."));
     }
 
     #[test]

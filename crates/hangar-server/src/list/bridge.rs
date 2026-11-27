@@ -175,7 +175,7 @@ impl<T> Guarded<T> {
 
 /// O que a decoração das linhas Claude e de todas guarda entre rodadas.
 #[derive(Default)]
-struct Decor { context: ContextCache, agy: super::agy_context::AgyContextCache, replies: ReplyCache, limits: super::limit::LimitWatch, refusals: super::limit::LimitWatch }
+struct Decor { context: ContextCache, agy: super::agy_context::AgyContextCache, replies: ReplyCache, limits: super::limit::LimitWatch, refusals: super::limit::LimitWatch, stops: super::limit::LimitWatch }
 
 /// Marcadores junto da classificação: duas produções seguidas não releem tudo do zero.
 #[derive(Default)]
@@ -197,6 +197,8 @@ struct Caches {
     /// Avisos de limite que a rodada viu, à espera do vigia da troca de conta.
     limits: Mutex<Vec<crate::runtime::gateway::LimitHit>>,
     refusals: Mutex<Vec<crate::runtime::gateway::AuthHit>>,
+    /// Fins de turno do Claude com terminal, à espera da agenda de continuar depois da queda.
+    stops: Mutex<Vec<hangar_auto_continue::StopHit>>,
 }
 
 struct GitGate { at: Instant, activity: u64, fingerprint: Option<Vec<u128>> }
@@ -662,6 +664,7 @@ impl ListBridge {
         self.flush_notes();
         let Some((mut changed, effects)) = done else { return Ok(Partial::Unchanged) };
         crate::dictation::rename_suggestion::fill_rows(&self.dirs()?.home, &self.env.mux, &mut changed).await;
+        crate::auto_continue::fill_rows(&self.dirs()?.home, &self.env.mux, &mut changed, &self.facts.diag).await;
         let plugins = self.plugin_facts(&changed).await;
         self.project_plugins(&mut changed, &plugins);
         public_problems(&mut changed);
@@ -838,6 +841,7 @@ impl ListBridge {
         self.demote(effects);
         let mut rows = rows;
         crate::dictation::rename_suggestion::fill_rows(&self.dirs()?.home, &self.env.mux, &mut rows).await;
+        crate::auto_continue::fill_rows(&self.dirs()?.home, &self.env.mux, &mut rows, &self.facts.diag).await;
         self.project_plugins(&mut rows, &plugins);
         public_problems(&mut rows);
         rows.extend(aside);
@@ -961,6 +965,15 @@ impl ListBridge {
             match self.plugin_runtime.get() {
                 Some(runtime) => runtime.auth_failed(&hit.name, hit.account.map(PathBuf::from), &hit.code),
                 None => self.facts.diag.report("rust.list_limit_seen", &hit.name, "auth_no_runtime", "a lista viu a recusa do login sem o runtime para entregá-la"),
+            }
+        }
+        let stops = std::mem::take(&mut *self.caches.stops.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for hit in stops {
+            match self.plugin_runtime.get() {
+                Some(runtime) => runtime.turn_stopped(hit),
+                // O fim normal é a maioria: só a parada passageira perdida vai ao diário.
+                None if hit.kind.is_transient() => self.facts.diag.report("rust.list_limit_seen", &hit.name, "stop_no_runtime", "a lista viu a parada passageira sem o runtime para entregá-la"),
+                None => {}
             }
         }
     }
@@ -1264,6 +1277,9 @@ fn decorate(env: &ListEnv, caches: &Caches, dirs: &Dirs, config_dirs: &[PathBuf]
                 let account = super::context::config_dir_of(row.conta.as_deref()).unwrap_or_else(|| dirs.claude.clone());
                 caches.refusals.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(crate::runtime::gateway::AuthHit {
                     name: row.name.clone(), account: Some(account.to_string_lossy().into_owned()), code });
+            }
+            if let Some(hit) = d.stops.seen_stop(row, started) {
+                caches.stops.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(hit);
             }
         }
         for (name, error) in d.replies.decorate(rows, |_| None) {

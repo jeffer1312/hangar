@@ -408,6 +408,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         result.1["timing_note"] = json!(outcome);
     }
     count_input(st.counting().filter(|_| owner), &ctx.target.provider, ctx.target.terminal, &text, steer, &result);
+    if owner && result.0.is_success() { crate::auto_continue::owner_wrote(&st, &ctx.name, &text); }
     crate::diag::record(crate::diag::diary_dir(), vec![received_line(&ctx.name, ctx.headers(), peer, &text, steer, &result)], "mensagem recebida");
     answer(&ctx, result)
 }
@@ -434,6 +435,9 @@ fn count_input(telemetry: Option<&hangar_telemetry::Telemetry>, provider: &str, 
 
 static COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^/[a-z][a-z0-9:_-]{0,30}$").unwrap());
 static FROM: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^\s*\[(de|grupo|de fora|painel):\s*([A-Za-z0-9._:-]{1,64})").unwrap());
+
+/// Recado de outra sessão ou aviso do app (`[de: …]`, `[grupo: …]`, `[de fora: …]`, `[painel: …]`), não a pessoa.
+pub(crate) fn is_relay(text: &str) -> bool { FROM.is_match(text) }
 
 /// De onde veio cada mensagem e o que aconteceu com ela, sem o texto: o cliente (`hangar-mcp (de x)`,
 /// app), o remetente do recado (`[de: x]`), o endereço, o pedido do cliente e a resposta da entrega.
