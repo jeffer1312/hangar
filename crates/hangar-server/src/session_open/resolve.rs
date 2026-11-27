@@ -318,7 +318,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     }
 
     let inherited_codex_mode = if saved_first { saved_codex_mode.or(inherited_codex_mode) } else { inherited_codex_mode.or(saved_codex_mode) };
-    if permission.is_none() && provider == AgentProvider::Claude {
+    if permission.is_none() && matches!(provider, AgentProvider::Claude | AgentProvider::Kimi) {
         permission = saved_permission.filter(|_| !saved_first);
     }
 

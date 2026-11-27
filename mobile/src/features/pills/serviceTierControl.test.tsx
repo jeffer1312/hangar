@@ -887,3 +887,18 @@ it('Kimi mostra seus três modos e aplica a permissão na máquina da conversa',
   await act(async () => option!.click());
   expect(api.modeWrite).toHaveBeenCalledWith('sess', 'yolo', expect.objectContaining({ id: 'a' }));
 });
+
+
+it('Kimi descarta uma recuperação antiga depois de outra troca de permissão', async () => {
+  const recovery = deferred<{ current: string; modes: string[]; sondavel: boolean }>();
+  api.permissions.mockResolvedValueOnce({ current: 'manual', modes: ['manual', 'yolo', 'auto'], sondavel: false }).mockReturnValueOnce(recovery.promise);
+  api.modeWrite.mockRejectedValueOnce(new Error('resposta perdida')).mockResolvedValueOnce({ mode: 'auto', current: 'auto' });
+  state.rows[0] = { ...state.rows[0], provider: 'kimi' };
+  const { container } = await mount('kimi', 'a', { which: 'mode', n: 1 });
+  const button = (label: string) => Array.from(container.querySelectorAll('button')).find((row) => row.textContent?.includes(label));
+  await act(async () => button('native_ctl_mode_title')!.click());
+  await act(async () => button('native_kimi_mode_yolo')!.click());
+  await act(async () => button('native_kimi_mode_auto')!.click());
+  await act(async () => recovery.resolve({ current: 'yolo', modes: ['manual', 'yolo', 'auto'], sondavel: false }));
+  expect(button('native_ctl_mode_title')?.textContent).toContain('native_kimi_mode_auto');
+});

@@ -126,7 +126,9 @@ export function usePermissionControl({ serverId, name, provider }: Args) {
       setNotice(e instanceof Error ? e.message : String(e));
       if (!isCodex) {
         // Mostrar o modo antigo depois de uma troca que pode ter pegado afirma uma permissão falsa.
+        const my = ++seq.current;
         getPermissionModes(name, false, server).then((res) => {
+          if (my !== seq.current) return;
           setCurrent(res.current);
           if (res.modes.length) setModes(res.modes);
         }).catch(() => {});

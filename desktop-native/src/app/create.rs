@@ -1021,6 +1021,8 @@ impl NewSession {
         self.engine.clear();
         self.model.clear();
         self.effort.clear();
+        self.permission.clear();
+        self.permission_touched = false;
         self.engine_account.clear();
         self.engine_pick = None;
         self.engine_account_pick = None;

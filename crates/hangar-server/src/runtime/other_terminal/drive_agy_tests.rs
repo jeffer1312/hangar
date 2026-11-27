@@ -237,3 +237,13 @@ async fn kimi_permissions_without_a_wire_confirm_the_current_tick_and_close_the_
     assert_eq!(reply.payload["current"], "manual");
     assert_eq!(io.keys(), ["/permission", "Enter", "Up", "Enter", "/permission", "Enter", "Escape"]);
 }
+
+
+#[tokio::test(start_paused = true)]
+async fn kimi_permissions_do_not_reopen_over_a_new_draft_after_selection() {
+    let draft = KIMI_IDLE.replace("│ > ", "│ > novo rascunho ");
+    let io = Screens::texts(&[KIMI_IDLE, KIMI_MENU, &draft]);
+    let reply = run_kimi(&io, "set_permission_mode", json!({"mode":"manual"})).await;
+    assert_eq!(reply.disposition, RuntimeDisposition::Unknown);
+    assert_eq!(io.keys(), ["/permission", "Enter", "Up", "Enter"]);
+}

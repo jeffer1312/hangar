@@ -504,7 +504,7 @@ impl Hangar {
     fn ctl_label(&self, ctl: Ctl) -> Option<String> {
         let key = self.selected_key()?;
         let live = self.ctl_live(ctl);
-        if ctl == Ctl::Mode && let Some(target) = self.controls.mode_target.get(&key) { return Some(target.mode.clone()); }
+        if ctl == Ctl::Mode && self.provider().0 != "kimi" && let Some(target) = self.controls.mode_target.get(&key) { return Some(target.mode.clone()); }
         match self.controls.applied.get(&(key, ctl)) {
             Some((applied, before)) if *before == live => Some(applied.clone()),
             _ => live,
@@ -1031,9 +1031,10 @@ impl Hangar {
                     }))).into_any_element());
                 continue;
             }
-            // O modo pedido pelo Shift+Tab já aparece como valor; "aplicando" fica para a troca pelo painel.
+            // Claude e Antigravity antecipam o alvo do teclado; o Kimi mantém o modo confirmado.
+            let kimi_mode = ctl == Ctl::Mode && self.provider().0 == "kimi";
             let shifting = ctl == Ctl::Mode && self.controls.mode_target.contains_key(&key);
-            let text = if busy == Some(ctl) && !shifting { tr("ctl_applying").replace("{what}", &name) } else { value.clone().unwrap_or_else(|| name.clone()) };
+            let text = if busy == Some(ctl) && !shifting && !kimi_mode { tr("ctl_applying").replace("{what}", &name) } else { value.clone().unwrap_or_else(|| name.clone()) };
             let id = SharedString::from(format!("ctl-{}", ctl.key()));
             let listener = cx.listener(move |this, _, window, cx| {
                 this.open_ctl(ctl, false, cx);
@@ -1043,7 +1044,7 @@ impl Hangar {
                 let plan = self.ctl_label(ctl).as_deref() == Some("plan");
                 let aria = format!("{name}: {text}");
                 let pill = if crate::appearance::conversation_beta() { super::beta_mode_pill(id.clone(), text, cx) } else { super::menu_pill(id.clone(), text, plan, cx) };
-                mode = Some(popup::anchor(div(), id.clone()).child(pill.selected(open == Some(ctl)).disabled(!self.chat_online)
+                mode = Some(popup::anchor(div(), id.clone()).child(pill.selected(open == Some(ctl)).disabled(!self.chat_online).loading(kimi_mode && busy == Some(ctl))
                     .tooltip(name.clone()).accessibility_label(aria)
                     .on_click(listener)).into_any_element());
                 continue;

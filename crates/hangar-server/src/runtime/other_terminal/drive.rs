@@ -1830,6 +1830,9 @@ async fn kimi_permission(context: &mut Control<'_>, payload: &Value, set: bool) 
             return Ok(context.reply(RuntimeDisposition::Accepted, json!({"mode":requested,"current":requested,"changed":true})));
         }
         if closed && actual.is_none() {
+            if !composer(context.target, &frame).is_some_and(|draft| draft.is_empty()) {
+                return Ok(context.unknown("erro_permissao_leitura"));
+            }
             // Antes da primeira mensagem ainda não há wire: o tique do seletor é a confirmação.
             let menu = open_kimi_permissions(context).await?;
             let actual = Some(KIMI_MODES[menu.current]);
