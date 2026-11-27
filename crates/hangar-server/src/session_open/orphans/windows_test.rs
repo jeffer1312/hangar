@@ -34,7 +34,7 @@ async fn a_real_psmux_orphan_can_be_recovered_and_dismissed() {
         record::write(home.path(), &spec).unwrap();
         let transcript = claude::transcript(&spec, conversation, &projects);
         std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
-        std::fs::write(&transcript, "{}\n").unwrap();
+        std::fs::write(&transcript, "{\"type\":\"permission-mode\",\"permissionMode\":\"acceptEdits\"}\n").unwrap();
         let entry = restore::Entry { name: name.into(), provider: AgentProvider::Claude, conversation: Some(conversation.into()),
             transcript: Some(transcript.to_string_lossy().into_owned()), permission_mode: Some("acceptEdits".into()), missing_since: None, unit: None,
             turn_open: false, last_line: None };
@@ -50,8 +50,9 @@ async fn a_real_psmux_orphan_can_be_recovered_and_dismissed() {
         let displaced = port.with_extension("probe-backup");
         std::fs::rename(&port, &displaced).expect("sessão de prova gravou a ficha na pasta isolada");
 
+        let seen = generation();
         let found = find_bound(name, key).await;
-        register(home.path(), &found, &snapshot, Some(home.path()));
+        register(home.path(), &found, &snapshot, Some(home.path()), seen);
         let fallen = fallen::get(home.path(), name).expect("a sessão de prova apareceu como caída");
         assert!(!fallen.orphan_descendants.is_empty());
         let row = fallen::rows(home.path(), &[]).into_iter().find(|row| row.name == name).unwrap();
@@ -88,7 +89,8 @@ async fn find_bound(name: &str, key: &str) -> Vec<(Orphan, Option<Binding>)> {
         let mut ticks = tokio::time::interval(Duration::from_millis(250));
         loop {
             ticks.tick().await;
-            let found = tokio::task::spawn_blocking(|| find_after(Duration::ZERO)).await.unwrap().unwrap();
+            let found: Vec<_> = tokio::task::spawn_blocking(|| find_after(Duration::ZERO)).await.unwrap().unwrap().into_iter()
+                .map(|(orphan, probe)| (orphan, match probe { Probe::Bound(binding) => Some(binding), _ => None })).collect();
             if found.iter().any(|(orphan, proof)| orphan.name == name && proof.as_ref().is_some_and(|proof| proof.key == key)) {
                 return found;
             }

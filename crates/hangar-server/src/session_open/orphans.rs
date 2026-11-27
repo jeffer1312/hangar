@@ -233,8 +233,12 @@ mod tests {
     use super::*;
     use crate::session_open::{fallen, record};
 
+    /// `NAMES` e `ENDED` são do processo: os testes que os trocam rodam um de cada vez.
+    static GLOBAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn only_an_orphan_bound_to_the_spec_becomes_actionable() {
+        let _global = GLOBAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = tempfile::tempdir().unwrap();
         let spec = serde_json::from_value(serde_json::json!({"version": 1, "key": "f54d0180be54162a529ce67d5c55114a", "name": "hangar",
             "cwd": "C:\\w\\erro", "provider": "claude", "surface": "terminal", "account": {"kind": "default"}, "account_source": "default",
@@ -296,6 +300,7 @@ mod tests {
     /// A busca que começou antes de um encerramento não devolve o nome que ele liberou.
     #[test]
     fn a_stale_scan_does_not_hold_an_ended_name() {
+        let _global = GLOBAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = tempfile::tempdir().unwrap();
         let snapshot = super::super::restore::Snapshot::default();
         let started = generation();
