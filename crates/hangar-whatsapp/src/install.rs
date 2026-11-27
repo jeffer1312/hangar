@@ -472,7 +472,13 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
     let (binary, fetched) = release::BINARY.fetch_new(&ctx.github, latest, ctx.platform, &ctx.paths.service).await?;
     let (version, new_schema, file_schema) = tokio::join!(release::check(&binary), release::schema_of(&binary),
         release::data_schema_of(&binary, &ctx.paths.data));
-    let version = version?;
+    let version = match version {
+        Ok(version) => version,
+        Err(failure) => {
+            discard_download(old, &binary, fetched);
+            return Err(failure);
+        }
+    };
     let changes = format_changes(new_schema, file_schema);
     tracing::info!(?new_schema, ?file_schema, changes, "whatsapp: esquema do arquivo e da versão nova");
     attempt.migration = Some(changes);
@@ -482,6 +488,12 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
         return Ok(Outcome::NeedsConfirm);
     }
     let client = Client::new(ctx.paths.data.clone());
+    // Trocar religa o programa e derruba o pareamento em curso: o relógio deixa para a próxima passada.
+    if mode == Mode::Auto && client.status().await.is_ok_and(|status| pairing(&status)) {
+        tracing::info!(from = %old.tag, to = %latest.tag, "whatsapp: pareamento em curso; a troca fica para a próxima passada");
+        discard_download(old, &binary, fetched);
+        return Ok(Outcome::Skipped);
+    }
     wait_sends(&client).await;
     let before = client.claimed().map(|c| c.pid);
     let recorded_before = recorded_pid(&ctx.paths.data);
@@ -506,16 +518,22 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
         // Sem a cópia a nova não migrou e deixou o arquivo como estava: a anterior volta sobre ele.
         if switched && backup_failed(&ctx.paths.home, &new.binary).await {
             tracing::warn!(from = %old.tag, to = %new.tag, "whatsapp: a versão nova não gravou a cópia dos dados; voltando para a anterior");
-            return Err(rollback(ctx, old, Failure::new("whatsapp_backup_failed", format!(
+            let back = rollback(ctx, old, Failure::new("whatsapp_backup_failed", format!(
                 "{}; {} não conseguiu gravar a cópia dos dados antes de migrar (saída {BACKUP_FAILED_EXIT}) e não mexeu no messages.db",
-                failure.detail, new.tag))).await);
+                failure.detail, new.tag))).await;
+            discard_download(old, &new.binary, fetched);
+            return Err(back);
         }
         let source = restore_source(mode, &ctx.paths.data, file_schema, since);
         return Err(match after_failure(opened_after(switched, recorded_before, &ctx.paths.data, since), source,
             same_format(new_schema, file_schema)) {
-            AfterFailure::Restore(schema) => restore(ctx, old, &new, schema, fetched, failure).await,
+            AfterFailure::Restore(schema) => restore(ctx, old, &new, schema, fetched, since, failure).await,
             AfterFailure::KeepNew => keep_new(&ctx.paths, &new, failure),
-            AfterFailure::Rollback => rollback(ctx, old, failure).await,
+            AfterFailure::Rollback => {
+                let back = rollback(ctx, old, failure).await;
+                discard_download(old, &new.binary, fetched);
+                back
+            }
         });
     }
     // A nova respondeu e só o registro não gravou: os dados são dela, e a cópia não volta.
@@ -648,7 +666,7 @@ impl Migrating<'_> {
 async fn wait_up(client: &Client, version: &str, before: Option<u32>, migrating: Option<Migrating<'_>>) -> Result<(), Failure> {
     let started = Instant::now();
     let mut last = String::from("sem control.json");
-    let limit = loop {
+    loop {
         match client.claimed() {
             Some(control) if Some(control.pid) == before => last = "ainda o processo anterior".into(),
             Some(_) => match client.status().await {
@@ -662,9 +680,11 @@ async fn wait_up(client: &Client, version: &str, before: Option<u32>, migrating:
         }
         let mut pause = Duration::from_millis(500);
         if started.elapsed() >= START_TIMEOUT {
+            // Depois de gravar o `control.json` a nova já abriu os dados: cair e religar daí em diante não é migrar.
+            let opened = client.claimed().is_some_and(|control| Some(control.pid) != before);
             let busy = match migrating {
-                Some(migrating) => migrating.in_progress().await,
-                None => false,
+                Some(migrating) if !opened => migrating.in_progress().await,
+                _ => false,
             };
             let limit = if busy { MIGRATION_TIMEOUT } else { START_TIMEOUT };
             if busy {
@@ -672,12 +692,12 @@ async fn wait_up(client: &Client, version: &str, before: Option<u32>, migrating:
                 pause = MIGRATION_POLL;
             }
             if started.elapsed() >= limit {
-                break limit;
+                break;
             }
         }
         tokio::time::sleep(pause).await;
     };
-    Err(Failure::new("whatsapp_not_started", format!("o serviço não respondeu em {}s ({last})", limit.as_secs())))
+    Err(Failure::new("whatsapp_not_started", format!("o serviço não respondeu em {}s ({last})", started.elapsed().as_secs())))
 }
 
 /// O `status` assinado só prova a subida com a `version` esperada; sem o campo, não prova.
@@ -762,6 +782,11 @@ async fn wait_sends(client: &Client) {
     }
 }
 
+/// O `status` do binário diz pareamento em curso (QR na tela ou código no celular).
+fn pairing(status: &Value) -> bool {
+    status["state"] == "pairing"
+}
+
 /// A lista `{"drafts": [...]}` do `GET /v1/outbox?state=sending` tem algum rascunho.
 fn still_sending(reply: &crate::client::Reply) -> bool {
     reply.status == 200 && serde_json::from_slice::<Value>(&reply.body)
@@ -772,7 +797,7 @@ fn still_sending(reply: &crate::client::Reply) -> bool {
 /// (registrar a anterior com a nova de pé deixaria ela abrir o banco migrado e sair com 3), a cópia vai para o
 /// lugar do `messages.db` e a anterior é registrada. Sem a parada confirmada ou com a troca dos arquivos falhando,
 /// fica o [`keep_new`]; na troca que falha, a nova sobe de novo ([`after_restore_failed`]). `fetched`: a nova foi baixada nesta chamada.
-async fn restore(ctx: &Context, old: &Installed, new: &Installed, schema: u32, fetched: bool, failure: Failure) -> Failure {
+async fn restore(ctx: &Context, old: &Installed, new: &Installed, schema: u32, fetched: bool, since: SystemTime, failure: Failure) -> Failure {
     let not_restored = |why: String| Failure { detail: format!("{}; a cópia dos dados não voltou: {why}", failure.detail), ..failure.clone() };
     // Conferido antes de parar: sem a anterior rodando, devolver a cópia não adianta.
     let version = match release::check(&old.binary).await {
@@ -802,7 +827,7 @@ async fn restore(ctx: &Context, old: &Installed, new: &Installed, schema: u32, f
             Failure::new("whatsapp_update_restored", format!(
                 "{}; os dados voltaram para a cópia de antes da troca e {} voltou a rodar; mensagens que chegaram durante \
                  a tentativa (até uns {}s) podem não voltar; o banco da tentativa ficou em messages.db.migrated",
-                failure.detail, old.tag, START_TIMEOUT.as_secs()))
+                failure.detail, old.tag, since.elapsed().map_or(0, |d| d.as_secs())))
         }
         Err(e) => Failure::new("whatsapp_update_no_rollback", format!(
             "{}; os dados voltaram para a cópia de antes da troca (o banco da tentativa ficou em messages.db.migrated), \
@@ -1569,6 +1594,14 @@ mod tests {
         let old = r#"{"latest":"v0.2.0","migration":true,"checked_at":"x"}"#;
         std::fs::write(paths.update_check(), old).unwrap();
         assert_eq!(read(), (true, None, None), "arquivo de antes de last_error");
+    }
+
+    /// Só o pareamento em curso segura a troca do relógio; pareado ou sem pareamento, ela segue.
+    #[test]
+    fn only_a_pairing_in_progress_holds_the_clock() {
+        assert!(pairing(&json!({"state": "pairing"})));
+        assert!(!pairing(&json!({"state": "connected"})));
+        assert!(!pairing(&json!({"state": "unpaired"})));
     }
 
     /// Só um rascunho listado como `sending` segura a troca; binário sem o estado ou resposta ilegível não.
