@@ -1214,7 +1214,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           // O 503 com código só é recusa no `/input`: o do `/steer` continua incerto.
           if (steer && status === 503) throw Object.assign(new Error((err as Error).message, { cause: err }), { status });
           // A linha local do painel sai em qualquer falha: se a mensagem entrou na fila mesmo assim, o servidor a lista.
-          if (queue || isInputRejected(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
+          if (queue || isInputRefusal(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
           throw err;
         }
       }, draftRevision).catch((error: unknown) => {
@@ -1242,10 +1242,6 @@ export function settleDelivered(serverId: string, name: string, draft: Conversat
     }).catch(() => {});
   }
   chatStore(serverId, name).use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
-}
-
-function isInputRejected(error: unknown): boolean {
-  return isInputRefusal(error);
 }
 
 // O snapshot precede qualquer POST e já esvazia o campo enviado; só a falha devolve o texto.
@@ -1306,7 +1302,7 @@ export async function submitConversationDraft(serverId: string, name: string, te
       });
     };
     try { await deliver(); } catch (error) {
-      const rejected = isInputRejected(error);
+      const rejected = isInputRefusal(error);
       settle(rejected ? 'rejected' : 'unknown');
       if (!rejected && (error instanceof TypeError || isNoResponse(error))) throw new Error(m.chat_envio_incerto(), { cause: error });
       throw error;

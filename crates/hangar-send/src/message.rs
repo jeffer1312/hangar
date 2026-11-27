@@ -151,8 +151,7 @@ pub(crate) fn maybe_delivered(endpoint: &Endpoint, err: &mut dyn Write) {
 pub(crate) const MAYBE_DELIVERED: &str = "o recado pode ter chegado; confira com hangar-send --list antes de reenviar";
 
 /// O que a conversa do destino disse depois de um envio cortado.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Arrival {
+enum Arrival {
     Arrived,
     NotSeen,
     Unknown,
@@ -172,7 +171,7 @@ fn unix_now() -> f64 {
 
 /// Lê a conversa no mesmo servidor e com o mesmo token do envio, até a primeira prova ou o fim da
 /// janela. Sem uma leitura boa não se afirma nada: "não chegou" levaria a reenviar.
-pub(crate) fn check_arrival(cx: &Ctx, endpoint: &Endpoint, session: &str, text: &str, started: f64) -> Arrival {
+fn check_arrival(cx: &Ctx, endpoint: &Endpoint, session: &str, text: &str, started: f64) -> Arrival {
     let path = format!("/api/sessions/{}/history?limit=40", path_segment(session));
     let deadline = Instant::now() + Duration::from_secs_f64(cx.check_window());
     let (mut seen, mut doubtful) = (false, false);
@@ -229,7 +228,7 @@ fn read_tail(body: &[u8], sent: &str, started: f64) -> Tail {
 }
 
 /// O servidor pode escrever o remetente de outro jeito (`servidor::sessao` resolvido): vale o corpo.
-pub(crate) fn same_recado(event_text: &str, sent: &str) -> bool {
+fn same_recado(event_text: &str, sent: &str) -> bool {
     let (said, sent) = (event_text.trim(), sent.trim());
     if said == sent {
         return true;
