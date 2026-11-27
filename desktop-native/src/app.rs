@@ -2382,7 +2382,7 @@ impl Hangar {
             }
             Payload::Stream(Update::Offline(error)) => {
                 // Sem stream, nada mais vem assentar a conversa: o histórico guardado entra já.
-                if is_chat { self.release_held_history(window, cx); }
+                if is_chat && self.held_history.is_some() { self.release_held_history(window, cx); }
                 if if is_chat { self.chat_auth_lost(&error) } else { self.auth_lost(&error) } {
                     self.open_connection(window, cx);
                     self.error = Some(Self::failure(&error));
@@ -2495,7 +2495,7 @@ impl Hangar {
                 let _ = frame.applied.send(applied);
             }
             Payload::History(revision, limit, result) if revision == self.revision && limit == self.history_limit
-                && !self.history_installed && !self.stream_caught_up && self.chat_online && self.held_history.is_none() => {
+                && result.is_ok() && !self.history_installed && !self.stream_caught_up && self.chat_online && self.held_history.is_none() => {
                 api::open_trace(|| "history held".into());
                 self.held_history = Some(Envelope { connection: envelope.connection, selection: envelope.selection,
                     payload: Payload::History(revision, limit, result) });

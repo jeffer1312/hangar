@@ -34,8 +34,8 @@ pub async fn run(api: Api, name: Option<String>, tx: Sender<Update>) {
             if tx.send(Update::Online).await.is_err() { return Ok(()); }
             let mut events = response.bytes_stream().eventsource();
             let mut wire_id = cursor.clone();
-            // O ping sai antes de o servidor ler a conversa, então não conta.
-            let (mut started, mut caught_up) = (false, name.is_none());
+            // Só o que vem depois do primeiro ping é a conversa: o ping sai antes de o servidor lê-la, e o `nav` antes do ping.
+            let (mut pinged, mut started, mut caught_up) = (false, false, name.is_none());
             loop {
                 let next = if started && !caught_up {
                     match tokio::time::timeout(QUIET, events.next()).await {
@@ -65,7 +65,8 @@ pub async fn run(api: Api, name: Option<String>, tx: Sender<Update>) {
                     Some(item.id.clone())
                 } else { None };
                 wire_id = item.id;
-                started |= item.event != "ping";
+                started |= pinged && item.event != "ping";
+                pinged |= item.event == "ping";
                 let (applied, received) = oneshot::channel();
                 if tx.send(Update::Frame(Frame { event: item.event.clone(), data, applied })).await.is_err() { return Ok(()); }
                 if !received.await.unwrap_or(false) { return Err(Failure::local("invalid_response")); }
