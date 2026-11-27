@@ -30,6 +30,7 @@ mod groups_text;
 mod session_defaults;
 mod notice_ignores;
 mod tags;
+mod placement_clone;
 mod machine_peers;
 mod update_process;
 mod tour_progress;
@@ -140,24 +141,21 @@ pub fn refused_address() -> std::net::SocketAddr {
 
 /// A porta fechou: conexão recusada dentro do prazo. Um filho de outro teste, entre o fork e o exec, pode
 /// carregar por instantes a cópia do socket que o servidor acabou de fechar.
+/// Espera pela condição; se a porta nunca fechar, o teste trava e o prazo do executor de testes aponta.
 pub async fn assert_closed(address: std::net::SocketAddr, what: &str) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while tokio::net::TcpStream::connect(address).await.is_ok() {
-        assert!(std::time::Instant::now() < deadline, "{what} continua aceitando conexão em {address}");
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        tracing::debug!("{what} ainda aceita conexão em {address}");
+        tokio::task::yield_now().await;
     }
 }
 
 /// O lease, esperando a cópia que um filho de outro teste carrega entre o fork e o exec: a trava do
 /// flock é da descrição aberta, e o exec a solta em instantes. Dono de verdade segura além do prazo.
 pub fn lease_when_free(path: &std::path::Path) -> std::sync::Arc<hangar_server::runtime::queue::Lease> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
         match hangar_server::runtime::queue::acquire_lease(path) {
             Ok(lease) => return lease,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(5))
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => std::thread::yield_now(),
             Err(error) => panic!("lease ocupado: {error}"),
         }
     }

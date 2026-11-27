@@ -22,6 +22,9 @@ pub const LONG_POLL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Leitura e prazo total de quem espera a outra máquina abrir uma sessão: preparar conta, buscar no
 /// remoto e criar a worktree passa dos 30 s, e a criação não manda nada antes de terminar.
 pub const OPEN_TIMEOUT: Duration = Duration::from_secs(150);
+/// Leitura e prazo total de quem espera a outra máquina clonar um repositório: acima dos 10 min que ela
+/// dá ao `git clone`, senão quem pede desiste com o clone ainda correndo lá.
+pub const CLONE_TIMEOUT: Duration = Duration::from_secs(660);
 /// Corpo com senha sem `Content-Length`: cobre a maior senha do cofre (16 KiB) com todo byte
 /// escapado no JSON, para o vetor não crescer.
 const SECRET_RESERVE: usize = 128 * 1024;
@@ -188,7 +191,7 @@ fn transport_kind(error:&reqwest::Error)->&'static str {
 
 /// Quanto um pedido espera a resposta: o comum, a dona que espera outras máquinas, a abertura de sessão.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Wait { Read, Owner, Open }
+enum Wait { Read, Owner, Open, Clone }
 
 pub struct PeerClient {
     diagnostics: Option<DiagnosticContext>,
@@ -204,6 +207,8 @@ pub struct PeerClient {
     waiting: OnceLock<reqwest::Client>,
     /// `call_opening`: sem redirect, com `OPEN_TIMEOUT`.
     opening: OnceLock<reqwest::Client>,
+    /// `call_cloning`: sem redirect, com `CLONE_TIMEOUT`.
+    cloning: OnceLock<reqwest::Client>,
     /// `send_secret` (curto e longo): sem redirect.
     secret: OnceLock<reqwest::Client>,
     long: OnceLock<reqwest::Client>,
@@ -212,7 +217,7 @@ pub struct PeerClient {
 impl PeerClient {
     pub fn new(book: PeerBook) -> Self {
         Self { diagnostics: None, book: Arc::new(book), connect_route: false, routes: Mutex::default(), http: OnceLock::new(),
-            writes: OnceLock::new(), waiting: OnceLock::new(), opening: OnceLock::new(), secret: OnceLock::new(), long: OnceLock::new() }
+            writes: OnceLock::new(), waiting: OnceLock::new(), opening: OnceLock::new(), cloning: OnceLock::new(), secret: OnceLock::new(), long: OnceLock::new() }
     }
 
     /// Aceita o Connect da entrada quando o endereço salvo não conecta.
@@ -335,6 +340,11 @@ impl PeerClient {
         self.send(None, Wait::Open, server, method, path, body).await.map(|(_, v)| v)
     }
 
+    /// Como `call`, para o que espera a outra máquina clonar um repositório (`CLONE_TIMEOUT`, sem redirect).
+    pub async fn call_cloning(&self, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Option<Value>, PeerError> {
+        self.send(None, Wait::Clone, server, method, path, body).await.map(|(_, v)| v)
+    }
+
     /// Como `call`, dizendo quem pede: o `user-agent` é o `cliente` que o diário de lá grava.
     pub async fn call_as(&self, agent: &str, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<Option<Value>, PeerError> {
@@ -362,6 +372,7 @@ impl PeerClient {
         let (slot, read, total) = match wait {
             Wait::Owner => (&self.waiting, OWNER_WAIT_TIMEOUT, OWNER_WAIT_TIMEOUT),
             Wait::Open => (&self.opening, OPEN_TIMEOUT, OPEN_TIMEOUT),
+            Wait::Clone => (&self.cloning, CLONE_TIMEOUT, CLONE_TIMEOUT),
             Wait::Read if reads => (&self.http, READ_TIMEOUT, TOTAL_TIMEOUT),
             Wait::Read => (&self.writes, READ_TIMEOUT, TOTAL_TIMEOUT),
         };

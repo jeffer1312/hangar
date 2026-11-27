@@ -9,9 +9,9 @@ use reqwest::Method;
 use serde_json::{Value, json};
 
 use hangar_core::project::ProjectId;
-use hangar_placement::{AgentMode, Exclusion, MachineFacts, OpenContext, Placement, PlacementConfig, ReasonCode, UiMode, Unpublished, Warning, choose};
+use hangar_placement::{AgentMode, Exclusion, KnownRepo, MachineFacts, OpenContext, Placement, PlacementConfig, ReasonCode, UiMode, Unpublished, Warning, choose};
 
-use super::{context, facts, forward};
+use super::{clone, context, facts, forward};
 use crate::groups::peers::PeerError;
 use crate::routes::{AppState, owner_gate};
 use crate::session_open::{AgentProvider, OpenCaller, OpenError, SessionOpenRequest, Surface};
@@ -27,7 +27,8 @@ pub enum Step {
     /// Abre nesta máquina; `placement` vai na resposta quando o pedido trouxe `auto`.
     Here(Option<Value>),
     /// Abre em `server` com este corpo (`forward::open`); `placement` é `None` com máquina explícita.
-    There { server: String, body: Value, placement: Option<Value> },
+    /// `warnings` vão aos `avisos` da resposta (o clone novo).
+    There { server: String, body: Value, placement: Option<Value>, warnings: Vec<String> },
     Refused(OpenError),
 }
 
@@ -64,8 +65,6 @@ pub async fn step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &Ope
         if matches!(placement.reason, ReasonCode::NotBalanced { .. }) { return Step::Here(Some(wire(&placement))) }
         if config.agent_mode == AgentMode::Ask { return Step::Refused(ask(&placement)) }
         if let Some(root) = &ctx.cwd_root { st.placement_reservations.reserve(root, &placement.server); }
-        // O clone ainda não abre por aqui: a escolha que pede clone é recusada, à vista.
-        if placement.clone.is_some() { return Step::Refused(clone_unavailable(&placement.server, Some(&placement))) }
         if placement.server == ctx.local_id { return Step::Here(Some(wire(&placement))) }
         let dest = facts.into_iter().find(|f| f.server_id == placement.server);
         (Some(placement), dest)
@@ -73,7 +72,7 @@ pub async fn step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &Ope
         (None, peer_facts(st, machine.to_owned(), &facts_path(ctx.cwd_project.as_ref())).await)
     };
     let server = placement.as_ref().map_or(machine, |p| p.server.as_str()).to_owned();
-    let dest = match dest {
+    let mut dest = match dest {
         Some(dest) if dest.capable => dest,
         Some(_) => return Step::Refused(OpenError::new(409, "placement_peer_old",
             format!("{server} está numa versão sem a escolha de máquina: abra com `{server}::<nome>`")).with_params(json!({"server": server}))),
@@ -84,10 +83,40 @@ pub async fn step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &Ope
         Ok(inherited) => inherited,
         Err(error) => return Step::Refused(error),
     };
+    let mut warnings = Vec::new();
+    let missing = ctx.cwd_project.as_ref().filter(|p| !dest.repos.iter().any(|r| &r.project == *p));
+    if let Some(project) = missing {
+        let root = match clone_there(st, &ctx, &dest, placement.as_ref()).await {
+            Ok(root) => root,
+            Err(error) => return Step::Refused(error),
+        };
+        dest.repos.push(KnownRepo { project: project.clone(), root });
+        warnings.push(crate::session_open::baton::FRESH_CLONE_NOTE.to_owned());
+    }
     match forward::body(request, &ctx, &dest, &inherited) {
-        Some(body) => Step::There { server, body, placement: placement.as_ref().map(wire) },
+        Some(mut body) => {
+            // A sessão do clone novo instala o que o projeto pede antes do resto.
+            if !warnings.is_empty() {
+                body["initial_prompt"] = json!(crate::session_open::baton::fresh_clone_prompt(body["initial_prompt"].as_str()));
+            }
+            Step::There { server, body, placement: placement.as_ref().map(wire), warnings }
+        }
         None => Step::Refused(clone_unavailable(&server, placement.as_ref())),
     }
+}
+
+/// Clona em `dest` o repositório da pasta do pedido e devolve a raiz lá. A pasta é a da escolha; com a
+/// máquina pedida, a da tela para ela, senão a que ela calcula.
+async fn clone_there(st: &AppState, ctx: &OpenContext, dest: &MachineFacts, placement: Option<&Placement>) -> Result<String, OpenError> {
+    let server = &dest.server_id;
+    let dir = match placement.and_then(|p| p.clone.as_ref()) {
+        Some(target) => Some(target.dir.clone()),
+        None => load_config(st).await.ok().and_then(|c| c.clone_dirs.get(server).cloned()).or_else(|| dest.clone_dir.clone()),
+    };
+    let root_here = ctx.cwd_root.clone();
+    let origin = tokio::task::spawn_blocking(move || root_here.and_then(|r| hangar_workspace::worktrees::origin_url(&r))).await.ok().flatten();
+    let (Some(dir), Some(origin)) = (dir, origin) else { return Err(clone_unavailable(server, placement)) };
+    clone::remote(&st.peers, server, &origin, &dir).await
 }
 
 /// `POST /api/placement/suggest`: o corpo de abertura → a máquina que a tela marca e o motivo, sem abrir.
@@ -236,8 +265,8 @@ fn ask(placement: &Placement) -> OpenError {
 }
 
 fn clone_unavailable(server: &str, placement: Option<&Placement>) -> OpenError {
-    OpenError::new(409, "placement_clone_unavailable", format!("{server} não tem o repositório desta pasta e o clone ainda não \
-        está disponível: escolha outra máquina (`maquina` no new_session, `--machine` no hangar-send)"))
+    OpenError::new(409, "placement_clone_unavailable", format!("{server} não tem o repositório desta pasta nem pasta de clone \
+        conhecida: escolha outra máquina (`maquina` no new_session, `--machine` no hangar-send) ou a pasta de clone dela na tela"))
         .with_params(json!({"server": server, "placement": placement.map(wire)}))
 }
 

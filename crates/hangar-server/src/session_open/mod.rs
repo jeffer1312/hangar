@@ -363,6 +363,10 @@ pub struct WorktreeSpec {
     pub new_branch: bool,
     pub base: Option<String>,
     pub path: Option<String>,
+    /// Pedida com `machine` desta máquina (a abertura que outra encaminhou): a worktree parte do remoto
+    /// recém-buscado, nunca de uma branch velha daqui nem de pasta com trabalho daqui.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fresh: bool,
 }
 
 /// A sessão decidida: nada fica implícito. Ausente em `model`, `effort` e `service_tier` quer dizer

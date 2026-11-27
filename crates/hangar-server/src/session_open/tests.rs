@@ -2498,7 +2498,7 @@ fn confirm_refuses_a_reserve_when_the_open_has_a_worktree() {
     assert!(!adopting.was_adopted(), "tirada não é adotada");
     let meta = json!({"cwd": cwd, "key": world.key, "name": "proj", "session_id": world.session_id});
     let mut spec = record::claude_from_meta(&meta, "proj", 0.0).unwrap();
-    spec.worktree = Some(WorktreeSpec { branch: "feat".into(), new_branch: true, base: None, path: Some(cwd.clone()) });
+    spec.worktree = Some(WorktreeSpec { branch: "feat".into(), new_branch: true, base: None, path: Some(cwd.clone()), fresh: false });
     assert!(!runtime.block_on(adopting.confirm(&spec)));
     assert!(!adopting.was_adopted(), "a abertura que descartou a reserva não conta como pré-aquecida");
     assert_eq!(runtime.block_on(adopting.finish("proj", None))["resultado"], "descartada:pasta_diferente");

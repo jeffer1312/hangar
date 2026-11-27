@@ -545,7 +545,7 @@ pub(crate) async fn resolve_here(st: &Arc<AppState>, request: &SessionOpenReques
 }
 
 /// A abertura que a escolha mandou a outra máquina: a resposta é a de lá, com `alvo` e `placement`.
-async fn forwarded(st: &AppState, server: &str, body: &Value, placement: Option<Value>) -> Response {
+async fn forwarded(st: &AppState, server: &str, body: &Value, placement: Option<Value>, warnings: Vec<String>) -> Response {
     use crate::groups::peers::PeerError;
     let opened = crate::placement::forward::open(&st.peers, server, body, true).await
         .and_then(|info| if info["name"].is_string() { Ok(info) } else { Err(PeerError::Transport(format!("{server}: resposta da abertura sem o nome"))) });
@@ -555,6 +555,10 @@ async fn forwarded(st: &AppState, server: &str, body: &Value, placement: Option<
             if let Some(fields) = info.as_object_mut() {
                 fields.insert("alvo".into(), json!(alvo));
                 if let Some(placement) = placement { fields.insert("placement".into(), placement); }
+                if !warnings.is_empty() {
+                    let avisos = fields.entry("avisos").or_insert_with(|| json!([]));
+                    if let Some(list) = avisos.as_array_mut() { list.extend(warnings.into_iter().map(Value::from)); }
+                }
             }
             crate::session_write::json_response(StatusCode::OK, info)
         }
@@ -604,8 +608,8 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             access_diary("POST /api/sessions", &response, started, &diag);
             return response;
         }
-        Step::There { server, body, placement } => {
-            let mut response = forwarded(&st, &server, &body, placement).await;
+        Step::There { server, body, placement, warnings } => {
+            let mut response = forwarded(&st, &server, &body, placement, warnings).await;
             crate::routes::cors(&parts.headers, response.headers_mut());
             access_diary("POST /api/sessions", &response, started, &diag);
             return response;

@@ -1076,6 +1076,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/placement/config", axum::routing::get(crate::placement::routes::config).put(crate::placement::routes::config))
         .route("/api/placement/facts", get(crate::placement::facts::facts))
         .route("/api/placement/suggest", axum::routing::post(crate::placement::suggest::suggest))
+        .route("/api/placement/clone", axum::routing::post(crate::placement::clone::clone))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .merge(crate::scheduled_tasks::router())
         .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))
