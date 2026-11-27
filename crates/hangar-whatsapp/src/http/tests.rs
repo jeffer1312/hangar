@@ -402,6 +402,18 @@ async fn a_wipe_takes_the_copies_of_the_messages_too() {
     }
 }
 
+/// O serviço de pé já apagou banco e mídia: uma cópia que não sai depois disso é apagar em parte, nunca "não apaguei".
+#[tokio::test]
+async fn a_copy_that_stays_after_the_service_wiped_is_a_partial_wipe() {
+    let s = Scene::new();
+    s.serve(Signing::Signed).await;
+    let data = s.paths().data.clone();
+    std::fs::create_dir_all(data.join("messages.db.schema1.bak/x")).unwrap();
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
+    assert_eq!((status, code(&body)), (500, "whatsapp_wipe_partial"), "{body}");
+    assert_eq!(body["detail"]["params"]["failed"], "messages.db.schema1.bak");
+}
+
 /// Um arquivo que não sai no meio (no Windows, aberto pelo serviço): a resposta diz o que já saiu.
 #[cfg(unix)]
 #[tokio::test]

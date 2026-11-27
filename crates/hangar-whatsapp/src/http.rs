@@ -362,9 +362,11 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     // De pé é o serviço respondendo: só a falta de conexão leva ao ramo do disco, com as guardas dele.
     match wa.client.call(reqwest::Method::POST, "/v1/wipe", &[], Some(&json!({"confirm": true}))).await {
         Ok(reply) if (200..300).contains(&reply.status) => {
-            // As cópias de uma volta são do Hangar, e a versão antiga religada por ela não conhece as `.bak`.
+            // As cópias de uma volta são do Hangar, e a versão antiga religada por ela não conhece as `.bak`. O que o
+            // serviço apagou já saiu: uma cópia que fica depois disso é apagar em parte.
             let data = wa.ctx.paths.data.clone();
-            return match tokio::task::spawn_blocking(move || wipe_copies(&data, Vec::new())).await {
+            let wiped = vec!["messages.db".into(), "session.db".into(), "media".into()];
+            return match tokio::task::spawn_blocking(move || wipe_copies(&data, wiped)).await {
                 Ok(Ok(_)) => relay(reply),
                 Ok(Err(partial)) => partial_wipe(partial),
                 Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),

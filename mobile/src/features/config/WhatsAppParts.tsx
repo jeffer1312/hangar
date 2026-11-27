@@ -267,8 +267,8 @@ export function Connected({ state, version }: { state: WhatsAppState; version?: 
   </>;
 }
 
-/** A versão instalada e o botão que procura, atualiza ou pede a confirmação da mudança de formato. */
-/** `onUpdate`: procurar e atualizar são o mesmo pedido; o servidor troca quando acha versão sem mudança de formato. */
+/** A versão instalada e o botão que procura, atualiza ou pede a confirmação da mudança de formato. `onUpdate`:
+ * procurar e atualizar são o mesmo pedido; o servidor troca quando acha versão sem mudança de formato. */
 export function Version({ line, busy, onUpdate, onAsk }: {
   line: VersionLine; busy: Act | null; onUpdate: () => void; onAsk: () => void;
 }) {
