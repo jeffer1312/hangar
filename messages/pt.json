@@ -12689,6 +12689,8 @@
   "integrations_setup_redirect": "Endereço de retorno desta máquina (URI de redirecionamento)",
   "integrations_copy": "Copiar",
   "integrations_copied": "Copiado",
+  "integrations_added": "Adicionada",
+  "integrations_add_token": "Adicionar token",
   "integrations_google_testing_hint": "Em modo Testing no Google, o token expira a cada 7 dias; quando vencer, use Reconectar.",
   "integrations_field_id": "Identificador (slug)",
   "integrations_field_id_hint": "Letras minúsculas, números e hífen (ex.: gmail-pessoal)",

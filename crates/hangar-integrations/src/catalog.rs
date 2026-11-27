@@ -38,6 +38,13 @@ pub struct SetupGuide {
     pub redirect_uri: Option<String>,
 }
 
+/// Marca do serviço: logo (`icon`, nome do arquivo que os clientes embutem) e a cor de fundo dele, `#RRGGBB`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Brand {
+    pub icon: String,
+    pub color: String,
+}
+
 /// Definição declarativa de um servidor MCP remoto conhecido no catálogo.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogPreset {
@@ -55,6 +62,8 @@ pub struct CatalogPreset {
     pub requires_loopback_redirect: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_guide: Option<SetupGuide>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brand: Option<Brand>,
 }
 
 /// Retorna todos os presets embutidos no catálogo pronto.
@@ -89,6 +98,40 @@ pub fn catalog_for_port(port: u16) -> Vec<CatalogPreset> {
             preset
         })
         .collect()
+}
+
+/// Marca de uma integração: a do preset dela; sem preset conhecido, a do serviço cujo endereço é o mesmo host ou, se
+/// só um preset usa aquele domínio, o mesmo domínio.
+pub fn brand_for(preset: Option<&str>, url: Option<&str>) -> Option<Brand> {
+    if let Some(brand) = preset.and_then(find_preset).and_then(|p| p.brand.clone()) {
+        return Some(brand);
+    }
+    let host = url.and_then(host_of)?;
+    if let Some(brand) = catalog()
+        .iter()
+        .filter(|p| host_of(&p.url).as_deref() == Some(host.as_str()))
+        .find_map(|p| p.brand.clone())
+    {
+        return Some(brand);
+    }
+    let domain = registrable(&host);
+    let mut same_domain = catalog()
+        .iter()
+        .filter(|p| host_of(&p.url).is_some_and(|h| registrable(&h) == domain));
+    match (same_domain.next(), same_domain.next()) {
+        (Some(only), None) => only.brand.clone(),
+        _ => None,
+    }
+}
+
+fn host_of(url: &str) -> Option<String> {
+    reqwest::Url::parse(url).ok()?.host_str().map(str::to_ascii_lowercase)
+}
+
+// ponytail: últimos dois rótulos, sem lista de sufixos públicos; serve aos domínios do catálogo (`.com`, `.app`, `.dev`).
+fn registrable(host: &str) -> String {
+    let labels: Vec<&str> = host.rsplit('.').take(2).collect();
+    labels.into_iter().rev().collect::<Vec<_>>().join(".")
 }
 
 /// Busca um preset do catálogo pelo slug `id`.

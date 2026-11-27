@@ -22,6 +22,10 @@
       ],
       "docs_hint": "Google Cloud Console → Google Auth Platform → Clientes",
       "docs_url": "https://console.cloud.google.com/auth/clients"
+    },
+    "brand": {
+      "icon": "gmail",
+      "color": "#EA4335"
     }
   },
   {
@@ -47,6 +51,10 @@
       ],
       "docs_hint": "Google Cloud Console → Google Auth Platform → Clientes",
       "docs_url": "https://console.cloud.google.com/auth/clients"
+    },
+    "brand": {
+      "icon": "googledrive",
+      "color": "#4285F4"
     }
   },
   {
@@ -72,6 +80,10 @@
       ],
       "docs_hint": "Google Cloud Console → Google Auth Platform → Clientes",
       "docs_url": "https://console.cloud.google.com/auth/clients"
+    },
+    "brand": {
+      "icon": "googlecalendar",
+      "color": "#4285F4"
     }
   },
   {
@@ -84,7 +96,11 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "notion",
+      "color": "#000000"
+    }
   },
   {
     "id": "linear",
@@ -96,7 +112,11 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "linear",
+      "color": "#5E6AD2"
+    }
   },
   {
     "id": "slack",
@@ -117,6 +137,10 @@
       ],
       "docs_hint": "api.slack.com/apps → OAuth & Permissions → Redirect URLs",
       "docs_url": "https://api.slack.com/apps"
+    },
+    "brand": {
+      "icon": "slack",
+      "color": "#4A154B"
     }
   },
   {
@@ -129,7 +153,11 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "figma",
+      "color": "#F24E1E"
+    }
   },
   {
     "id": "atlassian",
@@ -141,7 +169,11 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "atlassian",
+      "color": "#0052CC"
+    }
   },
   {
     "id": "github",
@@ -162,6 +194,10 @@
       ],
       "docs_hint": "github.com/settings/tokens",
       "docs_url": "https://github.com/settings/personal-access-tokens/new"
+    },
+    "brand": {
+      "icon": "github",
+      "color": "#181717"
     }
   },
   {
@@ -174,7 +210,11 @@
     "auth_kind": "none",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "cloudflare",
+      "color": "#F38020"
+    }
   },
   {
     "id": "sentry",
@@ -186,7 +226,11 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "sentry",
+      "color": "#362D59"
+    }
   },
   {
     "id": "supabase",
@@ -198,6 +242,10 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "supabase",
+      "color": "#3FCF8E"
+    }
   }
 ]

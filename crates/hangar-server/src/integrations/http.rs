@@ -224,6 +224,8 @@ struct IntegrationView {
     status: IntegrationStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    brand: Option<hangar_integrations::Brand>,
 }
 
 fn build_view(
@@ -236,10 +238,16 @@ fn build_view(
     if status == IntegrationStatus::Ready && last_error.is_some() {
         status = IntegrationStatus::Error;
     }
+    let url = match &config.transport {
+        hangar_integrations::Transport::RemoteHttp { url, .. } => Some(url.as_str()),
+        hangar_integrations::Transport::LocalStdio { .. } => None,
+    };
+    let brand = hangar_integrations::brand_for(config.preset.as_deref(), url);
     IntegrationView {
         config,
         status,
         last_error,
+        brand,
     }
 }
 

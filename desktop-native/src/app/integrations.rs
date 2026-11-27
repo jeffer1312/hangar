@@ -5,7 +5,16 @@ use super::settings::{section_head, settings_box};
 use super::vault::{alert, chip, muted};
 use gpui_kit::component::switch::Switch;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
+
+/// Quanto o card da integração recém-criada fica aceso, apagando aos poucos.
+const FRESH_GLOW: Duration = Duration::from_millis(2600);
+
+/// Logos embutidos (`assets/integrations`): marca fora desta lista cai na inicial do nome.
+const LOGOS: [&str; 12] = ["gmail", "googledrive", "googlecalendar", "notion", "linear", "slack", "figma", "atlassian", "github",
+    "cloudflare", "sentry", "supabase"];
 
 const READ_SECONDS: u64 = 25;
 const MUTATION_SECONDS: u64 = 30;
@@ -50,6 +59,13 @@ pub(super) struct SetupGuide {
     pub redirect_uri: Option<String>,
 }
 
+/// Marca do serviço que o servidor manda: o logo embutido (`assets/integrations/<icon>.svg`) e a cor dele.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub(super) struct Brand {
+    pub icon: String,
+    pub color: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(super) struct CatalogPreset {
     pub id: String,
@@ -70,6 +86,8 @@ pub(super) struct CatalogPreset {
     pub requires_loopback_redirect: bool,
     #[serde(default)]
     pub setup_guide: Option<SetupGuide>,
+    #[serde(default)]
+    pub brand: Option<Brand>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -170,6 +188,8 @@ pub(super) struct IntegrationItem {
     pub status: IntegrationStatus,
     #[serde(default)]
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub brand: Option<Brand>,
 }
 
 #[derive(Deserialize)]
@@ -293,6 +313,9 @@ pub(super) struct IntegrationsPage {
     busy: HashSet<String>,
     testing: HashSet<String>,
     feedback: HashMap<String, Feedback>,
+    /// Integração recém-criada: a página rola até ela uma vez e o card acende e apaga.
+    fresh: Option<(String, Instant)>,
+    reveal: Rc<Cell<bool>>,
     notice: Option<String>,
     handoff: Option<PendingHandoff>,
 }
@@ -388,6 +411,8 @@ impl IntegrationsPage {
             busy: HashSet::new(),
             testing: HashSet::new(),
             feedback: HashMap::new(),
+            fresh: None,
+            reveal: Rc::new(Cell::new(false)),
             notice: None,
             handoff: None,
         };
@@ -559,11 +584,15 @@ impl IntegrationsPage {
     ) {
         // Invalida leituras de lista anteriores à gravação confirmada.
         self.seq += 1;
-        self.feedback.remove(&item.id);
-        self.notice = Some(tr_shared(
-            if created { "integrations_created" } else { "integrations_saved" },
-            &[],
-        ));
+        self.notice = None;
+        self.feedback.insert(
+            item.id.clone(),
+            Feedback::Info(tr_shared(if created { "integrations_created" } else { "integrations_saved" }, &[])),
+        );
+        if created {
+            self.fresh = Some((item.id.clone(), Instant::now()));
+            self.reveal.set(true);
+        }
         if let Some(Ok(list)) = self.items.as_mut() {
             if let Some(slot) = list.iter_mut().find(|existing| existing.id == item.id) {
                 *slot = item.clone();
@@ -969,7 +998,7 @@ impl IntegrationsPage {
         }
     }
 
-    fn render_configured(&self, items: &[IntegrationItem], cx: &mut Context<Self>) -> AnyElement {
+    fn render_configured(&self, items: &[IntegrationItem], window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let head = self.mark_section(
             section_head(
                 IconName::Plug,
@@ -994,7 +1023,7 @@ impl IntegrationsPage {
                 .aria_label(tr_shared("integrations_configured_heading", &[]))
                 .children(items.iter().flat_map(|item| {
                     let open = self.open_tools.contains(&item.id);
-                    std::iter::once(self.render_item(item, open, cx))
+                    std::iter::once(self.render_item(item, open, window, cx))
                         .chain(open.then(|| self.render_tools(item, cx)))
                 }))
                 .into_any_element()
@@ -1002,7 +1031,13 @@ impl IntegrationsPage {
         div().flex().flex_col().gap_2().child(head).child(body).into_any_element()
     }
 
-    fn render_item(&self, item: &IntegrationItem, tools_open: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_item(
+        &self,
+        item: &IntegrationItem,
+        tools_open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let id = item.id.clone();
         let busy = self.busy.contains(&id);
         let testing = self.testing.contains(&id);
@@ -1143,6 +1178,20 @@ impl IntegrationsPage {
             }))
         });
 
+        // Token pessoal ainda não salvo: o caminho é a edição, onde fica o campo do token.
+        let token_btn = (item.auth == AuthConfig::Bearer && item.status == IntegrationStatus::AuthRequired).then(|| {
+            let token_item = item.clone();
+            let token_preset = self.preset_for(item.preset.as_deref());
+            Button::new(SharedString::from(format!("integrations-token-{id}")))
+                .primary()
+                .xsmall()
+                .disabled(locked)
+                .label(tr_shared("integrations_add_token", &[]))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_form(FormMode::Edit(token_item.clone(), token_preset.clone()), window, cx);
+                }))
+        });
+
         let id_test = id.clone();
         let test_btn = Button::new(SharedString::from(format!("integrations-test-{id}")))
             .outline()
@@ -1196,18 +1245,47 @@ impl IntegrationsPage {
                 this.confirm_remove(&remove_item, window, cx);
             }));
 
+        let local = matches!(item.transport, Transport::LocalStdio { .. });
+        let icon = integration_icon(item.brand.as_ref(), &item.name, local, 40.).relative().child(
+            div()
+                .absolute()
+                .right(px(-3.))
+                .bottom(px(-3.))
+                .size(px(12.))
+                .rounded_full()
+                .border_2()
+                .border_color(theme::boxed())
+                .bg(status_dot(item.status)),
+        );
+        // Recém-criada: a página rola até ela uma vez e o fundo acende e apaga, para a pessoa ver onde ela entrou.
+        let glow = self.fresh.as_ref().filter(|(fresh, _)| *fresh == id).map(|(_, at)| {
+            let t = (at.elapsed().as_secs_f32() / FRESH_GLOW.as_secs_f32()).min(1.);
+            if t < 1. { motion::request_frame(window, cx); }
+            if cx.reduce_motion() { if t < 1. { 1. } else { 0. } } else { 1. - motion::ease_out(t) }
+        });
+        let scroll = self.hangar.upgrade().map(|hangar| hangar.read(cx).settings_ui.scroll.clone());
+        let reveal = (self.fresh.as_ref().is_some_and(|(fresh, _)| *fresh == id)).then(|| self.reveal.clone()).zip(scroll);
+
         div()
             .id(SharedString::from(format!("integrations-row-{id}")))
             .role(Role::ListItem)
             .aria_label(item.name.clone())
+            .relative()
             .mt(px(-1.))
             .border_t_1()
             .border_color(theme::border())
             .px_4()
             .py(px(12.))
             .flex()
-            .flex_col()
-            .gap_2()
+            .items_start()
+            .gap(px(14.))
+            .when_some(glow.filter(|g| *g > 0.), |el, g| {
+                el.bg(theme::accent().opacity(0.18 * g))
+                    .child(div().absolute().inset_0().border_2().border_color(theme::accent().opacity(g)))
+            })
+            .when_some(reveal, |el, (reveal, scroll)| el.child(super::settings::reveal_here(scroll, reveal)))
+            .child(icon)
+            .child(div().flex_1().min_w_0().flex().flex_col().gap_2()
             .child(
                 div()
                     .flex()
@@ -1275,11 +1353,12 @@ impl IntegrationsPage {
                     .child(pin_check)
                     .child(div().flex_1())
                     .children(oauth_btn)
+                    .children(token_btn)
                     .child(test_btn)
                     .child(tools_btn)
                     .child(edit_btn)
                     .child(remove_btn),
-            )
+            ))
             .into_any_element()
     }
 
@@ -1420,7 +1499,7 @@ impl IntegrationsPage {
             .into_any_element()
     }
 
-    fn render_catalog(&self, existing: &[IntegrationItem], cx: &mut Context<Self>) -> AnyElement {
+    fn render_catalog(&self, existing: &[IntegrationItem], window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let head = self.mark_section(
             section_head(
                 IconName::Globe,
@@ -1448,91 +1527,88 @@ impl IntegrationsPage {
                 .py(px(14.))
                 .child(muted(tr_shared("integrations_catalog_empty", &[])))
                 .into_any_element(),
-            Some(Ok(presets)) => settings_box()
-                .id("integrations-catalog")
-                .role(Role::List)
-                .aria_label(tr_shared("integrations_catalog_heading", &[]))
-                .children(presets.iter().map(|preset| {
-                    let already = existing
-                        .iter()
-                        .any(|item| item.preset.as_deref() == Some(preset.id.as_str()));
-                    let connect_label = tr_shared(
-                        if already {
-                            "integrations_add_account"
-                        } else {
-                            "integrations_connect"
-                        },
-                        &[],
-                    );
-                    let preset_cloned = preset.clone();
-                    div()
-                        .id(SharedString::from(format!("integrations-preset-{}", preset.id)))
-                        .role(Role::ListItem)
-                        .aria_label(preset.name.clone())
-                        .mt(px(-1.))
-                        .border_t_1()
-                        .border_color(theme::border())
-                        .px_4()
-                        .py(px(12.))
-                        .flex()
-                        .items_center()
-                        .gap(px(14.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .gap(px(3.))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_wrap()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(preset.name.clone()),
-                                        )
-                                        .child(chip(
-                                            tr_shared("integrations_badge_official", &[]),
-                                            theme::accent_text(),
-                                            theme::accent_dim(),
-                                        ))
-                                        .child(chip(
-                                            preset_auth_summary(preset.auth_kind),
-                                            theme::muted(),
-                                            theme::inset(),
-                                        )),
-                                )
-                                .when(!preset.description.is_empty(), |el| {
-                                    el.child(
-                                        div()
-                                            .text_size(px(12.5))
-                                            .text_color(theme::muted())
-                                            .whitespace_normal()
-                                            .child(preset.description.clone()),
-                                    )
-                                }),
-                        )
-                        .child(
-                            Button::new(SharedString::from(format!(
-                                "integrations-connect-{}",
-                                preset.id
-                            )))
-                            .primary()
-                            .small()
-                            .label(connect_label)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_form(FormMode::Preset(preset_cloned.clone()), window, cx);
-                            })),
-                        )
-                        .into_any_element()
-                }))
-                .into_any_element(),
+            Some(Ok(presets)) => {
+                // Colunas pela largura do painel ao lado da navegação; cada cartão tem no mínimo ~300px.
+                let room = f32::from(window.viewport_size().width) - 330.;
+                let columns = ((room / 300.).floor() as u16).clamp(1, 4);
+                div()
+                    .id("integrations-catalog")
+                    .role(Role::List)
+                    .aria_label(tr_shared("integrations_catalog_heading", &[]))
+                    .grid()
+                    .grid_cols(columns)
+                    .gap_3()
+                    .children(presets.iter().map(|preset| self.render_preset_card(preset, existing, cx)))
+                    .into_any_element()
+            }
         };
         div().flex().flex_col().gap_2().child(head).child(body).into_any_element()
+    }
+
+    /// Cartão do catálogo: quem é o serviço (logo e nome), como entra (selo do login), o que faz e o botão de conectar.
+    /// Serviço já conectado mostra "Conectada" e o botão vira "Conectar conta", para outra conta do mesmo serviço.
+    fn render_preset_card(&self, preset: &CatalogPreset, existing: &[IntegrationItem], cx: &mut Context<Self>) -> AnyElement {
+        let connected = existing.iter().filter(|item| item.preset.as_deref() == Some(preset.id.as_str())).count();
+        let preset_cloned = preset.clone();
+        let connect = Button::new(SharedString::from(format!("integrations-connect-{}", preset.id)))
+            .small()
+            .label(tr_shared(if connected > 0 { "integrations_add_account" } else { "integrations_connect" }, &[]))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_form(FormMode::Preset(preset_cloned.clone()), window, cx);
+            }));
+        let connect = if connected > 0 { connect.outline() } else { connect.primary() };
+        div()
+            .id(SharedString::from(format!("integrations-preset-{}", preset.id)))
+            .role(Role::ListItem)
+            .aria_label(preset.name.clone())
+            .p_4()
+            .rounded(px(14.))
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::boxed())
+            .hover(|style| style.border_color(theme::accent().opacity(0.6)))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(integration_icon(preset.brand.as_ref(), &preset.name, false, 40.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(div().font_weight(FontWeight::MEDIUM).truncate().child(preset.name.clone()))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap(px(6.))
+                                    .child(chip(preset_auth_summary(preset.auth_kind), theme::muted(), theme::inset()))
+                                    // "Adicionada", não "Conectada": o estado de cada conta (token, login) fica no card dela.
+                                    .when(connected > 0, |el| {
+                                        el.child(chip(tr_shared("integrations_added", &[]), theme::accent_text(), theme::accent_dim()))
+                                    }),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(12.5))
+                    .text_color(theme::muted())
+                    .whitespace_normal()
+                    .line_clamp(3)
+                    .text_ellipsis()
+                    .child(preset.description.clone()),
+            )
+            .child(div().flex().justify_end().child(connect))
+            .into_any_element()
     }
 }
 
@@ -1948,7 +2024,7 @@ impl Hangar {
 }
 
 impl Render for IntegrationsPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let custom_btn = self.mark_section(
             div().child(
                 Button::new("integrations-add-custom")
@@ -2091,8 +2167,8 @@ impl Render for IntegrationsPage {
             Some(Ok(items)) => items,
         };
 
-        page.child(self.render_configured(items, cx))
-            .child(self.render_catalog(items, cx))
+        page.child(self.render_configured(items, window, cx))
+            .child(self.render_catalog(items, window, cx))
     }
 }
 
@@ -2591,6 +2667,47 @@ pub(super) fn integrations_failure(error: &Failure) -> String {
             }
         }
         _ => Hangar::fetch_failure(error),
+    }
+}
+
+/// Ícone da integração: o logo do serviço sobre a cor da marca; sem marca, a inicial do nome, ou o terminal se for
+/// processo local.
+fn integration_icon(brand: Option<&Brand>, name: &str, local: bool, size: f32) -> Div {
+    let tile = div().size(px(size)).flex_shrink_0().rounded(px(size * 0.26)).flex().items_center().justify_center();
+    let logo = brand
+        .filter(|b| LOGOS.contains(&b.icon.as_str()))
+        .and_then(|b| brand_color(&b.color).map(|color| (b.icon.clone(), color)));
+    match logo {
+        Some((icon, color)) => tile
+            .bg(color)
+            .child(svg().path(SharedString::from(format!("integrations/{icon}.svg"))).size(px(size * 0.56)).text_color(gpui::white())),
+        None if local => tile
+            .bg(theme::inset())
+            .border_1()
+            .border_color(theme::border())
+            .child(chrome::small_icon(IconName::SquareTerminal, size * 0.5, theme::muted())),
+        None => tile
+            .bg(theme::accent_dim())
+            .text_color(theme::accent_text())
+            .text_size(px(size * 0.44))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_default()),
+    }
+}
+
+/// A cor da marca é dado do catálogo (`#RRGGBB`), não tema: vale igual no claro e no escuro, com o logo em branco por cima.
+fn brand_color(hex: &str) -> Option<Hsla> {
+    let value = u32::from_str_radix(hex.strip_prefix('#')?, 16).ok()?;
+    Some(gpui::rgb(value).into())
+}
+
+/// Cor da bolinha de estado no canto do ícone; o nome do estado continua no selo ao lado.
+fn status_dot(status: IntegrationStatus) -> Hsla {
+    match status {
+        IntegrationStatus::Ready => theme::success(),
+        IntegrationStatus::AuthRequired | IntegrationStatus::AuthExpired => theme::warning(),
+        IntegrationStatus::Error => theme::danger(),
+        IntegrationStatus::Disabled => theme::faint(),
     }
 }
 

@@ -17,7 +17,9 @@ pub use approvals::{
     MAX_ARGUMENTS_PREVIEW_CHARS, MAX_OPEN, MAX_OPEN_PER_SESSION, MAX_REASON_CHARS,
     OpenApprovalRequest, format_arguments_preview, format_origin, truncate_preview_chars,
 };
-pub use catalog::{CatalogPreset, PresetAuthKind, SetupGuide, catalog, catalog_for_port, find_preset};
+pub use catalog::{
+    Brand, CatalogPreset, PresetAuthKind, SetupGuide, brand_for, catalog, catalog_for_port, find_preset,
+};
 pub use client::{
     ClientConfig, ClientError, DEFAULT_CALL_TIMEOUT, DEFAULT_CONNECT_TIMEOUT, DEFAULT_EXIT_GRACE,
     DEFAULT_IDLE_TTL, McpCallOutput, McpClientManager, TokenRefresher,

@@ -13,6 +13,7 @@ import type {
 import { MachineGroup, MachineRow } from '../machines/MachineRows';
 import { useSettingsColors } from '../config/colors';
 import { haptic } from '../../ui/haptics';
+import { IntegrationIcon } from './IntegrationIcon';
 import { toast } from '../../ui/Toast';
 import * as m from '../../paraglide/messages';
 
@@ -111,6 +112,14 @@ export function ConfiguredIntegrationRow({ integration, onPress }: {
 
   return (
     <MachineRow
+      leading={(
+        <IntegrationIcon
+          brand={integration.brand}
+          name={integration.name}
+          local={integration.transport.kind === 'local_stdio'}
+          status={integration.status}
+        />
+      )}
       title={integration.name}
       description={summary}
       value={integrationStatusLabel(integration.status)}
@@ -127,6 +136,7 @@ export function CatalogPresetRow({ preset, connectedCount, onPress }: {
 }) {
   return (
     <MachineRow
+      leading={<IntegrationIcon brand={preset.brand} name={preset.name} />}
       title={preset.name}
       description={`${presetAuthLabel(preset)} · ${preset.description}`}
       value={connectedCount > 0 ? m.integrations_add_account() : m.integrations_badge_official()}

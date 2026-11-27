@@ -17,6 +17,12 @@ export interface IntegrationSetupGuide {
   redirect_uri?: string | null;
 }
 
+/** Marca do serviço que o servidor manda: logo embutido nos clientes (`icon`) e a cor dele (`#RRGGBB`). */
+export interface IntegrationBrand {
+  icon: string;
+  color: string;
+}
+
 export interface IntegrationPreset {
   id: string;
   name: string;
@@ -28,6 +34,7 @@ export interface IntegrationPreset {
   default_scopes: string[];
   requires_loopback_redirect: boolean;
   setup_guide?: IntegrationSetupGuide | null;
+  brand?: IntegrationBrand | null;
 }
 
 export type IntegrationTransport =
@@ -63,6 +70,7 @@ export interface IntegrationView {
   updated_at: number;
   status: IntegrationStatus;
   last_error?: string;
+  brand?: IntegrationBrand | null;
 }
 
 export interface IntegrationToolSummary {

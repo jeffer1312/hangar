@@ -18,7 +18,7 @@ use hangar_integrations::{
     AuthConfig, ClientConfig, IntegrationConfig, IntegrationRegistry, IntegrationSecrets,
     IntegrationStatus, IntegrationUpdate, McpClientManager, MemoryKeyStore, OAUTH_CALLBACK_PATH,
     OAuthError, OAuthManager, OAuthOrigin, OAuthStartInput, OAuthStartOutcome, OAuthTokens,
-    PermissionPolicy, PresetAuthKind, SecretStore, TokenRefresher, ToolsCache, Transport, catalog, catalog_for_port,
+    PermissionPolicy, PresetAuthKind, SecretStore, TokenRefresher, ToolsCache, Transport, brand_for, catalog, catalog_for_port,
     compute_status, find_preset,
 };
 use ring::digest::{SHA256, digest};
@@ -929,6 +929,21 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
         }
     }
     assert!(find_preset("nao-existe").is_none());
+}
+
+#[test]
+fn brand_comes_from_the_preset_or_from_a_known_service_address() {
+    let icon = |preset: Option<&str>, url: Option<&str>| brand_for(preset, url).map(|b| b.icon);
+    assert_eq!(icon(Some("notion"), None).as_deref(), Some("notion"));
+    assert_eq!(icon(Some("google-drive"), Some("https://example.com/mcp")).as_deref(), Some("googledrive"));
+    assert_eq!(icon(None, Some("https://mcp.linear.app/sse")).as_deref(), Some("linear"));
+    // Outro endpoint do mesmo serviço: o domínio basta quando só um preset o usa.
+    assert_eq!(icon(None, Some("https://bindings.mcp.cloudflare.com/mcp")).as_deref(), Some("cloudflare"));
+    // googleapis.com serve três presets: sem host exato, não dá para escolher.
+    assert_eq!(icon(None, Some("https://other.googleapis.com/mcp")), None);
+    assert_eq!(icon(None, Some("https://example.com/mcp")), None);
+    assert_eq!(icon(None, None), None);
+    assert!(catalog().iter().all(|p| p.brand.as_ref().is_some_and(|b| b.color.starts_with('#') && b.color.len() == 7)));
 }
 
 #[test]

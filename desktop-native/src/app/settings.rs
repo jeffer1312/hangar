@@ -376,7 +376,7 @@ pub(super) struct SettingsUi {
     pick: usize,
     /// Linha levada pela busca: fica destacada até outra busca ou até sair da página.
     hit: Option<&'static str>,
-    scroll: ScrollHandle,
+    pub(super) scroll: ScrollHandle,
     /// A posição da linha só é conhecida no desenho: este sinal pede a rolagem até ela lá.
     reveal: Rc<Cell<bool>>,
     /// Seção da Aparência levada pelo atalho: rola até ela como a busca, sem o destaque.
@@ -1077,7 +1077,7 @@ impl Hangar {
 }
 
 /// Rola a página até o elemento (`relative`) que leva este filho, uma vez por pedido em `reveal`.
-fn reveal_here(scroll: ScrollHandle, reveal: Rc<Cell<bool>>) -> impl IntoElement {
+pub(super) fn reveal_here(scroll: ScrollHandle, reveal: Rc<Cell<bool>>) -> impl IntoElement {
     canvas(move |bounds, window, _| {
         if !reveal.get() { return; }
         let area = scroll.bounds();
