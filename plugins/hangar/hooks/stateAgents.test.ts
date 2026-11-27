@@ -105,6 +105,14 @@ test("Agent do Code Mode: o completed da chamada encerra o de segundo plano, que
   expect(h.agents).toEqual(["cm1:running", "cm1:finished"]);
 }));
 
+test("Agent do Code Mode: o completed antes do turn.complete encerra uma vez só", () => withBridge(async () => {
+  const h = harness();
+  await h.spawn("cm2", true);
+  await h.agentCall({ result: { status: "completed", agentId: "cm2" } });
+  await h.done("cm2");
+  expect(h.agents).toEqual(["cm2:running", "cm2:finished"]);
+}));
+
 test("Agent lançado em segundo plano (async_launched) segue rodando até a notificação", () => withBridge(async () => {
   const h = harness();
   await h.spawn("bg3", true);

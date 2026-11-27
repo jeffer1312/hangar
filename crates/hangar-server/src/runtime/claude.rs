@@ -1310,10 +1310,11 @@ impl ClaudeEngine {
     /// o `task_notification` dele.
     fn finish_called_agent(&mut self,event:&Value) {
         let result = &event["tool_use_result"];
-        let Some(id) = result["agentId"].as_str() else { return };
-        let state = match result["status"].as_str() { Some("completed") => "completed", Some("failed") => "failed", _ => return };
+        let Some(id) = result["agentId"].as_str().filter(|_|result["status"] == "completed") else { return };
+        let failed = event["message"]["content"].as_array().is_some_and(|blocks|blocks.iter().any(|block|block["is_error"] == true));
+        if failed { return; }
         let Some(entry) = self.subagents.get_mut(id).filter(|entry|entry["state"] == "running") else { return };
-        entry["state"] = json!(state);
+        entry["state"] = json!("completed");
         if let Some(end) = event["timestamp"].as_str().and_then(|at|chrono::DateTime::parse_from_rfc3339(at).ok()) {
             entry["end_time"] = json!(end.timestamp_millis());
         }
@@ -1386,7 +1387,9 @@ impl ClaudeEngine {
                 let live:BTreeSet<String> = event["tasks"].as_array().into_iter().flatten().filter_map(|task|task["task_id"].as_str().map(str::to_owned)).collect();
                 for task in event["tasks"].as_array().into_iter().flatten() {
                     self.track_subagent(task);
-                    self.start_task(task);
+                    // Encerrado pelo resultado da chamada, mas ainda no conjunto vivo da CLI: não volta ao rótulo.
+                    let ended = task["task_id"].as_str().and_then(|id|self.subagents.get(id)).is_some_and(|entry|entry["state"] != "running");
+                    if !ended { self.start_task(task); }
                 }
                 let gone:Vec<String> = self.background.difference(&live).cloned().collect();
                 self.tasks.retain(|(key,_)|!gone.contains(key));

@@ -757,6 +757,11 @@ fn a_code_mode_agent_ends_on_the_completed_result_of_its_own_call() {
     line(&mut engine,json!({"type":"result","subtype":"success","is_error":false}),12.0);
     let label = engine.view()["public_state"]["label"].clone();
     assert!(label.is_null(),"o subagente encerrado sai do rótulo: {label}");
+    // A CLI ainda o lista no conjunto vivo depois do fim: continua fora do rótulo.
+    line(&mut engine,json!({"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":agent,"run_id":"0mwz846wc-c6910257","task_type":"local_agent","subagent_type":"general-purpose","description":"ping test"}]}),12.5);
+    let label = engine.view()["public_state"]["label"].clone();
+    assert!(label.is_null(),"o conjunto vivo atrasado não devolve o encerrado ao rótulo: {label}");
+    assert_eq!(engine.view()["subagents"][agent]["state"],"completed");
 }
 
 #[test]
@@ -767,6 +772,9 @@ fn an_agent_launched_in_the_background_keeps_running_after_the_launch_result() {
     line(&mut engine,json!({"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_cc_236f41e5","content":"Async agent launched successfully."}]},
         "tool_use_result":{"isAsync":true,"status":"async_launched","agentId":agent}}),10.5);
     assert_eq!(engine.view()["subagents"][agent]["state"],"running");
+    line(&mut engine,json!({"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_cc_236f41e5","content":"falhou","is_error":true}]},
+        "tool_use_result":{"status":"completed","agentId":agent}}),11.0);
+    assert_eq!(engine.view()["subagents"][agent]["state"],"running","resultado com erro não encerra");
 }
 
 #[test]

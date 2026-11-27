@@ -88,7 +88,7 @@ pub(crate) fn virtual_result(obj: &Map<String, Value>) -> Option<String> {
             if let Some(id) = m.get("agentId").and_then(Value::as_str).filter(|id| !id.is_empty()) {
                 parts.push(format!("agentId: {id}"));
             }
-            Some(parts.join("\n"))
+            (!parts.is_empty()).then(|| parts.join("\n"))
         }
         Value::Object(m) if let Some(text) = ["content", "result"].iter().find_map(|k| m.get(*k).and_then(Value::as_str)) =>
             Some(text.to_owned()),
@@ -451,6 +451,14 @@ mod tests {
                 "content": [{"type": "text", "text": "Relatório da tarefa"}]},
             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_cc_f2d6", "content": ""}]}})]);
         assert_eq!(evs[0].result.as_deref(), Some("Relatório da tarefa\nagentId: aa4752a94f4767aad"));
+    }
+
+    #[test]
+    fn a_result_of_blocks_without_text_stays_without_result() {
+        let evs = feed_all(&[json!({"type": "user", "uuid": "u-b", "timestamp": "2026-11-27T16:35:42.739Z",
+            "isVirtual": true, "toolUseResult": {"content": [{"type": "image"}]},
+            "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_cc_img", "content": ""}]}})]);
+        assert_eq!(evs[0].result.as_deref(), Some(""));
     }
 
     #[test]

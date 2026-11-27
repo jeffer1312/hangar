@@ -124,7 +124,8 @@ export function registerState(on: On) {
     if (e.agentId) {
       agentDone(e.agentId, { answer: e.answer, isAborted: e.isAborted });
       // O de fundo termina pela task-notification; interrompido, ela não vem, e o fim é este.
-      if (!background.has(e.agentId) || e.isAborted) await agentLife($, e.agentId, e.isAborted ? "failed" : "finished");
+      // O `completed` da chamada Agent pode ter chegado antes e já encerrado este.
+      if ((!background.has(e.agentId) || e.isAborted) && !ended.has(e.agentId)) await agentLife($, e.agentId, e.isAborted ? "failed" : "finished");
       return next(e);
     }
     await send($, "idle", { motivo: e.reason }, true);
