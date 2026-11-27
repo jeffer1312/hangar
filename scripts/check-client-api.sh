@@ -48,7 +48,8 @@ case "${1:-}" in
         git rev-list "$1" >/dev/null 2>&1 || { echo "intervalo inválido: $1" >&2; exit 2; }
         # Sem pipe: com pipefail, o `grep -q` sai cedo e o SIGPIPE do `git log` daria falha mesmo achando o escape.
         mensagens="$(git log --no-merges --format=%B "$1")"
-        grep -qE '(^|[^A-Za-z_])HANGAR_SEM_CLIENT_API: +[^ ]' <<<"$mensagens" && exit 0
+        # Só no começo da linha e com motivo: a marca citada num texto ("HANGAR_SEM_CLIENT_API: <motivo>") não desliga o PR.
+        grep -qE '^HANGAR_SEM_CLIENT_API: +[^< ]' <<<"$mensagens" && exit 0
         algum=""
         # Merges ficam de fora: trazem o que já foi conferido.
         for c in $(git rev-list --no-merges "$1"); do

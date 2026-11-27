@@ -77,6 +77,11 @@ echo y >> README.md
 commit $'ajuste\n\nHANGAR_SEM_CLIENT_API: nada novo é pedido ao servidor'
 confere "escape num commit posterior do intervalo → 0" 0 "$base..HEAD"
 
+git checkout -q -b escape-citado "$base"
+echo 'fn c() {}' >> desktop-native/src/api/mod.rs
+commit $'doc da trava\n\nA saída é escrever HANGAR_SEM_CLIENT_API: <motivo> no commit.\nHANGAR_SEM_CLIENT_API: <por quê>'
+confere "marca só citada no texto → 1" 1 "$base..HEAD"
+
 # PR paralelo: a base já subiu para 3 (outro PR mesclado) e esta branch também parou em 3.
 git checkout -q -b base-nova "$base"
 api 3; commit 'outro PR subiu'
