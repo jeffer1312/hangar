@@ -301,7 +301,9 @@ pub async fn tick<S: Sources>(src: &S, slot: &mut Slot, frame: Option<&Frame>, e
         None => Vec::new(),
     };
     let marker = slot.marker.as_ref().map(|(s, t)| (s.as_str(), *t));
-    let (text, md, full) = match hook_text(&files, marker, src.wall()) {
+    // Arquivo velho é "nada em voo", nunca a volta ao pane: uma ferramenta longa envelhece o arquivo e
+    // o marcador juntos, e a tela pode estar com o painel lateral do Claude Code.
+    let (text, md, full) = match hook_text(&files, marker, src.wall()).or_else(|| (!files.is_empty()).then(String::new)) {
         Some(text) => {
             slot.fast = !text.is_empty();
             (text, true, true)
@@ -487,6 +489,18 @@ mod tests {
         task.abort();
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn an_old_hook_file_never_hands_the_preview_back_to_the_pane() {
+        // Ferramenta de mais de 10 min: o arquivo e o marcador envelhecem juntos, e o pane tem outra coisa.
+        let fake = Fake::new(pane("resposta antiga com o painel lateral grudado", true));
+        *fake.hook.lock().unwrap() = vec![HookFile { text: "resposta gravada antes da ferramenta".into(), ts: Some(1_000_000.0 - MAX_AGE - 1.0) }];
+        let task = tokio::spawn(Monitor::new(fake.clone()).run());
+        tokio::time::sleep(POLL * 2).await;
+        assert_eq!(fake.texts(), [(String::new(), true, true)]);
+        assert_eq!(fake.fast_captures.load(Ordering::SeqCst), 0, "sem capturas só para a prévia");
+        task.abort();
+    }
+
     #[test]
     fn old_file_valid_while_marker_working() {
         for row in golden()["sidecars"].as_array().unwrap() {
@@ -504,7 +518,7 @@ mod tests {
         let file = dir.join(SUBDIR).join("sid.json");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, r#"{"text": "um", "ts": 1}"#).unwrap();
-        let old = std::time::SystemTime::now() - Duration::from_secs(60);
+        let old = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
         std::fs::File::options().write(true).open(&file).unwrap().set_modified(old).unwrap();
         let mut files = HookFiles::default();
         let dirs = [dir.clone(), dir.join("sem-arquivo")];
