@@ -39,6 +39,7 @@ mod sleep_hidden;
 mod speech_pause;
 mod speed_choice;
 mod session_vault;
+mod telemetry_consent;
 mod tour;
 mod updates_manual;
 mod worktree_fresh;
@@ -123,6 +124,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "portas-da-sessao" => Some(session_ports::render),
         "antigravity" => Some(antigravity::render),
         "termos-antigravity" => Some(agy_terms::render),
+        "contagens-anonimas" => Some(telemetry_consent::render),
         _ => None,
     }
 }

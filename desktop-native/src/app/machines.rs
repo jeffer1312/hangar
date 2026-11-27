@@ -412,7 +412,7 @@ fn web_ui_value(result: Result<Value, Failure>) -> Result<Option<bool>, String> 
 
 /// Uma escolha do dono gravada no servidor e perguntada na abertura do app.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Consent { AutoReport, Telemetry }
+pub(crate) enum Consent { AutoReport, Telemetry }
 
 /// Os ids dos elementos da linha nas Configurações.
 struct ConsentIds { switch: &'static str, load_error: &'static str, retry: &'static str, save_error: &'static str }
@@ -454,7 +454,7 @@ impl Consent {
 
 /// A resposta do dono (`None` = não respondida) e se o ambiente da máquina desligou o recurso (só a telemetria diz).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ConsentChoice { answer: Option<bool>, disabled: bool }
+pub(crate) struct ConsentChoice { pub(crate) answer: Option<bool>, pub(crate) disabled: bool }
 
 const UNANSWERED: ConsentChoice = ConsentChoice { answer: None, disabled: false };
 
@@ -474,6 +474,28 @@ fn consent_value(kind: Consent, result: Result<Value, Failure>) -> Result<Option
             Ok(Some(ConsentChoice { answer, disabled: !value["disabled_by"].is_null() }))
         }
     }
+}
+
+/// A vista da linha de uma escolha, sem a marca da busca: a tela e a animação da novidade desenham por aqui.
+/// `choice` = `None` enquanto não há leitura boa; `toggle` chega só com o id e o clique.
+pub(crate) fn consent_row(kind: Consent, live: bool, choice: Option<ConsentChoice>, loading: bool, saving: bool, read_failed: bool, toggle: Switch) -> Div {
+    let (icon, title, hint) = match kind {
+        Consent::AutoReport => (IconName::FileText, tr("auto_report_title"), tr_shared("auto_report_setting_hint", &[])),
+        Consent::Telemetry => (IconName::ChartBar, tr_shared("telemetry_setting", &[]), tr_shared("telemetry_setting_hint", &[])),
+    };
+    let status = match choice {
+        _ if saving => tr("server_saving"),
+        Some(ConsentChoice { disabled: true, .. }) => tr_shared("telemetry_disabled_env", &[]),
+        Some(ConsentChoice { answer: Some(on), .. }) => format!("{} · {hint}", tr_shared(if on { "auto_report_on" } else { "auto_report_off" }, &[])),
+        Some(ConsentChoice { answer: None, .. }) => format!("{} · {hint}", tr_shared("auto_report_value_unanswered", &[])),
+        None if !read_failed => tr("server_loading"),
+        None => hint,
+    };
+    let enabled = choice.is_some_and(|c| !c.disabled);
+    let toggle = toggle.checked(choice.is_some_and(|c| !c.disabled && c.answer == Some(true)))
+        .accessibility_label(title.clone())
+        .disabled(!enabled || loading || saving);
+    setting_row(live, icon, title, div().whitespace_normal().child(status), enabled, toggle.into_any_element())
 }
 
 fn consent_body(kind: Consent, on: bool) -> Value {
@@ -1104,29 +1126,14 @@ impl Hangar {
     fn render_consent(&self, kind: Consent, cx: &mut Context<Self>) -> Option<Div> {
         let setting = self.machines.consent_ref(kind);
         if self.active_invite() || matches!(setting.remote.value, Some(Ok(None))) { return None; }
-        let (icon, title, mark, hint) = match kind {
-            Consent::AutoReport => (IconName::FileText, tr("auto_report_title"), "auto_report_title", tr_shared("auto_report_setting_hint", &[])),
-            Consent::Telemetry => (IconName::ChartBar, tr_shared("telemetry_setting", &[]), "telemetry_setting", tr_shared("telemetry_setting_hint", &[])),
-        };
         let ids = kind.ids();
         let choice = setting.remote.ok().copied().flatten();
         let read_error = setting.remote.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !setting.remote.loading).cloned();
-        let status = match choice {
-            _ if setting.saving => tr("server_saving"),
-            Some(ConsentChoice { disabled: true, .. }) => tr_shared("telemetry_disabled_env", &[]),
-            Some(ConsentChoice { answer: Some(on), .. }) => format!("{} · {hint}", tr_shared(if on { "auto_report_on" } else { "auto_report_off" }, &[])),
-            Some(ConsentChoice { answer: None, .. }) => format!("{} · {hint}", tr_shared("auto_report_value_unanswered", &[])),
-            None if read_error.is_none() => tr("server_loading"),
-            None => hint,
-        };
-        let enabled = choice.is_some_and(|c| !c.disabled);
-        let toggle = Switch::new(ids.switch).checked(choice.is_some_and(|c| !c.disabled && c.answer == Some(true)))
-            .accessibility_label(title.clone())
-            .disabled(!enabled || setting.remote.loading || setting.saving)
-            .on_click(cx.listener(move |this, on: &bool, _, cx| this.save_consent(kind, *on, cx)));
+        let toggle = Switch::new(ids.switch).on_click(cx.listener(move |this, on: &bool, _, cx| this.save_consent(kind, *on, cx)));
         let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
             .whitespace_normal().child(text);
-        let row = setting_row(self.settings_ui.live, icon, title, div().whitespace_normal().child(status), enabled, toggle.into_any_element());
+        let row = consent_row(kind, self.settings_ui.live, choice, setting.remote.loading, setting.saving, read_error.is_some(), toggle);
+        let mark = match kind { Consent::AutoReport => "auto_report_title", Consent::Telemetry => "telemetry_setting" };
         Some(settings_box().child(self.mark(row, mark))
             .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
                 .child(alert(ids.load_error, error))
