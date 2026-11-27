@@ -326,7 +326,7 @@ function lineChart(slot) {
   const max = Math.max(1, ...rows.map(s => s.value));
   const ticks = Math.min(4, max), step = Math.ceil(max / ticks), top = step * ticks;
   const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", height: H, role: "img",
-    "aria-label": slot._chart.label + ": " + rows.map(r => fmt.format(r.value)).join(", ") });
+    "aria-label": slot._chart.label + ". " + rows.map(r => dayMonth(r.day) + ": " + fmt.format(r.value)).join("; ") + ". Setas mudam o dia.", tabindex: "0" });
   for (let i = 0; i <= ticks; i++) {
     const y = T + (H - B - T) * (1 - i / ticks);
     svg.append(svgEl("line", { x1: L, x2: W - R, y1: y, y2: y, class: i ? "gridline" : "base" }));
@@ -360,7 +360,21 @@ function lineChart(slot) {
     const hide = () => { cross.style.opacity = 0; dot.setAttribute("cx", pts.at(-1)[0]); dot.setAttribute("cy", pts.at(-1)[1]); hideTip(); };
     hit.addEventListener("pointermove", e => show(e.clientX, e.clientY));
     hit.addEventListener("pointerleave", hide);
+    hit._show = show;
     svg.append(hit);
+  });
+  // Teclado: o gráfico é uma parada só; as setas andam pelos dias e a dica mostra data e valor.
+  const hits = [...svg.querySelectorAll(".hit")];
+  let at = rows.length - 1;
+  const focusDay = () => { const r = hits[at].getBoundingClientRect(); hits[at]._show(r.left + r.width / 2, r.top + 20); };
+  svg.addEventListener("focus", focusDay);
+  svg.addEventListener("blur", () => { cross.style.opacity = 0; hideTip(); });
+  svg.addEventListener("keydown", e => {
+    const step = { ArrowLeft: -1, ArrowRight: 1, Home: -rows.length, End: rows.length }[e.key];
+    if (step == null) return;
+    e.preventDefault();
+    at = Math.min(rows.length - 1, Math.max(0, at + step));
+    focusDay();
   });
   slot.replaceChildren(svg);
 }
@@ -414,7 +428,7 @@ function logCard(logs) {
 
 function sectionBlock(id, big, bigNote, ...body) {
   const [, name, hue, ic, explain] = SECTIONS.find(s => s[0] === id);
-  return el("section", { class: "sec", id: "s-" + id, style: "--hue:" + hue, "aria-labelledby": "h-" + id },
+  return el("section", { class: "sec", id: "s-" + id, style: "--hue:" + hue, "aria-labelledby": "h-" + id, "data-title": name.toLowerCase() },
     el("div", { class: "sec-head" }, el("span", { class: "tile" }, icon(ic)),
       el("div", {}, el("h2", { id: "h-" + id, text: name }), el("p", { text: explain })),
       big != null ? el("div", { class: "big" }, el("b", { text: big }), bigNote) : null),
@@ -647,8 +661,10 @@ function applyFilter() {
   for (const sec of document.querySelectorAll(".sec")) {
     if (sec.id === "s-overview") { sec.hidden = !!text; continue; }
     let secHits = 0;
+    // Buscar o nome da seção mostra a seção inteira.
+    const secHit = !!text && (sec.dataset.title || "").includes(text);
     for (const c of sec.querySelectorAll(".card")) {
-      const titleHit = !text || (c.dataset.title || "").includes(text);
+      const titleHit = !text || secHit || (c.dataset.title || "").includes(text);
       let rowHits = 0;
       for (const r of c.querySelectorAll("[data-q]")) {
         const show = titleHit || r.dataset.q.includes(text);
