@@ -280,6 +280,11 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **Config e opção moram em MODAL, não em painel docado.** Só o `DesktopSessionContext` fica
   docado. Tela de config usa **container query**, nunca media query — quem aperta a linha é a
   largura do painel.
+- **Página de configuração do nativo ocupa a largura do painel.** A coluna vem de
+  `page_column` (`desktop-native/src/app/settings.rs`); página não define largura própria. Só texto
+  corrido para em `READING_WIDTH` (explicação da página, da seção e da linha, e o artigo do
+  Manual). Ao criar página, use `page_top`, `section_head` e `setting_row`, que já aplicam isso.
+  [Decisão](docs/decisoes/frontend.md#configurações-do-nativo-ocupam-a-largura-do-painel-27112026).
 - **Configurações do Expo usam listas de ajustes agrupados.** Cada linha mostra o nome e o
   valor atual; o toque edita ou abre os detalhes. Agrupe opções relacionadas, com rótulos únicos
   e explicações curtas quando ajudarem a decidir. Ações frequentes ficam à vista; diagnóstico

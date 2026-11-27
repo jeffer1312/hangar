@@ -188,7 +188,7 @@ async fn reply(state: &AppState, peer: Option<SocketAddr>, request: Request) -> 
 
     match (method, route) {
         (Method::GET, Route::Catalog) => {
-            json_response(StatusCode::OK, json!({"presets": hangar_integrations::catalog()}))
+            json_response(StatusCode::OK, json!({"presets": hangar_integrations::catalog_for_port(state.integrations.local_port())}))
         }
         (Method::GET, Route::Collection) => list_integrations(state).await,
         (Method::POST, Route::Collection) => create_integration(state, request).await,

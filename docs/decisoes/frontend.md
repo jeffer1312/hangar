@@ -430,6 +430,25 @@ Decisão de desenho de 2026-07-30, vale
   Tailscale no servidor). O interruptor nunca muda sozinho: `checked` é o dado, o `onchange` repõe
   o dado e chama a ação, e a ação confirmada é quem muda a lista.
 
+## Configurações do nativo ocupam a largura do painel (27/11/2026)
+
+Decisão do dono: as páginas de configuração do app nativo usam a largura que o painel ao lado da
+navegação tem. Antes, `render_settings` (`desktop-native/src/app/settings.rs`) centralizava uma
+coluna fixa de 720 px (1040 em Servidores, 960 no artigo do Manual, largura toda só em Status,
+Agentes e Contas), e a mesma largura se repetia na faixa de abas e no rodapé do Salvar
+(`server_config.rs`). Numa janela de 1920 px sobravam cerca de 400 px vazios de cada lado.
+
+- A coluna de toda página sai de `page_column` (largura toda, recuo de 20 px, o mesmo que
+  Status e Contas já usavam). Página nova não define largura: nasce assim.
+- Texto corrido mantém largura de leitura: `READING_WIDTH` (720 px) limita a explicação de
+  `page_top`, o subtítulo de `section_head` e a descrição de `setting_row`. Caixas, listas,
+  tabelas e controles não têm teto.
+- O artigo do Manual é texto do começo ao fim: fica em `READING_WIDTH` (960 com o
+  "Nesta página" ao lado).
+- Fica de fora, sem teto de leitura: cabeçalhos montados à mão em cada página (título + linha
+  de explicação próprios) e textos vindos de fora, como a descrição dos plugins. As quebras de
+  Contas e Servidores continuam lendo a largura da janela, não a do painel.
+
 ## Bloco rolável dentro da conversa é `position: relative`, ou o `.sr-only` dele vaza pra lista
 
 

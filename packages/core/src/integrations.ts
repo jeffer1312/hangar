@@ -4,12 +4,17 @@ import { integrationsFetchForServer } from './api';
 import type { LanInfo, Server } from './servers';
 import * as m from './paraglide/messages';
 
-export type PresetAuthKind = 'oauth_dcr' | 'oauth_manual_client' | 'oauth_dcr_or_bearer';
+// `oauth_dcr_or_bearer` só chega de servidor anterior ao preset por token.
+export type PresetAuthKind = 'none' | 'bearer' | 'oauth_dcr' | 'oauth_manual_client' | 'oauth_dcr_or_bearer';
 
 export interface IntegrationSetupGuide {
   title: string;
   steps: string[];
   docs_hint?: string | null;
+  /** Página do provedor onde a configuração começa. */
+  docs_url?: string | null;
+  /** Endereço de retorno do OAuth nesta máquina, pronto para copiar. */
+  redirect_uri?: string | null;
 }
 
 export interface IntegrationPreset {

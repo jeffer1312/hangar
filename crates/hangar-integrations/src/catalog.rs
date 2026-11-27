@@ -11,12 +11,16 @@ static CATALOG: OnceLock<Vec<CatalogPreset>> = OnceLock::new();
 /// Modelo de autenticação esperado por um preset do catálogo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PresetAuthKind {
+    /// Servidor público: conecta sem token.
+    #[serde(rename = "none")]
+    None,
+    /// Token pessoal enviado como `Authorization: Bearer` (servidor sem registro dinâmico de cliente).
+    #[serde(rename = "bearer")]
+    Bearer,
     #[serde(rename = "oauth_dcr")]
     OAuthDcr,
     #[serde(rename = "oauth_manual_client")]
     OAuthManualClient,
-    #[serde(rename = "oauth_dcr_or_bearer")]
-    OAuthDcrOrBearer,
 }
 
 /// Guia curto de configuração em português para provedores com `Client ID` manual.
@@ -26,6 +30,12 @@ pub struct SetupGuide {
     pub steps: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs_hint: Option<String>,
+    /// Página do provedor onde a configuração começa (botão "Abrir" nos clientes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs_url: Option<String>,
+    /// Endereço de retorno desta máquina, preenchido por [`catalog_for_port`] para quem exige redirecionamento local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirect_uri: Option<String>,
 }
 
 /// Definição declarativa de um servidor MCP remoto conhecido no catálogo.
@@ -57,6 +67,28 @@ pub fn catalog() -> &'static [CatalogPreset] {
         serde_json::from_str(RAW_CATALOG)
             .expect("catalog.json embutido deve ser um JSON válido de CatalogPreset")
     })
+}
+
+/// Catálogo como a pessoa deve segui-lo nesta máquina: no guia de quem exige redirecionamento local, o `<porta>` do
+/// texto vira a porta do servidor e `redirect_uri` traz o endereço pronto para copiar. Porta 0 (ainda não ligada)
+/// devolve o catálogo como está.
+pub fn catalog_for_port(port: u16) -> Vec<CatalogPreset> {
+    catalog()
+        .iter()
+        .cloned()
+        .map(|mut preset| {
+            if port != 0 && preset.requires_loopback_redirect {
+                let uri = crate::oauth::loopback_redirect_uri(Some(&preset.id), port);
+                if let Some(guide) = preset.setup_guide.as_mut() {
+                    for step in &mut guide.steps {
+                        *step = step.replace("<porta>", &port.to_string());
+                    }
+                    guide.redirect_uri = Some(uri);
+                }
+            }
+            preset
+        })
+        .collect()
 }
 
 /// Busca um preset do catálogo pelo slug `id`.

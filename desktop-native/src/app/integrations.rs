@@ -24,10 +24,15 @@ const RESERVED_HTTP_HEADERS: [&str; 5] = [
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(super) enum PresetAuthKind {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "bearer")]
+    Bearer,
     #[serde(rename = "oauth_dcr")]
     OAuthDcr,
     #[serde(rename = "oauth_manual_client")]
     OAuthManualClient,
+    /// Só chega de servidor anterior ao preset por token.
     #[serde(rename = "oauth_dcr_or_bearer")]
     OAuthDcrOrBearer,
 }
@@ -39,6 +44,10 @@ pub(super) struct SetupGuide {
     pub steps: Vec<String>,
     #[serde(default)]
     pub docs_hint: Option<String>,
+    #[serde(default)]
+    pub docs_url: Option<String>,
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -250,6 +259,13 @@ enum FormMode {
     Edit(IntegrationItem, Option<CatalogPreset>),
 }
 
+/// Retorno da última ação numa integração (Testar, Autenticar, Ativa…), mostrado no card dela.
+#[derive(Clone)]
+enum Feedback {
+    Info(String),
+    Error(String),
+}
+
 struct PendingHandoff {
     handoff_id: u64,
     integration_id: String,
@@ -276,7 +292,7 @@ pub(super) struct IntegrationsPage {
     open_tools: HashSet<String>,
     busy: HashSet<String>,
     testing: HashSet<String>,
-    error: Option<String>,
+    feedback: HashMap<String, Feedback>,
     notice: Option<String>,
     handoff: Option<PendingHandoff>,
 }
@@ -371,7 +387,7 @@ impl IntegrationsPage {
             open_tools: HashSet::new(),
             busy: HashSet::new(),
             testing: HashSet::new(),
-            error: None,
+            feedback: HashMap::new(),
             notice: None,
             handoff: None,
         };
@@ -390,7 +406,7 @@ impl IntegrationsPage {
         self.tools_errors.clear();
         self.pending_tools_reload.clear();
         self.tools_seq.clear();
-        self.error = None;
+        self.feedback.clear();
         let api_list = self.api.clone();
         run(
             &self.runtime,
@@ -543,7 +559,7 @@ impl IntegrationsPage {
     ) {
         // Invalida leituras de lista anteriores à gravação confirmada.
         self.seq += 1;
-        self.error = None;
+        self.feedback.remove(&item.id);
         self.notice = Some(tr_shared(
             if created { "integrations_created" } else { "integrations_saved" },
             &[],
@@ -572,7 +588,8 @@ impl IntegrationsPage {
         if !self.busy.insert(id.clone()) {
             return;
         }
-        (self.error, self.notice) = (None, None);
+        self.notice = None;
+        self.feedback.remove(&id);
         let (api, path) = (self.api.clone(), id.clone());
         run(
             &self.runtime,
@@ -608,7 +625,9 @@ impl IntegrationsPage {
                             this.tools_errors.remove(&id);
                         }
                     }
-                    Err(error) => this.error = Some(integrations_failure(&error)),
+                    Err(error) => {
+                        this.feedback.insert(id, Feedback::Error(integrations_failure(&error)));
+                    }
                 }
             },
         );
@@ -642,7 +661,8 @@ impl IntegrationsPage {
         if !self.testing.insert(id.clone()) {
             return;
         }
-        (self.error, self.notice) = (None, None);
+        self.notice = None;
+        self.feedback.remove(&id);
         let (api, path) = (self.api.clone(), id.clone());
         run(
             &self.runtime,
@@ -666,12 +686,13 @@ impl IntegrationsPage {
                         this.bump_tools_seq(&id);
                         this.tools.insert(id.clone(), tools);
                         this.open_tools.insert(id.clone());
-                        this.notice = Some(tr_shared("integrations_test_ok", &[("n", &count)]));
+                        this.feedback
+                            .insert(id.clone(), Feedback::Info(tr_shared("integrations_test_ok", &[("n", &count)])));
                         this.seq += 1;
                         this.reload_items(false, window, cx);
                     }
                     Err(error) => {
-                        this.error = Some(integrations_failure(&error));
+                        this.feedback.insert(id.clone(), Feedback::Error(integrations_failure(&error)));
                         this.seq += 1;
                         this.reload_items(false, window, cx);
                     }
@@ -687,8 +708,9 @@ impl IntegrationsPage {
         }
         self.oauth_start_seq += 1;
         let start_seq = self.oauth_start_seq;
-        self.error = None;
-        self.notice = Some(tr_shared("integrations_oauth_opening", &[]));
+        self.notice = None;
+        self.feedback
+            .insert(id.clone(), Feedback::Info(tr_shared("integrations_oauth_opening", &[])));
         self.handoff = None;
         let (api, path) = (self.api.clone(), id.clone());
         let start_body = oauth_start_body(&api);
@@ -715,10 +737,12 @@ impl IntegrationsPage {
                         Ok(OAuthStartResponse::OpenUrl { authorize_url, .. }) => {
                             if let Some(safe) = safe_authorize_url(&authorize_url) {
                                 cx.open_url(&safe);
-                                this.notice = Some(tr_shared("integrations_oauth_started", &[]));
+                                this.feedback.insert(
+                                    id,
+                                    Feedback::Info(tr_shared("integrations_oauth_started", &[])),
+                                );
                             } else {
-                                this.notice = None;
-                                this.error = Some(tr("invalid_response"));
+                                this.feedback.insert(id, Feedback::Error(tr("invalid_response")));
                             }
                         }
                         Ok(OAuthStartResponse::HandoffDesktop {
@@ -726,7 +750,7 @@ impl IntegrationsPage {
                             reason,
                             ..
                         }) => {
-                            this.notice = None;
+                            this.feedback.remove(&id);
                             this.handoff_seq += 1;
                             this.handoff = Some(PendingHandoff {
                                 handoff_id: this.handoff_seq,
@@ -736,13 +760,11 @@ impl IntegrationsPage {
                             });
                         }
                         Err(_) => {
-                            this.notice = None;
-                            this.error = Some(tr("invalid_response"));
+                            this.feedback.insert(id, Feedback::Error(tr("invalid_response")));
                         }
                     },
                     Err(error) => {
-                        this.notice = None;
-                        this.error = Some(integrations_failure(&error));
+                        this.feedback.insert(id, Feedback::Error(integrations_failure(&error)));
                     }
                 }
             },
@@ -790,12 +812,15 @@ impl IntegrationsPage {
                             this.handoff = None;
                         }
                         if same_handoff || this.handoff.is_none() {
-                            this.notice = Some(tr_shared("integrations_oauth_desktop_opened", &[]));
+                            this.feedback.insert(
+                                id,
+                                Feedback::Info(tr_shared("integrations_oauth_desktop_opened", &[])),
+                            );
                         }
                     }
                     Err(error) => {
                         if same_handoff || this.handoff.is_none() {
-                            this.error = Some(integrations_failure(&error));
+                            this.feedback.insert(id, Feedback::Error(integrations_failure(&error)));
                         }
                     }
                 }
@@ -895,7 +920,8 @@ impl IntegrationsPage {
         if !self.busy.insert(id.clone()) {
             return;
         }
-        (self.error, self.notice) = (None, None);
+        self.notice = None;
+        self.feedback.remove(&id);
         let (api, path) = (self.api.clone(), id.clone());
         run(
             &self.runtime,
@@ -924,9 +950,12 @@ impl IntegrationsPage {
                             // Se Atualizar estava em voo e foi invalidado por `this.seq += 1`, dispara leitura substituta.
                             this.reload_items(true, window, cx);
                         }
+                        this.feedback.remove(&id);
                         this.notice = Some(tr_shared("integrations_removed", &[]));
                     }
-                    Err(error) => this.error = Some(integrations_failure(&error)),
+                    Err(error) => {
+                        this.feedback.insert(id, Feedback::Error(integrations_failure(&error)));
+                    }
                 }
             },
         );
@@ -1086,13 +1115,23 @@ impl IntegrationsPage {
 
         let id_oauth = id.clone();
         let oauth_label = tr_shared(
-            if item.status == IntegrationStatus::AuthExpired {
-                "integrations_reconnect"
-            } else {
+            if item.status == IntegrationStatus::AuthRequired {
                 "integrations_authorize"
+            } else {
+                "integrations_reconnect"
             },
             &[],
         );
+        let feedback = self.feedback.get(&id).cloned();
+        // O erro da ação que a pessoa acabou de fazer explica mais que o `last_error` guardado: um aviso vermelho por vez.
+        let shown_error = match &feedback {
+            Some(Feedback::Error(err)) => Some(err.clone()),
+            _ => item.last_error.clone().filter(|err| !err.is_empty() && item.status != IntegrationStatus::Ready),
+        };
+        let info = match feedback {
+            Some(Feedback::Info(text)) => Some(text),
+            _ => None,
+        };
         let oauth_btn = is_oauth.then(|| {
             let btn = Button::new(SharedString::from(format!("integrations-oauth-{id}")))
                 .xsmall()
@@ -1202,12 +1241,20 @@ impl IntegrationsPage {
                     .truncate()
                     .child(transport_summary),
             )
-            .when_some(
-                item.last_error
-                    .clone()
-                    .filter(|err| !err.is_empty() && item.status != IntegrationStatus::Ready),
-                |el, err| el.child(alert(SharedString::from(format!("integrations-item-err-{id}")), err)),
-            )
+            .when_some(shown_error, |el, err| {
+                el.child(alert(SharedString::from(format!("integrations-item-err-{id}")), err))
+            })
+            .when_some(info, |el, text| {
+                el.child(
+                    div()
+                        .id(SharedString::from(format!("integrations-item-info-{id}")))
+                        .role(Role::Status)
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .whitespace_normal()
+                        .child(text),
+                )
+            })
             .when(is_google_expiring, |el| {
                 el.child(
                     div()
@@ -1494,6 +1541,8 @@ impl InitialFormValues {
         match mode {
             FormMode::Preset(p) => {
                 let auth_kind = match p.auth_kind {
+                    PresetAuthKind::None => AuthKindChoice::None,
+                    PresetAuthKind::Bearer => AuthKindChoice::Bearer,
                     PresetAuthKind::OAuthDcr | PresetAuthKind::OAuthDcrOrBearer => {
                         AuthKindChoice::OAuthDcr
                     }
@@ -1660,7 +1709,8 @@ impl IntegrationForm {
             cx,
         );
         let url_input = input(initial.url, "https://...".into(), window, cx);
-        let headers_input = area(String::new(), secret_hint.clone(), 2, window, cx);
+        let headers_hint = if initial.existing_headers.is_empty() { String::new() } else { secret_hint.clone() };
+        let headers_input = area(String::new(), headers_hint, 2, window, cx);
         let command_input = area(
             initial.command,
             tr_shared("integrations_field_command_hint", &[]),
@@ -1755,7 +1805,7 @@ impl IntegrationForm {
             existing_env_keys: self.existing_env_keys.clone(),
             removed_env_keys: self.removed_env_keys.clone(),
             new_env_raw: self.env_input.read(cx).value().to_string(),
-            auth_kind: self.auth_kind,
+            auth_kind: self.effective_auth(),
             client_id: self.client_id_input.read(cx).value().to_string(),
             client_secret: self.client_secret_input.read(cx).value().to_string(),
             scopes_raw: self.scopes_input.read(cx).value().to_string(),
@@ -1835,11 +1885,21 @@ impl IntegrationForm {
         cx.notify();
     }
 
+    /// Autenticação salva que o preset não oferece mais (GitHub antigo em OAuth) vira a primeira opção dele.
+    fn effective_auth(&self) -> AuthKindChoice {
+        let options = self.auth_options();
+        if options.is_empty() || options.contains(&self.auth_kind) { self.auth_kind } else { options[0] }
+    }
+
     fn auth_options(&self) -> Vec<AuthKindChoice> {
         if self.transport == TransportKind::LocalStdio {
             return Vec::new();
         }
         match self.preset_auth {
+            // A URL trocada de um preset público pode apontar para um endpoint com login.
+            Some(PresetAuthKind::None) if self.url_editable => vec![AuthKindChoice::None, AuthKindChoice::OAuthDcr],
+            Some(PresetAuthKind::None) => vec![AuthKindChoice::None],
+            Some(PresetAuthKind::Bearer) => vec![AuthKindChoice::Bearer],
             Some(PresetAuthKind::OAuthDcr) => vec![AuthKindChoice::OAuthDcr],
             Some(PresetAuthKind::OAuthManualClient) => vec![AuthKindChoice::OAuthManualClient],
             Some(PresetAuthKind::OAuthDcrOrBearer) => {
@@ -1930,6 +1990,7 @@ impl Render for IntegrationsPage {
                     .child(
                         div()
                             .mt(px(6.))
+                            .max_w(px(super::settings::READING_WIDTH))
                             .text_color(theme::muted())
                             .whitespace_normal()
                             .child(tr_shared("integrations_subtitle", &[])),
@@ -1938,9 +1999,6 @@ impl Render for IntegrationsPage {
             .child(div().flex().items_center().gap_2().child(refresh_btn).child(custom_btn));
 
         let mut page = div().flex().flex_col().gap_4().child(header);
-        if let Some(err) = self.error.clone() {
-            page = page.child(alert("integrations-action-error", err));
-        }
         if let Some(notice) = self.notice.clone() {
             page = page.child(
                 div()
@@ -2054,7 +2112,7 @@ impl Render for IntegrationForm {
         let mut body = div().flex().flex_col().gap(px(12.)).text_size(px(13.));
 
         if let Some(guide) = &self.setup_guide {
-            let is_google = self.preset.as_deref().is_some_and(|p| p.starts_with("google-"));
+            let docs_url = guide.docs_url.clone().and_then(|url| safe_authorize_url(&url));
             body = body.child(
                 div()
                     .p_3()
@@ -2092,13 +2150,56 @@ impl Render for IntegrationForm {
                                 .child(hint),
                         )
                     })
-                    .when(is_google, |el| {
+                    .when_some(guide.redirect_uri.clone(), |el, uri| {
+                        let copy = uri.clone();
                         el.child(
                             div()
-                                .text_xs()
-                                .text_color(theme::warning_text())
-                                .whitespace_normal()
-                                .child(tr_shared("integrations_google_testing_hint", &[])),
+                                .mt(px(4.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(muted(tr_shared("integrations_setup_redirect", &[])).text_xs())
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded(px(6.))
+                                                .bg(theme::boxed())
+                                                .font_family(theme::MONO)
+                                                .text_xs()
+                                                .whitespace_normal()
+                                                .child(uri),
+                                        )
+                                        .child(
+                                            Button::new("integrations-copy-redirect")
+                                                .outline()
+                                                .xsmall()
+                                                .icon(IconName::Copy)
+                                                .label(tr_shared("integrations_copy", &[]))
+                                                .on_click(move |_, _, cx| {
+                                                    cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                                                }),
+                                        ),
+                                ),
+                        )
+                    })
+                    .when_some(docs_url, |el, url| {
+                        el.child(
+                            div().mt(px(4.)).child(
+                                Button::new("integrations-open-docs")
+                                    .primary()
+                                    .small()
+                                    .icon(IconName::ExternalLink)
+                                    .label(tr_shared("integrations_setup_open_docs", &[]))
+                                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                            ),
                         )
                     }),
             );
@@ -2175,7 +2276,7 @@ impl Render for IntegrationForm {
                             let id = SharedString::from(format!("integrations-form-auth-{choice:?}"));
                             Radio::new(id)
                                 .label(auth_choice_label(choice))
-                                .checked(self.auth_kind == choice)
+                                .checked(self.effective_auth() == choice)
                                 .disabled(off)
                                 .on_change(cx.listener(move |this, _, _, cx| {
                                     this.auth_kind = choice;
@@ -2190,7 +2291,7 @@ impl Render for IntegrationForm {
                     ));
                 }
 
-                match self.auth_kind {
+                match self.effective_auth() {
                     AuthKindChoice::OAuthManualClient => {
                         body = body
                             .child(field(
@@ -2564,6 +2665,8 @@ pub(super) fn auth_choice_label(choice: AuthKindChoice) -> String {
 
 pub(super) fn preset_auth_summary(kind: PresetAuthKind) -> String {
     match kind {
+        PresetAuthKind::None => tr_shared("integrations_auth_none", &[]),
+        PresetAuthKind::Bearer => tr_shared("integrations_auth_bearer", &[]),
         PresetAuthKind::OAuthDcr => tr_shared("integrations_auth_oauth_dcr", &[]),
         PresetAuthKind::OAuthManualClient => tr_shared("integrations_auth_oauth_manual", &[]),
         PresetAuthKind::OAuthDcrOrBearer => format!(

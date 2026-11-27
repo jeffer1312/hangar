@@ -17,7 +17,7 @@ pub use approvals::{
     MAX_ARGUMENTS_PREVIEW_CHARS, MAX_OPEN, MAX_OPEN_PER_SESSION, MAX_REASON_CHARS,
     OpenApprovalRequest, format_arguments_preview, format_origin, truncate_preview_chars,
 };
-pub use catalog::{CatalogPreset, PresetAuthKind, SetupGuide, catalog, find_preset};
+pub use catalog::{CatalogPreset, PresetAuthKind, SetupGuide, catalog, catalog_for_port, find_preset};
 pub use client::{
     ClientConfig, ClientError, DEFAULT_CALL_TIMEOUT, DEFAULT_CONNECT_TIMEOUT, DEFAULT_EXIT_GRACE,
     DEFAULT_IDLE_TTL, McpCallOutput, McpClientManager, TokenRefresher,
@@ -30,7 +30,7 @@ pub use model::{
 };
 pub use oauth::{
     DEFAULT_STATE_TTL, OAUTH_CALLBACK_PATH, OAuthCallbackResult, OAuthError, OAuthManager,
-    OAuthOrigin, OAuthStartInput, OAuthStartOutcome, compute_status,
+    OAuthOrigin, OAuthStartInput, OAuthStartOutcome, compute_status, loopback_redirect_uri,
 };
 pub use registry::{IntegrationRegistry, IntegrationUpdate, RegistryError, config_path};
 pub use secrets::{

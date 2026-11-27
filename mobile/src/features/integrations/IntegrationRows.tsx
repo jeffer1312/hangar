@@ -1,4 +1,5 @@
-import { Pressable, Text, View } from 'react-native';
+import { Linking, Pressable, Text, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type {
   IntegrationPreset,
@@ -10,9 +11,9 @@ import type {
   ToolAccess,
 } from '@hangar/core';
 import { MachineGroup, MachineRow } from '../machines/MachineRows';
-import { InfoNotice } from '../config/InfoNotice';
 import { useSettingsColors } from '../config/colors';
 import { haptic } from '../../ui/haptics';
+import { toast } from '../../ui/Toast';
 import * as m from '../../paraglide/messages';
 
 export function integrationStatusLabel(status: IntegrationStatus): string {
@@ -48,6 +49,8 @@ export function integrationProjectsLabel(projects: string[]): string {
 
 export function presetAuthLabel(preset: IntegrationPreset): string {
   switch (preset.auth_kind) {
+    case 'none': return m.integrations_auth_none();
+    case 'bearer': return m.integrations_auth_bearer();
     case 'oauth_dcr': return m.integrations_auth_oauth_dcr();
     case 'oauth_manual_client': return m.integrations_auth_oauth_manual();
     case 'oauth_dcr_or_bearer': return `${m.integrations_auth_oauth_dcr()} · ${m.integrations_auth_bearer()}`;
@@ -200,20 +203,29 @@ export function ToolSummaryRow({ tool, policy, busy, onAllowAlways, onRevokeAlwa
   );
 }
 
-export function SetupGuideBlock({ guide, showGoogleTestingHint }: {
-  guide: IntegrationSetupGuide;
-  showGoogleTestingHint: boolean;
-}) {
+export function SetupGuideBlock({ guide }: { guide: IntegrationSetupGuide }) {
+  const docsUrl = guide.docs_url;
+  const redirectUri = guide.redirect_uri;
   return (
-    <>
-      <MachineGroup>
-        <MachineRow title={guide.title} description={guide.docs_hint ?? undefined} />
-        {guide.steps.map((step, idx) => (
-          <MachineRow key={idx} title={`${idx + 1}. ${step}`} />
-        ))}
-      </MachineGroup>
-      {showGoogleTestingHint ? <InfoNotice text={m.integrations_google_testing_hint()} /> : null}
-    </>
+    <MachineGroup>
+      <MachineRow title={guide.title} description={guide.docs_hint ?? undefined} />
+      {docsUrl ? (
+        <MachineRow title={m.integrations_setup_open_docs()} action onPress={() => void Linking.openURL(docsUrl)} />
+      ) : null}
+      {guide.steps.map((step, idx) => (
+        <MachineRow key={idx} title={`${idx + 1}. ${step}`} />
+      ))}
+      {redirectUri ? (
+        <MachineRow
+          title={redirectUri}
+          description={m.integrations_setup_redirect()}
+          value={m.integrations_copy()}
+          onPress={() => {
+            void Clipboard.setStringAsync(redirectUri).then(() => toast.ok(m.integrations_copied()));
+          }}
+        />
+      ) : null}
+    </MachineGroup>
   );
 }
 
