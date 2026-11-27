@@ -11,8 +11,17 @@ pub const MARKER: &str = "Delegar:";
 pub const CHILD: &str = "sua resposta final volta sozinha ao pai; não a mande por `send` nem `hangar-send`. \
 Dúvida que trava vira pergunta (AskUserQuestion), que chega ao pai.";
 
+const OPENING: &str = "Você é filha ligada de '";
+
 /// Linha única para o começo do `initial_prompt` da filha ligada a `parent`. Vai no prompt, não no
 /// `SessionStart`: o vínculo é gravado depois de o processo subir, e o hook pode rodar antes dele.
 pub fn child_prefix(parent: &str) -> String {
-    format!("Você é filha ligada de '{parent}': {CHILD}")
+    format!("{OPENING}{parent}': {CHILD}")
+}
+
+/// `text` sem a linha de `child_prefix` no começo, para resumo e título: sem isso toda filha ligada
+/// teria o mesmo começo, e o pedido real ficaria cortado.
+pub fn without_child_prefix(text: &str) -> &str {
+    let Some((_, tail)) = text.strip_prefix(OPENING).and_then(|rest| rest.split_once("': ")) else { return text };
+    tail.strip_prefix(CHILD).map_or(text, str::trim_start)
 }

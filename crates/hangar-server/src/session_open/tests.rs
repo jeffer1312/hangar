@@ -99,25 +99,36 @@ fn link_is_decided_before_opening() {
 fn a_linked_child_gets_the_child_line_in_the_first_prompt() {
     use hangar_delegation::guidance::child_prefix;
     let owner = resolve::OpenCaller::Owner;
-    let first_prompt = |body: String| {
-        let mut request = SessionOpenRequest::parse(body.as_bytes()).unwrap();
-        let link = request.link_plan(&owner).unwrap();
-        request.prefix_child_line(&link);
-        request.initial_prompt
+    let link = |body: &str| SessionOpenRequest::parse(body.as_bytes()).unwrap().link_plan(&owner).unwrap();
+    let joined = link(r#"{"name":"f","cwd":"/x","creator":"pai","link":true}"#);
+    // A linha só vai quando a ligação deve dar certo: pai fora de grupo `orq` e grupos legíveis.
+    assert_eq!(joined.line_parent(Some(false)), Some("pai"));
+    assert_eq!(joined.line_parent(Some(true)), None, "grupo orq recusa filha ligada");
+    assert_eq!(joined.line_parent(None), None, "sem grupos a ligação falha");
+    assert_eq!(link(r#"{"name":"f","cwd":"/x","creator":"pai"}"#).line_parent(Some(false)), None, "sem link");
+    assert_eq!(link(r#"{"name":"f","cwd":"/x","link":true}"#).line_parent(Some(false)), None, "sem criadora não há pai a nomear");
+
+    // O provedor que vale é o resolvido (o omitido vem da criadora), por isso a linha entra no `Resolved`.
+    let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == "create_claude_headless_initial_prompt").unwrap();
+    let resolved = resolve_fixture(&fixture).unwrap();
+    let first_prompt = |provider: AgentProvider, prompt: Option<&str>| {
+        let mut resolved = resolved.clone();
+        resolved.spec.provider = provider;
+        resolved.initial_prompt = prompt.map(str::to_owned);
+        resolved.prefix_child_line("pai");
+        resolved.initial_prompt
     };
-    for provider in ["claude", "codex", "antigravity", "pi", "omp", "kimi"] {
-        let linked = first_prompt(format!(r#"{{"name":"f","cwd":"/x","provider":"{provider}","creator":"pai","link":true,"initial_prompt":"faz a busca"}}"#))
-            .unwrap_or_else(|| panic!("{provider}: o prompt sumiu"));
-        assert!(linked.starts_with(&child_prefix("pai")), "{provider}: {linked}");
-        assert!(linked.ends_with("faz a busca"), "{provider}: o pedido continua inteiro: {linked}");
-        assert_eq!(linked.matches(&child_prefix("pai")).count(), 1, "{provider}: a linha vai uma vez");
-        let plain = first_prompt(format!(r#"{{"name":"f","cwd":"/x","provider":"{provider}","creator":"pai","initial_prompt":"faz a busca"}}"#));
-        assert_eq!(plain.as_deref(), Some("faz a busca"), "{provider}: sem link o prompt não muda");
-        let silent = first_prompt(format!(r#"{{"name":"f","cwd":"/x","provider":"{provider}","creator":"pai","link":true}}"#));
-        assert_eq!(silent, None, "{provider}: sem initial_prompt a filha não ganha um prompt");
+    for provider in [AgentProvider::Claude, AgentProvider::Codex, AgentProvider::Antigravity] {
+        let linked = first_prompt(provider, Some("faz a busca")).unwrap_or_else(|| panic!("{provider:?}: o prompt sumiu"));
+        assert!(linked.starts_with(&child_prefix("pai")), "{provider:?}: {linked}");
+        assert!(linked.ends_with("faz a busca"), "{provider:?}: o pedido continua inteiro: {linked}");
+        assert_eq!(linked.matches(&child_prefix("pai")).count(), 1, "{provider:?}: a linha vai uma vez");
+        assert_eq!(first_prompt(provider, None), None, "{provider:?}: sem initial_prompt a filha não ganha um prompt");
     }
-    let orphan = first_prompt(r#"{"name":"f","cwd":"/x","link":true,"initial_prompt":"faz a busca"}"#.to_owned());
-    assert_eq!(orphan.as_deref(), Some("faz a busca"), "sem criadora não há pai a nomear");
+    // Pi, omp e Kimi não devolvem a resposta: a linha mandaria não responder, e nada voltaria.
+    for provider in [AgentProvider::Pi, AgentProvider::Omp, AgentProvider::Kimi] {
+        assert_eq!(first_prompt(provider, Some("faz a busca")).as_deref(), Some("faz a busca"), "{provider:?}");
+    }
 }
 
 #[test]

@@ -299,23 +299,39 @@ impl SessionOpenRequest {
             None => LinkPlan::Unlinked("erro_link_sem_criador", "sem sessão criadora, a sessão abriu sem ligação"),
         })
     }
-
-    /// A filha ligada recebe a linha dela no começo do primeiro prompt, em todo provedor; sem prompt
-    /// não ganha um, porque a linha sozinha abriria um turno que ninguém pediu. Vai no prompt, não no
-    /// `SessionStart`: o vínculo só é gravado depois de o processo subir.
-    pub fn prefix_child_line(&mut self, link: &LinkPlan) {
-        let LinkPlan::Join(parent) = link else { return };
-        if let Some(prompt) = self.initial_prompt.as_mut().filter(|p| !p.is_empty()) {
-            // Espaço, não quebra de linha: o prompt de uma linha continua de uma linha no pane.
-            *prompt = format!("{} {prompt}", hangar_delegation::guidance::child_prefix(parent));
-        }
-    }
 }
 
 /// O que fazer com o vínculo depois de abrir: nada, entrar no grupo da criadora, ou só avisar
 /// (código e detalhe do `link_error`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkPlan { No, Join(String), Unlinked(&'static str, &'static str) }
+
+impl LinkPlan {
+    /// O pai cuja linha a filha recebe: só quando a ligação deve dar certo. `parent_orq` é o grupo do pai
+    /// lido antes de abrir (`None` = grupos fora ou ilegíveis); grupo `orq` recusa filha ligada, e a
+    /// linha prometeria um retorno que não vem.
+    pub fn line_parent(&self, parent_orq: Option<bool>) -> Option<&str> {
+        match (self, parent_orq) {
+            (LinkPlan::Join(parent), Some(false)) => Some(parent),
+            _ => None,
+        }
+    }
+}
+
+impl Resolved {
+    /// A filha ligada recebe a linha dela no começo do primeiro prompt; sem prompt não ganha um, porque
+    /// a linha sozinha abriria um turno que ninguém pediu. Só o provedor que devolve a resposta sozinho:
+    /// a Pi, omp e Kimi a linha mandaria não responder, e nada voltaria. Decidido depois da resolução,
+    /// porque o provedor omitido vem da criadora. Vai no prompt, não no `SessionStart`: o vínculo só é
+    /// gravado depois de o processo subir.
+    pub fn prefix_child_line(&mut self, parent: &str) {
+        if !crate::groups::link_return::returnable(self.spec.provider.name()) { return; }
+        if let Some(prompt) = self.initial_prompt.as_mut().filter(|p| !p.is_empty()) {
+            // Espaço, não quebra de linha: o prompt de uma linha continua de uma linha no pane.
+            *prompt = format!("{} {prompt}", hangar_delegation::guidance::child_prefix(parent));
+        }
+    }
+}
 
 /// Recusa da abertura no envelope do Python: `{"detail": {code, params, msg}}`, ou `{"detail": msg}`
 /// nos 400 que o Python manda sem código (`model_args`).

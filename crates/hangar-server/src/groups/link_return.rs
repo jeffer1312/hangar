@@ -126,7 +126,7 @@ pub(crate) async fn renamed(st: &AppState, old: &str, new: &str) {
 }
 
 /// Pi, omp e Kimi não têm retorno automático: nem seguram a assinatura da lista.
-fn returnable(provider: &str) -> bool {
+pub(crate) fn returnable(provider: &str) -> bool {
     matches!(Provider::parse(provider), Some(Provider::Claude | Provider::ClaudeHeadless | Provider::Codex | Provider::Antigravity))
 }
 
@@ -327,7 +327,9 @@ fn asked_by_parent(turn: &Turn, parent: &str, server: &str) -> bool {
     let Some(last) = users.next_back() else { return false };
     let text = last.text.as_deref().unwrap_or_default().trim_start();
     let from_parent = text.starts_with(&format!("[de: {parent}]"))
-        || (!server.is_empty() && text.starts_with(&format!("[de: {server}::{parent}]")));
+        || (!server.is_empty() && text.starts_with(&format!("[de: {server}::{parent}]")))
+        // A primeira mensagem da filha, mesmo quando a conversa é longa demais para ser lida inteira.
+        || text.starts_with(&hangar_delegation::guidance::child_prefix(parent));
     from_parent || (turn.whole && users.next().is_none())
 }
 
@@ -414,6 +416,11 @@ fn io_kind(e: &io::Error) -> String { format!("{:?}", e.kind()) }
 
 /// Falha que se repete a cada tique (arquivo ilegível, pai fora) sai uma vez por minuto. `detail` é o tipo
 /// do erro (E/S, status HTTP), nunca texto da conversa; vai ao código como `codigo:detalhe`.
+/// A filha ligada abriu com a linha de retorno e sem a ligação: a resposta dela não volta sozinha.
+pub(crate) fn line_unlinked(st: &AppState, child: &str, detail: &str) {
+    report(st, child, "link_line_unlinked", "filha recebeu a linha de retorno e abriu sem ligação", detail);
+}
+
 fn report(st: &AppState, child: &str, code: &str, reason: &'static str, detail: &str) {
     let code = if detail.is_empty() { code.to_owned() } else { format!("{code}:{detail}") };
     if !crate::warn_limit::allow(Some(child), &code) { return; }
@@ -536,6 +543,12 @@ mod tests {
         let whole = turn(vec![ev(ChatKind::UserMsg, &first), ev(ChatKind::AssistantMsg, "achei")], true);
         assert!(asked_by_parent(&whole, "pai", "casa"), "a primeira da conversa continua sendo do pai");
         assert_eq!(decide(&check(), &whole).map(|(a, _)| a), Ok("achei"));
+        // Conversa lida só pelo fim: é a linha que diz que o pedido veio do pai.
+        let cut = turn(vec![ev(ChatKind::UserMsg, &first), ev(ChatKind::AssistantMsg, "achei")], false);
+        assert!(asked_by_parent(&cut, "pai", "casa"), "a linha marca o pedido do pai");
+        assert!(!asked_by_parent(&cut, "outro", "casa"), "a linha de outro pai não serve");
+        let plain = turn(vec![ev(ChatKind::UserMsg, "faz a busca"), ev(ChatKind::AssistantMsg, "achei")], false);
+        assert!(!asked_by_parent(&plain, "pai", "casa"), "sem a linha e sem ler o começo, o turno não é do pai");
     }
 
     #[test]

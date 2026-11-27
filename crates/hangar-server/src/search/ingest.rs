@@ -346,7 +346,8 @@ fn absorb_events(st: &mut FileState, events: Vec<ChatEvent>, cwd: Option<&str>, 
             st.cwd = cwd.map(str::to_owned);
         }
         if st.preview.is_empty() {
-            if let Some(text) = first_user { st.preview = cut(&crate::list::reply::plain_text(text)); }
+            // A filha ligada abre pela linha de retorno, igual em todas; o resumo é o pedido.
+            if let Some(text) = first_user { st.preview = cut(&crate::list::reply::plain_text(hangar_delegation::guidance::without_child_prefix(text))); }
         }
         st.head_done = (st.cwd.is_some() && !st.preview.is_empty()) || st.lines >= HEAD_LINES;
     }
