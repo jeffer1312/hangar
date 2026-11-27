@@ -52,11 +52,17 @@ struct Binding {
     descendants: Vec<(u32, u64)>,
 }
 
+/// O que há dentro do órfão: um agente com a chave da sessão, nenhum agente, ou algo que não deu para provar.
 #[cfg(windows)]
-fn find() -> io::Result<Vec<(Orphan, Option<Binding>)>> { find_after(SETTLE) }
+enum Probe { Bound(Binding), Empty, Unproven }
 
 #[cfg(windows)]
-fn find_after(settle: Duration) -> io::Result<Vec<(Orphan, Option<Binding>)>> {
+fn find() -> io::Result<Vec<(Orphan, Option<Binding>)>> {
+    Ok(find_after(SETTLE)?.into_iter().map(|(orphan, probe)| (orphan, match probe { Probe::Bound(b) => Some(b), _ => None })).collect())
+}
+
+#[cfg(windows)]
+fn find_after(settle: Duration) -> io::Result<Vec<(Orphan, Probe)>> {
     use crate::list::discover::{is_aux, provider_from_argv};
     use crate::list::procs::{ProcessView, SystemProcs, vanished};
 
@@ -68,39 +74,50 @@ fn find_after(settle: Duration) -> io::Result<Vec<(Orphan, Option<Binding>)>> {
     let procs = SystemProcs::default();
     let mut result = Vec::new();
     for orphan in found {
-        let Some(birth) = hangar_psmux::process_birth(orphan.pid)? else { continue; };
+        // Erro só neste órfão não derruba a busca: ele fica sem prova.
+        let birth = match hangar_psmux::process_birth(orphan.pid) {
+            Ok(Some(birth)) => birth,
+            Ok(None) => continue,
+            Err(_) => { result.push((orphan, Probe::Unproven)); continue; }
+        };
         let Ok(descendants) = hangar_psmux::process_tree(orphan.pid, birth) else {
-            result.push((orphan, None));
+            result.push((orphan, Probe::Unproven));
             continue;
         };
         let pids: Vec<_> = descendants.iter().map(|&(pid, _)| i64::from(pid)).collect();
         procs.prefetch(&pids);
-        let mut binding: Option<Binding> = None;
+        let mut probe = Probe::Empty;
         for &(pid, started) in &descendants {
-            // Releitura que falha não derruba a busca inteira: aquele descendente fica sem prova.
-            if hangar_psmux::process_birth(pid).ok().flatten() != Some(started) { continue; }
+            // Releitura que falha não derruba a busca inteira, mas deixa este órfão sem prova.
+            let Ok(now) = hangar_psmux::process_birth(pid) else { probe = Probe::Unproven; break; };
+            if now != Some(started) { continue; }
             let process = i64::from(pid);
             let argv = match procs.argv_checked(process) {
                 Ok(argv) => argv,
                 Err(error) if vanished(&error) => continue,
-                Err(_) => { binding = None; break; }
+                Err(_) => { probe = Probe::Unproven; break; }
             };
             let Some(provider) = provider_from_argv(&argv).filter(|_| !is_aux(&argv)).and_then(AgentProvider::parse) else { continue; };
             let env = |name| procs.env_var(process, name).ok().flatten().and_then(|value| value.into_string().ok());
             let mux = env("TMUX").as_deref().and_then(hangar_psmux::pane_server_pid);
             let key = env("CP_SESSION_KEY");
-            if hangar_psmux::process_birth(pid).ok().flatten() != Some(started) { continue; }
+            let Ok(now) = hangar_psmux::process_birth(pid) else { probe = Probe::Unproven; break; };
+            if now != Some(started) { continue; }
             let Some(key) = key.filter(|key| !key.is_empty() && mux == Some(orphan.pid)) else {
-                binding = None;
+                probe = Probe::Unproven;
                 break;
             };
-            if binding.as_ref().is_some_and(|previous| previous.key != key) {
-                binding = None;
-                break;
+            match &probe {
+                Probe::Bound(previous) if previous.key != key => { probe = Probe::Unproven; break; }
+                Probe::Bound(_) => {}
+                _ => probe = Probe::Bound(Binding { key, provider, birth, descendants: descendants.clone() }),
             }
-            if binding.is_none() { binding = Some(Binding { key, provider, birth, descendants: descendants.clone() }); }
         }
-        if hangar_psmux::process_birth(orphan.pid)? == Some(birth) { result.push((orphan, binding)); }
+        match hangar_psmux::process_birth(orphan.pid) {
+            Ok(now) if now == Some(birth) => result.push((orphan, probe)),
+            Ok(_) => {}
+            Err(_) => result.push((orphan, Probe::Unproven)),
+        }
     }
     Ok(result)
 }
@@ -181,11 +198,13 @@ fn end_checked(home: &Path, name: &str, fallen: &super::fallen::Fallen, settle: 
     if hangar_psmux::process_birth(pid).map_err(unknown)? == Some(birth) {
         // O pid com o mesmo nascimento já é o servidor gravado; sem agente dentro (saiu e ficou o shell) os
         // descendentes gravados bastam. Agente de outra sessão dentro dele recusa.
-        let (_, binding) = find_after(settle).map_err(unknown)?.into_iter()
+        let (_, probe) = find_after(settle).map_err(unknown)?.into_iter()
             .find(|(orphan, _)| orphan.pid == pid && orphan.name == name).ok_or("psmux_orphan_unknown")?;
-        if let Some(binding) = binding {
-            if binding.birth != birth || binding.key != fallen.key || binding.provider != fallen.provider { return Err("psmux_orphan_unknown"); }
-            lives.extend(binding.descendants);
+        match probe {
+            Probe::Bound(binding) if binding.birth == birth && binding.key == fallen.key && binding.provider == fallen.provider =>
+                lives.extend(binding.descendants),
+            Probe::Empty => {}
+            _ => return Err("psmux_orphan_unknown"),
         }
     }
     let mut lives: Vec<_> = lives.into_iter().collect();

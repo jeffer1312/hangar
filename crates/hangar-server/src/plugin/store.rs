@@ -619,8 +619,13 @@ impl Store {
         let s = session(&mut memory, binding)?;
         // Os avisos chegam com prazo e podem cruzar: o mais velho que o último gravado não vale.
         let newest = s.agents.get(agent_id).and_then(|life| life.since.as_deref().or(life.ended_at.as_deref()))
-            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok());
-        if newest.is_some_and(|newest| at < newest) { return Ok(()); }
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()).map(|t| t.with_timezone(&chrono::Utc));
+        // Sem horário vale "agora", que não pode perder para o relógio adiantado de quem mandou o anterior.
+        let at = match (at_ms, newest) { (None, Some(newest)) => at.max(newest), _ => at };
+        if newest.is_some_and(|newest| at < newest) {
+            tracing::debug!(agent = agent_id, "aviso de subagente mais velho que o último gravado; ignorado");
+            return Ok(());
+        }
         let stamp = at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let (ended_at, since) = if state == AgentState::Running { (None, Some(stamp)) } else { (Some(stamp), None) };
         // ponytail: sem teto por conversa; a memória some com a vida da sessão.

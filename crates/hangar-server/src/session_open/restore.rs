@@ -412,8 +412,8 @@ pub(super) fn resolve_orphan(home: &Path, projects: &Path, key: &str, entry: &En
     // `resolved_for` já conferiu existir.
     let derived = (resolved.spec.provider == AgentProvider::Claude).then(|| resolved.resume.as_deref()
         .map(|conversation| super::claude::transcript(&resolved.spec, conversation, projects).to_string_lossy().into_owned())).flatten();
-    let transcript = entry.transcript.clone().or(derived).filter(|path| Path::new(path).is_file())
-        .ok_or("restore_transcript_missing")?;
+    let transcript = entry.transcript.clone().filter(|path| Path::new(path).is_file())
+        .or(derived.filter(|path| Path::new(path).is_file())).ok_or("restore_transcript_missing")?;
     let transcript = transcript.as_str();
     match resolved.spec.provider {
         // O modo da fotografia pode ser velho: vale o último que a própria conversa gravou.
@@ -445,12 +445,31 @@ pub(super) fn resolve_orphan(home: &Path, projects: &Path, key: &str, entry: &En
 }
 
 /// O último `permission-mode` que o Claude Code gravou na conversa.
+/// Lido de trás para a frente em blocos: a conversa pode ter centenas de MB e o registro costuma estar no fim.
 fn last_claude_mode(transcript: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(transcript).ok()?;
-    text.lines().rev().filter(|line| line.contains("\"permission-mode\"")).find_map(|line| {
-        let value: serde_json::Value = serde_json::from_str(line).ok()?;
-        (value["type"] == "permission-mode").then(|| value["permissionMode"].as_str().map(str::to_owned)).flatten()
-    })
+    use std::io::{Read, Seek, SeekFrom};
+    const CHUNK: u64 = 256 * 1024;
+    let mut file = std::fs::File::open(transcript).ok()?;
+    let mut end = file.metadata().ok()?.len();
+    let mut tail: Vec<u8> = Vec::new();
+    while end > 0 {
+        let start = end.saturating_sub(CHUNK);
+        let mut chunk = vec![0; (end - start) as usize];
+        file.seek(SeekFrom::Start(start)).ok()?;
+        file.read_exact(&mut chunk).ok()?;
+        chunk.extend_from_slice(&tail);
+        // A primeira linha do bloco pode estar cortada: só é lida quando o bloco seguinte a completar.
+        let cut = if start == 0 { 0 } else { chunk.iter().position(|b| *b == b'\n').map_or(chunk.len(), |i| i + 1) };
+        let found = chunk[cut..].split(|b| *b == b'\n').rev().filter(|line| line.windows(17).any(|w| w == b"\"permission-mode\""))
+            .find_map(|line| {
+                let value: serde_json::Value = serde_json::from_slice(line).ok()?;
+                (value["type"] == "permission-mode").then(|| value["permissionMode"].as_str().map(str::to_owned)).flatten()
+            });
+        if found.is_some() { return found; }
+        tail = chunk[..cut].to_vec();
+        end = start;
+    }
+    None
 }
 
 /// Reabre uma sessão pelo spec gravado, na conversa dela; devolve o código da falha.
