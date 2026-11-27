@@ -463,7 +463,8 @@ pub async fn interrupt(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
     let headers = req.headers().clone();
     let (ctx, _) = match admit_reach(&st, peer, req, WriteRoute::Interrupt).await {
         Ok(admitted) => admitted,
-        // O pai recusado (adormecido, abrindo, sem agente) não segura as filhas: a pessoa pediu parar tudo.
+        // O pai sem turno (adormecido, abrindo, sem agente) não segura as filhas: a pessoa pediu parar tudo.
+        // As outras recusas (orquestrador, runtime doente) chegam sem a raiz e não param nada.
         Err((refused, Some(root))) if asked => return refused_with_cascade(refused, cascade_from(&st, &root).await, &headers).await,
         Err((refused, _)) => return refused,
     };

@@ -392,11 +392,13 @@ impl Watcher {
             QuestionStep::Cancel(queued) => {
                 if self.cancel_retry_at.get(child).is_some_and(|t| now < *t) { return; }
                 let cancelled = crate::session_write::control::cancel_waiting(st, parent, &queued).await;
-                if let Err(code) = &cancelled {
+                let settled = cancel_settled(&cancelled);
+                // Com o pai ocupado só a primeira falha da série vai ao diário; as novas tentativas não.
+                if let Err(code) = &cancelled && (settled || !self.cancel_retry_at.contains_key(child)) {
                     report(st, child, "link_question_cancel_failed", "pergunta já resolvida segue na fila do pai", code);
                 }
                 // Pai ocupado ou acordando: a linha segue registrada e a tentativa volta depois.
-                if !cancel_settled(&cancelled) {
+                if !settled {
                     self.cancel_retry_at.insert(child.to_owned(), now + BACKOFF);
                     return;
                 }

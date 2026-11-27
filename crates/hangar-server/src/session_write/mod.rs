@@ -83,8 +83,9 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
     admit_reach(st, peer, req, route).await.map_err(|(response, _)| response)
 }
 
-/// O `admit`, com o nome da sessão junto da recusa quando quem chamou é o dono: a recusa do pai (sem
-/// turno, abrindo, ocupado) não impede o Parar de alcançar as filhas dele.
+/// O `admit`, com o nome da sessão junto da recusa quando quem chamou é o dono e a recusa é só a do pai
+/// sem turno (estacionado, adormecido, abrindo, ocupado, sem agente): essa não impede o Parar de alcançar
+/// as filhas. Guarda (orquestrador), corpo e runtime doente seguram a árvore inteira.
 pub(crate) async fn admit_reach(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute)
     -> Result<(Ctx, Bytes), (Response, Option<String>)> {
     let (_, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err((crate::auth::unavailable(e), None)) };
@@ -92,59 +93,70 @@ pub(crate) async fn admit_reach(st: &Arc<AppState>, peer: SocketAddr, req: Reque
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
     let Some(name) = name else { return Err((stranger(st, peer, req, who.as_ref()).await, None)) };
     let owner = matches!(who, Some(Caller::Owner));
-    let reach = owner.then(|| name.clone());
-    admit_named(st, peer, req, route, name, owner, runtime).await.map_err(|response| (response, reach))
+    let root = owner.then(|| name.clone());
+    admit_named(st, peer, req, route, name, owner, runtime).await.map_err(|(response, reach)| (response, root.filter(|_| reach)))
+}
+
+/// A recusa e se ela é só do pai sem turno, que deixa a cascata do Parar seguir às filhas.
+type Refused = (Response, bool);
+
+fn held(response: Response) -> Refused { (response, false) }
+
+/// Abrindo ou acordando: o pai ainda não tem turno, as filhas têm o delas.
+fn opening_code(code: &str) -> bool {
+    code == crate::runtime::codex_relaunch::STARTING || code == crate::runtime::gateway::ASLEEP_WAKING || code == "other_terminal_starting"
 }
 
 async fn admit_named(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute, name: String, owner: bool,
-                     runtime: Option<Arc<RuntimeRegistry>>) -> Result<(Ctx, Bytes), Response> {
+                     runtime: Option<Arc<RuntimeRegistry>>) -> Result<(Ctx, Bytes), Refused> {
     if matches!(route, WriteRoute::Input | WriteRoute::Interrupt)
         && let Some(response) = orchestration_guard(st, &name, req.headers()).await {
-        return Err(response);
+        return Err(held(response));
     }
-    let Some(runtime) = runtime else { return Err(no_runtime(req.headers())) };
+    let Some(runtime) = runtime else { return Err(held(no_runtime(req.headers()))) };
     // Sem turno não há o que parar: o Esc não acorda a adormecida nem sobe a estacionada.
     if route == WriteRoute::Interrupt && let Some((status, body)) = control::parked_no_turn(&runtime, &name).await {
         let mut response = json_response(status, body);
         cors(req.headers(), response.headers_mut());
-        return Err(response);
+        return Err((response, true));
     }
     // A troca de agente à espera segurou a fila para o Codex: orientar ou "Enviar agora" entregaria ao Claude.
     if matches!(route, WriteRoute::Steer | WriteRoute::QueueSteer) && runtime.handoff_held(&name) {
         let mut response = json_response(StatusCode::CONFLICT, detail_body("session_transfer_busy", "a sessão está trocando de agente", json!({})));
         cors(req.headers(), response.headers_mut());
-        return Err(response);
+        return Err(held(response));
     }
     let (parts, body) = req.into_parts();
-    let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return Err(too_large(&parts.headers)) };
+    let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return Err(held(too_large(&parts.headers))) };
     let shaped = table::body_ok(route, &bytes);
     let mut other=runtime.other_info(&name).await.is_some();
     if !other && runtime.asleep(&name).await.is_some(){other=runtime.ensure_other(&name).await.is_some();}
-    if !other && let Some(response)=control::asleep_queue(&runtime,&name,route,st.write_gate_wait,&parts,&bytes).await {return Err(response);}
+    if !other && let Some(response)=control::asleep_queue(&runtime,&name,route,st.write_gate_wait,&parts,&bytes).await {return Err(held(response));}
     match route_write(&runtime, &name, route, st.write_gate_wait).await {
-        Write::Rust(_, _) if !shaped => Err(invalid_body(&parts.headers)),
+        Write::Rust(_, _) if !shaped => Err(held(invalid_body(&parts.headers))),
         Write::Rust(pass_in, target) => Ok((Ctx { st: st.clone(), name, target, _pass: pass_in, owner, parts }, bytes)),
-        Write::Unowned if route == WriteRoute::Input => Err(input::unowned_response(st, &name, peer, &parts.headers, &bytes).await),
+        Write::Unowned if route == WriteRoute::Input => Err(held(input::unowned_response(st, &name, peer, &parts.headers, &bytes).await)),
         // O Python não tem a rota de parar: sem agente do Rust no nome, a recusa é a mesma do Codex.
-        Write::Unowned if route == WriteRoute::StopTask => Err(control::stop_unowned(&parts.headers)),
-        Write::Unowned if !shaped && !matches!(route, WriteRoute::QueueEdit | WriteRoute::QueueReorder | WriteRoute::QueueSteer) => Err(invalid_body(&parts.headers)),
+        Write::Unowned if route == WriteRoute::StopTask => Err(held(control::stop_unowned(&parts.headers))),
+        Write::Unowned if !shaped && !matches!(route, WriteRoute::QueueEdit | WriteRoute::QueueReorder | WriteRoute::QueueSteer) => Err(held(invalid_body(&parts.headers))),
         Write::Unowned => {
             let (status, body) = unowned::refusal(st, &name, route, &bytes).await;
             let mut response = json_response(status, body);
             cors(&parts.headers, response.headers_mut());
-            Err(response)
+            Err((response, true))
         }
         Write::Busy => {
             let mut response = json_response(StatusCode::CONFLICT, busy_body());
             cors(&parts.headers, response.headers_mut());
-            Err(response)
+            Err((response, true))
         }
-        Write::Opening(key) => Err(input::opening_response(st, &name, &key, &parts.headers, &bytes).await),
-        Write::Asleep(key) => Err(input::asleep_response(st, &name, &key, &parts.headers, &bytes).await),
+        Write::Opening(key) => Err((input::opening_response(st, &name, &key, &parts.headers, &bytes).await, true)),
+        Write::Asleep(key) => Err((input::asleep_response(st, &name, &key, &parts.headers, &bytes).await, true)),
         Write::Failed(error) => {
+            let reach = opening_code(&error.code);
             let mut response = detail(failed_status(&error), &error.code, &error.message, json!({}));
             cors(&parts.headers, response.headers_mut());
-            Err(response)
+            Err((response, reach))
         }
     }
 }
@@ -193,8 +205,7 @@ pub(crate) async fn stranger(st: &AppState, peer: SocketAddr, req: Request, who:
 /// Recusa do Rust a uma sessão dele: esperar a conversa abrir é 409; rota que não existe para a sessão
 /// também, porque repetir não muda nada; o resto, 503.
 pub(crate) fn failed_status(error: &crate::runtime::protocol::RuntimeError) -> StatusCode {
-    if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING || error.code=="other_terminal_starting"
-        || error.code == ROUTE_UNAVAILABLE || error.code == PROVIDER_UNKNOWN { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
+    if opening_code(&error.code) || error.code == ROUTE_UNAVAILABLE || error.code == PROVIDER_UNKNOWN { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
 }
 
 const ROUTE_UNAVAILABLE: &str = "session_route_unavailable";

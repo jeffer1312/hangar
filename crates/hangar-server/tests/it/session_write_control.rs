@@ -746,15 +746,22 @@ async fn stop_task_on_a_name_without_rust_owner_is_409_only_claude_not_python() 
 /// Pai `p` e filhas ligadas `a` (sem terminal, parada) e `b` (nenhuma sessão com esse nome), pelos arquivos de grupo.
 /// Volta também o diário do servidor, para esperar as gravações dele.
 async fn linked_family(registry: Arc<RuntimeRegistry>, dir: &Path) -> (Arc<Fake>, std::net::SocketAddr, hangar_server::diag::DiagClient) {
+    linked_family_of(registry, dir, "p", |_| {}).await
+}
+
+/// As filhas `a` e `b` ligadas a `parent`; `tweak` ajusta o estado antes de servir.
+async fn linked_family_of(registry: Arc<RuntimeRegistry>, dir: &Path, parent: &str, tweak: impl FnOnce(&mut AppState))
+    -> (Arc<Fake>, std::net::SocketAddr, hangar_server::diag::DiagClient) {
     use hangar_server::groups::{orq::OrqVault, service::GroupService, store::PairDir};
     let pair = dir.join("pair");
     std::fs::create_dir_all(&pair).unwrap();
     for child in ["a", "b"] {
-        let sidecar = json!({"peers": ["p"], "task": "", "gid": "g1", "harness": {child: "claude", "p": "claude"}, "linked_by": "p"});
+        let sidecar = json!({"peers": [parent], "task": "", "gid": "g1", "harness": {child: "claude", parent: "claude"}, "linked_by": parent});
         std::fs::write(pair.join(format!("{child}.json")), sidecar.to_string()).unwrap();
     }
     let (python, _) = spawn_fake().await;
     let mut state = AppState::new(config("127.0.0.1"));
+    tweak(&mut state);
     state.write_gate_wait = Duration::from_secs(5);
     state.diag = python.bind_diary(state.diag.clone());
     state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair, dir.join("arquivo")), Arc::new(OrqVault::from_state(&state)), "casa".into())));
@@ -842,6 +849,29 @@ async fn a_plain_interrupt_does_not_cascade() {
     let (status, body) = send(server, "POST", "p/interrupt", "").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
     assert!(body.get("cascade").is_none(), "sem `cascade=1` a resposta é a de sempre: {body}");
+    diag.flush().await;
+    assert!(cascade_failures(&python).is_empty(), "a filha que não existe nem foi procurada");
+}
+
+/// O pai que o guarda recusa (`p-orq` com as execuções ilegíveis) não é "sem turno": o Parar com
+/// `cascade=1` responde a recusa dele e não alcança filha nenhuma.
+#[tokio::test]
+async fn a_guard_refused_parent_does_not_cascade() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    let child = open_headless(&registry, dir.path(), "a").await;
+    let home = dir.path().join("home");
+    let runs = hangar_server::orchestration::runs::root(&home);
+    std::fs::create_dir_all(runs.parent().unwrap()).unwrap();
+    std::fs::write(&runs, "não é pasta").unwrap();
+    let (home, base) = (home.to_string_lossy().into_owned(), dir.path().join("conta").to_string_lossy().into_owned());
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home), ("CLAUDE_CONFIG_DIR".to_owned(), base)].into());
+    let (python, server, diag) = linked_family_of(registry, dir.path(), "p-orq",
+        |state| state.accounts = hangar_server::accounts::AccountService::new(env)).await;
+    let (status, body) = send(server, "POST", "p-orq/interrupt?cascade=1", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("orq_runs_unavailable")), "{body}");
+    assert!(body.get("cascade").is_none(), "a recusa do guarda segura a árvore: {body}");
+    assert!(!child.lock().unwrap().iter().any(|e| e.to_string().contains("interrupt")), "nada foi à filha");
     diag.flush().await;
     assert!(cascade_failures(&python).is_empty(), "a filha que não existe nem foi procurada");
 }
