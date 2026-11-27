@@ -30,9 +30,12 @@ export function TelemetrySetting({ server }: { server: Server }) {
     void save.run(async (signal) => {
       if (consent !== true) {
         const machine = telemetryTarget(server, useServers.getState().servers);
-        if (await showTelemetryNotice(machine) !== true || signal.aborted) return state;
+        const answer = await showTelemetryNotice(machine);
+        // "Não enviar" responde a máquina ainda sem resposta; fechar não grava nada.
+        if (answer === undefined || signal.aborted || (answer === false && consent !== null)) return state;
+        return saveTelemetryChoice(server, answer, scope);
       }
-      return saveTelemetryChoice(server, consent !== true, scope);
+      return saveTelemetryChoice(server, false, scope);
     }, setState);
   };
   return <>

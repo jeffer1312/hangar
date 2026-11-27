@@ -87,10 +87,10 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
     }
     let (snapshot, book, snapshot_diag, snapshot_st) = (telemetry.clone(), st.peers.clone(), diag.clone(), st.clone());
     tasks.push(tokio::spawn(async move {
-        let mut done: Option<String> = None;
+        let mut done: Option<(String, u64)> = None;
         loop {
-            let today = snapshot.today();
-            if done.as_deref() != Some(today.as_str()) {
+            let (today, epoch) = (snapshot.today(), snapshot.consent_epoch());
+            if snapshot_due(done.as_ref(), &today, epoch) {
                 let (st, read_st, diag) = (snapshot_st.clone(), snapshot_st.clone(), snapshot_diag.clone());
                 let discover = move || async move { default_provider(&st).await };
                 let read = move |provider: Option<String>| {
@@ -99,7 +99,7 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
                     server_settings(&read_st.accounts.env.home, runtime.as_ref(), provider.as_deref(), &diag)
                 };
                 match daily_snapshot(snapshot.clone(), book.clone(), snapshot_diag.clone(), today.clone(), discover, read).await {
-                    Ok(Ok(true)) => done = Some(today),
+                    Ok(Ok(true)) => done = Some((today, epoch)),
                     Ok(Ok(false)) => {}
                     Ok(Err(e)) => report(&snapshot_diag, Failure::Disk(e)),
                     Err(_) => task_failed(&snapshot_diag),
@@ -119,6 +119,11 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
         }
     }));
     tasks
+}
+
+/// O dia novo e o aceite novo do mesmo dia (a época sobe a cada aceite) tiram o retrato de novo.
+fn snapshot_due(done: Option<&(String, u64)>, today: &str, epoch: u64) -> bool {
+    done.is_none_or(|(day, at)| day != today || *at != epoch)
 }
 
 /// As linhas de aviso e erro do log, limpas lote a lote. Sem conjunto bom de nomes o lote não sai e
@@ -368,9 +373,9 @@ pub async fn snapshot(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
 fn settings_snapshot(telemetry: &Telemetry, diag: &crate::diag::DiagClient, item: &Value) -> std::io::Result<Option<String>> {
     let Some(period) = item["snapshot_period"].as_str() else { return Ok(None) };
     let Some(captured) = item["ts"].as_str().and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok()) else { return Ok(None) };
-    let Some(values) = item["valores"].as_object() else { return Ok(None) };
+    let Some(values) = item["values"].as_object() else { return Ok(None) };
     let client = screen_client(item);
-    let device = item["aparelho"].as_str()
+    let device = item["device"].as_str()
         .filter(|id| (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
     let key = format!("settings:{}:{}", client.as_str(), device.unwrap_or_default());
     let (counters, dropped) = settings_counters(client, values.iter().map(|(name, value)| (name.as_str(), value.as_str())));
@@ -663,7 +668,7 @@ mod tests {
         let (_, new) = put(&st, yes, false).await;
         assert_ne!(first["snapshot_period"], new["snapshot_period"]);
         let body = |period: &Value, ts: &str| json!({"snapshot_period": period, "ts": ts, "cliente": "ios",
-            "aparelho": "fictional-device", "valores": {"theme": "dark", "palette": "classic"}}).to_string();
+            "device": "fictional-device", "values": {"theme": "dark", "palette": "classic"}}).to_string();
         let current = body(&new["snapshot_period"], ts);
         assert_eq!(request(&st, Method::POST, &current, true).await.0, StatusCode::FORBIDDEN);
         for bad in [body(&first["snapshot_period"], ts), body(&Value::Null, ts), body(&new["snapshot_period"], "2026-11-27T12:01:01Z")] {
@@ -767,8 +772,8 @@ mod tests {
         let telemetry = Telemetry::for_test(home.path(), Arc::new(move || chrono::DateTime::from_timestamp(clock.load(Ordering::SeqCst), 0).unwrap()));
         telemetry.set_consent(true).unwrap();
         let period = telemetry.snapshot_period().unwrap();
-        let snapshot = |client: &str, device: &str, ts: &str| json!({"snapshot_period": period, "cliente": client, "aparelho": device,
-            "ts": ts, "valores": {"theme": "dark", "font": "Fira Code", "modelo": "opus", "tool_look": 3}});
+        let snapshot = |client: &str, device: &str, ts: &str| json!({"snapshot_period": period, "cliente": client, "device": device,
+            "ts": ts, "values": {"theme": "dark", "font": "Fira Code", "modelo": "opus", "tool_look": 3}});
         let diag = crate::diag::DiagClient::new();
         let send = |item: Value| settings_snapshot(&telemetry, &diag, &item).unwrap();
         for (client, device) in [("native", "a-1"), ("native", "a-1"), ("native", "b-2"), ("ios", "a-1"), ("server", "c-3")] {
@@ -788,7 +793,7 @@ mod tests {
         let saved = std::fs::read(&day_file).unwrap();
         now.fetch_add(24 * 60 * 60, Ordering::SeqCst);
         let mut late = snapshot("native", "a-1", "2026-11-28T01:59:59+02:00");
-        late["valores"]["theme"] = json!("light");
+        late["values"]["theme"] = json!("light");
         let mut missing = late.clone();
         missing.as_object_mut().unwrap().remove("ts");
         let mut invalid = late.clone();
@@ -851,7 +856,7 @@ mod tests {
         let diag = crate::diag::DiagClient::new().with_diary(Some(diary.path().to_owned()));
         let period = telemetry.snapshot_period().unwrap();
         let body = json!({"snapshot_period": period, "cliente": "native", "ts": ts,
-            "valores": {"theme": "dark", "modelo": "opus", "tool_look": 3}});
+            "values": {"theme": "dark", "modelo": "opus", "tool_look": 3}});
         assert!(settings_snapshot(&telemetry, &diag, &body).unwrap().is_some());
         let rows = diary_codes(&diag, diary.path()).await;
         let row = |code: &str| rows.iter().find(|row| row["codigo"] == code).cloned();
@@ -977,6 +982,29 @@ mod tests {
         assert!(round(&telemetry).await.unwrap().unwrap());
         assert_eq!(calls.load(Ordering::SeqCst), 1, "o dia já contado não redescobre, nem depois de reiniciar");
         assert_eq!(telemetry.counters().iter().filter(|c| c.dims["setting"] == "default_provider" && c.dims["value"] == "codex").map(|c| c.count).sum::<u64>(), 1);
+    }
+
+    #[tokio::test]
+    async fn new_consent_on_the_same_day_takes_the_server_snapshot_again() {
+        let home = tempfile::tempdir().unwrap();
+        let ts = chrono::DateTime::parse_from_rfc3339("2026-11-27T12:00:00Z").unwrap().to_utc();
+        let telemetry = Arc::new(Telemetry::for_test(home.path(), Arc::new(move || ts)));
+        telemetry.set_consent(true).unwrap();
+        let peers = Arc::new(PeerClient::new(PeerBook::new(None)));
+        let round = || daily_snapshot(telemetry.clone(), peers.clone(), crate::diag::DiagClient::new(), telemetry.today(),
+            || async { Some("codex".to_owned()) }, |p: Option<String>| vec![("default_provider", p.unwrap_or_default())]);
+        let provider = || telemetry.counters().iter().any(|c| c.dims["setting"] == "default_provider");
+        let day = telemetry.today();
+        assert!(snapshot_due(None, &day, telemetry.consent_epoch()));
+        assert!(round().await.unwrap().unwrap());
+        let done = (day.clone(), telemetry.consent_epoch());
+        assert!(!snapshot_due(Some(&done), &day, telemetry.consent_epoch()), "o mesmo dia e aceite não repetem");
+        telemetry.set_consent(false).unwrap();
+        telemetry.set_consent(true).unwrap();
+        assert!(!provider(), "a recusa apagou o retrato do período anterior");
+        assert!(snapshot_due(Some(&done), &day, telemetry.consent_epoch()), "aceite novo no mesmo dia tira o retrato de novo");
+        assert!(round().await.unwrap().unwrap());
+        assert!(provider());
     }
 
     #[tokio::test(start_paused = true)]

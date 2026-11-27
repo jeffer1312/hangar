@@ -11,7 +11,7 @@ let iniciado = false;
 const VISIBLE_EVERY_MS = 5 * 60 * 1000;
 const trimBase = (base: string) => base.replace(/\/+$/, '');
 const destination = (server: Server) => trimBase(server.baseUrl);
-type SettingsSnapshot = Pick<EventoDiag, 'valores' | 'aparelho'> & {
+type SettingsSnapshot = Pick<EventoDiag, 'values' | 'device'> & {
   cliente: 'ios' | 'android'; ts: string; snapshot_period: string;
 };
 let telemetrySaved: ((server: Server, state: TelemetrySetting) => void) | undefined;
@@ -50,7 +50,7 @@ export function withMachineRequestDiagnostics(fetcher: typeof fetch): typeof fet
 }
 
 /** `settings`: o retrato das preferências do aparelho, mandado uma vez por dia (UTC) ao servidor ativo. */
-export function iniciarDiag(settings?: () => Pick<EventoDiag, 'valores' | 'aparelho'>): void {
+export function iniciarDiag(settings?: () => Pick<EventoDiag, 'values' | 'device'>): void {
   if (iniciado) return;
   iniciado = true;
   // O core resume a falha no resultado; registra aqui antes de perder o motivo do cancelamento.
@@ -140,6 +140,8 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'valores' | 'apare
     const server = snapshotTarget();
     if (!settings || !server) return;
     const key = destination(server);
+    // Dia já confirmado: só o dia novo ou um aceite salvo aqui (`saved`) pedem outra leitura.
+    if (!saved && settingsDay.get(key)?.startsWith(`${server.id}:${new Date().toISOString().slice(0, 10)}:`)) return;
     const existing = inFlight.get(key);
     if (existing && sameServer(server, existing.server)) return;
     const flight = { server };

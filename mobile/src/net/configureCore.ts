@@ -65,12 +65,16 @@ export function configureCore() {
     const a = useAparencia.getState();
     const { width, height } = Dimensions.get('window');
     return {
-      valores: settingsValues({
-        ...a, texto: a.conversa.texto, textoPadrao: CONVERSA_PADRAO.texto,
+      values: settingsValues({
+        theme: a.tema, background: a.fundo, backgroundEffect: a.efeito, palette: a.paleta, reading: a.leitura,
+        textScale: a.conversa.texto, defaultTextScale: CONVERSA_PADRAO.texto, toolLook: a.ferramentas,
+        thinkingTools: a.pensamentoTools, taskList: a.tarefas, tableChart: a.graficoTabela,
+        askHighlight: a.destaquePergunta, listGroup: a.agrupar, listOrganize: a.organizar,
+        homeScreen: a.homeScreen, language: a.idioma,
         tabletBar: Math.min(width, height) >= TABLET_MIN_SIDE ? useTabletPrefs.getState().placement : undefined,
         delivery: useDeliveryMode.getState().mode, handsFree: useHandsFree.getState().on,
       }),
-      aparelho: updateDeviceId(),
+      device: updateDeviceId(),
     };
   });
 }

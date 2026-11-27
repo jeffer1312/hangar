@@ -1686,7 +1686,7 @@ impl Hangar {
             self.ask_consent(machines::Consent::AutoReport, window, cx);
             self.ask_consent(machines::Consent::Telemetry, window, cx);
             self.send_crash_telemetry();
-            self.send_settings_snapshot(cx);
+            self.send_settings_snapshot(false, cx);
         }
         self.connection_dialog = false;
         // Conectado por qualquer caminho: reabrir o cartão mostra endereço + token, não a entrada da primeira abertura.

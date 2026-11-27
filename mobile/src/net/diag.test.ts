@@ -46,7 +46,7 @@ it('separa retrato do diário, repete após 503 e descarta leitura de máquina r
     }
     return new Response(JSON.stringify({ gravadas: JSON.parse(init!.body as string).eventos.length }));
   });
-  const settings = vi.fn(() => ({ valores: { theme: 'dark' }, aparelho: 'dev-1' }));
+  const settings = vi.fn(() => ({ values: { theme: 'dark' }, device: 'dev-1' }));
   const posts = (base: string, path: string) => fetchMock.mock.calls.filter(([url, init]) =>
     url === `${base}/api/${path}` && init?.method === 'POST');
   const snapshots = (base: string) => posts(base, 'telemetry').map(([, init]) => JSON.parse(init!.body as string));
@@ -71,7 +71,7 @@ it('separa retrato do diário, repete após 503 e descarta leitura de máquina r
   onTelemetrySaved(first, accepted);
   await vi.advanceTimersByTimeAsync(0);
   expect(snapshots(first.baseUrl)).toEqual([expect.objectContaining({ snapshot_period: accepted.snapshot_period,
-    valores: { theme: 'dark' }, aparelho: 'dev-1', ts: '2026-11-27T23:50:00.000Z' })]);
+    values: { theme: 'dark' }, device: 'dev-1', ts: '2026-11-27T23:50:00.000Z' })]);
   await vi.advanceTimersByTimeAsync(599_000);
   expect(snapshots(first.baseUrl).map((body) => body.ts)).toEqual(['2026-11-27T23:50:00.000Z', '2026-11-27T23:55:00.000Z']);
   expect(JSON.stringify(posts(first.baseUrl, 'diag'))).not.toMatch(/settings\.snapshot|snapshot_period|dev-1/);
@@ -90,6 +90,31 @@ it('separa retrato do diário, repete após 503 e descarta leitura de máquina r
     await vi.advanceTimersByTimeAsync(1000);
     expect(snapshots(second.baseUrl).map((body) => body.ts)).toEqual(['2026-11-27T23:59:59.000Z', '2026-11-28T00:00:00.000Z']);
   } finally { estado.servidores = original; }
+});
+
+it('não relê o aceite no mesmo dia depois do retrato confirmado', async () => {
+  vi.resetModules();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-11-27T10:00:00Z'));
+  const core = await import('@hangar/core');
+  core.configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized: () => {}, origin: null, createEventSource: vi.fn() });
+  const fresh = await import('./diag');
+  const accepted = { consent: true, consent_scope: 2, enabled: true, disabled_by: null, snapshot_period: 'a'.repeat(32) };
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/api/telemetry')) {
+      return new Response(JSON.stringify(init?.method === 'POST' ? { snapshot_period: accepted.snapshot_period } : accepted));
+    }
+    return new Response(JSON.stringify({ gravadas: JSON.parse(init!.body as string).eventos.length }));
+  });
+  const calls = (post: boolean) => fetchMock.mock.calls.filter(([url, init]) =>
+    String(url).endsWith('/api/telemetry') && (init?.method === 'POST') === post).length;
+  fresh.iniciarDiag(() => ({ values: { theme: 'dark' }, device: 'dev-1' }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect([calls(false), calls(true)]).toEqual([1, 1]);
+  await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+  expect([calls(false), calls(true)]).toEqual([1, 1]);
+  await vi.advanceTimersByTimeAsync(14 * 60 * 60 * 1000);
+  expect([calls(false), calls(true)]).toEqual([2, 2]);
 });
 
 it.each(['401', 'timeout', 'network', 'cancelled'] as const)('registra falha %s do pedido sem token, corpo ou query', async (kind) => {

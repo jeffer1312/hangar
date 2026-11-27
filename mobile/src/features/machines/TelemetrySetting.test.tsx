@@ -89,6 +89,16 @@ describe('linha de telemetria', () => {
     expect(mocks.saved).toHaveBeenCalledWith(server, expect.objectContaining({ consent: true, consent_scope: 2, enabled: true }));
   });
 
+  it('"Não enviar" no aviso grava a recusa da máquina ainda sem resposta', async () => {
+    const alert = vi.spyOn(Alert, 'alert');
+    mocks.fetch.mockImplementation(async (_url, init) => init?.method === 'PUT' ? view(JSON.parse(init.body).consent) : view(null));
+    await render();
+    await act(async () => row()!.click());
+    await act(async () => alert.mock.calls[0][2]!.find((button) => button.text === m.telemetry_no())!.onPress!());
+    expect(puts().map(([, init]) => JSON.parse(init.body))).toEqual([{ consent: false }]);
+    expect(row()?.textContent).toContain(m.auto_report_off());
+  });
+
   it('mostra bloqueio do ambiente antes de escolha ainda não respondida', async () => {
     mocks.fetch.mockImplementation(async () => json({ consent: null, disabled_by: 'env' }));
     await render();

@@ -467,6 +467,8 @@ impl ConsentChoice {
     fn can_enable(self, kind: Consent) -> bool {
         !self.disabled && !self.inactive && (kind == Consent::AutoReport || self.scope == Some(SETTINGS_CONSENT_SCOPE))
     }
+    /// O aviso aberto pela linha grava o "Pode enviar" e o "Não enviar" da máquina ainda sem resposta.
+    fn notice_saves(self, on: bool) -> bool { on || self.answer.is_none() }
 }
 
 pub(super) fn settings_snapshot_period(reply: &Value) -> Option<&str> {
@@ -510,7 +512,7 @@ pub(crate) fn consent_row(kind: Consent, live: bool, choice: Option<ConsentChoic
             let hint = match choice.map(|c| c.scope) {
                 Some(Some(SETTINGS_CONSENT_SCOPE)) => "telemetry_setting_hint",
                 Some(_) => "telemetry_update_required",
-                None => "telemetry_setting",
+                None => "telemetry_setting_hint",
             };
             (IconName::ChartBar, tr_shared("telemetry_setting", &[]), tr_shared(hint, &[]))
         }
@@ -1167,10 +1169,11 @@ impl Hangar {
         let connection = self.connection;
         let answer = show_consent_question(kind.question(), &machine, window, cx);
         cx.spawn_in(window, async move |this, cx| {
-            if answer.await.ok().flatten() != Some(true) { return; }
+            let Some(on) = answer.await.ok().flatten() else { return };
             let _ = this.update(cx, |this, cx| {
-                if this.connection == connection && this.active_key() == key {
-                    this.save_consent(kind, true, cx);
+                let saves = this.machines.consent_ref(kind).remote.ok().copied().flatten().is_some_and(|c| c.notice_saves(on));
+                if this.connection == connection && this.active_key() == key && saves {
+                    this.save_consent(kind, on, cx);
                 }
             });
         }).detach();
@@ -1220,7 +1223,7 @@ impl Hangar {
             let Ok(saved) = saved.await else { return };
             let _ = this.update_in(cx, |this, window, cx| {
                 if kind == Consent::Telemetry && saved.iter().any(|(_, key, ok)| *ok && *key == this.active_key()) {
-                    this.send_settings_snapshot(cx);
+                    this.send_settings_snapshot(true, cx);
                 }
                 let failed = saved.iter().filter(|(_, _, ok)| !ok).map(|(label, _, _)| label.as_str()).collect::<Vec<_>>();
                 if !failed.is_empty() {
@@ -1673,7 +1676,7 @@ impl Hangar {
                 let setting = self.machines.consent(kind);
                 let saved = setting.seq == seq && result.is_ok();
                 setting.saved(kind, seq, result);
-                if saved && kind == Consent::Telemetry { self.send_settings_snapshot(cx); }
+                if saved && kind == Consent::Telemetry { self.send_settings_snapshot(true, cx); }
             }
         }
         cx.notify();
@@ -2902,6 +2905,9 @@ mod telemetry_tests {
         assert_eq!(super::consent_body(kind, false, legacy.scope), json!({"consent": false}));
         assert_eq!(super::consent_body(kind, true, known.scope), json!({"consent": true, "consent_scope": 2}));
         assert_eq!(super::consent_body(kind, false, future.scope), json!({"consent": false}));
+        assert!(known.notice_saves(false) && known.notice_saves(true), "sem resposta, o aviso grava as duas");
+        let refused = consent_value(kind, Ok(json!({"consent": false}))).unwrap().unwrap();
+        assert!(!refused.notice_saves(false) && refused.notice_saves(true), "recusada, só o aceite grava");
     }
 
     #[test]
