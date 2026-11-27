@@ -14,6 +14,7 @@ import { PeerSettings } from './PeerSettings';
 import { MachineDevices } from './MachineDevices';
 import { WebUiSetting } from './WebUiSetting';
 import { AutoReportSetting } from './AutoReportSetting';
+import { TelemetrySetting } from './TelemetrySetting';
 import { DevModeSetting } from './DevModeSetting';
 import { TagEditor } from '../tags/TagEditor';
 import * as m from '../../paraglide/messages';
@@ -45,7 +46,7 @@ export function MachineSettings({ server, view, onNavigate, onClose }: {
   if (view === 'tag') return <MachinePage title={m.tags_machine_title()}><TagEditor target={{ kind: 'machine', server }} /></MachinePage>;
   if (view === 'devices') return <MachinePage title={m.machine_devices_title()}><MachineDevices server={server} /></MachinePage>;
   if (view === 'peers') return <MachinePage title={m.mobile_machines_peers_title()}><PeerSettings server={server} /></MachinePage>;
-  if (view === 'maintenance') return <MachinePage title={m.mobile_machines_maintenance()}><MachineOperations server={server} /><WebUiSetting server={server} /><AutoReportSetting server={server} /><DevModeSetting server={server} /></MachinePage>;
+  if (view === 'maintenance') return <MachinePage title={m.mobile_machines_maintenance()}><MachineOperations server={server} /><WebUiSetting server={server} /><AutoReportSetting key={`auto-report-${server.id}`} server={server} /><TelemetrySetting key={`telemetry-${server.id}`} server={server} /><DevModeSetting server={server} /></MachinePage>;
   if (view === 'advanced') return <MachinePage title={m.mobile_machines_advanced_title()}>
     <MachineGroup>
       <MachineRow title={m.mobile_machines_identity_title()} onPress={() => onNavigate('identity')} />

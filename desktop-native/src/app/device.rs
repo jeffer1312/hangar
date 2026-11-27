@@ -8,6 +8,7 @@ use gpui_kit::component::progress::Progress;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::checkbox::Checkbox;
 use crate::update::confirm::{Acceptance, Launch};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 /// Um pedido ao servidor e o último resultado: carregando, erro, vazio e com dados saem daqui.
 pub(super) struct Remote<T> { pub(super) value: Option<Result<T, String>>, pub(super) loading: bool, pub(super) seq: u64 }
@@ -1250,6 +1251,229 @@ impl Hangar {
     }
 }
 
+/// `app.visible_time` sai neste compasso, o mesmo teto que o servidor aplica a cada evento.
+const VISIBLE_EVERY: Duration = Duration::from_secs(5 * 60);
+
+/// Os eventos de telemetria do app, mandados ao servidor por `POST /api/diag`; quem decide contar é o servidor, pela
+/// escolha do dono. Fica fora do `Device`, que nasce de novo a cada conexão.
+pub(super) struct ClientTelemetry {
+    /// Tempo à vista ainda não mandado, e desde quando a janela está fora da bandeja (`shown` na abertura).
+    visible: Duration,
+    visible_since: Option<Instant>,
+    /// A conversa aberta esperando aparecer: quando o clique veio e a máquina dela.
+    chat_open: Option<(Instant, Api)>,
+    unsent: Arc<Unsent>,
+}
+
+/// O que ainda não chegou ao servidor, dividido com a tarefa do envio: o `POST` que falha devolve aqui
+/// o valor dele, e ele sai no próximo envio.
+#[derive(Default)]
+struct Unsent {
+    ms: AtomicU64,
+    /// A execução anterior caiu: sai um `app.crash` na primeira conexão.
+    crashed: AtomicBool,
+    /// Já houve falha desde o último envio bom: o `native.log` só leva a primeira da sequência.
+    failing: AtomicBool,
+    /// Lotes seguidos que o servidor respondeu sem gravar.
+    rejected: AtomicU8,
+}
+
+/// Repetir sem fim só reenviaria o mesmo lote a cada passada.
+const REJECTED_RETRIES: u8 = 3;
+
+impl Unsent {
+    /// Devolve o valor para o próximo envio e diz o que vai ao `native.log`: a primeira falha da sequência e o descarte.
+    /// `rejected`: o servidor respondeu sem gravar; passadas `REJECTED_RETRIES` seguidas, o valor sai.
+    fn failed(&self, rejected: bool, give_back: impl FnOnce(&Unsent)) -> Option<&'static str> {
+        if rejected {
+            let seen = self.rejected.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_add(1))).unwrap_or_else(|n| n);
+            if seen >= REJECTED_RETRIES {
+                return (seen == REJECTED_RETRIES).then_some("descartado depois de 3 lotes não gravados seguidos");
+            }
+        }
+        give_back(self);
+        (!self.failing.swap(true, Ordering::SeqCst)).then_some("sai no próximo envio")
+    }
+    fn sent(&self) {
+        self.failing.store(false, Ordering::SeqCst);
+        self.rejected.store(0, Ordering::SeqCst);
+    }
+}
+
+impl ClientTelemetry {
+    /// Do pânico só fica o "houve": o texto leva caminho e mensagem.
+    pub(super) fn new(crash: Option<&str>) -> Self {
+        let unsent = Unsent { crashed: AtomicBool::new(crash.is_some()), ..Unsent::default() };
+        Self { visible: Duration::ZERO, visible_since: None, chat_open: None, unsent: Arc::new(unsent) }
+    }
+    pub(super) fn hidden(&mut self, now: Instant) {
+        if let Some(since) = self.visible_since.take() { self.visible += now.saturating_duration_since(since); }
+    }
+    pub(super) fn shown(&mut self, now: Instant) { if self.visible_since.is_none() { self.visible_since = Some(now); } }
+    fn take_visible(&mut self, now: Instant) -> Duration {
+        if let Some(since) = self.visible_since.as_mut() {
+            self.visible += now.saturating_duration_since(*since);
+            *since = now;
+        }
+        self.take_slice()
+    }
+    /// O servidor corta cada evento em `VISIBLE_EVERY`: o resto espera o próximo.
+    fn take_slice(&mut self) -> Duration {
+        self.visible += self.returned_visible();
+        let sent = self.visible.min(VISIBLE_EVERY);
+        self.visible -= sent;
+        sent
+    }
+    /// O tempo à vista que um envio que falhou devolveu.
+    fn returned_visible(&self) -> Duration { Duration::from_millis(self.unsent.ms.swap(0, Ordering::SeqCst)) }
+    /// Uma vez por queda.
+    fn take_crash(&mut self) -> Option<Value> {
+        self.unsent.crashed.swap(false, Ordering::SeqCst).then(|| telemetry_batch(serde_json::json!({"evento": "app.crash", "codigo": "panic"})))
+    }
+}
+
+/// Um evento no lote do diário, com o tipo do cliente.
+fn telemetry_batch(mut event: Value) -> Value {
+    event["cliente"] = Value::from("native");
+    serde_json::json!({"eventos": [event]})
+}
+
+/// Inteiro: o servidor descarta `ms` fracionário.
+fn millis(took: Duration) -> u64 { u64::try_from(took.as_millis()).unwrap_or(u64::MAX) }
+
+/// Sem retorno na tela: a falha (servidor sem a rota, fora do ar, lote não gravado) devolve o valor por `give_back`
+/// e vai ao `native.log`.
+fn send_telemetry(runtime: &tokio::runtime::Runtime, api: Api, body: Value, unsent: Arc<Unsent>, give_back: impl FnOnce(&Unsent) + Send + 'static) {
+    let events = body["eventos"].as_array().map_or(0, Vec::len);
+    drop(runtime.spawn(async move {
+        let why = match api.server_send(reqwest::Method::POST, &["diag"], Some(body), 10).await {
+            Ok(reply) => (!written_all(&reply, events)).then(|| ("lote não gravado".to_owned(), true)),
+            Err(failure) => Some((failure.status.map_or_else(|| "sem resposta".to_owned(), |status| status.to_string()), false)),
+        };
+        match why {
+            None => unsent.sent(),
+            Some((why, rejected)) => if let Some(next) = unsent.failed(rejected, give_back) {
+                crate::log_line(&format!("telemetria: evento do app não chegou ao servidor ({why}); {next}"));
+            },
+        }
+    }));
+}
+
+/// O servidor responde 200 com `gravadas` menor quando o diário não gravou o lote.
+fn written_all(reply: &Value, events: usize) -> bool { reply["gravadas"].as_u64() == Some(events as u64) }
+
+impl Hangar {
+    pub(super) fn start_client_telemetry(&mut self, cx: &mut Context<Self>) {
+        self.client_telemetry.shown(Instant::now());
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(VISIBLE_EVERY).await;
+            if this.update(cx, |this, _| this.send_visible_time()).is_err() { break; }
+        }).detach();
+    }
+
+    /// Só à máquina ativa: o tempo é do app, e mandado a todas contaria várias vezes.
+    fn send_visible_time(&mut self) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let ms = millis(self.client_telemetry.take_visible(Instant::now()));
+        if ms > 0 {
+            let body = telemetry_batch(serde_json::json!({"evento": "app.visible_time", "ms": ms}));
+            send_telemetry(&self.runtime, api, body, self.client_telemetry.unsent.clone(), move |u| { u.ms.fetch_add(ms, Ordering::SeqCst); });
+        }
+    }
+
+    pub(super) fn send_crash_telemetry(&mut self) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        if let Some(body) = self.client_telemetry.take_crash() {
+            send_telemetry(&self.runtime, api, body, self.client_telemetry.unsent.clone(), |u| u.crashed.store(true, Ordering::SeqCst));
+        }
+    }
+
+    /// Começa a medir a abertura da conversa, na máquina dela; convite fica de fora.
+    pub(super) fn chat_open_started(&mut self, opens_chat: bool) {
+        let invite = self.server_entry(&self.open_server()).is_some_and(|s| s.invite);
+        self.client_telemetry.chat_open = self.session_api().filter(|_| opens_chat && !invite).map(|api| (Instant::now(), api));
+    }
+
+    /// Histórico na tela: o tempo sai no quadro seguinte, o primeiro com a conversa desenhada. Abertura que deu erro não conta.
+    pub(super) fn chat_open_rendered(&mut self, window: &mut Window) {
+        if self.loading { return; }
+        let Some((started, api)) = self.client_telemetry.chat_open.take() else { return };
+        if self.error.is_some() || self.selected.is_none() { return; }
+        let (runtime, unsent) = (self.runtime.clone(), self.client_telemetry.unsent.clone());
+        window.on_next_frame(move |_, _| {
+            // A medida vale para aquela abertura: perdida, não volta.
+            send_telemetry(&runtime, api, telemetry_batch(serde_json::json!({"evento": "chat.opened", "ms": millis(started.elapsed())})), unsent, |_| {});
+        });
+    }
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::{ClientTelemetry, millis};
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    #[test]
+    fn telemetry_crash_event_never_carries_the_panic_text() {
+        let panic = "[2026-11-26 10:00:00] pânico na thread main (v1.2.3): called `Option::unwrap()` on a `None` value at src/app.rs:42";
+        let mut telemetry = ClientTelemetry::new(Some(panic));
+        assert_eq!(telemetry.take_crash(), Some(serde_json::json!({"eventos": [{"evento": "app.crash", "codigo": "panic", "cliente": "native"}]})));
+        assert_eq!(telemetry.take_crash(), None, "um por queda");
+        assert_eq!(ClientTelemetry::new(None).take_crash(), None);
+    }
+
+    #[test]
+    fn telemetry_failed_send_comes_back_in_the_next_one() {
+        let mut telemetry = ClientTelemetry::new(Some("pânico"));
+        assert!(telemetry.take_crash().is_some());
+        assert!(telemetry.unsent.failed(false, |u| u.crashed.store(true, Ordering::SeqCst)).is_some(), "a primeira falha vai ao log");
+        assert!(telemetry.unsent.failed(false, |u| { u.ms.fetch_add(90_000, Ordering::SeqCst); }).is_none(), "as seguintes, não");
+        assert!(telemetry.take_crash().is_some(), "a queda sai de novo");
+        assert_eq!(telemetry.returned_visible(), Duration::from_secs(90));
+        assert_eq!(telemetry.returned_visible(), Duration::ZERO);
+    }
+
+    #[test]
+    fn telemetry_visible_time_leaves_in_slices_of_five_minutes() {
+        let mut telemetry = ClientTelemetry::new(None);
+        telemetry.unsent.ms.store(300_000, Ordering::SeqCst);
+        telemetry.visible = Duration::from_secs(240);
+        assert_eq!(telemetry.take_slice(), Duration::from_secs(300));
+        assert_eq!(telemetry.take_slice(), Duration::from_secs(240), "o resto sai no envio seguinte");
+        assert_eq!(telemetry.take_slice(), Duration::ZERO);
+    }
+
+    #[test]
+    fn telemetry_batch_the_server_keeps_refusing_comes_back_three_times_then_is_dropped() {
+        let telemetry = ClientTelemetry::new(None);
+        let give_back = |u: &super::Unsent| { u.ms.fetch_add(1_000, Ordering::SeqCst); };
+        assert!(telemetry.unsent.failed(true, give_back).is_some(), "a primeira falha vai ao log");
+        assert!(telemetry.unsent.failed(true, give_back).is_none());
+        assert!(telemetry.unsent.failed(true, give_back).is_none());
+        assert_eq!(telemetry.returned_visible(), Duration::from_secs(3), "voltou três vezes");
+        assert!(telemetry.unsent.failed(true, give_back).is_some_and(|line| line.contains("descartado")), "o descarte vai ao log uma vez");
+        assert!(telemetry.unsent.failed(true, give_back).is_none());
+        assert_eq!(telemetry.returned_visible(), Duration::ZERO, "descartado, não volta");
+        assert!(telemetry.unsent.failed(false, give_back).is_none(), "sem resposta ainda volta");
+        assert_eq!(telemetry.returned_visible(), Duration::from_secs(1));
+        telemetry.unsent.sent();
+        assert!(telemetry.unsent.failed(true, give_back).is_some(), "o envio bom recomeça a conta");
+        assert_eq!(telemetry.returned_visible(), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn telemetry_partial_ack_is_a_failure() {
+        assert!(super::written_all(&serde_json::json!({"gravadas": 2}), 2));
+        assert!(!super::written_all(&serde_json::json!({"gravadas": 0}), 2));
+        assert!(!super::written_all(&serde_json::json!({}), 1));
+    }
+
+    #[test]
+    fn telemetry_ms_is_a_whole_number() {
+        assert_eq!(millis(Duration::from_micros(1_500_700)), 1_500);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Currency, Level, diary_line, legible, money, pending};
@@ -1367,28 +1591,25 @@ mod tests {
 
     #[test]
     fn update_channel_404_is_recorded_for_get_and_put() {
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("hangar-channel-log-{}-{stamp}", std::process::id()));
-        let path = dir.join("native.log");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native.log");
         super::record_channel_404(&path, false).unwrap();
         super::record_channel_404(&path, true).unwrap();
         let log = std::fs::read_to_string(&path).unwrap();
         assert!(log.contains("method=GET status=404"));
         assert!(log.contains("method=PUT status=404"));
         assert_eq!(log.lines().count(), 2);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn update_channel_log_failure_reaches_feedback_channel() {
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let blocker = std::env::temp_dir().join(format!("hangar-log-blocker-{}-{stamp}", std::process::id()));
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
         std::fs::write(&blocker, "blocked").unwrap();
         let mut failures = 0;
         super::record_channel_404_or_report(&blocker.join("native.log"), false, |_| failures += 1);
         super::record_channel_404_or_report(&blocker.join("native.log"), true, |_| failures += 1);
         assert_eq!(failures, 2);
-        std::fs::remove_file(blocker).unwrap();
     }
 
     #[test]

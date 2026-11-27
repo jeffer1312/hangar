@@ -118,6 +118,7 @@ pub(crate) use sign_in::{account_top as sign_in_account_top, default_picks as si
 pub(crate) use viewer::{STRIP_THUMB, play_badge, show_in_chat_button, strip_day, strip_frame, strip_row, strip_thumb, strip_window, viewer_counter,
     viewer_stage, viewer_title};
 pub(crate) use media_panel::{media_cell, media_cell_side, media_day_title, media_filter_chip, media_filter_row, media_grid_row, media_section_tabs};
+pub(crate) use machines::{Consent, ConsentChoice, consent_row, telemetry_doc_row};
 pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news_kind_pill, news_markdown_block, setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
@@ -1068,6 +1069,7 @@ pub struct Hangar {
     topbar: topbar::TopBar,
     window_tray: window_tray::WindowTray,
     presence: presence::Presence,
+    client_telemetry: device::ClientTelemetry,
     system_notifications: SystemNotifications,
     computer: computer::Computer,
     whatsapp: whatsapp::WhatsApp,
@@ -1178,6 +1180,7 @@ fn show_system_notification(title: &str, body: &str) {
 impl Hangar {
     pub fn new(runtime: Arc<Runtime>, appearance_error: Option<String>, crash: Option<String>, links: async_channel::Receiver<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.set_global(links::Owner(cx.entity().downgrade()));
+        let client_telemetry = device::ClientTelemetry::new(crash.as_deref());
         if let Some(error) = crash {
             cx.defer_in(window, move |_, window, cx| {
                 let desc = tr("crash_desc").replace("{error}", &error);
@@ -1197,6 +1200,7 @@ impl Hangar {
         }).detach();
         cx.defer_in(window, |this, _, cx| this.sync_tray(cx));
         cx.defer_in(window, |this, _, cx| this.start_presence(cx));
+        cx.defer_in(window, |this, _, cx| this.start_client_telemetry(cx));
         let tray_owner = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             let Some(this) = tray_owner.upgrade() else { return true };
@@ -1415,7 +1419,7 @@ impl Hangar {
             costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), whatsapp: whatsapp::WhatsApp::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
-            window_tray: window_tray::WindowTray::new(tray_tx), presence: Default::default(),
+            window_tray: window_tray::WindowTray::new(tray_tx), presence: Default::default(), client_telemetry,
             act: activity::ActivityState::new(cx), files: files::Files::new(window, cx), keyboard: keyboard::Keyboard::new(window, cx), session_picker: Default::default(),
             tree: tree::Tree::new(window, cx), find: find::Find::new(window, cx), ctl_search: controls::search_field(window, cx), panes, dossier: None, turn_seen: None, sent_until: None,
             new_chat: None, new_chat_focus: cx.focus_handle().tab_stop(true),
@@ -1678,7 +1682,11 @@ impl Hangar {
         }
         self.start_remote_lists(cx);
         self.sync_updater(cx);
-        if !self.active_invite() { self.ask_auto_report(window, cx); }
+        if !self.active_invite() {
+            self.ask_consent(machines::Consent::AutoReport, window, cx);
+            self.ask_consent(machines::Consent::Telemetry, window, cx);
+            self.send_crash_telemetry();
+        }
         self.connection_dialog = false;
         // Conectado por qualquer caminho: reabrir o cartão mostra endereço + token, não a entrada da primeira abertura.
         self.entry = None;
@@ -1890,6 +1898,7 @@ impl Hangar {
         self.error = None;
         let opens_chat = session.readable() || session.waiting_for_first_input();
         self.loading = opens_chat;
+        self.chat_open_started(opens_chat);
         self.history_started = false;
         self.history_installed = false;
         (self.stream_caught_up, self.held_history) = (false, None);
@@ -6802,11 +6811,14 @@ impl RenderOnce for CopyButton {
 }
 
 /// Hora da mensagem: só "HH:MM" se for de hoje, com o dia antes se não for.
-fn stamp(ts: Option<f64>) -> Option<String> {
+fn stamp(ts: Option<f64>) -> Option<String> { stamp_on(ts, chrono::Local::now().date_naive()) }
+
+/// O dia de hoje vem de fora: o teste fixa o dia em vez de ler o relógio.
+fn stamp_on(ts: Option<f64>, today: chrono::NaiveDate) -> Option<String> {
     use chrono::{Datelike, Local, TimeZone, Timelike};
     let at = Local.timestamp_opt(ts.filter(|ts| ts.is_finite() && *ts > 0.)? as i64, 0).single()?;
     let time = format!("{:02}:{:02}", at.hour(), at.minute());
-    if at.date_naive() == Local::now().date_naive() { return Some(time); }
+    if at.date_naive() == today { return Some(time); }
     let day = tr("message_date").replace("{d}", &format!("{:02}", at.day())).replace("{m}", &format!("{:02}", at.month()));
     Some(format!("{day} {time}"))
 }
@@ -7804,8 +7816,12 @@ impl PrivateCopy {
 
 impl Drop for PrivateCopy {
     fn drop(&mut self) {
-        if let Some(path) = self.0.take() { std::thread::spawn(move || { let _ = std::fs::remove_file(path); }); }
+        if let Some(path) = self.0.take() { drop(remove_in_background(path)); }
     }
+}
+
+fn remove_in_background(path: PathBuf) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || { let _ = std::fs::remove_file(path); })
 }
 
 /// O Reabrir só vale se o cartão continua "baixado" no arquivo que ele leu: um Salvar mais novo trocou o arquivo.
@@ -8384,6 +8400,7 @@ impl Hangar {
         self.media.next_frame();
         api::open_trace(|| format!("conversation render rows={} loading={}", self.row_ids.len(), self.loading));
         if api::open_trace_on() { window.on_next_frame(|_, _| api::open_trace(|| "next frame".into())); }
+        self.chat_open_rendered(window);
         let mut content = div().size_full().flex().flex_col();
         let prethread = self.render_prethread(cx);
         if let Some(selected) = &self.selected {
@@ -9740,19 +9757,15 @@ mod tests {
 
     #[test]
     fn a_private_copy_leaves_unless_kept() {
-        let dir = std::env::temp_dir().join(format!("hangar-private-copy-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let (dropped, kept) = (dir.join("dropped.pdf"), dir.join("kept.pdf"));
+        let dir = tempfile::tempdir().unwrap();
+        let (dropped, kept) = (dir.path().join("dropped.pdf"), dir.path().join("kept.pdf"));
         std::fs::write(&dropped, b"x").unwrap();
         std::fs::write(&kept, b"x").unwrap();
-        drop(super::PrivateCopy(Some(dropped.clone())));
+        // A remoção do `Drop` roda numa thread própria: o teste espera por ela, não pelo relógio.
+        super::remove_in_background(dropped.clone()).join().unwrap();
         super::PrivateCopy(Some(kept.clone())).keep();
-        // A remoção roda numa thread própria.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while dropped.exists() && std::time::Instant::now() < deadline { std::thread::sleep(std::time::Duration::from_millis(10)); }
         assert!(!dropped.exists());
         assert!(kept.exists());
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -10065,12 +10078,11 @@ mod tests {
         assert_eq!(tr_shared("orq_talk_to_arbiter", &[]), "Falar com o árbitro");
     }
 
-    #[test]
-    fn system_notifications_require_live_transitions_and_confirmed_preferences() {
+    #[tokio::test(start_paused = true)]
+    async fn system_notifications_require_live_transitions_and_confirmed_preferences() {
         use super::{PushPreferences, SystemNotifications};
         use chrono::NaiveTime;
         use serde_json::json;
-        use std::time::Instant;
         let time = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
         let prefs = PushPreferences::parse(json!({"muted": ["muted"], "quiet_hours": {"start": "22:00", "end": "07:00"}})).unwrap();
         assert!(prefs.suppressed("muted", time(12, 0)));
@@ -10080,7 +10092,8 @@ mod tests {
         assert!(!equal.suppressed("open", time(12, 0)));
         assert!(PushPreferences::parse(json!({"muted": [], "quiet_hours": {"start": "bad", "end": "07:00"}})).is_none());
         assert!(PushPreferences::parse(json!({})).is_none());
-        let now = Instant::now();
+        // Relógio pausado: o instante só serve de origem, e o teste avança somando a ele.
+        let now = tokio::time::Instant::now().into_std();
         let mut n = SystemNotifications { finished: Some((true, 45)), ..Default::default() };
         assert_eq!(n.advance("working", now), None);
         assert_eq!(n.advance("idle", now + Duration::from_secs(90)), None);
@@ -10132,10 +10145,11 @@ mod tests {
         assert!(!super::long_message(&markdown));
         let super::Prepared::Message { markdown, .. } = super::prepare_message(&event("assistant_msg"), &HashSet::new()) else { panic!() };
         assert_eq!(markdown.matches("hangar-file:").count(), 2);
-        assert_eq!(super::stamp(None), None);
-        let now = chrono::Local::now().timestamp() as f64;
-        assert_eq!(super::stamp(Some(now)), super::clock(Some(now)));
-        assert!(super::stamp(Some(now - 3. * 86_400.)).is_some_and(|s| s.len() > 5));
+        let at = 1_764_158_400.;
+        let today = chrono::TimeZone::timestamp_opt(&chrono::Local, at as i64, 0).single().unwrap().date_naive();
+        assert_eq!(super::stamp_on(None, today), None);
+        assert_eq!(super::stamp_on(Some(at), today), super::clock(Some(at)));
+        assert!(super::stamp_on(Some(at - 3. * 86_400.), today).is_some_and(|s| s.len() > 5));
     }
 
     #[test]

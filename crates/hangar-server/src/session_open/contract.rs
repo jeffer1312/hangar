@@ -295,6 +295,7 @@ impl OpenHost for Host {
         self.record.lock().unwrap().runtime_requests.push(json!({"op": "claude_headless.acordar", "name": name}));
     }
     fn prewarm(&self) -> Option<&crate::prewarm::Store> { self.prewarm.as_deref() }
+    fn telemetry(&self) -> Option<&hangar_telemetry::Telemetry> { None }
     /// O transcript que a lista do Python dava aos panes Claude do cenário: o id do comando, na conta do pane.
     fn live_sessions(&self) -> BoxFuture<'_, Result<Vec<(String, String)>, OpenError>> {
         Box::pin(async move {

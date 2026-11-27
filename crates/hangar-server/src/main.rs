@@ -273,6 +273,11 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
     hangar_server::diag::record_boot(&hangar_dir, &env.claude_base, cfg.log_path.as_deref());
     hangar_server::init_log(cfg.log_path.as_deref());
     hangar_server::install_panic_hook();
+    // Lê e grava `telemetry.json` e o `.env`: corre junto com o resto da subida e é esperada antes do estado.
+    let opening = tokio::task::spawn_blocking({
+        let home = env.home.clone();
+        move || hangar_server::telemetry_routes::open(&home, &hangar_server::diag::DiagClient::new())
+    });
     if let Some(code) = notifier.rejected {
         tracing::warn!(code, "variável do watchdog do systemd recusada; o servidor segue sem watchdog");
     }
@@ -362,6 +367,12 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
     state.front = hangar_server::routes::front_address(&state.accounts.env.home, state.cfg.listen);
     state.connect = hangar_server::config::connect_listen(state.cfg.listen);
     state.preview = hangar_server::config::preview_listen(state.cfg.listen);
+    state.telemetry = opening.await.unwrap_or_else(|_| {
+        tracing::warn!(code = "telemetry_unavailable", "telemetria desligada nesta vida: a abertura não terminou");
+        state.diag.report("telemetry.unavailable", "", "telemetry_open_failed", "telemetria desligada nesta vida: a abertura não terminou");
+        None
+    });
+    let telemetry = state.telemetry.clone();
     let startup = state.startup.clone();
     let service = hangar_server::update::git_engine::Service::from_state(&state);
     let startup_environment = state.accounts.env.clone();
@@ -370,6 +381,7 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
     let (alive_state, listen) = (state.state.clone(), state.cfg.listen);
     let (ready_recorded, ready_dir, ready_notifier) = (stop_recorded.clone(), hangar_dir.clone(), notifier.clone());
     let ready_stopped = stopped.clone();
+    let ready_telemetry = telemetry.clone();
     // Pronto quando a porta pública atende, antes da preparação demorada (hooks, sessões): uma máquina
     // cheia não estoura o `TimeoutStartSec` e vira um laço de religadas sem queda contada.
     let _ready = tokio::spawn(async move {
@@ -379,7 +391,7 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
         let marked = tokio::task::spawn_blocking(move || {
             let recorded = ready_recorded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if *recorded || ready_stopped.get().is_some() { return false; }
-            hangar_server::diag::record_running(&ready_dir, hangar_server::watchdog::probe_address(listen));
+            hangar_server::diag::record_running(&ready_dir, hangar_server::watchdog::probe_address(listen), ready_telemetry.as_deref());
             true
         }).await;
         let marked = match marked {
@@ -430,6 +442,8 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
     // A porta do convidado não entra no bind fatal acima: o filho anterior pode ainda segurá-la.
     let served = hangar_server::serve_until_with_guest(listener, state, guest.listen, stop).await;
     let _ = notifier.send("STOPPING=1");
+    // Antes das esperas abaixo: se uma pendurar e o systemd matar, o dia já está na fila.
+    save_telemetry(telemetry.as_deref());
     connect.stop().await;
     prewarm.discard_all("saida_do_servidor").await;
     match served {
@@ -446,6 +460,13 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
             record_stop_once(&stop_recorded, &hangar_dir, "serve_failed", true);
             std::process::exit(1);
         }
+    }
+}
+
+/// O dia corrente vai à fila antes de sair: a próxima vida soma a ele.
+fn save_telemetry(telemetry: Option<&hangar_telemetry::Telemetry>) {
+    if let Some(telemetry) = telemetry && let Err(error) = telemetry.save() {
+        tracing::warn!(code = "telemetry_save_failed", kind = ?error.kind(), "telemetria: dia corrente não gravado na saída");
     }
 }
 

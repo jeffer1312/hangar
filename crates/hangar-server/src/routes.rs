@@ -170,9 +170,14 @@ pub struct AppState {
     pub status: Arc<crate::status::Status>,
     /// Revisão do trabalho (`work_review/v1`) das sessões ligadas a um ticket.
     pub work_review: Arc<hangar_work_review::Engine>,
+    /// Telemetria anônima; só a subida real (`main.rs`) liga, e `None` quando o estado não se lê.
+    pub telemetry: Option<Arc<hangar_telemetry::Telemetry>>,
 }
 
 impl AppState {
+    /// A telemetria só quando ela conta: desligada, os ganchos nem montam as dimensões.
+    pub fn counting(&self) -> Option<&hangar_telemetry::Telemetry> { self.telemetry.as_deref().filter(|t| t.enabled()) }
+
     /// O boot inicializa antes de servir; o lazy permite injetar contas nas provas isoladas.
     pub fn settings_snapshot(&self)->Result<Arc<crate::machine_peers::dotenv::SettingsSnapshot>,String>{
         self.settings_snapshot.get_or_init(||{
@@ -341,6 +346,7 @@ impl AppState {
             whatsapp: Default::default(),
             status: Arc::default(),
             work_review,
+            telemetry: None,
             hangar_dir, device_install,
             upload_naming: Default::default(),
             upload_media: Default::default(),
@@ -454,6 +460,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
     let _vault_files = crate::AbortOnDrop(tokio::spawn(crate::vault::files::sweep_at_start()));
     let _auto_report = crate::AbortOnDrop(crate::diag_report::auto::spawn(state.clone()));
+    let _telemetry: Vec<crate::AbortOnDrop> = crate::telemetry_routes::spawn(&state).into_iter().map(crate::AbortOnDrop).collect();
+    let _telemetry_hooks = crate::telemetry_hooks::spawn(&state).map(crate::AbortOnDrop);
     // O Connect gravado volta junto com o servidor: é o evento "Connect ligado" da subida.
     crate::machine_peers::connect_route::spawn(&state, None);
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
@@ -831,6 +839,8 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     let _ = state.mission_notify.state.set(Arc::downgrade(&state));
     // O MCP chama as tools pelas mesmas rotas que o `hangar-send` chama: o roteador público inteiro.
     api.clone().merge(crate::mcp::router(state.clone(), api))
+        // Por dentro do porteiro: o login do convidado e a marca `NotOwner` já estão no pedido.
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::telemetry_hooks::count_feature))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::gate::guard))
         .layer(axum::middleware::from_fn(request_auth))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::body_limit))
@@ -1165,6 +1175,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/web-ui", get(crate::ui::setting).put(crate::ui::setting))
         // Consentimento do relatório automático da atualização: só o dono, nunca repassado.
         .route("/api/auto-report", get(crate::diag_report::auto::setting).put(crate::diag_report::auto::setting))
+        // Telemetria anônima: a escolha e o dono comum entre as máquinas; só o dono, nunca repassado.
+        .route("/api/telemetry", get(crate::telemetry_routes::setting).put(crate::telemetry_routes::setting))
+        .route("/api/telemetry/owner", get(crate::telemetry_routes::owner))
         // Atualização do pacote e do checkout, com a mesma decisão do dono.
         .route("/api/atualizacao", get(crate::update::http::status).fallback(pass_registered))
         .route("/api/atualizacao/iniciar", axum::routing::post(crate::update::http::start).fallback(pass_registered))
@@ -1317,6 +1330,14 @@ async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Respons
 /// Um handler já decidiu, por `gate` ou `who`, que quem pede não é o dono: o `pass` não leva o pedido ao Python.
 #[derive(Clone, Default)]
 pub(crate) struct NotOwner(Arc<std::sync::atomic::AtomicBool>);
+
+impl NotOwner {
+    /// Algum handler deste pedido viu que quem pede não é o dono.
+    pub(crate) fn seen(&self) -> bool { self.0.load(Ordering::Relaxed) }
+
+    #[cfg(test)]
+    pub(crate) fn seen_for_test() -> Self { Self(Arc::new(std::sync::atomic::AtomicBool::new(true))) }
+}
 
 pub(crate) fn gate(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<(Forward, bool), auth::AuthError>> + Send + use<> {

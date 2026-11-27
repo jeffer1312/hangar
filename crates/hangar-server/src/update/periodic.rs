@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
-use super::executor::{Args, StartError, Task};
+use super::executor::{Args, Origin, StartError, Task};
 use super::{Layout, Release};
 use crate::accounts::environment::AccountEnvironment;
 
@@ -233,7 +233,7 @@ impl Machine for Live {
 
     async fn launch(&self) -> Result<(), String> {
         let (home, claude) = (self.env.home.clone(), self.env.claude_base.clone());
-        let args = Args { task: Task::Update { channel: None }, listen: self.listen };
+        let args = Args { task: Task::Update { channel: None, origin: Origin::Auto }, listen: self.listen };
         let require_scope = super::http::topology().await == super::restart::Topology::Systemd;
         tokio::task::spawn_blocking(move || {
             super::executor::launch(&home, &claude, &args, require_scope).map(|_| ()).map_err(|e| match e {

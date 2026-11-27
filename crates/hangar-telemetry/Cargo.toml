@@ -1,0 +1,28 @@
+[package]
+name = "hangar-telemetry"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas, compilar este crate sozinho guarda outra cópia de cada
+# dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
+[dependencies]
+serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"], optional = true }
+chrono = { workspace = true, optional = true }
+hangar-core = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["macros", "time"], optional = true }
+reqwest = { workspace = true, optional = true }
+
+[features]
+default = ["runtime"]
+# O motor (estado, fila, envio) precisa do core; o receptor usa só `wire`/`events`/`buckets`, sem ela.
+runtime = ["dep:serde_json", "dep:chrono", "dep:hangar-core", "dep:tokio", "dep:reqwest"]
+# `Telemetry::for_test` para os testes do servidor (só nas dev-dependencies dele).
+test-util = ["runtime"]
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tempfile.workspace = true
+# Relógio pausado nas esperas entre tentativas de envio.
+tokio = { workspace = true, features = ["macros", "rt", "time", "test-util"] }

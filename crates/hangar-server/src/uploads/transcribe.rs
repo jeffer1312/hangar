@@ -58,7 +58,7 @@ pub async fn route(
 }
 
 pub async fn serve(st: &AppState, name: &str, req: Request, guest: bool) -> Response {
-    crate::dictation::timing::measure(st, "sessao", transcribe(st, name, req, guest)).await
+    crate::dictation::timing::measure(st, "sessao", guest, transcribe(st, name, req, guest)).await
 }
 
 /// O convidado não transcreve por caminho absoluto nem usa a conta do harness para organizar.

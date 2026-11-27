@@ -113,6 +113,8 @@ impl OpenHost for LocalHost {
     fn wake(&self, _name: &str) {}
     /// As reservas são do servidor; fora dele não há nenhuma.
     fn prewarm(&self) -> Option<&crate::prewarm::Store> { None }
+    // Com o servidor parado a abertura não conta.
+    fn telemetry(&self) -> Option<&hangar_telemetry::Telemetry> { None }
     // Sem o servidor não há lista: o comando local não retoma conversa.
     fn live_sessions(&self) -> BoxFuture<'_, Result<Vec<(String, String)>, OpenError>> {
         Box::pin(async { Err(OpenError::new(503, "erro_lista_indisponivel", "retomar conversa precisa do servidor no ar")) })

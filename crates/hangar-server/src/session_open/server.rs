@@ -103,7 +103,7 @@ pub(crate) fn read_guests(claude_base: &Path) -> Result<Option<Value>, OpenError
 }
 
 /// O id do convidado dono de `session` no `guests.json`. Só outra vida desfaz o dono, como no `owner_of`.
-fn session_guest(raw: &Value, session: &str, life: Option<&str>) -> Option<String> {
+pub(crate) fn session_guest(raw: &Value, session: &str, life: Option<&str>) -> Option<String> {
     let entry = &raw["sessions"][session];
     let stored = entry["life"].as_str();
     if stored.is_some() && life.is_some() && stored != life { return None; }
@@ -362,6 +362,7 @@ impl OpenHost for ServerHost {
     }
 
     fn prewarm(&self) -> Option<&crate::prewarm::Store> { Some(&self.st.prewarm) }
+    fn telemetry(&self) -> Option<&hangar_telemetry::Telemetry> { self.st.counting() }
 }
 
 pub enum Decision { Opened(super::open::Opened), Refused(OpenError), NotOurs }
@@ -465,7 +466,10 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
     let mut resolved = match resolved.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou"))) {
         Ok(resolved) => resolved,
         Err(error) => {
-            if let Some(events) = super::open::refusal_diary(crate::mods::state::random_hex(8), request.name.as_deref().unwrap_or(""), super::open::requested_provider(request), &error) { host.diary(events); }
+            if let Some(events) = super::open::refusal_diary(crate::mods::state::random_hex(8), request.name.as_deref().unwrap_or(""), super::open::requested_provider(request), &error) {
+                host.diary(events);
+                super::open::count_open_failed(host.telemetry(), caller, super::open::requested_provider(request), error.code);
+            }
             return Decision::Refused(error);
         }
     };

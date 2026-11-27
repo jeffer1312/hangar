@@ -185,8 +185,15 @@ impl VoiceHub {
         let call_id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         log_owner("voice call opened", &client);
         *self.lock() = Some(LiveCall { call_id, epoch, client, to_controller, link });
-        let hub = self.clone();
-        tokio::spawn(async move { controller.run(events, from_device).await; hub.ended(call_id); });
+        let (hub, telemetry, opened) = (self.clone(), st.telemetry.clone(), std::time::Instant::now());
+        tokio::spawn(async move {
+            controller.run(events, from_device).await;
+            hub.ended(call_id);
+            // A chamada inteira, também a que passou de um aparelho a outro.
+            if let Some(telemetry) = telemetry {
+                telemetry.duration(hangar_telemetry::events::Event::VoiceCall, hangar_telemetry::events::Dims::new(), opened.elapsed());
+            }
+        });
         Ok(Attached { epoch, from_call })
     }
 

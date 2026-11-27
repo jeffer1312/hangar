@@ -1,0 +1,4 @@
+*
+!crates
+!services/telemetry-ingest
+**/target

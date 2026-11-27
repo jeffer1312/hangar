@@ -91,7 +91,7 @@ pub async fn serve(
         REORGANIZE => "relimpar",
         _ => return answer(st, req, guest, grant).await,
     };
-    super::timing::measure(st, route, answer(st, req, guest, grant)).await
+    super::timing::measure(st, route, guest, answer(st, req, guest, grant)).await
 }
 
 async fn answer(

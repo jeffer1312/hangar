@@ -13,7 +13,7 @@ use add::{AddMachine, Found};
 use pair::Pair;
 use super::server_config::chip;
 use crate::api::route::{RouteKind, route_kind};
-use super::settings::{section_head, settings_box, Page};
+use super::settings::{section_head, setting_row, settings_box, Page};
 use gpui_kit::component::{WindowExt, switch::Switch, tooltip::Tooltip};
 
 /// O web espera o serviço voltar por até 2 minutos, perguntando a cada 2 segundos.
@@ -410,16 +410,125 @@ fn web_ui_value(result: Result<Value, Failure>) -> Result<Option<bool>, String> 
     }
 }
 
-/// `GET`/`PUT /api/auto-report`. Servidor sem a rota: `Ok(None)`, e a linha some. `Ok(Some(None))` = não respondido.
-fn auto_report_value(result: Result<Value, Failure>) -> Result<Option<Option<bool>>, String> {
+/// Uma escolha do dono gravada no servidor e perguntada na abertura do app.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Consent { AutoReport, Telemetry }
+
+/// Os ids dos elementos da linha nas Configurações.
+struct ConsentIds { switch: &'static str, load_error: &'static str, retry: &'static str, save_error: &'static str }
+
+/// Os textos e ids da pergunta da abertura; `what_is_sent` é a página com o que sai, quando há.
+#[derive(Clone, Copy)]
+struct ConsentQuestion {
+    title: &'static str,
+    body: &'static str,
+    no: (&'static str, &'static str),
+    yes: (&'static str, &'static str),
+    what_is_sent: Option<&'static str>,
+}
+
+/// Página com a lista completa do que sai, mantida junto com o código.
+const TELEMETRY_DOC: &str = "https://github.com/jeffer1312/hangar/blob/main/docs/telemetria.md";
+
+impl Consent {
+    fn path(self) -> &'static str { match self { Consent::AutoReport => "auto-report", Consent::Telemetry => "telemetry" } }
+    /// O campo da escolha no JSON da rota.
+    fn key(self) -> &'static str { match self { Consent::AutoReport => "auto_report", Consent::Telemetry => "consent" } }
+    fn ids(self) -> ConsentIds {
+        match self {
+            Consent::AutoReport => ConsentIds { switch: "machines-auto-report", load_error: "machines-auto-report-load-error",
+                retry: "machines-auto-report-retry", save_error: "machines-auto-report-error" },
+            Consent::Telemetry => ConsentIds { switch: "machines-telemetry", load_error: "machines-telemetry-load-error",
+                retry: "machines-telemetry-retry", save_error: "machines-telemetry-error" },
+        }
+    }
+    fn question(self) -> ConsentQuestion {
+        match self {
+            Consent::AutoReport => ConsentQuestion { title: "auto_report_question_title", body: "auto_report_question_body",
+                no: ("auto-report-no", "auto_report_no"), yes: ("auto-report-yes", "auto_report_yes"), what_is_sent: None },
+            Consent::Telemetry => ConsentQuestion { title: "telemetry_question_title", body: "telemetry_question_body",
+                no: ("telemetry-no", "telemetry_no"), yes: ("telemetry-yes", "telemetry_yes"), what_is_sent: Some(TELEMETRY_DOC) },
+        }
+    }
+}
+
+/// A resposta do dono (`None` = não respondida) e se o ambiente da máquina desligou o recurso (só a telemetria diz).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ConsentChoice { pub(crate) answer: Option<bool>, pub(crate) disabled: bool }
+
+const UNANSWERED: ConsentChoice = ConsentChoice { answer: None, disabled: false };
+
+/// `GET`/`PUT` da rota da escolha. Servidor sem o recurso (sem a rota; na telemetria, também o 503
+/// `telemetry_unavailable`): `Ok(None)`, e a linha some sem erro.
+fn consent_value(kind: Consent, result: Result<Value, Failure>) -> Result<Option<ConsentChoice>, String> {
     match result {
         Err(error) if matches!(error.status, Some(404 | 405)) => Ok(None),
+        Err(error) if kind == Consent::Telemetry && error.code.as_deref() == Some("telemetry_unavailable") => Ok(None),
         Err(error) => Err(Hangar::setting_failure(&error)),
-        Ok(value) => match value.get("auto_report") {
-            Some(Value::Bool(on)) => Ok(Some(Some(*on))),
-            Some(Value::Null) => Ok(Some(None)),
-            _ => Err(tr("invalid_response")),
-        },
+        Ok(value) => {
+            let answer = match value.get(kind.key()) {
+                Some(Value::Bool(on)) => Some(*on),
+                Some(Value::Null) => None,
+                _ => return Err(tr("invalid_response")),
+            };
+            Ok(Some(ConsentChoice { answer, disabled: !value["disabled_by"].is_null() }))
+        }
+    }
+}
+
+/// A vista da linha de uma escolha, sem a marca da busca: a tela e a animação da novidade desenham por aqui.
+/// `choice` = `None` enquanto não há leitura boa; `toggle` chega só com o id e o clique.
+pub(crate) fn consent_row(kind: Consent, live: bool, choice: Option<ConsentChoice>, loading: bool, saving: bool, read_failed: bool, toggle: Switch) -> Div {
+    let (icon, title, hint) = match kind {
+        Consent::AutoReport => (IconName::FileText, tr("auto_report_title"), tr_shared("auto_report_setting_hint", &[])),
+        Consent::Telemetry => (IconName::ChartBar, tr_shared("telemetry_setting", &[]), tr_shared("telemetry_setting_hint", &[])),
+    };
+    let status = match choice {
+        _ if saving => tr("server_saving"),
+        Some(ConsentChoice { disabled: true, .. }) => tr_shared("telemetry_disabled_env", &[]),
+        Some(ConsentChoice { answer: Some(on), .. }) => format!("{} · {hint}", tr_shared(if on { "auto_report_on" } else { "auto_report_off" }, &[])),
+        Some(ConsentChoice { answer: None, .. }) => format!("{} · {hint}", tr_shared("auto_report_value_unanswered", &[])),
+        None if !read_failed => tr("server_loading"),
+        None => hint,
+    };
+    let enabled = choice.is_some_and(|c| !c.disabled);
+    let toggle = toggle.checked(choice.is_some_and(|c| !c.disabled && c.answer == Some(true)))
+        .accessibility_label(title.clone())
+        .disabled(!enabled || loading || saving);
+    setting_row(live, icon, title, div().whitespace_normal().child(status), enabled, toggle.into_any_element())
+}
+
+/// "O que é enviado" abaixo da linha das contagens anônimas, como no Expo. `tab_stop` falso na miniatura só leitura.
+pub(crate) fn telemetry_doc_row(tab_stop: bool) -> Div {
+    div().mt(px(-1.)).border_t_1().border_color(theme::border()).px_4().py(px(10.))
+        .child(Button::new("machines-telemetry-what").ghost().small().tab_stop(tab_stop).label(tr_shared("telemetry_what_is_sent", &[]))
+            .on_click(|_, _, cx| cx.open_url(TELEMETRY_DOC)))
+}
+
+fn consent_body(kind: Consent, on: bool) -> Value {
+    let mut body = serde_json::Map::new();
+    body.insert(kind.key().to_owned(), Value::Bool(on));
+    Value::Object(body)
+}
+
+/// Leitura e gravação de uma escolha; a gravação não mexe no valor até o servidor confirmar.
+#[derive(Default)]
+struct ConsentSetting { remote: Remote<Option<ConsentChoice>>, saving: bool, seq: u64, error: Option<String> }
+
+impl ConsentSetting {
+    /// Falha na gravação deixa o valor de antes e mostra o motivo, também a recusa que a leitura leria como
+    /// servidor sem a escolha: a revogação que não gravou fica à vista para repetir.
+    fn saved(&mut self, kind: Consent, seq: u64, result: Result<Value, Failure>) {
+        if seq != self.seq { return; }
+        self.saving = false;
+        let saved = match result {
+            Err(error) => Err(Hangar::setting_failure(&error)),
+            reply => consent_value(kind, reply),
+        };
+        match saved {
+            Ok(saved) => { self.remote.set(Ok(saved)); self.error = None; }
+            Err(error) => self.error = Some(error),
+        }
     }
 }
 
@@ -476,8 +585,8 @@ pub(super) enum MachinesReply {
     Paired(u64, Result<Value, Failure>),
     WebUi(u64, Result<Value, Failure>),
     WebUiSaved(u64, Result<Value, Failure>),
-    AutoReport(u64, Result<Value, Failure>),
-    AutoReportSaved(u64, Result<Value, Failure>),
+    ConsentRead(Consent, u64, Result<Value, Failure>),
+    ConsentSaved(Consent, u64, Result<Value, Failure>),
 }
 
 #[derive(Default)]
@@ -566,11 +675,9 @@ pub(in crate::app) struct Machines {
     web_ui_saving: bool,
     web_ui_seq: u64,
     web_ui_error: Option<String>,
-    /// Relatório automático da atualização; `Ok(None)` = servidor sem a rota, `Ok(Some(None))` = não respondido.
-    auto_report: Remote<Option<Option<bool>>>,
-    auto_report_saving: bool,
-    auto_report_seq: u64,
-    auto_report_error: Option<String>,
+    /// Relatório automático da atualização e contagens anônimas de uso.
+    auto_report: ConsentSetting,
+    telemetry: ConsentSetting,
     /// Pacote ou modo desenvolvedor; `Ok(None)` = servidor sem a troca pela tela (só antes de [`Self::dev_mode_seen`]).
     dev_mode: Remote<Option<DevMode>>,
     /// Já houve uma leitura boa do modo neste servidor: a linha não some mais.
@@ -627,13 +734,11 @@ impl Machines {
         }
     }
 
-    fn auto_report_saved(&mut self, seq: u64, result: Result<Value, Failure>) {
-        if seq != self.auto_report_seq { return; }
-        self.auto_report_saving = false;
-        match auto_report_value(result) {
-            Ok(saved) => { self.auto_report.set(Ok(saved)); self.auto_report_error = None; }
-            Err(error) => self.auto_report_error = Some(error),
-        }
+    fn consent(&mut self, kind: Consent) -> &mut ConsentSetting {
+        match kind { Consent::AutoReport => &mut self.auto_report, Consent::Telemetry => &mut self.telemetry }
+    }
+    fn consent_ref(&self, kind: Consent) -> &ConsentSetting {
+        match kind { Consent::AutoReport => &self.auto_report, Consent::Telemetry => &self.telemetry }
     }
 }
 
@@ -663,7 +768,9 @@ impl Hangar {
         m.checks.clear();
         if !m.id_saving { self.load_machine_id(cx); }
         if !self.machines.web_ui_saving { self.load_web_ui(cx); }
-        if !self.machines.auto_report_saving { self.load_auto_report(cx); }
+        for kind in [Consent::AutoReport, Consent::Telemetry] {
+            if !self.machines.consent_ref(kind).saving { self.load_consent(kind, cx); }
+        }
         if !self.machines.dev_switch.busy() { self.load_dev_mode(cx); }
         self.load_reach(cx);
         self.load_saved_ids(cx);
@@ -946,69 +1053,109 @@ impl Hangar {
         cx.notify();
     }
 
-    fn load_auto_report(&mut self, cx: &mut Context<Self>) {
+    fn load_consent(&mut self, kind: Consent, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
-        let seq = self.machines.auto_report.start();
-        self.machines.auto_report_error = None;
+        let setting = self.machines.consent(kind);
+        let seq = setting.remote.start();
+        setting.error = None;
         let done = self.machines_send_later();
-        self.runtime.spawn(async move { done(MachinesReply::AutoReport(seq, api.server_read(&["auto-report"], &[], 15).await)).await });
+        self.runtime.spawn(async move { done(MachinesReply::ConsentRead(kind, seq, api.server_read(&[kind.path()], &[], 15).await)).await });
         cx.notify();
     }
 
-    fn save_auto_report(&mut self, on: bool, cx: &mut Context<Self>) {
+    fn save_consent(&mut self, kind: Consent, on: bool, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
-        let m = &mut self.machines;
-        if m.auto_report_saving || m.auto_report.loading || m.auto_report.ok().copied().flatten().is_none() { return; }
-        m.auto_report_seq += 1;
-        (m.auto_report_saving, m.auto_report_error) = (true, None);
-        let (seq, done) = (m.auto_report_seq, self.machines_send_later());
+        let setting = self.machines.consent(kind);
+        if setting.saving || setting.remote.loading || setting.remote.ok().copied().flatten().is_none_or(|c| c.disabled) { return; }
+        setting.seq += 1;
+        (setting.saving, setting.error) = (true, None);
+        let seq = setting.seq;
+        let done = self.machines_send_later();
         self.runtime.spawn(async move {
-            done(MachinesReply::AutoReportSaved(seq, api.server_send(reqwest::Method::PUT, &["auto-report"], Some(json!({"auto_report": on})), 15).await)).await
+            done(MachinesReply::ConsentSaved(kind, seq, api.server_send(reqwest::Method::PUT, &[kind.path()], Some(consent_body(kind, on)), 15).await)).await
         });
         cx.notify();
     }
 
-    /// Uma vez por abertura do app: as máquinas próprias sem resposta ao relatório automático entram numa pergunta só.
-    /// Leitura que falha não pergunta; fica para a próxima abertura.
-    pub(super) fn ask_auto_report(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if ASKED.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
+    /// Uma vez por abertura do app: as máquinas próprias sem resposta entram numa pergunta só. Leitura que falha, ou
+    /// máquina desligada pelo ambiente, não pergunta. Só um botão grava; fechar pergunta de novo na próxima abertura.
+    pub(super) fn ask_consent(&mut self, kind: Consent, window: &mut Window, cx: &mut Context<Self>) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static ASKED: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+        if ASKED[kind as usize].swap(true, Ordering::SeqCst) { return; }
         let entries: Vec<_> = self.servers.iter().filter(|s| !s.disabled && !s.invite && !s.ephemeral).cloned().collect();
+        // A máquina recém-conectada só entra em `servers` com a primeira lista: sem ela, ficaria sem a pergunta.
+        let current = self.api.clone().filter(|api| !self.active_invite() && self.server_entry(&servers::norm(&api.identity())).is_none())
+            .map(|api| (servers::default_label(&api.identity()), api));
         let task = self.runtime.spawn(async move {
-            let mut pending: Vec<(String, Api)> = Vec::new();
+            let mut machines: Vec<(String, Api)> = current.into_iter().collect();
             for entry in entries {
                 let Ok(api) = Api::new(&entry.address, &entry.token) else { continue };
-                if pending.iter().any(|(_, known)| known.identity() == api.identity()) { continue; }
-                if let Ok(value) = api.server_read(&["auto-report"], &[], 10).await && value.get("auto_report") == Some(&Value::Null) {
-                    pending.push((entry.label.clone(), api));
-                }
+                if !machines.iter().any(|(_, known)| known.identity() == api.identity()) { machines.push((entry.label.clone(), api)); }
             }
-            pending
+            let reads = futures::future::join_all(machines.iter().map(|(_, api)| async move { api.server_read(&[kind.path()], &[], 10).await })).await;
+            machines.into_iter().zip(reads)
+                .filter_map(|(machine, read)| (consent_value(kind, read) == Ok(Some(UNANSWERED))).then_some(machine))
+                .collect::<Vec<_>>()
         });
         let runtime = self.runtime.clone();
         cx.spawn_in(window, async move |_, cx| {
             let pending = task.await.unwrap_or_default();
             if pending.is_empty() { return; }
+            let question = kind.question();
             let machines = pending.iter().map(|(label, _)| label.as_str()).collect::<Vec<_>>().join(", ");
-            let body = tr_shared("auto_report_question_body", &[("machines", &machines)]);
-            let apis: Vec<Api> = pending.into_iter().map(|(_, api)| api).collect();
-            let answer = move |value: bool| {
-                for api in apis.clone() {
-                    runtime.spawn(async move { let _ = api.server_send(reqwest::Method::PUT, &["auto-report"], Some(json!({"auto_report": value})), 15).await; });
-                }
+            let body = tr_shared(question.body, &[("machines", &machines)]);
+            let answer = move |on: bool, window: &mut Window, cx: &mut App| {
+                let pending = pending.clone();
+                let saved = runtime.spawn(async move {
+                    let saves = pending.iter().map(|(label, api)| async move {
+                        api.server_send(reqwest::Method::PUT, &[kind.path()], Some(consent_body(kind, on)), 15).await.err().map(|_| label.clone())
+                    });
+                    futures::future::join_all(saves).await.into_iter().flatten().collect::<Vec<_>>()
+                });
+                window.spawn(cx, async move |cx| {
+                    let failed = saved.await.unwrap_or_default();
+                    if failed.is_empty() { return; }
+                    let text = tr_shared("auto_report_save_failed", &[("machines", &failed.join(", "))]);
+                    let _ = cx.update(|window, cx| window.push_notification(Notification::error(text), cx));
+                }).detach();
             };
             let _ = cx.update(|window, cx| window.open_dialog(cx, move |dialog, _, _| {
                 let (yes, no) = (answer.clone(), answer.clone());
-                popup::dialog(dialog).w(px(480.)).title(tr_shared("auto_report_question_title", &[]))
+                popup::dialog(dialog).w(px(480.)).title(tr_shared(question.title, &[]))
                     .child(div().flex().flex_col().gap(px(14.))
                         .child(div().whitespace_normal().child(body.clone()))
-                        .child(div().flex().justify_end().gap(px(8.))
-                            .child(Button::new("auto-report-no").outline().label(tr_shared("auto_report_no", &[]))
-                                .on_click(move |_, window, cx| { no(false); window.close_dialog(cx); }))
-                            .child(Button::new("auto-report-yes").primary().label(tr_shared("auto_report_yes", &[]))
-                                .on_click(move |_, window, cx| { yes(true); window.close_dialog(cx); }))))
+                        .child(div().flex().items_center().gap(px(8.))
+                            .when_some(question.what_is_sent, |el, url| el.child(Button::new("consent-what").ghost().small()
+                                .label(tr_shared("telemetry_what_is_sent", &[])).on_click(move |_, _, cx| cx.open_url(url))))
+                            .child(div().flex_1())
+                            .child(Button::new(question.no.0).outline().label(tr_shared(question.no.1, &[]))
+                                .on_click(move |_, window, cx| { no(false, window, cx); window.close_dialog(cx); }))
+                            .child(Button::new(question.yes.0).primary().label(tr_shared(question.yes.1, &[]))
+                                .on_click(move |_, window, cx| { yes(true, window, cx); window.close_dialog(cx); }))))
             }));
         }).detach();
+    }
+
+    /// A linha de uma escolha nas Configurações. Convidado não escolhe; servidor sem o recurso não oferece.
+    fn render_consent(&self, kind: Consent, cx: &mut Context<Self>) -> Option<Div> {
+        let setting = self.machines.consent_ref(kind);
+        if self.active_invite() || matches!(setting.remote.value, Some(Ok(None))) { return None; }
+        let ids = kind.ids();
+        let choice = setting.remote.ok().copied().flatten();
+        let read_error = setting.remote.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !setting.remote.loading).cloned();
+        let toggle = Switch::new(ids.switch).on_click(cx.listener(move |this, on: &bool, _, cx| this.save_consent(kind, *on, cx)));
+        let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
+            .whitespace_normal().child(text);
+        let row = consent_row(kind, self.settings_ui.live, choice, setting.remote.loading, setting.saving, read_error.is_some(), toggle);
+        let mark = match kind { Consent::AutoReport => "auto_report_title", Consent::Telemetry => "telemetry_setting" };
+        Some(settings_box().child(self.mark(row, mark))
+            .when(matches!(kind, Consent::Telemetry), |el| el.child(telemetry_doc_row(true)))
+            .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
+                .child(alert(ids.load_error, error))
+                .child(Button::new(ids.retry).outline().small().label(tr("server_retry"))
+                    .on_click(cx.listener(move |this, _, _, cx| this.load_consent(kind, cx))))))
+            .when_some(setting.error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert(ids.save_error, error)))))
     }
 
     pub(super) fn load_dev_mode(&mut self, cx: &mut Context<Self>) {
@@ -1421,8 +1568,8 @@ impl Hangar {
             MachinesReply::Paired(seq, result) => self.paired(seq, result, window),
             MachinesReply::WebUi(seq, result) => { self.machines.web_ui.finish(seq, web_ui_value(result)); }
             MachinesReply::WebUiSaved(seq, result) => self.machines.web_ui_saved(seq, result),
-            MachinesReply::AutoReport(seq, result) => { self.machines.auto_report.finish(seq, auto_report_value(result)); }
-            MachinesReply::AutoReportSaved(seq, result) => self.machines.auto_report_saved(seq, result),
+            MachinesReply::ConsentRead(kind, seq, result) => { self.machines.consent(kind).remote.finish(seq, consent_value(kind, result)); }
+            MachinesReply::ConsentSaved(kind, seq, result) => self.machines.consent(kind).saved(kind, seq, result),
         }
         cx.notify();
     }
@@ -2238,29 +2385,8 @@ impl Hangar {
                 .when_some(m.web_ui_error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-web-ui-error", error))))
         });
 
-        // Convidado não escolhe; servidor sem a rota não oferece. `Some(None)` = ainda não respondido.
-        let auto_report = (!self.active_invite() && !matches!(m.auto_report.value, Some(Ok(None)))).then(|| {
-            let answer = m.auto_report.ok().copied().flatten();
-            let read_error = m.auto_report.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.auto_report.loading).cloned();
-            let status = match answer {
-                _ if m.auto_report_saving => tr("server_saving"),
-                Some(Some(on)) => format!("{} · {}", tr_shared(if on { "auto_report_on" } else { "auto_report_off" }, &[]), tr_shared("auto_report_setting_hint", &[])),
-                Some(None) => format!("{} · {}", tr_shared("auto_report_value_unanswered", &[]), tr_shared("auto_report_setting_hint", &[])),
-                None if read_error.is_none() => tr("server_loading"),
-                None => tr_shared("auto_report_setting_hint", &[]),
-            };
-            let toggle = Switch::new("machines-auto-report").checked(answer.flatten().unwrap_or(false)).accessibility_label(tr("auto_report_title"))
-                .disabled(answer.is_none() || m.auto_report.loading || m.auto_report_saving)
-                .on_click(cx.listener(|this, on: &bool, _, cx| this.save_auto_report(*on, cx)));
-            let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
-                .whitespace_normal().child(text);
-            settings_box().child(self.row_with(IconName::FileText, "auto_report_title", div().whitespace_normal().child(status), answer.is_some(), toggle.into_any_element()))
-                .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
-                    .child(alert("machines-auto-report-load-error", error))
-                    .child(Button::new("machines-auto-report-retry").outline().small().label(tr("server_retry"))
-                        .on_click(cx.listener(|this, _, _, cx| this.load_auto_report(cx))))))
-                .when_some(m.auto_report_error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-auto-report-error", error))))
-        });
+        let auto_report = self.render_consent(Consent::AutoReport, cx);
+        let telemetry = self.render_consent(Consent::Telemetry, cx);
 
         let dev_mode = self.render_dev_mode(cx);
 
@@ -2318,6 +2444,7 @@ impl Hangar {
                 .child(div().px_4().pb_4().child(service)))
             .children(web_ui)
             .children(auto_report)
+            .children(telemetry)
             .children(dev_mode)
             .child(advanced)
             .child(remove)
@@ -2618,5 +2745,51 @@ mod tests {
     fn identifier_follows_the_backend_rule() {
         for ok in ["casa", "notebook-2", "a", "x_y", &"a".repeat(32)] { assert!(valid_id(ok), "{ok}"); }
         for bad in ["", "Casa", "-casa", "_x", "casa nova", "ção", &"a".repeat(33)] { assert!(!valid_id(bad), "{bad}"); }
+    }
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::{Consent, ConsentChoice, consent_value};
+    use crate::{api::Failure, i18n::tr};
+    use serde_json::json;
+
+    fn refused(status: u16, code: &str) -> Failure {
+        Failure { status: Some(status), detail: "fixture".into(), retry_after: None, uncertain: false, code: Some(code.into()) }
+    }
+
+    #[test]
+    fn telemetry_row_hides_on_servers_without_it() {
+        let telemetry = |result| consent_value(Consent::Telemetry, result);
+        assert_eq!(telemetry(Err(refused(404, "not_found"))), Ok(None), "servidor sem a rota");
+        assert_eq!(telemetry(Err(refused(405, "method"))), Ok(None));
+        assert_eq!(telemetry(Err(refused(503, "telemetry_unavailable"))), Ok(None), "estado ilegível nesta vida do servidor");
+        assert!(telemetry(Err(refused(502, "upstream"))).is_err(), "outra falha aparece");
+        assert_eq!(telemetry(Ok(json!({"consent": null, "disabled_by": null}))), Ok(Some(ConsentChoice { answer: None, disabled: false })));
+        assert_eq!(telemetry(Ok(json!({"consent": true, "disabled_by": "env"}))), Ok(Some(ConsentChoice { answer: Some(true), disabled: true })));
+        assert_eq!(telemetry(Ok(json!({"consent": "sim"}))), Err(tr("invalid_response")));
+    }
+
+    #[test]
+    fn telemetry_and_auto_report_read_their_own_field() {
+        let auto = |result| consent_value(Consent::AutoReport, result);
+        assert_eq!(auto(Err(refused(404, "not_found"))), Ok(None));
+        assert!(auto(Err(refused(503, "telemetry_unavailable"))).is_err(), "o código da telemetria não esconde o relatório");
+        assert_eq!(auto(Ok(json!({"auto_report": null}))), Ok(Some(ConsentChoice { answer: None, disabled: false })));
+        assert_eq!(auto(Ok(json!({"auto_report": false}))), Ok(Some(ConsentChoice { answer: Some(false), disabled: false })));
+        assert_eq!(auto(Ok(json!({"consent": true}))), Err(tr("invalid_response")));
+        assert_eq!(super::consent_body(Consent::Telemetry, true), json!({"consent": true}));
+        assert_eq!(super::consent_body(Consent::AutoReport, false), json!({"auto_report": false}));
+    }
+
+    #[test]
+    fn telemetry_refused_save_keeps_the_choice_and_shows_why() {
+        let on = ConsentChoice { answer: Some(true), disabled: false };
+        let mut setting = super::ConsentSetting::default();
+        setting.remote.set(Ok(Some(on)));
+        (setting.seq, setting.saving) = (1, true);
+        setting.saved(Consent::Telemetry, 1, Err(refused(503, "telemetry_unavailable")));
+        assert_eq!(setting.remote.ok().copied().flatten(), Some(on), "a escolha de antes fica");
+        assert!(setting.error.is_some(), "a revogação recusada aparece");
     }
 }

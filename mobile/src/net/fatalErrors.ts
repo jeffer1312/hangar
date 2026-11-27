@@ -152,6 +152,11 @@ export function takeFatalErrorNotice(): boolean {
   return true;
 }
 
+/** A queda para a telemetria: o nome do erro e o modelo da rota, nunca mensagem nem pilha. */
+export function fatalTelemetryEvent(report: FatalErrorReport): { evento: 'app.crash'; ts: string; codigo: string; tela: string } {
+  return { evento: 'app.crash', ts: report.timestamp, codigo: report.name, tela: report.route };
+}
+
 export async function replayFatalError(send: (report: FatalErrorReport) => Promise<boolean>): Promise<void> {
   if (replaying) return;
   replaying = true;

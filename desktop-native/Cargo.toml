@@ -84,9 +84,13 @@ ksni = { version = "=0.3.6", default-features = false, features = ["async-io", "
 zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 
 [dev-dependencies]
+# `start_paused` nos testes que precisam de um instante de origem.
+tokio = { version = "=1.53.1", features = ["test-util"] }
 gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
 # A mesma versão que o lockfile já tem por dependência do kit.
 proptest = "=1.11.0"
+# Pastas temporárias dos testes; a mesma versão que o lockfile já tem.
+tempfile = "=3.27.0"
 
 [build-dependencies]
 embed-resource = "=3.0.11"

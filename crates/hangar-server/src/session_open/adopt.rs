@@ -91,6 +91,8 @@ impl Adopting {
         }
     }
 
+    pub(crate) fn was_adopted(&self) -> bool { self.outcome.as_deref() == Some("adotada") }
+
     /// O sidecar já aponta o processo: o recibo sai (a subida do servidor não pode matá-lo).
     pub(crate) async fn adopted(&mut self) {
         let Some(reserve) = self.reserve.take() else { return };

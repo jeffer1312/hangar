@@ -562,6 +562,8 @@ pub struct Job<'a> {
     /// A porta pública: com ela, a falha do reinício leva a saída da versão nova e o retrato da
     /// máquina (`startup_output`). `None` nos testes, que não leem o journal nem os processos da máquina.
     pub startup_output: Option<u16>,
+    /// Quem pediu, gravado em `origem`; `None` grava nulo.
+    pub origin: Option<executor::Origin>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -680,12 +682,54 @@ async fn wait_previous<H: HealthProbe>(health: &H, expected: Option<&Manifest>, 
     }
 }
 
+/// `codigo` da falha que não vem de um `UpdateError`: a versão nova não se provou depois do reinício.
+pub const RESTART_FAILED: &str = "update_restart_failed";
+/// `codigo` da rodada cujo executor morreu sem gravar o desfecho.
+pub const ABANDONED: &str = "update_abandoned";
+
+/// Todo `codigo` que uma atualização de pacote grava: os de `UpdateError::code()`, os do pacote e os
+/// dois acima. A telemetria só conta estes.
+pub const FAILURE_CODES: &[&str] = &[
+    "update_locked", "update_io", "update_index_unavailable", "update_no_platform", "update_download_failed",
+    "update_sha_mismatch", "update_step_failed", "update_swap_failed", RESTART_FAILED, ABANDONED,
+    "package_manifest_invalid", "package_sha_mismatch", "package_unsafe_path", "package_existing_differs",
+    "package_rename_failed", "package_io",
+];
+
+/// Quanto cada etapa levou: o desfecho grava em `duracoes` (ms por etapa) para o servidor de pé contar,
+/// porque o executor é outro processo.
+#[derive(Default)]
+struct Timeline(std::sync::Mutex<(serde_json::Map<String, Value>, Option<(&'static str, Instant)>)>);
+
+impl Timeline {
+    fn step(&self, state: &StateFile, key: &'static str) {
+        if let Ok(mut timeline) = self.0.lock() {
+            let (done, current) = &mut *timeline;
+            if let Some((previous, since)) = current.take() { done.insert(previous.to_owned(), millis(since.elapsed()).into()); }
+            *current = Some((key, Instant::now()));
+        }
+        state.step(key);
+    }
+
+    /// As etapas terminadas e a corrente até agora.
+    fn durations(&self) -> Value {
+        let Ok(timeline) = self.0.lock() else { return Value::Null };
+        let (done, current) = &*timeline;
+        let mut all = done.clone();
+        if let Some((key, since)) = current { all.insert((*key).to_owned(), millis(since.elapsed()).into()); }
+        Value::Object(all)
+    }
+}
+
+fn millis(took: Duration) -> u64 { u64::try_from(took.as_millis()).unwrap_or(u64::MAX) }
+
 /// Falha antes do reinício, com o `current` como estava: `no_ar` é medido.
-async fn failed_before<H: HealthProbe>(state: &StateFile, health: &H, error: UpdateError) -> Outcome {
+async fn failed_before<H: HealthProbe>(state: &StateFile, timeline: &Timeline, health: &H, error: UpdateError) -> Outcome {
     tracing::warn!(code = error.code(), "update: {error}");
+    let took = timeline.durations();
     let no_ar = !matches!(health.read().await, Reading::Down(_));
     let erro = error.to_string();
-    state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar}));
+    state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar, "codigo": error.code(), "duracoes": took}));
     Outcome::Failed { voltou: false, no_ar, erro }
 }
 
@@ -696,8 +740,10 @@ async fn failed_before<H: HealthProbe>(state: &StateFile, health: &H, error: Upd
 /// anterior e não volta; o aviso diz quais.
 #[allow(clippy::too_many_arguments)]
 async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFile, previous: Option<PathBuf>, expected: Option<&Manifest>,
-    applied_now: &[String], why: String, restarter: &R, health: &H) -> Outcome {
+    applied_now: &[String], why: String, code: &'static str, timeline: &Timeline, restarter: &R, health: &H) -> Outcome {
     tracing::warn!("update: voltando para a versão anterior: {why}");
+    // A etapa que falhou termina aqui: a volta não entra na duração dela.
+    let took = timeline.durations();
     state.write(json!({"fase": "rodando", "texto": "Voltando para a versão anterior"}));
     if !applied_now.is_empty() {
         state.warn(&format!("passos de máquina aplicados nesta rodada continuam valendo na versão anterior: {}", applied_now.join(", ")));
@@ -721,7 +767,7 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
     if let Some(erro) = failure {
         detail(vec![format!("volta: {erro}")], old).await;
         let no_ar = !matches!(health.read().await, Reading::Down(_));
-        state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar}));
+        state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar, "codigo": code, "duracoes": took}));
         return Outcome::Failed { voltou: false, no_ar, erro };
     }
     if let Err(unconfirmed) = wait_previous(&trail, expected, failed_pid, &job.settings).await {
@@ -730,10 +776,10 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
         detail(lines, old).await;
         let no_ar = !matches!(health.read().await, Reading::Down(_));
         let erro = format!("{why}; o current voltou para a versão anterior e o servidor reiniciou, mas a versão anterior não se confirmou no ar: {unconfirmed}");
-        state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar}));
+        state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar, "codigo": code, "duracoes": took}));
         return Outcome::Failed { voltou: false, no_ar, erro };
     }
-    state.write(json!({"fase": "pronto", "ok": false, "erro": why, "voltou": true, "no_ar": true}));
+    state.write(json!({"fase": "pronto", "ok": false, "erro": why, "voltou": true, "no_ar": true, "codigo": code, "duracoes": took}));
     Outcome::Failed { voltou: true, no_ar: true, erro: why }
 }
 
@@ -823,7 +869,7 @@ pub fn for_screen(state_dir: &Path, layout: &Layout, running: Option<&str>) -> S
         let undone_text = if undone { "a troca sem prova foi desfeita, " } else { "" };
         // Desfeita com a versão nova já de pé (reinício no meio dos passos): a anterior sobe no próximo reinício.
         let restart = undone && running.is_some() && running != disk.as_deref();
-        state.write(json!({"fase": "pronto", "ok": false, "voltou": false, "no_ar": true, "reiniciar_manual": restart,
+        state.write(json!({"fase": "pronto", "ok": false, "voltou": false, "no_ar": true, "reiniciar_manual": restart, "codigo": ABANDONED,
             "erro": format!("a atualização foi interrompida, o processo que a executava não existe mais; {undone_text}{place}, e o servidor de pé é {up}")}));
     }
     state.read()
@@ -836,11 +882,12 @@ pub fn for_screen(state_dir: &Path, layout: &Layout, running: Option<&str>) -> S
 pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::Arc<dyn StepRunner + Send + Sync>, restarter: &R, health: &H,
     in_use: std::sync::Arc<dyn InUse + Send + Sync>) -> Outcome {
     let state = StateFile::new(job.state_dir);
+    let timeline = Timeline::default();
     let _lock = match UpdateLock::try_acquire(job.layout) {
         Ok(lock) => lock,
         // A recusa não toca no estado: ele é da rodada que está de pé.
         Err(UpdateError::Locked) => return Outcome::Locked,
-        Err(e) => return failed_before(&state, health, e).await,
+        Err(e) => return failed_before(&state, &timeline, health, e).await,
     };
     // O estado é o mesmo arquivo do motor `git`: com ele rodando, nada aqui é tocado.
     if let Some(pid) = other_engine(&state, job.state_dir) {
@@ -854,38 +901,39 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
                 "detalhe": format!("{} voltou a apontar para a versão de antes da troca interrompida", job.layout.current().display())})], "update");
         }
         Ok(false) => {}
-        Err(e) => return failed_before(&state, health, UpdateError::Swap(format!("troca interrompida não recuperada: {e}"))).await,
+        Err(e) => return failed_before(&state, &timeline, health, UpdateError::Swap(format!("troca interrompida não recuperada: {e}"))).await,
     }
     if let Some(why) = broken_manifest(job.layout) {
-        return failed_before(&state, health, UpdateError::Io(why)).await;
+        return failed_before(&state, &timeline, health, UpdateError::Io(why)).await;
     }
     let before = installed(job.layout);
     if let Err(error)=state.try_write(json!({"fase": "rodando", "ok": null, "erro": null, "resgate": null, "voltou": null, "no_ar": null,
         "commit_de": before.as_ref().map_or("", |m| m.commit.as_str()), "commit_para": null,
         "versao_de": before.as_ref().map(|m| m.version.clone()), "versao_para": null,
         "pid": std::process::id(), "backend_pid": null, "reiniciar_manual": false, "shell_mudou": false,
-        "waiting_for_server_build": false, "request_id": null, "log": [], "avisos": [], "passos_invalidos": []})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
+        "waiting_for_server_build": false, "request_id": null, "log": [], "avisos": [], "passos_invalidos": [],
+        "origem": job.origin.map(executor::Origin::as_str), "canal": job.release.channel, "codigo": null, "duracoes": null})) {return failed_before(&state,&timeline,health,UpdateError::Io(error)).await;}
     for note in &job.notes { state.warn(note); }
 
-    state.step("baixar");
+    timeline.step(&state, "baixar");
     let downloading = Instant::now();
     // Trocar de canal instala o publicado no outro, mesmo com número menor que o instalado.
     let installed_version = before.as_ref().filter(|m| m.channel == job.release.channel).and_then(|m| m.version.parse().ok());
     let entry = match check(job.client, job.release, job.platform, installed_version).await {
         Ok(Some(entry)) => entry,
         Ok(None) => {
-            if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Já está na versão mais nova"})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
+            if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Já está na versão mais nova", "duracoes": timeline.durations()})) {return failed_before(&state,&timeline,health,UpdateError::Io(error)).await;}
             return Outcome::UpToDate;
         }
-        Err(e) => return failed_before(&state, health, e).await,
+        Err(e) => return failed_before(&state, &timeline, health, e).await,
     };
-    if let Err(error)=state.try_write(json!({"commit_para": entry.commit, "versao_para": entry.version})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
+    if let Err(error)=state.try_write(json!({"commit_para": entry.commit, "versao_para": entry.version})) {return failed_before(&state,&timeline,health,UpdateError::Io(error)).await;}
     let dir = match prepare(job.client, job.release, &entry, job.layout, job.settings.download_deadline).await {
         Ok(dir) => dir,
-        Err(e) => return failed_before(&state, health, e).await,
+        Err(e) => return failed_before(&state, &timeline, health, e).await,
     };
     let Some(manifest) = read_manifest(&dir) else {
-        return failed_before(&state, health, UpdateError::Io(format!("{} sem manifesto legível", dir.display()))).await;
+        return failed_before(&state, &timeline, health, UpdateError::Io(format!("{} sem manifesto legível", dir.display()))).await;
     };
     // A tela é opcional: falha deixa a da chave anterior servida, e a atualização segue.
     if let (Some(ui), Some(key)) = (job.ui, manifest.dist_key.as_deref()) {
@@ -901,20 +949,20 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
         }
     }
 
-    state.step("trocar");
+    timeline.step(&state, "trocar");
     let swapping = Instant::now();
     let pid_before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
     let previous = {
         let (layout, dir) = (job.layout.clone(), dir.clone());
         match blocking(move || note_unproven(&layout, &dir).and_then(|()| swap(&layout, &dir).inspect_err(|_| { let _ = recover(&layout); }))).await {
             Ok(previous) => previous,
-            Err(e) => return failed_before(&state, health, e).await,
+            Err(e) => return failed_before(&state, &timeline, health, e).await,
         }
     };
 
     // Depois da troca: o instalador que um passo chama só grava links pelo `current` quando ele já é
     // a versão dele; antes, os prenderia à pasta da versão, que a poda apaga.
-    state.step("passos");
+    timeline.step(&state, "passos");
     let stepping = Instant::now();
     let steps_mark = job.startup_output.map(|_| startup_output::Mark::take(false));
     let applied_before = self::steps::applied(job.state_dir).unwrap_or_default();
@@ -944,13 +992,13 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
                 };
                 if restarted && !restarter.manual() {
                     let applied_now: Vec<String> = self::steps::applied(job.state_dir).unwrap_or_default().difference(&applied_before).cloned().collect();
-                    return roll_back(job, &state, previous, before.as_ref(), &applied_now, e.to_string(), restarter, health).await;
+                    return roll_back(job, &state, previous, before.as_ref(), &applied_now, e.to_string(), e.code(), &timeline, restarter, health).await;
                 }
                 let e = match put_back(job.layout, previous).await {
                     Ok(()) => e,
                     Err(back) => UpdateError::Step(format!("{e}; e o current não voltou para a versão anterior: {back}")),
                 };
-                return failed_before(&state, health, e).await;
+                return failed_before(&state, &timeline, health, e).await;
             }
         }
     };
@@ -967,11 +1015,11 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     // Na mão não há reinício nem prova: o servidor de antes segue no ar até alguém reiniciá-lo.
     if restarter.manual() {
         keep_swap(job.layout, &state);
-        if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado", "reiniciar_manual": true})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
+        if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado", "reiniciar_manual": true, "duracoes": timeline.durations()})) {return failed_before(&state,&timeline,health,UpdateError::Io(error)).await;}
         return Outcome::UpdatedManual { version: manifest.version };
     }
 
-    state.step("reiniciar");
+    timeline.step(&state, "reiniciar");
     let restarting = Instant::now();
     let mark = job.startup_output.map(|_| startup_output::Mark::take(false));
     let trail = startup_output::Trail::new(health);
@@ -992,7 +1040,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
             lines.extend(trail.lines("prova"));
             log_failure_detail(lines, mark, job.home, port, Some(dir.clone()), previous.clone()).await;
         }
-        return roll_back(job, &state, previous, before.as_ref(), &applied_now, why, restarter, health).await;
+        return roll_back(job, &state, previous, before.as_ref(), &applied_now, why, RESTART_FAILED, &timeline, restarter, health).await;
     }
     keep_swap(job.layout, &state);
 
@@ -1005,6 +1053,6 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     for failure in failed {
         state.warn(&failure);
     }
-    if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado"})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
+    if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado", "duracoes": timeline.durations()})) {return failed_before(&state,&timeline,health,UpdateError::Io(error)).await;}
     Outcome::Updated { version: manifest.version }
 }

@@ -509,7 +509,23 @@ impl Tools {
             }
             _ => Err(format!("Unknown tool: {name}")),
         };
-        outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]))
+        let result = outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]));
+        if let Some(telemetry) = self.st.counting() && self.owner_session(headers).await {
+            use hangar_telemetry::events::{Code, Dims, Event};
+            let dims = Dims::new().with("tool", Code::known(name, &super::TOOL_NAMES)).with("error", result.is_error == Some(true));
+            telemetry.count(Event::McpTool, dims, 1);
+        }
+        result
+    }
+
+    /// A tool vem de sessão do dono: a de convidado com login usa o token do dono, e só o `guests.json`
+    /// a separa. Sessão que não se resolve, ou convidados ilegíveis, também não contam.
+    async fn owner_session(&self, headers: &HeaderMap) -> bool {
+        let Ok((name, _)) = self.resolve(headers).await else { return false };
+        let life = crate::login_guests::gate::session_life(&self.st, &name).await;
+        let base = self.st.accounts.env.claude_base.clone();
+        tokio::task::spawn_blocking(move || counts_as_owner(crate::session_open::server::read_guests(&base), &name, life.as_deref()))
+            .await.unwrap_or(false)
     }
 
     fn home(&self) -> PathBuf {
@@ -1311,6 +1327,17 @@ fn host_fill_refusal(refusal: hangar_browser_host::Refusal) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn only_an_owner_session_counts_a_tool() {
+        let raw = json!({"sessions": {"dela": {"guest": "g1", "life": "k:1"}}});
+        let guests = || Ok::<_, ()>(Some(raw.clone()));
+        assert!(!counts_as_owner(guests(), "dela", Some("k:1")), "sessão de convidado não conta");
+        assert!(counts_as_owner(guests(), "dela", Some("k:2")), "o mesmo nome em outra vida é do dono");
+        assert!(counts_as_owner(guests(), "minha", None), "sessão do dono conta");
+        assert!(counts_as_owner(Ok::<_, ()>(None), "minha", None), "sem convidados, tudo é do dono");
+        assert!(!counts_as_owner(Err(()), "minha", None), "convidados ilegíveis não contam");
+    }
+
     #[tokio::test]
     async fn a_route_body_past_the_limit_is_an_error_not_an_empty_answer() {
         let api = Router::new().route("/big", axum::routing::get(|| async { vec![b'x'; ROUTE_BODY_LIMIT + 1] }));
@@ -1597,6 +1624,11 @@ mod tests {
         }
         assert!(resumed(&json!({"name": "s", "avisos": []}), None).structured_content.unwrap().get("avisos").is_none());
     }
+}
+
+/// O mesmo dono da abertura (`session_guest`): o nome em outra vida é do dono; convidados ilegíveis não contam.
+fn counts_as_owner<E>(guests: Result<Option<Value>, E>, name: &str, life: Option<&str>) -> bool {
+    matches!(guests, Ok(raw) if raw.as_ref().is_none_or(|raw| crate::session_open::server::session_guest(raw, name, life).is_none()))
 }
 
 /// A rota pública como o dono, fora de uma tool: a recusa do rascunho na chamada largada também passa por aqui.

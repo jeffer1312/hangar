@@ -281,6 +281,8 @@ pub trait Host: Send + Sync {
     fn dismiss_limit_menu<'a>(&'a self,name:&'a str) -> BoxFuture<'a,Result<bool,String>>;
     /// Uma troca de agente pedida pelo seletor espera esta sessão: ela leva a conversa ao Codex.
     fn handoff_held(&self,name:&str) -> bool;
+    /// A telemetria do servidor, só quando conta; o dublê de teste não conta.
+    fn telemetry(&self) -> Option<&hangar_telemetry::Telemetry> { None }
 }
 
 /// O menu "What do you want to do?" do Claude Code ao bater o limite, no rodapé do pane.
@@ -491,6 +493,12 @@ impl Switcher {
             host.diary(&hit.name,"limit_switch_repeated","limite de uso: o mesmo aviso já tratado chegou de novo e não troca outra vez");
             return;
         };
+        if let Some(telemetry) = host.telemetry() {
+            use hangar_telemetry::events::{Code,Dims,Event};
+            // O código de `Failed`/`Busy` vem de fora do binário: sai só o tipo do desfecho.
+            let code = match &outcome { Outcome::Switched { .. }=>"switched", Outcome::Stayed(code)=>*code, Outcome::Failed(_)=>"limit_switch_failed", Outcome::Busy(_)=>"limit_switch_busy" };
+            telemetry.count(Event::LimitSwitch,Dims::new().with("code",Code::fixed(code)),1);
+        }
         let report = |code:&str,reason:&'static str|host.diary(&hit.name,&super::input::diary_code(code),reason);
         // O recado que não saiu: a sessão segue parada no aviso, e a linha mostra isso em vez de limpar.
         let mut continue_failed:Option<String> = None;
@@ -615,6 +623,7 @@ impl Host for Native {
         Box::pin(self.runtime.show_limit_problem(name,shown))
     }
     fn diary(&self,name:&str,code:&str,reason:&'static str) { self.st.diag.report("session.limit_switch",name,code,reason); }
+    fn telemetry(&self) -> Option<&hangar_telemetry::Telemetry> { self.st.counting() }
     fn now(&self) -> f64 { crate::state::monitor::wall_now() }
     fn send_continue<'a>(&'a self,name:&'a str) -> BoxFuture<'a,Result<bool,String>> {
         Box::pin(async move {

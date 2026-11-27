@@ -18,7 +18,7 @@ use hangar_package::{Manifest, PlatformEntry, Version};
 use serde_json::{json, Value};
 
 use super::dev::Checkout;
-use super::executor::{Args, StartError, Started, Task};
+use super::executor::{Args, Origin, StartError, Started, Task};
 use super::restart::Topology;
 use super::{Layout, Release};
 use crate::routes::{cors, gate, AppState};
@@ -311,7 +311,7 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
             if let Some(why) = broken {
                 return with_cors(req.headers(), detail(StatusCode::CONFLICT, "erro_atualizacao_manifesto", &why, json!({})));
             }
-            Task::Update { channel: None }
+            Task::Update { channel: None, origin: Origin::Manual }
         }
     };
     with_cors(req.headers(), started(launch(&st, task).await))

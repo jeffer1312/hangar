@@ -97,6 +97,7 @@ impl Hangar {
     pub(super) fn hide_to_tray(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.set_hidden(true);
         self.window_tray.hidden = true;
+        self.client_telemetry.hidden(Instant::now());
         self.presence_leave();
         // Na bandeja ninguém lê a página: a conexão do retrato fecha já, sem esperar o próximo evento.
         self.status_left();
@@ -109,6 +110,7 @@ impl Hangar {
         if self.window_tray.hidden {
             window.set_hidden(false);
             self.window_tray.hidden = false;
+            self.client_telemetry.shown(Instant::now());
             self.presence_beat();
         }
         window.activate_window();

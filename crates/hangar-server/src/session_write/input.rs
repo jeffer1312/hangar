@@ -365,6 +365,8 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
 
 /// No Claude, o ator terminal conduz o `/clear`; no Codex, ele é controle de conversa nova.
 pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    // O `admit` só deixa passar o dono ou um convidado: fora as marcas de convidado, é o dono.
+    let owner = !crate::telemetry_routes::guest(&req);
     let (ctx, bytes) = match admit(&st, peer, req, WriteRoute::Input).await {
         Ok(admitted) => admitted,
         Err(response) => return response,
@@ -399,8 +401,29 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         tracing::info!(target: "delivery_timing", session=%ctx.name, outcome, "decisão de entrega aplicada");
         result.1["timing_note"] = json!(outcome);
     }
+    count_input(st.counting().filter(|_| owner), &ctx.target.provider, ctx.target.terminal, &text, steer, &result);
     crate::diag::record(crate::diag::diary_dir(), vec![received_line(&ctx.name, ctx.headers(), peer, &text, steer, &result)], "mensagem recebida");
     answer(&ctx, result)
+}
+
+/// As recusas do `classify`; outra sai `other`.
+const SEND_REFUSALS: &[&str] = &["erro_envio_falhou", "erro_aguarde_clear", "erro_comando_nao_executado"];
+
+/// `message_sent` ou `send_failed` do `/input`; `telemetry` só vem com o dono.
+fn count_input(telemetry: Option<&hangar_telemetry::Telemetry>, provider: &str, terminal: bool, text: &str, steer: bool, result: &(StatusCode, Value)) {
+    use hangar_telemetry::events::{Code, Dims, Event, Provider, SenderOrigin, Surface};
+    let Some(telemetry) = telemetry else { return };
+    let (status, body) = result;
+    if !status.is_success() {
+        let code = body["detail"]["code"].as_str().unwrap_or_default();
+        telemetry.count(Event::SendFailed, Dims::new().with("code", Code::known(code, SEND_REFUSALS)), 1);
+        return;
+    }
+    let origin = if FROM.is_match(text) { SenderOrigin::Session } else { SenderOrigin::Person };
+    let dims = Dims::new().with("provider", Provider::parse(provider).unwrap_or(Provider::Other))
+        .with("surface", if terminal { Surface::Terminal } else { Surface::Headless })
+        .with("steer", steer).with("origin", origin);
+    telemetry.count(Event::MessageSent, dims, 1);
 }
 
 static COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^/[a-z][a-z0-9:_-]{0,30}$").unwrap());
@@ -776,6 +799,42 @@ pub async fn steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 #[cfg(test)]
 mod broadcast_tests {
     use super::*;
+
+    #[test]
+    fn telemetry_input_counts_the_owner_only_and_never_the_text() {
+        use hangar_telemetry::events::Event;
+        let home = tempfile::tempdir().unwrap();
+        let telemetry = crate::telemetry_hooks::test_telemetry(home.path(), true);
+        let ok = (StatusCode::OK, json!({"ok": true}));
+        count_input(Some(&*telemetry), "claude", true, "oi, segredo", false, &ok);
+        count_input(Some(&*telemetry), "claude", true, "[grupo: par-1] terminei", false, &ok);
+        count_input(Some(&*telemetry), "codex", false, "  [de: outra] olha", true, &ok);
+        // O convidado chega sem o motor: o `input` só o passa com o dono.
+        count_input(None, "claude", true, "do convidado", false, &ok);
+        let refused = (StatusCode::BAD_REQUEST, detail_body("erro_envio_falhou", "x", json!({})));
+        count_input(Some(&*telemetry), "claude", true, "oi", false, &refused);
+        count_input(Some(&*telemetry), "claude", true, "oi", false, &(StatusCode::CONFLICT, detail_body("Erro Livre", "x", json!({}))));
+        assert_eq!(crate::telemetry_hooks::counted(&telemetry, Event::MessageSent, "origin"),
+            [("person".to_owned(), 1), ("session".to_owned(), 1), ("session".to_owned(), 1)]);
+        let sent: u64 = telemetry.counters().iter().filter(|c| c.event == "message_sent").map(|c| c.count).sum();
+        assert_eq!(sent, 3);
+        let mut failed = crate::telemetry_hooks::counted(&telemetry, Event::SendFailed, "code");
+        failed.sort();
+        assert_eq!(failed, [("erro_envio_falhou".to_owned(), 1), ("other".to_owned(), 1)]);
+        assert!(telemetry.counters().iter().all(|c| c.dims.values().all(|v| !v.contains("segredo") && !v.contains("par-1"))));
+    }
+
+    #[test]
+    fn telemetry_guest_requests_are_not_the_owner() {
+        let plain = || axum::http::Request::builder().uri("/api/sessions/s/input").body(axum::body::Body::empty()).unwrap();
+        assert!(!crate::telemetry_routes::guest(&plain()));
+        let mut port = plain();
+        port.extensions_mut().insert(ConnectInfo(crate::share::gate::GuestConn { peer: "127.0.0.1:1".parse().unwrap(), local: None }));
+        assert!(crate::telemetry_routes::guest(&port), "porta 8766");
+        let mut signed = plain();
+        signed.headers_mut().insert("x-hangar-guest", "1".parse().unwrap());
+        assert!(crate::telemetry_routes::guest(&signed));
+    }
 
     #[test]
     fn direct_delivery_reports_when_the_claude_terminal_accepted_the_message() {

@@ -55,7 +55,10 @@ export function createEventSource(
     const queda = quedas.get(chave);
     if (!primeiroQuadro && !queda) return;
     primeiroQuadro = false;
-    anotar(queda ? 'sse.voltou' : 'sse.conectou', undefined, Date.now() - (queda?.inicio ?? inicio));
+    const took = Date.now() - (queda?.inicio ?? inicio);
+    anotar(queda ? 'sse.voltou' : 'sse.conectou', undefined, took);
+    // Conversa aberta: o primeiro quadro da conversa; a lista (`/api/sessions/events`) fica de fora.
+    if (!queda && destino && rota === '/api/sessions/*/events') registrarDiag({ evento: 'chat.opened', req, ms: took }, destino);
     quedas.delete(chave);
   };
   anotar(anterior ? 'sse.reconectando' : 'sse.abrir');

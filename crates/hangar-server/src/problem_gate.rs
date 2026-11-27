@@ -13,6 +13,17 @@ const DIAGNOSTIC: [&str; 16] = [
     crate::list::ports::UNAVAILABLE, crate::list::ports::UNREACHED, crate::list::ports::MAP_STALE,
 ];
 
+/// Códigos de tela que a telemetria conhece (`problem_shown`); outro sai `other`.
+pub const SCREEN: &[&str] = &[
+    "headless_processo_caiu", "headless_caiu", "headless_nao_subiu", "headless_sem_login", "headless_sem_resposta",
+    "headless_turno_erro", "headless_delivery_stalled", "codex_sem_login", "codex_hooks_nao_aprovados", "codex_limite_uso",
+    "codex_headless_nao_subiu", "codex_conversa_nao_abriu", "codex_abertura_falhou", "codex_prompt_bloqueado",
+    "codex_turno_cortado", "codex_esforco_nao_aplicado", "limit_switch_no_room", "limit_switch_failed", "limit_switch_no_target",
+    "limit_switch_login_lost", "terminal_clear_not_applied", "terminal_input_stalled", "terminal_input_composer_busy",
+    "terminal_input_delivery_unproved", "terminal_input_delivery_composer_busy", "terminal_out_of_memory", "terminal_died",
+    "runtime_falhou", crate::list::bridge::INTERACTION_UNAVAILABLE,
+];
+
 /// O código vai só ao diário, qualquer que seja o estado da sessão.
 pub fn is_diagnostic(code: &str) -> bool { DIAGNOSTIC.contains(&code) }
 
@@ -30,6 +41,11 @@ pub fn keeps(current: Option<&str>, new: &str) -> bool { current.is_some_and(|cu
 pub fn report_hidden(diag: &crate::diag::DiagClient, session: &str, code: &str, detail: Option<&str>) {
     if crate::warn_limit::allow(Some(session), &format!("problem_hidden:{code}")) {
         tracing::warn!(session, code, detail, "aviso de diagnóstico fora da tela");
+        // No ritmo do log: cada estado publicado repetiria a contagem.
+        if is_diagnostic(code) && let Some(telemetry) = crate::telemetry_hooks::installed() {
+            use hangar_telemetry::events::{Code, Dims, Event};
+            telemetry.count(Event::ProblemHidden, Dims::new().with("code", Code::known(code, &DIAGNOSTIC)), 1);
+        }
     }
     diag.report_with("rust.problem_hidden", session, code, "aviso de diagnóstico fora da tela",
         serde_json::json!({"detalhe": detail, "via": "conversa"}));
@@ -73,18 +89,21 @@ impl ProblemGate {
     /// Já mostrando `code` (o que a lista mostra): o mesmo problema sai sem esperar de novo.
     pub fn showing(code: Option<String>) -> Self { Self { shown: code, pending: None } }
 
-    pub fn admit(&mut self, code: Option<&str>, now: Instant, hold: Duration) -> Gate {
-        let Some(code) = code else { self.shown = None; self.pending = None; return Gate::Clear };
-        if self.shown.as_deref().is_some_and(|shown| same_problem(shown, code)) { self.shown = Some(code.to_owned()); return Gate::Show; }
+    pub fn admit(&mut self, code: Option<&str>, now: Instant, hold: Duration) -> Gate { self.admit_noting(code, now, hold).0 }
+
+    /// `admit`, e se esta chamada passou o problema de esperando para mostrado: a vez que ele foi visto.
+    pub fn admit_noting(&mut self, code: Option<&str>, now: Instant, hold: Duration) -> (Gate, bool) {
+        let Some(code) = code else { self.shown = None; self.pending = None; return (Gate::Clear, false) };
+        if self.shown.as_deref().is_some_and(|shown| same_problem(shown, code)) { self.shown = Some(code.to_owned()); return (Gate::Show, false); }
         self.shown = None;
         let since = match &self.pending { Some((pending, since)) if same_problem(pending, code) => *since, _ => now };
         if now.saturating_duration_since(since) >= hold {
             self.pending = None;
             self.shown = Some(code.to_owned());
-            return Gate::Show;
+            return (Gate::Show, true);
         }
         self.pending = Some((code.to_owned(), since));
-        Gate::Hold(since + hold)
+        (Gate::Hold(since + hold), false)
     }
 }
 
@@ -103,6 +122,11 @@ mod tests {
         assert_eq!(gate.admit(None, t0 + Duration::from_secs(10), HOLD), Gate::Clear, "resolveu: some na hora");
         let t1 = t0 + Duration::from_secs(11);
         assert_eq!(gate.admit(Some("runtime_binding"), t1, HOLD), Gate::Hold(t1 + HOLD), "voltou: espera de novo");
+        // A telemetria conta só a passagem de esperando para mostrado.
+        assert_eq!(gate.admit_noting(Some("runtime_binding"), t1 + HOLD, HOLD), (Gate::Show, true));
+        for tick in 2..12 { assert_eq!(gate.admit_noting(Some("runtime_binding"), t1 + HOLD * tick, HOLD), (Gate::Show, false)); }
+        assert_eq!(ProblemGate::showing(Some("a".into())).admit_noting(Some("a"), t1, HOLD), (Gate::Show, false), "a lista já mostrava");
+        for code in SCREEN { assert!(!is_diagnostic(code) && hangar_telemetry::wire::is_name(code), "{code}"); }
     }
 
     #[test]
