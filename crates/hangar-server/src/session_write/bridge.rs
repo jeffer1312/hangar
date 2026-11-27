@@ -35,13 +35,17 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         crate::routes::cors(req.headers(), response.headers_mut());
         return response;
     };
+    // Lidas antes do fechamento: o do Pi/omp/Kimi sai do grupo por dentro, e a saída apaga o `linked_by` delas.
+    let children = children_to_stop(&st, &name, owner).await;
     // A chave antes do kill (depois dele o pane não a diz mais); os arquivos do cofre saem só no sucesso.
     let vault_files = crate::vault::files::before_close(&st, &name).await;
     if let Some(closed) = runtime.close_other(&name).await {
         match closed {
-            Ok(body) => {
+            Ok(mut body) => {
                 if let Some(files) = vault_files { files.done(); }
                 closed_line(&st, &name, owner, req.headers(), peer);
+                let stopped = stop_children(&st, children).await;
+                if let Some(warnings) = body.get_mut("warnings").and_then(Value::as_array_mut) { warnings.extend(stopped); }
                 let mut response = super::json_response(StatusCode::OK, body);
                 crate::routes::cors(req.headers(), response.headers_mut());
                 return response;
@@ -93,7 +97,7 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         cleanup.push(cleanup_failed(&st, &name, "close_chain_failed", "o vínculo then da sessão encerrada não saiu"));
     }
     record_closed_name(&st, &name, closed["transcript"].as_str()).await;
-    let mut leave = match st.groups.clone() { Some(groups) => leave_stopping_children(&st, &groups, &name, "session_closed").await, None => Vec::new() };
+    let mut leave = match st.groups.clone() { Some(groups) => leave_stopping_children(&st, &groups, &name, "session_closed", children).await, None => Vec::new() };
     leave.extend(crate::groups::link_orphans::closed(&st, &name).await);
     cleanup.extend(after_close(&st, &name).await);
     let mut response = super::json_response(StatusCode::OK, json!({"ok": true, "warning": null}));
@@ -139,19 +143,26 @@ async fn listed_transcript(st: &AppState, name: &str) -> Option<std::path::PathB
     st.list.discovered_session(name).await.ok().flatten().and_then(|(row, _)| row.jsonl).map(std::path::PathBuf::from)
 }
 
-/// A saída do grupo de quem já morreu, e depois a interrupção das descendentes ligadas dele: elas seguem
-/// abertas, as filhas marcadas sem pai. Lidas antes da saída, que apaga o `linked_by` delas. A que não
-/// parou vai no aviso `{sessao, erro}` (o diário já tem o `rust.link_cascade_failed`).
-async fn leave_stopping_children(st: &Arc<AppState>, groups: &crate::groups::service::GroupService, name: &str, why: &'static str) -> Vec<Value> {
-    use crate::session_write::control::{CASCADE_GROUPS_UNAVAILABLE, cascade_targets, interrupt_descendants};
-    let targets = cascade_targets(st, name).await;
+/// As descendentes ligadas que o fechamento para: só no fechamento do dono, porque o convidado alcança a
+/// sessão, não a árvore dela. Arquivos de grupo ilegíveis ficam no diário: o fechamento não falhou por isso.
+async fn children_to_stop(st: &AppState, name: &str, owner: bool) -> Vec<hangar_delegation::cascade::CascadeTarget> {
+    if !owner || st.groups.is_none() { return Vec::new(); }
+    crate::session_write::control::cascade_targets(st, name).await.unwrap_or_default()
+}
+
+/// Interrompe as descendentes lidas antes do fechamento; elas seguem abertas, as filhas marcadas sem pai
+/// pela saída do grupo. A que não parou vai no aviso `{sessao, erro}` (o diário já tem o `rust.link_cascade_failed`).
+async fn stop_children(st: &Arc<AppState>, targets: Vec<hangar_delegation::cascade::CascadeTarget>) -> Vec<Value> {
+    if targets.is_empty() { return Vec::new(); }
+    let (_, failed) = crate::session_write::control::interrupt_descendants(st, targets).await;
+    failed.into_iter().map(|(child, code)| json!({"sessao": child, "erro": cleanup_warning(&code)})).collect()
+}
+
+/// A saída do grupo de quem já morreu, e depois a interrupção das descendentes `children`, lidas antes.
+async fn leave_stopping_children(st: &Arc<AppState>, groups: &crate::groups::service::GroupService, name: &str, why: &'static str,
+                                 children: Vec<hangar_delegation::cascade::CascadeTarget>) -> Vec<Value> {
     let mut warnings = leave_warnings(st, groups, name, why).await;
-    let failed = match targets {
-        Ok(targets) if targets.is_empty() => Vec::new(),
-        Ok(targets) => interrupt_descendants(st, targets).await.1,
-        Err(()) => vec![(name.to_owned(), CASCADE_GROUPS_UNAVAILABLE.to_owned())],
-    };
-    warnings.extend(failed.into_iter().map(|(child, code)| json!({"sessao": child, "erro": cleanup_warning(&code)})));
+    warnings.extend(stop_children(st, children).await);
     warnings
 }
 
@@ -342,7 +353,8 @@ pub fn other_cleanup(state:std::sync::Weak<AppState>)->crate::runtime::other_ter
         let Some(st)=state.upgrade()else{return Ok(vec![]);};let Some(runtime)=st.state.runtime.get().cloned()else{return Ok(vec![json!({"code":"other_cleanup_unavailable"})]);};
         let life=closed.life;let mut warnings=Vec::new();let name=life.name().to_owned();
         if !runtime.other_cleanup_allowed(&life).await? {return Ok(vec![json!({"code":"other_cleanup_replaced"})]);}
-        if let Some(groups)=st.groups.clone(){warnings.extend(leave_stopping_children(&st,&groups,&name,"other_session_closed").await);}
+        // Só a saída e a marca de órfã: quem interrompe as filhas é o `DELETE` do dono, que as lê antes de fechar.
+        if let Some(groups)=st.groups.clone(){warnings.extend(leave_warnings(&st,&groups,&name,"other_session_closed").await);}
         if runtime.other_cleanup_allowed(&life).await? {warnings.extend(crate::groups::link_orphans::closed(&st,&name).await);}
         if runtime.other_cleanup_allowed(&life).await? && let Some(share)=st.share.clone() {
             match share.store.revoke_session(&name,None) {Ok(0)=>{},Ok(_)=>crate::share::owner_routes::sync_tunnel(&share).await,Err(_)=>warnings.push(json!({"code":"other_share_cleanup_failed"}))}

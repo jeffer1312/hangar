@@ -107,6 +107,20 @@ async fn closing_a_parent_interrupts_and_keeps_its_linked_child_marked_orphan() 
     assert!(orphans(&e.home).get("pai").is_none(), "o pai fechado não vira órfão");
 }
 
+/// O convidado alcança o pai, não a árvore dele: fechar o pai não interrompe ninguém, e as filhas ficam
+/// marcadas sem pai como em qualquer saída do grupo.
+#[tokio::test]
+async fn a_guest_closing_a_parent_does_not_interrupt_its_children() {
+    let (e, _dir) = family().await;
+    let (status, body) = e.delete_as("pai", crate::session_close_by_name::GUEST).await;
+    assert_eq!((status, &body), (200, &json!({"ok": true, "warning": null})), "a filha que não existe nem foi procurada: {body}");
+    assert!(e.alive().is_empty(), "o pai fechou");
+    assert!(e.registry.writable("filha").await.is_some(), "a filha segue aberta");
+    let marks = orphans(&e.home);
+    assert_eq!((marks.get("filha").map(|o| o.parent.as_str()), marks.get("fantasma").map(|o| o.parent.as_str())), (Some("pai"), Some("pai")));
+    assert!(!e.python.diag().iter().any(|l| l["evento"] == "rust.link_cascade_failed"), "ninguém foi interrompido: {:?}", e.python.diag());
+}
+
 #[tokio::test]
 async fn an_unconfirmed_kill_leaves_the_children_linked() {
     let (e, _dir) = family().await;

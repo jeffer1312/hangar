@@ -1101,8 +1101,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   aberto; sem esperar bloqueante. A pergunta (`AskUserQuestion`) da filha chega ao pai uma vez por
   `interaction_id` e é respondida por `child_answer`; menu e permissão só avisam. Parar com
   `cascade=1` (botão Parar e tool `interrupt`) para as descendentes até 3 níveis; cancelar cartão
-  de pergunta não cascateia. Fechar o pai, com a morte confirmada, interrompe as filhas e as mantém
-  abertas; toda saída do grupo grava `orphaned_from` nelas. Os clientes calculam a linha
+  de pergunta não cascateia. Fechar o pai pelo dono, com a morte confirmada, interrompe as filhas
+  (pelo convidado, não) e as mantém abertas; toda saída do grupo grava `orphaned_from` nelas. Os clientes calculam a linha
   "N subagentes" da lista. Motivo em
   [plataforma.md](docs/decisoes/plataforma.md#sessão-filha-ligada-a-quem-a-abriu) e
   [plataforma.md](docs/decisoes/plataforma.md#filhas-ligadas-pergunta-ao-pai-parar-em-cascata-e-pai-que-fecha-27112026).

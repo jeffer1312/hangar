@@ -523,11 +523,10 @@ const CASCADE_UNOWNED: &str = "session_unowned";
 const MSG_CASCADE_UNOWNED: &str = "nenhum agente do Hangar nesta sessão para interromper";
 const CASCADE_UNCONFIRMED: &str = "interrupt_unconfirmed";
 
-/// Para as descendentes ligadas de `root` ao mesmo tempo; `None` = nenhuma descendente.
+/// Para as descendentes ligadas de `root` ao mesmo tempo; `None` = nenhuma descendente conhecida. Arquivos
+/// de grupo ilegíveis ficam só no diário: sem filha conhecida, não há parada que falhou para mostrar.
 async fn cascade_from(st: &Arc<AppState>, root: &str) -> Option<Value> {
-    let Ok(targets) = cascade_targets(st, root).await else {
-        return Some(json!({"interrupted": [], "failed": [{"name": "*", "code": CASCADE_GROUPS_UNAVAILABLE}]}));
-    };
+    let targets = cascade_targets(st, root).await.ok()?;
     if targets.is_empty() { return None; }
     let (interrupted, failed) = interrupt_descendants(st, targets).await;
     let failed: Vec<Value> = failed.into_iter().map(|(name, code)| json!({"name": name, "code": code})).collect();

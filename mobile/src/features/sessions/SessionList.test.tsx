@@ -9,6 +9,7 @@ import { OFFLINE_NOTICE_MS, type AggSession, type GroupBy, type Server, type Ses
 const calls = vi.hoisted(() => ({
   alert: vi.fn(),
   deleteSession: vi.fn(),
+  deleteSessionForServer: vi.fn(),
   hideSession: vi.fn(),
   error: vi.fn(),
   ok: vi.fn(),
@@ -28,6 +29,7 @@ const calls = vi.hoisted(() => ({
 vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
   deleteSession: calls.deleteSession,
+  deleteSessionForServer: calls.deleteSessionForServer,
   hideSession: calls.hideSession,
   rotaDecidida: () => true,
   probeServerResponse: async (server: Server) => ({ ok: true, status: 200,
@@ -207,6 +209,7 @@ beforeEach(() => {
   _resetSessionsForTests();
   vi.clearAllMocks();
   calls.deleteSession.mockReset();
+  calls.deleteSessionForServer.mockReset();
   useAparencia.setState({ agrupar: 'server', organizar: 'sessions' });
   calls.realRow = false;
   calls.reduced = false;
@@ -824,7 +827,7 @@ describe('SessionList', () => {
   it('with_children_deletes_children_then_parent', async () => {
     calls.sessions = family();
     let first!: (value: { ok: boolean; warning: null }) => void;
-    calls.deleteSession
+    calls.deleteSessionForServer
       .mockReturnValueOnce(new Promise((done) => { first = done; }))
       .mockRejectedValueOnce(new Error('falhou'))
       .mockResolvedValueOnce({ ok: true, warning: null });
@@ -833,13 +836,17 @@ describe('SessionList', () => {
     const choices = calls.alert.mock.calls[0][2] as Choice[];
     await act(async () => { choices.find((c) => c.text === 'session_close_with_children:2')!.onPress!(); });
     // Uma de cada vez, a primeira filha antes de tudo; as três linhas somem na hora.
-    expect(calls.deleteSession.mock.calls.map(([name]) => name)).toEqual(['filha-a']);
+    expect(calls.deleteSessionForServer.mock.calls.map(([, name]) => name)).toEqual(['filha-a']);
     for (const name of ['pai', 'filha-a', 'filha-b']) expect(container.querySelector(`[data-row="srv1::${name}"]`)).toBeNull();
     expect(container.querySelector('[data-row="srv1::outra"]')).not.toBeNull();
 
+    // Abrir uma conversa de outra máquina no meio troca o servidor ativo: os fechamentos seguintes ficam na da linha.
+    await act(async () => { useServers.setState({ activeId: 'srv2' }); });
     await act(async () => { first({ ok: true, warning: null }); });
-    await vi.waitFor(() => expect(calls.deleteSession).toHaveBeenCalledTimes(3));
-    expect(calls.deleteSession.mock.calls.map(([name]) => name)).toEqual(['filha-a', 'filha-b', 'pai']);
+    await vi.waitFor(() => expect(calls.deleteSessionForServer).toHaveBeenCalledTimes(3));
+    expect(calls.deleteSessionForServer.mock.calls.map(([, name]) => name)).toEqual(['filha-a', 'filha-b', 'pai']);
+    expect(calls.deleteSessionForServer.mock.calls.map(([target]) => (target as Server).id)).toEqual(['srv1', 'srv1', 'srv1']);
+    expect(calls.deleteSession).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(calls.error).toHaveBeenCalled());
     expect(calls.error).toHaveBeenCalledExactlyOnceWith('session_close_children_failed:filha-b (falhou)');
     expect(calls.ok).not.toHaveBeenCalled();

@@ -416,7 +416,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
       .then((result) => {
         const failed = interruptCascadeFailed(result);
         if (failed.length && rotaAtual.current === rota) {
-          mostrarAviso(failed.includes('*') ? m.interrupt_cascade_unavailable() : m.interrupt_cascade_failed({ names: failed.join(', ') }));
+          mostrarAviso(m.interrupt_cascade_failed({ names: failed.join(', ') }));
         }
         if (!last || !chat.use.getState().pending.some((p) => p.id === last.id)) return;
         chat.use.setState((live) => ({ pending: live.pending.filter((p) => p.id !== last.id) }));

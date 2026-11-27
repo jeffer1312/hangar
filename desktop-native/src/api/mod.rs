@@ -245,7 +245,7 @@ fn session_life_key(code: &str) -> Option<(&str, Option<&'static str>)> {
     }
 }
 
-/// Nomes de `cascade.failed` da resposta do `/interrupt`; `*` = os arquivos de grupo não foram lidos.
+/// Nomes de `cascade.failed` da resposta do `/interrupt`.
 fn cascade_failed(body: &Value) -> Vec<String> {
     body.pointer("/cascade/failed").and_then(Value::as_array).map(|failed| failed.iter()
         .filter_map(|f| f.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_owned)).collect())
@@ -2021,7 +2021,7 @@ mod tests {
             "POST /api/sessions/a%20b/interrupt?clear=false".to_owned(),
             "POST /api/sessions/a%20b/interrupt?clear=true&cascade=1".to_owned(),
         ]);
-        assert_eq!(cascade_failed(&json!({"cascade": {"failed": [{"name": "*", "code": "groups_unavailable"}]}})), vec!["*".to_owned()]);
+        assert_eq!(cascade_failed(&json!({"cascade": {"failed": [{"name": "kid-c", "code": "interrupt_unconfirmed"}]}})), vec!["kid-c".to_owned()]);
         assert!(cascade_failed(&Value::Null).is_empty());
     }
 

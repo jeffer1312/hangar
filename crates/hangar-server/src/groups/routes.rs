@@ -347,10 +347,13 @@ pub(super) async fn unpair(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     let asked = match Asked::take(st, peer, req).await { Ok(a) => a, Err(response) => return response };
     let held = match asked.enter().await { Ok(held) => held, Err(busy) => return busy };
     if let Some(refused) = asked.orchestrator(std::slice::from_ref(&asked.name)).await { return refused; }
+    // Antes da saída, que apaga o `linked_by` das filhas ligadas de quem sai.
+    let orphans = super::link_orphans::leaving(&asked.groups, &asked.name, false).await;
     let (ex, tell) = match super::exit::leave(&asked.st, &asked.groups, &asked.name, None, "route_unpair").await { Ok(left) => left, Err(error) => return asked.store_failed(&error) };
     drop(held);
     if ex.is_empty() { return asked.reply(StatusCode::OK, json!({"ok": true, "warning": null})); }
     let mut errs = super::exit::notify_exit(&asked.st, &asked.groups, &asked.name, &tell).await;
+    errs.extend(super::link_orphans::mark(&asked.st, &asked.name, orphans).await);
     let text = format!("{PREFIX} Você saiu do grupo de trabalho ({}). Volte a operar independente; use hangar-send só quando o usuário pedir.", ex.join(", "));
     if let Err(e) = deliver_text(&asked.st, &asked.name, &text).await {
         errs.push(json!({"sessao": asked.name, "erro": e}));

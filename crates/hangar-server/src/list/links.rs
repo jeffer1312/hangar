@@ -204,15 +204,20 @@ pub fn fill_links(row: &mut SessionRow, dirs: &Dirs, problems: &mut Problems) {
     row.orphaned_from = if row.linked_by.is_some() { None } else { orphan_parent(&row.name, dirs, problems) };
 }
 
-/// O pai de quem a filha ficou sem (`link-orphans.json`, no cofre `~/.hangar`); ausente é o normal.
+static ORPHANS: TailCache<hangar_delegation::orphans::Orphans> = LazyLock::new(Default::default);
+
+/// O pai de quem a filha ficou sem (`link-orphans.json`, no cofre `~/.hangar`); ausente é o normal. Lido uma
+/// vez por versão do arquivo, não uma por linha; ilegível não fica guardado e volta ao diário a cada leitura.
 fn orphan_parent(name: &str, dirs: &Dirs, problems: &mut Problems) -> Option<String> {
-    match hangar_delegation::orphans::read(&dirs.home.join(".hangar")) {
-        Ok(mut all) => all.remove(name).map(|orphan| orphan.parent),
+    let hangar = dirs.home.join(".hangar");
+    let all = cached(&ORPHANS, &hangar_delegation::orphans::path(&hangar), || match hangar_delegation::orphans::read(&hangar) {
+        Ok(all) => Some(all),
         Err(_) => {
             problems.note("list_link_orphans_unreadable", name, "marcas de filha sem pai ilegíveis; tratadas como ausentes");
             None
         }
-    }
+    })?;
+    all.get(name).map(|orphan| orphan.parent.clone())
 }
 
 /// `_decorate_loop`: sem sidecar, nenhum badge. Devolve a falha contornada (sidecar torto), para

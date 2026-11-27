@@ -23,6 +23,7 @@ import type { AskQuestionPayload, StateEvent } from './types';
 import { discardFile, fileAuthHeader, fileUrlNative, getPairContract, getPlans, listFiles, pathDiff, readFile, searchFiles, setPlanPin, unpairSession, writeFile } from './api';
 import type { Server } from './servers';
 import { createShare, exportShortcuts, sendSubagentMessage } from './api';
+import { deleteSession, deleteSessionForServer } from './api';
 import { cancelQueuedMessage, editQueuedMessage, reorderQueuedMessage, steerQueuedMessage, terminateCodexCommand } from './api';
 import { fileUrl, uploadUrl, uploadUrlNative } from './api';
 import { relimparDitado, transcribePiece } from './api';
@@ -1356,6 +1357,21 @@ describe('pairSession', () => {
     await pairSession('sessao', ['outra'], 'tarefa', true);
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(init?.body as string)).toEqual({ peers: ['outra'], task: 'tarefa', replace_task: true });
+  });
+});
+
+describe('fechar sessão com servidor explícito', () => {
+  const target = { id: 'b', label: 'Servidor B', baseUrl: 'https://b.test', token: 'token-b' };
+
+  it('deleteSessionForServer fecha em B e o deleteSession continua no ativo', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{"ok":true,"warning":null}'));
+    await expect(deleteSessionForServer(target, 'pai filha')).resolves.toEqual({ ok: true, warning: null });
+    await deleteSession('pai filha');
+    expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ['https://b.test/api/sessions/pai%20filha', 'DELETE'],
+      ['https://a.test/api/sessions/pai%20filha', 'DELETE'],
+    ]);
+    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({ Authorization: 'Bearer token-b' });
   });
 });
 

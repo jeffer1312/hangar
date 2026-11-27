@@ -820,3 +820,24 @@ async fn a_plain_interrupt_does_not_cascade() {
     diag.flush().await;
     assert!(cascade_failures(&python).is_empty(), "a filha que não existe nem foi procurada");
 }
+
+/// Sem os arquivos de grupo nenhuma filha é conhecida: o Parar responde sem `cascade` (nada a mostrar na
+/// tela) e a falha de leitura vai só ao diário.
+#[tokio::test]
+async fn unreadable_groups_stop_without_a_cascade_warning() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "p").await;
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
+    state.write_gate_wait = Duration::from_secs(5);
+    state.diag = python.bind_diary(state.diag.clone());
+    state.groups = None;
+    assert!(state.state.runtime.set(registry).is_ok());
+    let diag = state.diag.clone();
+    let server = spawn_state_for(&python, state).await;
+    let (status, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
+    assert!(body.get("cascade").is_none(), "sem filha conhecida não há aviso: {body}");
+    diag.flush().await;
+    assert!(cascade_failures(&python).iter().any(|d| d["sessao"] == "p" && d["codigo"] == "groups_unavailable"), "{:?}", python.diag());
+}

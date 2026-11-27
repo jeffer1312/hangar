@@ -4182,8 +4182,9 @@ ninguém.
 - **Texto de quando delegar no pai, linha curta na filha.** O pai lê o texto (marca `Delegar:`,
   `hangar_delegation::guidance::MARKER`) na descrição do `new_session`, no `help.txt` do
   `hangar-send` e no bloco do `CLAUDE.md`; o teste confere só a marca, porque cada superfície quebra
-  linha de um jeito. A filha recebe `guidance::child_prefix` no começo do `initial_prompt`, em todo
-  provider. Não no `SessionStart`: o `link_child` grava o `linked_by` depois de o processo subir, e
+  linha de um jeito. A filha recebe `guidance::child_prefix` no começo do `initial_prompt` só nos
+  provedores com retorno automático (`link_return::returnable`: Claude, Codex e Antigravity). Pi, omp e
+  Kimi ficam sem a linha: ela manda não responder por recado, e nada voltaria sozinho ao pai. Não no `SessionStart`: o `link_child` grava o `linked_by` depois de o processo subir, e
   o hook pode rodar antes. Sem `initial_prompt`, nada: um segundo turno quebraria o retorno (a última
   mensagem do usuário deixaria de ser o pedido do pai). O resumo e o título tiram a linha
   (`without_child_prefix`).
@@ -4206,12 +4207,16 @@ ninguém.
   tool `interrupt`. A árvore sai de `cascade::plan`, em largura, até `MAX_DEPTH = 3` níveis e sem
   voltar a quem já apareceu (vínculo em ciclo termina). Só conta como parada a resposta que confirma
   que não há turno; a que não parou vai no `cascade.failed` da resposta, num aviso só, e no diário
-  (`rust.link_cascade_failed`).
-- **Fechar o pai interrompe as filhas e as mantém abertas (4B).** Só depois de a morte do pai ser
-  confirmada: com o kill falho, nada muda nelas. As descendentes são lidas antes da saída do grupo, que
-  apaga o `linked_by`, e interrompidas depois dela. Toda saída do grupo grava a marca em
-  `~/.hangar/link-orphans.json` (`hangar_delegation::orphans`): o DELETE do dono, a limpeza de
-  Pi/omp/Kimi e a varredura de membro morto, que é quem tira o pai que morreu sozinho. A linha leva
+  (`rust.link_cascade_failed`). Arquivos de grupo ilegíveis não dão filha conhecida: a resposta sai sem
+  `cascade` e a falha fica só no diário, porque nenhuma parada pedida falhou à vista da pessoa.
+- **Fechar o pai interrompe as filhas e as mantém abertas (4B).** Só no fechamento do dono: o
+  convidado alcança a sessão, não a árvore dela, como no `/interrupt`. Só depois de a morte do pai ser
+  confirmada: com o kill falho, nada muda nelas. As descendentes são lidas antes do fechamento (o de
+  Pi/omp/Kimi sai do grupo por dentro, e a saída apaga o `linked_by`) e interrompidas depois dele; o
+  Pi/omp/Kimi que some sozinho só marca, como a varredura. Toda saída do grupo grava a marca em
+  `~/.hangar/link-orphans.json` (`hangar_delegation::orphans`): o DELETE (dono ou convidado), a
+  limpeza de Pi/omp/Kimi, o `DELETE /pair` e a varredura de membro morto, que é quem tira o pai que
+  morreu sozinho. A linha leva
   `orphaned_from`, e os clientes mostram "sem pai · era de <pai>". A marca sai quando a filha fecha, é
   religada, some da lista ou nome reusado abre outra vida; rename a leva junto. Pela tela, fechar um
   pai com filhas abertas pergunta "fechar também as N filhas?".

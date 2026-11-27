@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use crate::fake::{self, Fake, OWNER};
 
 /// Convidado com conta que vê as sessões sem dono, e um que não as vê.
-const GUEST: &str = "convidado-ana";
+pub(crate) const GUEST: &str = "convidado-ana";
 const BLIND: &str = "convidado-bia";
 
 /// Multiplexador falso: `sessions` tem uma sessão por linha, `hidden` as marcadas `@cp_hidden`, `survive`
@@ -95,7 +95,7 @@ impl Env {
         path
     }
     pub(crate) async fn delete(&self, name: &str) -> (u16, Value) { self.delete_as(name, OWNER).await }
-    async fn delete_as(&self, name: &str, token: &str) -> (u16, Value) {
+    pub(crate) async fn delete_as(&self, name: &str, token: &str) -> (u16, Value) {
         let response = fake::client().delete(format!("http://{}/api/sessions/{name}", self.server)).bearer_auth(token).send().await.unwrap();
         let status = response.status().as_u16();
         let text = response.text().await.unwrap();

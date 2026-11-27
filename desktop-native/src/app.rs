@@ -8164,9 +8164,8 @@ pub(crate) fn message_label(label: String, error: bool) -> Div {
 /// A marca da filha cujo pai fechou ou morreu: ela segue aberta, sem pai.
 fn orphan_label(parent: &str) -> String { tr_shared("session_orphaned_from", &[("name", parent)]) }
 
-/// Um aviso só para as filhas que o Parar não alcançou; `*` = o servidor não leu os arquivos de grupo.
+/// Um aviso só para as filhas que o Parar não alcançou.
 fn cascade_failed_note(failed: &[String]) -> String {
-    if failed.iter().any(|name| name == "*") { return tr_shared("interrupt_cascade_unavailable", &[]); }
     tr_shared("interrupt_cascade_failed", &[("names", &failed.join(", "))])
 }
 

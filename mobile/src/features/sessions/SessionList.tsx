@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MenuView } from '@react-native-menu/menu';
 import {
   deleteSession,
+  deleteSessionForServer,
   dismissFallenSession,
   effectiveGroupBy,
   formataErro,
@@ -151,16 +152,17 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     else toast.erro(m.servidor_nao_existe());
   }, []);
 
-  // As filhas antes do pai, uma a uma pelo DELETE de sempre (vale em servidor antigo); as linhas
-  // somem na hora, as que falharem voltam, e as falhas vêm num aviso só no fim.
-  const fecharComFilhas = useCallback(async (s: AggSession, kids: AggSession[]) => {
+  // As filhas antes do pai, uma a uma pelo DELETE de sempre (vale em servidor antigo), sempre na máquina
+  // da linha: o servidor ativo pode mudar entre um fechamento e outro. As linhas somem na hora, as que
+  // falharem voltam, e as falhas vêm num aviso só no fim.
+  const fecharComFilhas = useCallback(async (server: Server, s: AggSession, kids: AggSession[]) => {
     const order = [...kids, s];
     for (const x of order) useSessions.getState().markDeleting(x.serverId, x.name);
     const failed: string[] = [];
     let warning: unknown = null;
     for (const x of order) {
       try {
-        const r = await deleteSession(x.name);
+        const r = await deleteSessionForServer(server, x.name);
         if (r.warning && !warning) warning = r.warning;
       } catch (e: unknown) {
         useSessions.getState().unmarkDeleting(x.serverId, x.name);
@@ -192,11 +194,16 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
       const fechar = (kids: AggSession[]) => {
         if (deleting.current.get(key) !== reservation || reservation.confirmed) return;
         reservation.confirmed = true;
-        if (!comServidor(s, () => {
-          if (kids.length) {
-            fecharComFilhas(s, kids).finally(release);
+        if (kids.length) {
+          if (!server) {
+            toast.erro(m.servidor_nao_existe());
+            release();
             return;
           }
+          fecharComFilhas(server, s, kids).finally(release);
+          return;
+        }
+        if (!comServidor(s, () => {
           useSessions.getState().markDeleting(s.serverId, s.name);
           deleteSession(s.name)
             .then((r) => {

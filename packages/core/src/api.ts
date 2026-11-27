@@ -2179,6 +2179,14 @@ export async function deleteSession(name: string): Promise<{ ok: boolean; warnin
   });
 }
 
+// Fechar em sequência (o pai com as filhas) não pode seguir o servidor ativo: ele pode mudar no meio, e o
+// DELETE seguinte iria a outra máquina. O teto cobre o fechamento que espera o processo morrer.
+export function deleteSessionForServer(s: Server, name: string): Promise<{ ok: boolean; warning: unknown | null }> {
+  return apiFetchForServer<{ ok: boolean; warning: unknown | null }>(s, `/api/sessions/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  }, 60_000);
+}
+
 // Renomeia a sessao do tmux. Devolve o nome final (sanitizado pelo backend).
 export async function renameSession(name: string, newName: string, server?: Server | null): Promise<{ ok: boolean; name: string }> {
   return sessionFetch<{ ok: boolean; name: string }>(server, `/api/sessions/${encodeURIComponent(name)}/rename`, {
@@ -3776,7 +3784,7 @@ export async function skipQuestion(name: string, requestId: string, interactionI
   return res.json() as Promise<{ ok: boolean }>;
 }
 
-/** `cascade` só vem com `cascade=1` e descendente ligada; `name: '*'` = os arquivos de grupo não foram lidos. */
+/** `cascade` só vem com `cascade=1` e descendente ligada conhecida. */
 export interface InterruptResult {
   ok: boolean;
   cascade?: { interrupted: string[]; failed: { name: string; code: string }[] };
