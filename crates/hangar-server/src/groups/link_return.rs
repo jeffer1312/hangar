@@ -491,10 +491,13 @@ async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at:
         report(st, child, "link_returns_write_failed", "returned_at da filha não gravado", &io_kind(&e));
     }
     // O aviso de resposta descartada já tem código próprio no diário.
-    if dropped.is_none() {
-        st.diag.report("rust.link_return_delivered", child, "link_return_delivered", "resposta da filha ligada devolvida ao pai");
-    }
+    if dropped.is_none() { st.diag.record_line(delivered_line(child)); }
     Outcome::Done
+}
+
+/// Sucesso vai como `ok`: o `report` grava `erro`, e passado o teto do dia só `ok` é descartado.
+fn delivered_line(child: &str) -> serde_json::Value {
+    serde_json::json!({"evento": "rust.link_return_delivered", "nivel": "ok", "sessao": child, "codigo": "link_return_delivered"})
 }
 
 /// O que segue ao pai; `dropped` = a resposta não foi inteira, com o código e o motivo do diário.
@@ -789,6 +792,14 @@ mod tests {
         tool.push(ev(ChatKind::ToolUse, ""));
         let Err(Refusal::NoAnswer(unanswered)) = decide(&check(), &turn(tool.clone(), false)) else { panic!("esperava NoAnswer") };
         assert_eq!(reply_key(&tool), unanswered);
+    }
+
+    /// O retorno entregue é sucesso no diário, nunca uma linha de erro.
+    #[test]
+    fn a_delivered_return_is_an_ok_line() {
+        let line = delivered_line("filha");
+        assert_eq!((&line["evento"], &line["nivel"], &line["sessao"], &line["codigo"]),
+            (&serde_json::json!("rust.link_return_delivered"), &serde_json::json!("ok"), &serde_json::json!("filha"), &serde_json::json!("link_return_delivered")));
     }
 
     #[test]

@@ -420,6 +420,19 @@ fn link_refusal(me: &str, alvo: &str, sidecar: Option<&Sidecar>, code: &str) -> 
 /// O histórico inteiro de uma conversa longa passaria do teto do corpo da rota.
 const CHILD_WINDOWS: [usize; 2] = [400, 4000];
 
+/// A rota junta a fila do Hangar e as notas dos avisos da CLI; o retorno lê sem elas. Mantidas, a nota viraria a
+/// resposta e o recado ainda na fila abriria um turno vazio, e `returned` não bateria com o `returned_key` gravado.
+/// `queued-agent:` e afins (com `:`) vêm do próprio transcript e ficam.
+fn transcript_only(e: &ChatEvent) -> bool {
+    let queued = e.id.starts_with("local-") || e.id.strip_prefix("queued-").is_some_and(|rest| !rest.contains(':'));
+    !queued && !crate::transcript::is_cli_note(&e.id)
+}
+
+/// O 404 da rota do histórico para sessão sem transcript.
+fn not_born_yet(status: u16, value: &Value) -> bool {
+    status == 404 && value["detail"]["code"] == "erro_sessao_inexistente"
+}
+
 /// Uma página da resposta final, contada em `char`; `offset` além do fim volta página vazia.
 fn answer_page(text: &str, offset: usize) -> Value {
     let total = text.chars().count();
@@ -813,9 +826,9 @@ impl Tools {
         let alvo = a.alvo.as_str();
         if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo) { return Err(refusal); }
         self.linked_child(&me, alvo, "erro_nao_ligada").await?;
-        let events = self.child_events(&me, alvo).await?;
         let produced = self.st.list.snapshot().await.map_err(|_| "child_status_list_failed: a lista de sessões não respondeu")?;
         let row = produced.rows.iter().find(|r| r.name == alvo);
+        let events = self.child_events(&me, alvo, row.is_some()).await?;
         let busy = row.is_some_and(|r| matches!(r.state.as_str(), "working" | "awaiting_input"));
         let answer = if busy { None } else { link_return::final_answer(&events).map(|(e, _)| e.text.clone().unwrap_or_default()) };
         let key = link_return::reply_key(&events);
@@ -832,15 +845,19 @@ impl Tools {
     }
 
     /// O fim do histórico até a última mensagem do usuário. Rota com erro ou corpo torto é erro, nunca página vazia.
-    async fn child_events(&self, me: &str, alvo: &str) -> Result<Vec<ChatEvent>, String> {
+    /// `listed`: a filha está na lista; sem transcript ainda, ela acabou de nascer e não tem resposta.
+    async fn child_events(&self, me: &str, alvo: &str, listed: bool) -> Result<Vec<ChatEvent>, String> {
         let mut events = Vec::new();
         for limit in CHILD_WINDOWS {
             let path = format!("/api/sessions/{}/history?limit={limit}", segment(alvo));
             let (status, value) = self.route_from(Some(me), Method::GET, &path, None).await;
+            if listed && not_born_yet(status, &value) { return Ok(Vec::new()); }
             if !(200..300).contains(&status) { return Err(format!("child_status_history_failed: {}", coded(status, &value))); }
             events = serde_json::from_value::<Vec<ChatEvent>>(value)
                 .map_err(|e| format!("child_status_history_failed: histórico de '{alvo}' ilegível ({e})"))?;
-            if events.len() < limit || events.iter().any(|e| e.kind == ChatKind::UserMsg) { break; }
+            let exhausted = events.len() < limit;
+            events.retain(transcript_only);
+            if exhausted || events.iter().any(|e| e.kind == ChatKind::UserMsg) { break; }
         }
         Ok(events)
     }
@@ -1453,6 +1470,29 @@ mod tests {
         assert!(refused(None), "sem arquivo de grupo");
         // As tools novas recusam com o código delas; o do `interrupt` não muda.
         assert!(link_refusal("pai", "filha", None, "erro_nao_ligada").is_some_and(|e| e.starts_with("erro_nao_ligada: 'filha'")));
+    }
+
+    /// O `child_status` lê o mesmo turno que o retorno: sem a fila do Hangar e sem as notas da CLI.
+    #[test]
+    fn the_status_reads_the_transcript_without_queue_or_cli_notes() {
+        let ev = |kind: ChatKind, id: &str| ChatEvent { kind, id: id.into(), text: Some("x".into()), ..Default::default() };
+        let mut events = vec![
+            ev(ChatKind::UserMsg, "u1"), ev(ChatKind::AssistantMsg, "a1"), ev(ChatKind::AssistantMsg, "retry-ok:a1"),
+            ev(ChatKind::AssistantMsg, "local-9"), ev(ChatKind::UserMsg, "queued-q1"), ev(ChatKind::UserMsg, "queued-agent:h1"),
+        ];
+        events.retain(transcript_only);
+        let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["u1", "a1", "queued-agent:h1"]);
+    }
+
+    /// Só o 404 de sessão sem transcript é a filha recém-aberta; outro erro da rota segue erro.
+    #[test]
+    fn only_the_missing_transcript_is_a_child_not_born_yet() {
+        let missing = json!({"detail": {"code": "erro_sessao_inexistente", "msg": "session or transcript not found"}});
+        assert!(not_born_yet(404, &missing));
+        assert!(!not_born_yet(500, &missing));
+        assert!(!not_born_yet(404, &json!({"detail": "Not Found"})));
+        assert!(!not_born_yet(502, &json!({"detail": "resposta da rota ilegível"})));
     }
 
     #[test]
