@@ -55,6 +55,8 @@ pub(crate) struct Ctx {
     pub(crate) target: WriteTarget,
     // Só segura a porta: o `Drop` a solta quando a escrita termina.
     pub(crate) _pass: IngressPass,
+    /// Quem chamou é o dono: só ele alcança além da sessão da rota (a cascata do `/interrupt`).
+    pub(crate) owner: bool,
     parts: Parts,
 }
 
@@ -82,6 +84,7 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
     let runtime = st.state.runtime.get().cloned();
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
     let Some(name) = name else { return Err(stranger(st, peer, req, who.as_ref()).await) };
+    let owner = matches!(who, Some(Caller::Owner));
     if matches!(route, WriteRoute::Input | WriteRoute::Interrupt)
         && let Some(response) = orchestration_guard(st, &name, req.headers()).await {
         return Err(response);
@@ -101,7 +104,7 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
     if !other && let Some(response)=control::asleep_queue(&runtime,&name,route,st.write_gate_wait,&parts,&bytes).await {return Err(response);}
     match route_write(&runtime, &name, route, st.write_gate_wait).await {
         Write::Rust(_, _) if !shaped => Err(invalid_body(&parts.headers)),
-        Write::Rust(pass_in, target) => Ok((Ctx { st: st.clone(), name, target, _pass: pass_in, parts }, bytes)),
+        Write::Rust(pass_in, target) => Ok((Ctx { st: st.clone(), name, target, _pass: pass_in, owner, parts }, bytes)),
         Write::Unowned if route == WriteRoute::Input => Err(input::unowned_response(st, &name, peer, &parts.headers, &bytes).await),
         // O Python não tem a rota de parar: sem agente do Rust no nome, a recusa é a mesma do Codex.
         Write::Unowned if route == WriteRoute::StopTask => Err(control::stop_unowned(&parts.headers)),

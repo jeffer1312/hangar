@@ -18,11 +18,13 @@ use super::input::{
     Diary, MSG_CODEX_CONTROL, MSG_CONTROL_DEFERRED, MSG_CONTROL_UNCONFIRMED, MSG_STEER_REFUSED, MSG_STEER_UNKNOWN, answer, codex_control,
     control_failed, diary_code, json_content_type, payload_code, runtime_failed, sem_turno,
 };
-use super::{Ctx, WriteRoute, admit, busy_body, detail_body, invalid_body, json_response};
+use super::{Ctx, Write, WriteRoute, admit, busy_body, detail_body, failed_status, invalid_body, json_response, route_write};
+use crate::groups::model::Sidecar;
+use crate::groups::store::file_stem;
 use crate::mods::state::random_hex;
 use crate::interactions::{ExpectedInteraction, InteractionError};
 use crate::routes::{AppState, cors};
-use crate::runtime::gateway::{EntryHandle, RuntimeRegistry};
+use crate::runtime::gateway::{EntryHandle, RuntimeRegistry, WriteTarget};
 use crate::runtime::protocol::{Disposition, OperationKind, RuntimeCommand, RuntimeError, RuntimeReply};
 use crate::runtime::queue::{Action, queue_text_ok};
 
@@ -462,19 +464,109 @@ pub async fn interrupt(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         Err(response) => return response,
     };
     let Some(clear) = parse_clear(query.as_deref()) else { return invalid_body(ctx.headers()) };
+    // Só o Parar pede a cascata: cancelar o cartão de pergunta também chama esta rota e não para as filhas.
+    // O convidado alcança a sessão, não a árvore dela.
+    let cascade = ctx.owner && crate::auth::query_param(query.as_deref(), "cascade").as_deref() == Some("1");
+    let own = interrupt_target(&ctx.name, &ctx.target, clear);
+    // O pai que falha na própria interrupção não segura as filhas: a pessoa pediu parar tudo.
+    let (mut result, cascaded) = if cascade { tokio::join!(own, cascade_from(&st, &ctx.name)) } else { (own.await, None) };
+    if let (Some(cascaded), Some(body)) = (cascaded, result.1.as_object_mut()) { body.insert("cascade".into(), cascaded); }
+    answer(&ctx, result)
+}
+
+/// A interrupção de uma entrada já admitida; a porta fica com quem chamou.
+async fn interrupt_target(name: &str, target: &WriteTarget, clear: bool) -> Answer {
     let operation_id = random_hex(16);
-    let result = match &ctx.target.handle {
+    match &target.handle {
         // O ator lê a pergunta do plugin antes do Esc e a fecha só se o Esc saiu.
         EntryHandle::Terminal { handle, .. } => interrupt_terminal_answer(&handle.control(operation_id, "interrupt".into(), json!({"clear": clear})).await),
         EntryHandle::OtherTerminal {handle,..}=>interrupt_terminal_answer(&handle.control(operation_id,"interrupt".into(),json!({"clear":clear})).await),
         headless => {
             let sent = headless.command(RuntimeCommand { operation_id, kind: OperationKind::Interrupt, payload: json!({}) }).await;
-            let codex = ctx.target.provider == "codex";
-            if codex { super::codex::log_outcome(&ctx.name, "interrupt", &sent, "interrupção do Codex não confirmada; a rota responde 409 erro_codex_controle"); }
+            let codex = target.provider == "codex";
+            if codex { super::codex::log_outcome(name, "interrupt", &sent, "interrupção do Codex não confirmada; a rota responde 409 erro_codex_controle"); }
             interrupt_headless_answer(codex, &sent)
         }
+    }
+}
+
+/// O `/interrupt` sem pedido HTTP, para a descendente que a cascata alcança: a mesma porta e a mesma entrada da rota.
+pub(crate) async fn interrupt_by_name(st: &AppState, name: &str) -> (StatusCode, Value) {
+    let Some(runtime) = st.state.runtime.get() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_unavailable", "o servidor está sem o registro de sessões", json!({})));
     };
-    answer(&ctx, result)
+    // Adormecida não tem turno: acordá-la só para o Esc seria trabalho à toa.
+    if runtime.writable(name).await.is_none() && runtime.asleep(name).await.is_some() { return sem_turno(MSG_NO_TURN); }
+    match route_write(runtime, name, WriteRoute::Interrupt, st.write_gate_wait).await {
+        Write::Rust(held, target) => {
+            let result = interrupt_target(name, &target, false).await;
+            drop(held);
+            result
+        }
+        Write::Unowned => (StatusCode::NOT_FOUND, detail_body(CASCADE_UNOWNED, MSG_CASCADE_UNOWNED, json!({}))),
+        Write::Busy => (StatusCode::CONFLICT, busy_body()),
+        Write::Failed(error) => (failed_status(&error), detail_body(&error.code, &error.message, json!({}))),
+        // Só texto vai à fila de quem abre ou acorda; interromper não chega aqui.
+        Write::Opening(_) | Write::Asleep(_) => sem_turno(MSG_NO_TURN),
+    }
+}
+
+/// Espera por descendente: o Parar responde mesmo com uma filha travada, e a interrupção dela segue à parte.
+const CASCADE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+const CASCADE_UNOWNED: &str = "session_unowned";
+const MSG_CASCADE_UNOWNED: &str = "nenhum agente do Hangar nesta sessão para interromper";
+
+/// Para as descendentes ligadas de `root` ao mesmo tempo; `None` = nenhuma descendente.
+async fn cascade_from(st: &Arc<AppState>, root: &str) -> Option<Value> {
+    let unavailable = || {
+        st.diag.report("rust.link_cascade_failed", root, "groups_unavailable", "arquivos de grupo indisponíveis; as filhas não pararam junto");
+        json!({"interrupted": [], "failed": [{"name": "*", "code": "groups_unavailable"}]})
+    };
+    let Some(groups) = st.groups.as_ref() else { return Some(unavailable()) };
+    let Ok(all) = groups.sidecars().await else { return Some(unavailable()) };
+    let targets = hangar_delegation::cascade::plan(&linked_parents(&all), root);
+    if targets.is_empty() { return None; }
+    let runs = targets.into_iter().map(|target| {
+        let (st, name) = (st.clone(), target.name);
+        async move {
+            let task = tokio::spawn({ let (st, name) = (st.clone(), name.clone()); async move { interrupt_by_name(&st, &name).await } });
+            let outcome = match tokio::time::timeout(CASCADE_WAIT, task).await {
+                Ok(Ok(answer)) => cascade_outcome(&answer),
+                Ok(Err(_)) => Err("cascade_task_failed".to_owned()),
+                Err(_) => Err("cascade_timeout".to_owned()),
+            };
+            (name, outcome)
+        }
+    });
+    let (mut interrupted, mut failed) = (Vec::new(), Vec::new());
+    for (name, outcome) in futures_util::future::join_all(runs).await {
+        match outcome {
+            Ok(()) => interrupted.push(json!(name)),
+            Err(code) => {
+                st.diag.report("rust.link_cascade_failed", &name, &code, "a descendente ligada não parou junto com o pai");
+                failed.push(json!({"name": name, "code": code}));
+            }
+        }
+    }
+    Some(json!({"interrupted": interrupted, "failed": failed}))
+}
+
+/// Filha → pai pelos arquivos de grupo. O arquivo tem o nome saneado; o `harness` guarda o da sessão.
+fn linked_parents(all: &[(String, Sidecar)]) -> std::collections::BTreeMap<String, String> {
+    all.iter().filter_map(|(stem, sidecar)| {
+        let parent = sidecar.linked_parent()?;
+        let name = sidecar.harness.keys().find(|n| file_stem(n) == *stem).cloned().unwrap_or_else(|| stem.clone());
+        Some((name, parent.to_owned()))
+    }).collect()
+}
+
+/// Sem turno conta como parada: não havia o que interromper. Senão, o código da recusa.
+fn cascade_outcome((status, body): &Answer) -> Result<(), String> {
+    let detail = &body["detail"];
+    let no_turn = *status == StatusCode::CONFLICT
+        && (detail["code"] == "erro_sem_turno" || (detail["code"] == "erro_codex_controle" && detail["msg"] == MSG_CODEX_NO_TURN));
+    if status.is_success() || no_turn { return Ok(()); }
+    Err(detail["code"].as_str().filter(|c| !c.is_empty()).map_or_else(|| status.as_u16().to_string(), str::to_owned))
 }
 
 /// `POST …/tasks/{task_id}/stop`: o pedido de parar sai; a prova é o `task_updated`/`task_notification`

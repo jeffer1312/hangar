@@ -742,3 +742,62 @@ async fn stop_task_on_a_name_without_rust_owner_is_409_only_claude_not_python() 
     let (status, body) = send(server, "POST", "shell-cru/tasks/bserqfwvd/stop", "").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_parar_so_claude")), "{body}");
 }
+
+/// Pai `p` e filhas ligadas `a` (sem terminal, parada) e `b` (nenhuma sessão com esse nome), pelos arquivos de grupo.
+/// Volta também o diário do servidor, para esperar as gravações dele.
+async fn linked_family(registry: Arc<RuntimeRegistry>, dir: &Path) -> (Arc<Fake>, std::net::SocketAddr, hangar_server::diag::DiagClient) {
+    use hangar_server::groups::{orq::OrqVault, service::GroupService, store::PairDir};
+    let pair = dir.join("pair");
+    std::fs::create_dir_all(&pair).unwrap();
+    for child in ["a", "b"] {
+        let sidecar = json!({"peers": ["p"], "task": "", "gid": "g1", "harness": {child: "claude", "p": "claude"}, "linked_by": "p"});
+        std::fs::write(pair.join(format!("{child}.json")), sidecar.to_string()).unwrap();
+    }
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
+    state.write_gate_wait = Duration::from_secs(5);
+    state.diag = python.bind_diary(state.diag.clone());
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair, dir.join("arquivo")), Arc::new(OrqVault::from_state(&state)), "casa".into())));
+    assert!(state.state.runtime.set(registry).is_ok());
+    let diag = state.diag.clone();
+    let addr = spawn_state_for(&python, state).await;
+    (python, addr, diag)
+}
+
+fn cascade_failures(python: &Fake) -> Vec<Value> {
+    python.diag().into_iter().filter(|d| d["evento"] == "rust.link_cascade_failed").collect()
+}
+
+#[tokio::test]
+async fn interrupting_a_parent_interrupts_its_linked_children_and_reports_each() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "p").await;
+    let child = open_headless(&registry, dir.path(), "a").await;
+    let (python, server, diag) = linked_family(registry, dir.path()).await;
+    let (status, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
+    // O pai sem turno responde como sempre, e a cascata corre mesmo assim.
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
+    assert_eq!(body["cascade"]["interrupted"], json!(["a"]), "filha parada sem turno conta como interrompida: {body}");
+    let failed = body["cascade"]["failed"].as_array().expect("lista das que falharam");
+    assert_eq!(failed.len(), 1, "{body}");
+    assert_eq!(failed[0]["name"], "b", "{body}");
+    let code = failed[0]["code"].as_str().filter(|c| !c.is_empty()).expect("a falha leva o código");
+    assert!(!child.lock().unwrap().iter().any(|e| e.to_string().contains("interrupt")), "sem turno nada vai ao cano da filha");
+    diag.flush().await;
+    let diary = cascade_failures(&python);
+    assert!(diary.iter().any(|d| d["sessao"] == "b" && d["codigo"] == code), "a falha vai ao diário com o código: {diary:?}");
+}
+
+#[tokio::test]
+async fn a_plain_interrupt_does_not_cascade() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "p").await;
+    open_headless(&registry, dir.path(), "a").await;
+    let (python, server, diag) = linked_family(registry, dir.path()).await;
+    // Cancelar o cartão de pergunta chama a mesma rota sem o parâmetro: só o pai.
+    let (status, body) = send(server, "POST", "p/interrupt", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
+    assert!(body.get("cascade").is_none(), "sem `cascade=1` a resposta é a de sempre: {body}");
+    diag.flush().await;
+    assert!(cascade_failures(&python).is_empty(), "a filha que não existe nem foi procurada");
+}

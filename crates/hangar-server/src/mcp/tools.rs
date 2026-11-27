@@ -834,7 +834,12 @@ impl Tools {
             return Err(format!("sessão '{alvo}' não existe (tool `sessions`)"));
         }
         self.linked_child(&me, alvo, "erro_interromper_nao_ligada").await?;
-        self.ok_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt", segment(alvo)), None).await.map(dict)
+        // Parar a filha para também as filhas dela, como o Parar da tela.
+        let (status, value) = self.route_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt?cascade=1", segment(alvo)), None).await;
+        if (200..300).contains(&status) { return Ok(dict(value)); }
+        // A filha sem turno pode ter parado as dela: o erro leva a cascata junto.
+        let cascade = value.get("cascade").map(|c| format!(" (cascade: {c})")).unwrap_or_default();
+        Err(format!("{}{cascade}", detail(status, &value)))
     }
 
     /// `alvo` é filha ligada a `me`, pelo arquivo de grupo dela; senão a recusa com o código da tool.
