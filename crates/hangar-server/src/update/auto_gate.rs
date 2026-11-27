@@ -30,10 +30,10 @@ pub(crate) fn policy(state: &AppState, gate: &Gate, diary: Option<&Path>) -> Pol
 }
 
 /// Configuração ilegível não atualiza, e vai ao diário: o componente parado de atualizar fica com causa.
+/// O arquivo que existe e não se lê também conta: lido como vazio, ligaria as automações que ele desliga.
 fn automations(runtime: Result<RuntimeConfig, String>, gate: &Gate, diary: Option<&Path>) -> bool {
-    match runtime {
-        Ok(runtime) => {
-            let value = runtime.get("automations");
+    match runtime.and_then(|runtime| runtime.get_checked("automations").map_err(|e| format!("{}: {}", e.kind, e.message))) {
+        Ok(value) => {
             let enabled = crate::orchestration::truthy(&value);
             crate::orchestration::codec::discard(value);
             enabled
@@ -82,7 +82,7 @@ mod tests {
     const GATE: Gate = Gate { event: "teste.atualizar", config_failed: "teste_config_failed", panicked: "teste_task_panicked", what: "teste" };
 
     fn diary_text(dir: &Path) -> String {
-        std::fs::read_dir(dir).unwrap().flatten().map(|file| std::fs::read_to_string(file.path()).unwrap()).collect()
+        std::fs::read_dir(dir).unwrap().map(|file| std::fs::read_to_string(file.expect("entrada do diário").path()).unwrap()).collect()
     }
 
     /// Uma passada que entra em pânico vai ao diário com código, e a seguinte ainda roda.
@@ -102,6 +102,23 @@ mod tests {
     fn an_unreadable_config_does_not_update_and_goes_to_the_diary() {
         let diary = tempfile::tempdir().unwrap();
         assert!(!automations(Err("ilegível".into()), &GATE, Some(diary.path())));
+        assert!(diary_text(diary.path()).contains(GATE.config_failed), "{}", diary_text(diary.path()));
+    }
+
+    /// O `runtime-config.json` que existe e não é JSON não atualiza, mesmo que diga automações desligadas.
+    #[test]
+    fn a_config_file_that_does_not_parse_does_not_update() {
+        let home = tempfile::tempdir().unwrap();
+        let env = crate::accounts::environment::AccountEnvironment::from_map([
+            ("HOME".into(), home.path().display().to_string()),
+            ("USERPROFILE".into(), home.path().display().to_string()),
+            ("PATH".into(), String::new()),
+        ].into());
+        let config = RuntimeConfig::new(env).unwrap();
+        std::fs::create_dir_all(config.path.parent().unwrap()).unwrap();
+        std::fs::write(&config.path, br#"{"automations": false"#).unwrap();
+        let diary = tempfile::tempdir().unwrap();
+        assert!(!automations(Ok(config), &GATE, Some(diary.path())));
         assert!(diary_text(diary.path()).contains(GATE.config_failed), "{}", diary_text(diary.path()));
     }
 

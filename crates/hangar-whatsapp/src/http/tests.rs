@@ -822,7 +822,7 @@ async fn fake_github(tags: &[&str]) -> String {
     format!("http://127.0.0.1:{port}")
 }
 
-/// O resumo diz a tag instalada e a versão nova da última procura (contrato C-D); sem instalação, procura ou
+/// O resumo diz a tag instalada e a versão nova da última procura; sem instalação, procura ou
 /// release mais nova que a instalada, `update` é `null`.
 #[tokio::test]
 async fn the_overview_says_the_installed_tag_and_a_newer_release() {

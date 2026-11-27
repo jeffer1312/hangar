@@ -25,7 +25,7 @@ import { haptic } from '../../src/ui/haptics';
 import { useServers } from '../../src/stores/servers';
 import * as m from '../../src/paraglide/messages';
 
-type Load = { status: 'loading' } | { status: 'error'; error: string; code?: string } | { status: 'ready'; data: WhatsAppState };
+type Load = { status: 'loading' } | { status: 'error'; error: string; code?: string } | { status: 'ready'; data: WhatsAppState; seq: number };
 type Confirm = 'logout' | 'wipe' | 'remove' | 'migrate';
 
 const ERR: Record<string, () => string> = {
@@ -105,6 +105,8 @@ export default function WhatsApp() {
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   // A atualização que esta tela pediu: só ela, ao parar por mudar o formato dos dados, abre a confirmação sozinha.
   const ownUpdate = useRef(false);
+  // O número da última leitura começada quando o Atualizar respondeu.
+  const ownUpdateFrom = useRef(0);
   // O 409 de um envio em curso: a próxima leitura diz se havia job a acompanhar ou se o aviso aparece.
   const updateBusy = useRef(false);
   // Troca de servidor no meio de uma chamada: a resposta do anterior não pinta esta tela.
@@ -148,7 +150,7 @@ export default function WhatsApp() {
         if (!latest()) return;
         if (!isWhatsAppState(v)) { failed({ status: 'error', error: m.native_invalid_response() }); return; }
         readFails.current = 0;
-        setLoad({ status: 'ready', data: v });
+        setLoad({ status: 'ready', data: v, seq });
       })
       .catch((e: unknown) => { if (latest()) failed({ status: 'error', error: errorText(e), code: errorCode(e) }); });
   }, []);
@@ -184,6 +186,7 @@ export default function WhatsApp() {
   }, [read]);
 
   const data = load.status === 'ready' ? load.data : null;
+  const readAt = load.status === 'ready' ? load.seq : 0;
   const view: WhatsAppView | null = data ? viewOf(data) : null;
   // As duas versões da confirmação da mudança de formato; sem elas a folha não tem o que dizer.
   const migration = data?.update && data.installed_tag ? { tag: data.update.latest, installed: data.installed_tag } : null;
@@ -194,10 +197,11 @@ export default function WhatsApp() {
       updateBusy.current = false;
       if (!jobRunning(data)) { setWriteError(m.native_whatsapp_update_busy()); haptic.error(); }
     }
-    const end = ownUpdateEnd(data, ownUpdate.current);
+    // Só uma leitura começada depois da resposta do Atualizar fala do job que ele abriu.
+    const end = ownUpdateEnd(data, ownUpdate.current && readAt > ownUpdateFrom.current);
     if (end) ownUpdate.current = false;
     if (end === 'confirm') setConfirm('migrate');
-  }, [data]);
+  }, [data, readAt]);
 
   // Conectou: o pedido de pareamento acabou.
   useEffect(() => {
@@ -228,7 +232,7 @@ export default function WhatsApp() {
         if (!live()) return;
         if (kind === 'wipe') setUnlinkOnPhone((r as { logout?: unknown } | undefined)?.logout === 'not_done');
         if (kind === 'pair') setAwaitUntil(Date.now() + PAIR_GRACE_MS);
-        if (kind === 'update') ownUpdate.current = true;
+        if (kind === 'update') { ownUpdate.current = true; ownUpdateFrom.current = readSeq.current; }
         if (kind === 'logout' || kind === 'wipe' || kind === 'uninstall') haptic.success();
       })
       .catch((e: unknown) => {

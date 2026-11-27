@@ -60,8 +60,8 @@ pub fn parse_version(output: &str) -> Option<(String, u32)> {
     (!version.is_empty()).then(|| (version.to_owned(), api))
 }
 
-/// O esquema do `messages.db` que o programa grava, pelo `--schema-version` (contrato C1). `None` quando ele
-/// não diz: o binário anterior ao C1 recusa a flag e sai com outro código.
+/// O esquema do `messages.db` que o programa grava, pelo `--schema-version`. `None` quando ele não diz: o
+/// binário que não conhece a flag a recusa e sai com outro código.
 pub async fn schema_of(binary: &Path) -> Option<u32> {
     number(command(binary, "--schema-version")).await
 }

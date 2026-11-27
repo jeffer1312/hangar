@@ -51,7 +51,7 @@ fn record(diary: Option<&Path>, update: Option<&AutoUpdate>) {
         Ok(Outcome::Updated) => tracing::info!(from = %from, to = %to, "WhatsApp: atualizado de {from} para {to}"),
         Ok(outcome) => tracing::debug!(outcome = ?outcome, from = %from, to = %to, "WhatsApp: atualização automática sem troca"),
         Err(failure) => {
-            tracing::warn!(code = failure.code, from = %from, to = %to, detail = %failure.detail, "WhatsApp: a atualização automática falhou");
+            tracing::warn!(code = failure.code, from = %from, to = %to, "WhatsApp: a atualização automática falhou");
         }
     }
     if let Some(line) = diary_line(update) {

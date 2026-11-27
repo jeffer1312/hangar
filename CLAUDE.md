@@ -833,7 +833,7 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   trava 463/475 sem reenvio ficam no binário. O dono pode editar só o texto no cartão (`send-edited`, binário api 3;
   binário antigo recebe 409 `whatsapp_edit_unsupported`, nunca o original no lugar). Atualiza sozinho: 2 min após a subida e de hora em hora, com os portões do hcu;
   release que muda o `user_version` só com confirmação do dono, e o binário grava
-  `messages.db.schema<v>.bak` antes de migrar, devolvida se a nova não sobe; envio durante a troca é
+  `messages.db.schema<v>.bak` antes de migrar, que o Hangar tenta devolver se a nova não sobe; envio durante a troca é
   409 `whatsapp_updating` (outra operação na vez: `whatsapp_busy`). `whatsapp_draft` recusa em sessão compartilhada e sem o
   prazo de 660 s; `MarkRead`, `SendPresence` e `SubscribePresence` seguem proibidos (lista fechada).
   Instalar exige aceite (`accepted.json`); o router usa `Edge::owner_only` e a 8766 não o monta; as

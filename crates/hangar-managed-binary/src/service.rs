@@ -207,7 +207,8 @@ pub async fn run(step: &str, program: &str, args: &[&str]) -> Result<(), Error> 
 /// O comando rodado até o fim, com qualquer código de saída; só não abrir é erro.
 async fn output(step: &str, program: &str, args: &[&str]) -> Result<std::process::Output, Error> {
     let mut command = tokio::process::Command::new(program);
-    command.args(args).stdin(std::process::Stdio::null());
+    // Quem desiste da espera (prazo) não deixa o comando rodando solto.
+    command.args(args).stdin(std::process::Stdio::null()).kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
     command.output().await.map_err(|e| Error { step: step.into(), detail: e.to_string() })
@@ -324,9 +325,12 @@ async fn launchd_stop(home: &Path, id: &ServiceId, launchctl: &str) -> Result<()
         return Ok(());
     }
     let path = plist.to_string_lossy().into_owned();
-    // Descarregar o que não estava carregado falha e não importa; o que segue carregado aparece no `process_running`.
-    let _ = run("launchctl unload", launchctl, &launchd_stop_args(&path)).await;
-    Ok(())
+    let Err(refused) = run("launchctl unload", launchctl, &launchd_stop_args(&path)).await else { return Ok(()) };
+    // Descarregar o que não estava carregado falha e não importa; qualquer outra recusa é a do `unload`.
+    match output("launchctl list", launchctl, &["list", id.launchd_label]).await {
+        Ok(out) if !out.status.success() && launchd_not_loaded(out.status.code(), &String::from_utf8_lossy(&out.stderr)) => Ok(()),
+        _ => Err(refused),
+    }
 }
 
 /// Grava o serviço apontando para `s.executable` e o (re)inicia: serve para instalar e para atualizar.
@@ -620,6 +624,27 @@ mod tests {
         for kept in ["Register-ScheduledTask", "Unregister-ScheduledTask", "Start-ScheduledTask"] {
             assert!(!stop.contains(kept), "{kept}: {stop}");
         }
+    }
+
+    /// Descarregar o que o launchd não tem carregado não é erro; qualquer outra recusa do `unload` é.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_refused_unload_is_an_error_unless_the_agent_is_not_loaded() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let plist = launchd_plist_path(home.path(), &WHATSAPP);
+        std::fs::create_dir_all(plist.parent().unwrap()).unwrap();
+        std::fs::write(&plist, "<plist/>").unwrap();
+        let fake = |name: &str, list: &str| {
+            let path = home.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n[ \"$1\" = unload ] && {{ echo recusado >&2; exit 5; }}\n{list}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path.display().to_string()
+        };
+        let unloaded = fake("unloaded", "echo 'Could not find service' >&2; exit 113");
+        assert_eq!(launchd_stop(home.path(), &WHATSAPP, &unloaded).await, Ok(()));
+        let loaded = fake("loaded", "echo '{ \"PID\" = 7; };'");
+        assert_eq!(launchd_stop(home.path(), &WHATSAPP, &loaded).await.unwrap_err().step, "launchctl unload");
     }
 
     /// Sem a unit no disco não se pergunta ao `systemctl`; o que sai com erro é erro.

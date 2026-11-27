@@ -261,7 +261,7 @@ async fn overview(wa: &WhatsApp) -> Response {
     }))
 }
 
-/// A última procura (contrato C-D) só vale como versão nova quando a `latest` dela passa da instalada.
+/// A última procura só vale como versão nova quando a `latest` dela passa da instalada.
 fn available_update(current: Option<&Installed>, check: Option<UpdateCheck>) -> Value {
     match (current, check) {
         (Some(current), Some(check)) if crate::release::newer(&check.latest, &current.tag) => {
@@ -680,9 +680,17 @@ fn wipe_copies(data: &Path, mut removed: Vec<String>) -> Result<Vec<String>, Par
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
         Err(e) => return Err(Partial { detail: format!("{}: {e}", data.display()), failed: data.display().to_string(), removed }),
     };
-    let mut names: Vec<String> = entries.flatten().filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| name.starts_with(install::MIGRATED) || name == install::RESTORING || install::backup_schema(name, true).is_some())
-        .collect();
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => return Err(Partial { detail: format!("{}: {e}", data.display()), failed: data.display().to_string(), removed }),
+        };
+        if let Ok(name) = entry.file_name().into_string()
+            && (name.starts_with(install::MIGRATED) || name == install::RESTORING || install::backup_schema(&name, true).is_some()) {
+            names.push(name);
+        }
+    }
     names.sort();
     for name in names {
         match std::fs::remove_file(data.join(&name)) {

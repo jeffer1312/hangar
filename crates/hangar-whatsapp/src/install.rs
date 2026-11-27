@@ -26,6 +26,8 @@ const MIGRATION_TIMEOUT: Duration = Duration::from_secs(600);
 const MIGRATION_POLL: Duration = Duration::from_secs(5);
 /// O launchd não espera o programa sair para responder ao `unload`.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// Teto de cada chamada ao gerenciador de serviços: uma que não volta seguraria a vez do instalador.
+const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub const SERVICE: ServiceId = ServiceId {
     unit: "hangar-whatsapp.service",
@@ -374,13 +376,19 @@ pub async fn auto_wants(ctx: &Context) -> AutoPlan {
         Ok(latest) => latest,
         Err(failure) => return AutoPlan::Done(AutoUpdate { to: old.tag.clone(), from: old.tag, result: Err(failure) }),
     };
+    let skipped = |old: Installed, latest: Release| AutoPlan::Done(AutoUpdate { from: old.tag, to: latest.tag, result: Ok(Outcome::Skipped) });
+    // Sem a vez (um envio a segura): a procura gravada é só da instalação que a pediu. Trocada no meio da procura,
+    // nada se grava, e a próxima passada procura de novo.
+    if current(&ctx.paths).as_ref().map(|now| &now.tag) != Some(&old.tag) {
+        return skipped(old, latest);
+    }
     if !release::newer(&latest.tag, &old.tag) {
         let result = Ok(Outcome::AlreadyLatest);
         record_check(&ctx.paths, &latest.tag, &Attempt { migration: Some(false), registered: false }, &result);
         return AutoPlan::Done(AutoUpdate { from: old.tag, to: latest.tag, result });
     }
     if skip_known(&ctx.paths, &latest.tag) {
-        return AutoPlan::Done(AutoUpdate { from: old.tag, to: latest.tag, result: Ok(Outcome::Skipped) });
+        return skipped(old, latest);
     }
     AutoPlan::Switch { from: old.tag, latest }
 }
@@ -474,6 +482,7 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
         return Ok(Outcome::NeedsConfirm);
     }
     let client = Client::new(ctx.paths.data.clone());
+    wait_sends(&client).await;
     let before = client.claimed().map(|c| c.pid);
     let recorded_before = recorded_pid(&ctx.paths.data);
     // A cópia dos dados que a volta e a espera usam é só a que a nova gravou nesta tentativa.
@@ -525,7 +534,7 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
 
 /// O formato só fica igual quando a nova diz o esquema que grava e o arquivo já está nele (ou adiante), ou não
 /// existe (0: nada a converter); quem não diz conta como mudança, porque subir o `user_version` não tem volta. O
-/// programa instalado não é consultado: o arquivo é a verdade, e a 0.3.0 nem tem `--schema-version`.
+/// programa instalado não é consultado: o arquivo é a verdade, e a versão anterior pode nem ter `--schema-version`.
 fn format_changes(new: Option<u32>, file: Option<u32>) -> bool {
     !matches!((new, file), (Some(new), Some(file)) if file == 0 || file >= new)
 }
@@ -628,7 +637,8 @@ struct Migrating<'a> {
 impl Migrating<'_> {
     /// A nova está migrando: a cópia desta tentativa (ou a que ela ainda escreve) está no disco e o processo vive.
     async fn in_progress(&self) -> bool {
-        fresh_copy(self.data, self.since, true) && service::process_running(self.home, &SERVICE).await.unwrap_or(false)
+        fresh_copy(self.data, self.since, true)
+            && tokio::time::timeout(QUERY_TIMEOUT, service::process_running(self.home, &SERVICE)).await.is_ok_and(|r| r.unwrap_or(false))
     }
 }
 
@@ -717,13 +727,45 @@ fn after_failure(opened: bool, source: Option<u32>, same_format: bool) -> AfterF
     }
 }
 
-/// Registra a anterior de novo, sobre dados que a nova não abriu.
+/// Registra a anterior de novo, sobre dados que a nova não abriu, e espera ela responder: o gerenciador dar o
+/// serviço por iniciado não prova que ela subiu.
 async fn rollback(ctx: &Context, old: &Installed, failure: Failure) -> Failure {
-    match service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&old.binary)).await {
+    let client = Client::new(ctx.paths.data.clone());
+    let before = client.claimed().map(|c| c.pid);
+    let back = match service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&old.binary)).await {
+        Ok(()) => match release::check(&old.binary).await {
+            Ok(version) => wait_up(&client, &version, before, None).await,
+            Err(e) => Err(e),
+        },
+        Err(e) => Err(Failure::from(e)),
+    };
+    match back {
         Ok(()) => failure,
         Err(e) => Failure::new("whatsapp_update_no_rollback",
-            format!("{}; e o serviço não voltou para {}: {}: {}", failure.detail, old.tag, e.step, e.detail)),
+            format!("{}; e o serviço não voltou para {}: {}", failure.detail, old.tag, e.detail)),
     }
+}
+
+/// Quanto a troca espera um envio aprovado sair: parar o programa no meio o deixaria `unconfirmed`.
+const SEND_WAIT: Duration = Duration::from_secs(30);
+
+/// Espera nenhum rascunho estar `sending`; com a vez do instalador, outro envio não começa. Serviço fora, binário
+/// sem a rota ou resposta que não se lê não seguram a troca; o prazo estourado vai ao log e a troca segue.
+async fn wait_sends(client: &Client) {
+    let deadline = Instant::now() + SEND_WAIT;
+    while client.call(reqwest::Method::GET, "/v1/outbox", &[("state", "sending")], None).await.is_ok_and(|reply| still_sending(&reply)) {
+        if Instant::now() >= deadline {
+            tracing::warn!(secs = SEND_WAIT.as_secs(), "whatsapp: um envio continuava saindo; a troca segue");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// A lista `{"drafts": [...]}` do `GET /v1/outbox?state=sending` tem algum rascunho.
+fn still_sending(reply: &crate::client::Reply) -> bool {
+    reply.status == 200 && serde_json::from_slice::<Value>(&reply.body)
+        .is_ok_and(|body| body["drafts"].as_array().is_some_and(|drafts| !drafts.is_empty()))
 }
 
 /// Devolve a cópia que a nova gravou antes de migrar e religa a anterior: o serviço para sem sair do gerenciador
@@ -834,11 +876,13 @@ fn fresh_copy(data: &Path, since: SystemTime, writing: bool) -> bool {
 /// gerenciador sozinho não vê um programa que escapou dele. O pid é olhado antes porque é barato; no Windows cada
 /// pergunta ao gerenciador abre um PowerShell.
 async fn stop_confirmed(home: &Path, managed_dir: &Path, data: &Path) -> Result<(), String> {
-    service::stop(home, managed_dir, &SERVICE).await.map_err(|e| format!("o serviço não parou: {}: {}", e.step, e.detail))?;
+    let stuck = || format!("o gerenciador de serviços não respondeu em {}s", QUERY_TIMEOUT.as_secs());
+    tokio::time::timeout(QUERY_TIMEOUT, service::stop(home, managed_dir, &SERVICE)).await.map_err(|_| stuck())?
+        .map_err(|e| format!("o serviço não parou: {}: {}", e.step, e.detail))?;
     let deadline = Instant::now() + STOP_TIMEOUT;
     loop {
         let pid = live_pid(data)?;
-        if pid.is_none() && !service::process_running(home, &SERVICE).await
+        if pid.is_none() && !tokio::time::timeout(QUERY_TIMEOUT, service::process_running(home, &SERVICE)).await.map_err(|_| stuck())?
             .map_err(|e| format!("não consegui confirmar que o serviço parou: {}: {}", e.step, e.detail))? {
             return Ok(());
         }
@@ -1047,7 +1091,7 @@ mod tests {
     }
 
     /// Programa de mentira: `--version` diz `version`; `--schema-version` diz `schema` e `--data-schema-version`,
-    /// `data`; `None` sai 2, como o binário anterior ao C1 diante de uma flag que não conhece.
+    /// `data`; `None` sai 2, como o binário que não conhece a flag.
     #[cfg(unix)]
     fn fake_program(path: &Path, version: &str, schema: Option<u32>, data: Option<u32>) {
         let answer = |n: Option<u32>| n.map_or_else(|| "exit 2".to_owned(), |n| format!("echo {n}"));
@@ -1301,7 +1345,7 @@ mod tests {
     /// o tenha aberto. Mudança de formato, esquema desconhecido ou arquivo que a nova criou (0) não entram aqui.
     #[test]
     fn a_failed_switch_that_keeps_the_format_goes_back_to_the_previous_version() {
-        assert!(same_format(Some(2), Some(2)), "0.3.0 -> 0.3.1");
+        assert!(same_format(Some(2), Some(2)), "o esquema da nova é igual ao do arquivo");
         assert!(!same_format(Some(2), Some(1)), "muda o formato");
         assert!(!same_format(Some(2), None), "arquivo ilegível");
         assert!(!same_format(None, Some(2)), "a nova não diz o esquema");
@@ -1527,6 +1571,16 @@ mod tests {
         assert_eq!(read(), (true, None, None), "arquivo de antes de last_error");
     }
 
+    /// Só um rascunho listado como `sending` segura a troca; binário sem o estado ou resposta ilegível não.
+    #[test]
+    fn only_a_draft_still_sending_holds_the_switch() {
+        let reply = |status, body: &str| crate::client::Reply { status, body: body.as_bytes().to_vec() };
+        assert!(still_sending(&reply(200, r#"{"drafts":[{"id":"a"}]}"#)));
+        assert!(!still_sending(&reply(200, r#"{"drafts":[]}"#)));
+        assert!(!still_sending(&reply(400, r#"{"drafts":[{"id":"a"}]}"#)), "binário que não conhece o estado");
+        assert!(!still_sending(&reply(200, "x")));
+    }
+
     /// A passada decide fora da vez: sem instalação, sem release nova (a procura gravada limpa a falha da tag),
     /// GitHub fora e release nova a tentar.
     #[tokio::test]
@@ -1580,7 +1634,7 @@ mod tests {
         }
     }
 
-    /// O arquivo já no esquema da nova (0.3.0 → 0.3.1), ou sem arquivo, não muda o formato, pela resposta do programa
+    /// O arquivo já no esquema da nova, ou sem arquivo, não muda o formato, pela resposta do programa
     /// novo; o atrás muda. A troca em si não roda aqui (mexeria no gerenciador de serviços da máquina).
     #[cfg(unix)]
     #[tokio::test]
