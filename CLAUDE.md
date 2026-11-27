@@ -710,8 +710,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   convidado nunca) e a saúde do servidor. Toda dimensão é enum, bool, versão ou código de lista
   fechada, e o que está fora vira `other`; texto livre só nas linhas de aviso e erro do log do
   servidor, depois da limpeza por regras de `telemetry_scrub.rs` (pode deixar passar pedaço do texto do
-  erro; a doc diz isso), até 100 distintas por dia. Nada é contado nem gravado sem
-  `consent: true` em `~/.hangar/telemetry.json`; `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1` e CI vencem
+  erro; a doc diz isso), até 100 distintas por dia. Nada é contado nem gravado sem o aceite do
+  aviso de preferências (`consent_scope: 2` em `~/.hangar/telemetry.json`); `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1` e CI vencem
   e apagam a fila. Um pacote por dia UTC; o receptor (`services/telemetry-ingest`) grava evento e
   valor que não conhece, desde que no formato do `wire`, em vez de recusá-los. Evento ou valor novo entra em `events.rs` e em
   [`docs/telemetria.md`](docs/telemetria.md) no mesmo commit. Motivo em
