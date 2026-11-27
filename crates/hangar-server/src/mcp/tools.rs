@@ -31,7 +31,7 @@ use crate::interactions::InteractionKind;
 use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
 use crate::vault::{VaultError, exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
-use hangar_api::chat::{ChatEvent, ChatKind};
+use hangar_api::chat::ChatEvent;
 use hangar_whatsapp::outbox;
 use zeroize::Zeroizing;
 
@@ -895,7 +895,7 @@ impl Tools {
         self.st.interactions.expected(&binding, Some(id)).ok().map(|expected| expected.target.kind)
     }
 
-    /// O fim do histórico até a última mensagem do usuário. Rota com erro ou corpo torto é erro, nunca página vazia.
+    /// O fim do histórico até o último pedido, pulando o continue sozinho como o retorno. Rota com erro ou corpo torto é erro, nunca página vazia.
     /// `listed`: a filha está na lista; sem transcript ainda, ela acabou de nascer e não tem resposta.
     async fn child_events(&self, me: &str, alvo: &str, listed: bool) -> Result<Vec<ChatEvent>, String> {
         let mut events = Vec::new();
@@ -908,7 +908,7 @@ impl Tools {
                 .map_err(|e| format!("child_status_history_failed: histórico de '{alvo}' ilegível ({e})"))?;
             let exhausted = events.len() < limit;
             events.retain(transcript_only);
-            if exhausted || events.iter().any(|e| e.kind == ChatKind::UserMsg) { break; }
+            if exhausted || events.iter().any(link_return::user_request) { break; }
         }
         Ok(events)
     }
@@ -1459,6 +1459,7 @@ fn host_fill_refusal(refusal: hangar_browser_host::Refusal) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hangar_api::chat::ChatKind;
 
     #[test]
     fn only_an_owner_session_counts_a_tool() {
@@ -1534,6 +1535,26 @@ mod tests {
         events.retain(transcript_only);
         let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, ["u1", "a1", "queued-agent:h1"]);
+    }
+
+    /// Filha que recebeu o continue sozinho: o `child_status` segue no pedido do pai, e a linha de erro de antes do
+    /// continue não vira resposta enquanto a filha não termina.
+    #[test]
+    fn the_status_skips_the_automatic_continue_like_the_return() {
+        let ev = |kind: ChatKind, id: &str, text: &str| ChatEvent { kind, id: id.into(), text: Some(text.into()), ..Default::default() };
+        let again = ev(ChatKind::UserMsg, "c1", hangar_auto_continue::text::TRANSIENT);
+        // Janela só com o continue não para a leitura: ela cresce até o pedido do pai.
+        assert!(!link_return::user_request(&again));
+        let mut events = vec![
+            ev(ChatKind::UserMsg, "u1", "[de: pai] x"), ev(ChatKind::AssistantMsg, "e1", "API Error: Connection lost mid-response."), again,
+        ];
+        events.retain(transcript_only);
+        assert!(link_return::final_answer(&events).is_none(), "o erro antes do continue não é a resposta");
+        assert_eq!(link_return::reply_key(&events), "sem-resposta:u1");
+        events.push(ev(ChatKind::AssistantMsg, "a1", "feito"));
+        let (answer, asked) = link_return::final_answer(&events).unwrap();
+        assert_eq!((answer.text.as_deref(), asked.map(|e| e.id.as_str())), (Some("feito"), Some("u1")));
+        assert_eq!(link_return::reply_key(&events), "a1");
     }
 
     /// Só o 404 de sessão sem transcript é a filha recém-aberta; outro erro da rota segue erro.

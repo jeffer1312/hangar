@@ -530,8 +530,8 @@ fn settled(c: &Check) -> bool {
 struct Turn { events: Vec<ChatEvent>, whole: bool }
 
 /// Mensagem do usuário escrita por alguém. O "continue" que o Hangar manda sozinho depois de uma queda não
-/// é pedido de ninguém: o turno é o da mensagem antes dele.
-fn user_request(e: &ChatEvent) -> bool {
+/// é pedido de ninguém: o turno é o da mensagem antes dele. O `child_status` lê o turno por ela também.
+pub(crate) fn user_request(e: &ChatEvent) -> bool {
     e.kind == ChatKind::UserMsg && !hangar_auto_continue::text::is_auto_continue(e.text.as_deref().unwrap_or_default())
 }
 
@@ -621,11 +621,13 @@ fn transient_stop(jsonl: &Path) -> Option<String> {
 fn blank_answer(e: &ChatEvent) -> bool { e.kind == ChatKind::AssistantMsg && e.text.as_deref().is_none_or(|t| t.trim().is_empty()) }
 
 /// A resposta final só existe se o turno terminou nela: interrompido ou parado em ferramenta traz
-/// texto pela metade. Volta junto a mensagem do usuário que ela responde.
+/// texto pela metade. Volta junto a mensagem do usuário que ela responde (o continue sozinho não é ela).
 pub(crate) fn final_answer(events: &[ChatEvent]) -> Option<(&ChatEvent, Option<&ChatEvent>)> {
-    let asked = events.iter().rposition(|e| e.kind == ChatKind::UserMsg);
+    let asked = events.iter().rposition(user_request);
     let turn = &events[asked.map_or(0, |i| i + 1)..];
-    if turn.iter().any(|e| e.kind == ChatKind::Notice && matches!(e.text.as_deref(), Some("interrupted" | "turn_aborted"))) {
+    // A interrupção antes de um continue sozinho ficou para trás: o turno seguiu depois dele.
+    let resumed = turn.iter().rposition(|e| e.kind == ChatKind::UserMsg).map_or(0, |i| i + 1);
+    if turn[resumed..].iter().any(|e| e.kind == ChatKind::Notice && matches!(e.text.as_deref(), Some("interrupted" | "turn_aborted"))) {
         return None;
     }
     let last = turn.iter().rev().find(|e| !matches!(e.kind, ChatKind::Notice | ChatKind::Other(_)) && !blank_answer(e))?;
@@ -650,7 +652,7 @@ pub(crate) fn reply_key(events: &[ChatEvent]) -> String {
 
 /// Turno sem resposta: a pergunta que ele responde, com prefixo próprio para não colidir com uma resposta.
 fn unanswered_key(events: &[ChatEvent]) -> String {
-    let asked = events.iter().rfind(|e| e.kind == ChatKind::UserMsg);
+    let asked = events.iter().rfind(|e| user_request(e));
     match asked {
         Some(e) if !e.id.is_empty() => format!("sem-resposta:{}", e.id),
         _ => format!("sem-resposta:{}", sha1_smol::Sha1::from(asked.and_then(|e| e.text.as_deref()).unwrap_or_default()).digest()),
@@ -965,6 +967,10 @@ mod tests {
             // O "é a primeira da conversa" também pula o continue.
             let first = vec![ev(ChatKind::UserMsg, "prompt inicial"), error(), ev(ChatKind::UserMsg, again), ev(ChatKind::AssistantMsg, "pronto")];
             assert_eq!(decide(&c, &turn(first, true)).map(|(a, _)| a), Ok("pronto"), "{again}");
+            // O turno cortado antes do continue terminou depois dele.
+            let mut cut = continued("[de: pai] x", again);
+            cut[3] = ev(ChatKind::Notice, "interrupted");
+            assert_eq!(decide(&c, &turn(cut, false)).map(|(a, _)| a), Ok("feito"), "{again}");
         }
         // O "continua" que a pessoa escreve na filha é turno dado à mão.
         assert_eq!(decide(&c, &turn(continued("[de: pai] x", "continua"), true)), Err(Refusal::NotAsked));
