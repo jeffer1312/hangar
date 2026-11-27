@@ -44,7 +44,7 @@ export function IntegrationIcon({ brand, name, local, status }: {
 
 const styles = StyleSheet.create((theme) => ({
   wrap: { width: 36, height: 36 },
-  tile: { width: 36, height: 36, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  tile: { width: 36, height: 36, borderRadius: theme.base.radius.xs, alignItems: 'center', justifyContent: 'center' },
   initial: { fontSize: theme.base.text.base, fontWeight: theme.base.weight.semibold },
-  dot: { position: 'absolute', right: -3, bottom: -3, width: 12, height: 12, borderRadius: 6, borderWidth: 2 },
+  dot: { position: 'absolute', right: -3, bottom: -3, width: 12, height: 12, borderRadius: theme.base.radius.full, borderWidth: 2 },
 }));

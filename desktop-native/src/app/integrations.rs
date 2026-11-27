@@ -3630,6 +3630,7 @@ mod tests {
             updated_at: 1.0,
             status: IntegrationStatus::Ready,
             last_error: None,
+            brand: None,
         };
         let initial = InitialFormValues::from_mode(FormMode::Edit(item, None), &[]);
         let base_draft = FormDraft {
@@ -3734,6 +3735,7 @@ mod tests {
             updated_at: 0.0,
             status: IntegrationStatus::Ready,
             last_error: None,
+            brand: None,
         };
         assert_eq!(suggest_preset_id("google-gmail", &[]), "google-gmail");
         assert_eq!(suggest_preset_id("google-gmail", &[item("google-gmail")]), "google-gmail-2");
@@ -3781,6 +3783,7 @@ mod tests {
             updated_at: 0.0,
             status: IntegrationStatus::AuthRequired,
             last_error: None,
+            brand: None,
         };
         let remote = Transport::RemoteHttp {
             url: "https://mcp.figma.com/mcp".into(),
