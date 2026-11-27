@@ -1,4 +1,4 @@
-//! A tarefa de fundo: grava a cada 15 min, fecha o dia e manda os dias fechados ao receptor.
+//! A tarefa de fundo: grava de tempos em tempos, fecha o dia e manda os dias fechados ao receptor.
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -140,14 +140,12 @@ impl Telemetry {
     /// `Refused` quando o receptor recusou o pacote e ele foi apagado; `Unreachable` quando nenhuma
     /// tentativa deu 2xx (sem resposta, 429, 5xx ou outro status), e o dia fica na fila para a próxima rodada.
     async fn send_day(&self, day: &str, post: &Post) -> io::Result<Option<Failure>> {
-        let Some(body) = self.prepare(day)? else { return Ok(None) };
         let mut last = None;
         for wait in RETRY_WAITS {
             tokio::time::sleep(Duration::from_secs(wait)).await;
-            if !self.enabled() {
-                return Ok(None);
-            }
-            match post(body.clone()).await {
+            // Relido a cada tentativa: revogar na espera apaga o dia da fila, e consentir de novo não o traz.
+            let Some(body) = self.prepare(day)? else { return Ok(None) };
+            match post(body).await {
                 Some(200..=299) => return self.drop_day(day).map(|()| None),
                 Some(status @ (400 | 413)) => return self.drop_day(day).map(|()| Some(Failure::Refused(status))),
                 status => last = status,
@@ -225,6 +223,27 @@ mod tests {
             Box::pin(async move { status })
         });
         (post, seen)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn day_revoked_between_retries_is_not_sent_even_after_consenting_again() {
+        let fx = Fixture::new();
+        let telemetry = Arc::new(fx.start());
+        telemetry.count(Event::MessageSent, message(), 4);
+        fx.next_day();
+        telemetry.save().unwrap();
+
+        let tries = Arc::new(Mutex::new(0));
+        let (seen, revoking) = (tries.clone(), telemetry.clone());
+        let post: Post = Arc::new(move |_body: Vec<u8>| -> PostFuture {
+            *seen.lock().unwrap() += 1;
+            revoking.set_consent(false).unwrap();
+            revoking.set_consent(true).unwrap();
+            Box::pin(async { Some(503) })
+        });
+        assert!(telemetry.send_closed(&post).await.is_empty());
+        assert_eq!(*tries.lock().unwrap(), 1, "o corpo de antes da revogação não sai");
+        assert!(!fx.queue().join("2026-11-26.json").exists());
     }
 
     #[tokio::test(start_paused = true)]

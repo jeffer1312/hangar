@@ -112,6 +112,17 @@ impl Live {
         }
     }
 
+    /// A gravação de `file` falhou: a mudança volta a valer para a próxima passada. O dia que virou
+    /// durante a gravação volta para `closed`, salvo se o giro já o pôs lá com contagem mais nova.
+    fn unsaved(&mut self, file: DayFile) {
+        if file.day == self.current.day {
+            self.dirty = true;
+        } else if !self.closed.iter().any(|day| day.day == file.day) {
+            let at = self.closed.iter().position(|day| day.day > file.day).unwrap_or(self.closed.len());
+            self.closed.insert(at, Day::from_file(file));
+        }
+    }
+
     /// Os dias que ainda dependem da memória: o corrente e os que viraram sem gravar.
     pub(crate) fn pending(&self) -> (String, Vec<String>) {
         (self.current.day.clone(), self.closed.iter().map(|day| day.day.clone()).collect())
@@ -288,8 +299,9 @@ impl Telemetry {
             let mut live = lock(&self.live)?;
             let same_day = current.as_ref().is_some_and(|file| file.day == live.current.day);
             if let Err(e) = written {
-                // A mudança não gravada volta a valer para a próxima passada.
-                live.dirty |= same_day;
+                if let Some(file) = current {
+                    live.unsaved(file);
+                }
                 return Err(e);
             }
             // Só sai da memória o que já está no disco; o que virou no meio fica para a próxima.
@@ -317,7 +329,7 @@ impl Telemetry {
         self.notes.lock().map(|mut notes| std::mem::take(&mut *notes)).unwrap_or_default()
     }
 
-    /// Relê os desligamentos e grava: a passada de 15 min da tarefa de fundo.
+    /// Relê os desligamentos e grava: a passada periódica da tarefa de fundo.
     pub(crate) fn tick(&self) -> io::Result<()> {
         self.refresh()?;
         self.save()
@@ -576,6 +588,30 @@ pub(crate) mod tests {
         telemetry.tick().unwrap();
         assert!(telemetry.enabled());
         assert_eq!(telemetry.counters()[0].count, 1);
+    }
+
+    #[test]
+    fn day_that_rolled_while_its_write_failed_goes_back_to_closed() {
+        let day = |name: &str, n: u64| {
+            let mut day = Day::new(name.into());
+            day.add(Counter::new(Event::MessageSent, message(), None, n));
+            day
+        };
+        let mut live = Live::new(Day::new("2026-11-27".into()), false);
+        live.unsaved(day("2026-11-26", 4).file());
+        assert_eq!(live.pending().1, ["2026-11-26"]);
+        assert_eq!(live.closed[0].to_counters()[0].count, 4);
+        assert!(!live.dirty);
+
+        let mut live = Live::new(Day::new("2026-11-27".into()), false);
+        live.closed.push(day("2026-11-26", 5));
+        live.unsaved(day("2026-11-26", 4).file());
+        assert_eq!(live.closed.len(), 1);
+        assert_eq!(live.closed[0].to_counters()[0].count, 5, "o giro já guardou a contagem mais nova");
+
+        let mut live = Live::new(day("2026-11-26", 4), true);
+        live.unsaved(day("2026-11-26", 4).file());
+        assert!(live.dirty && live.closed.is_empty());
     }
 
     #[test]
