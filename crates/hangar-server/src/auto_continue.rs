@@ -3,6 +3,7 @@
 //! a nota pela fila. O registro é o mesmo da troca de conta no limite. O interruptor da sessão mora no spec
 //! (`PUT`/`DELETE /api/sessions/{name}/auto-continue`, só do dono) e chega à linha da lista.
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -21,7 +22,7 @@ use tokio::task::JoinHandle;
 
 use crate::list::hub::InternalSubscription;
 use crate::list::mux::Mux;
-use crate::routes::{AppState, cors, gate};
+use crate::routes::{AppState, cors};
 use crate::runtime::gateway::RuntimeRegistry;
 use crate::session_open::{SessionSpec, record};
 use crate::session_write::{BODY_LIMIT, detail_body, json_response, session_name};
@@ -273,14 +274,26 @@ pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow]) {
 
 fn refuse(status: StatusCode, code: &str, msg: &str) -> Response { json_response(status, detail_body(code, msg, json!({}))) }
 
+const OWNER_ONLY: (&str, &str) = ("erro_so_dono", "só o dono liga, desliga ou cancela o continuar sozinho");
+
+/// Só o dono. Convidado (convite, par ou login) leva o 403 sem contar falha de senha; token errado, a recusa
+/// contada (401, 429 bloqueado). O pedido é lido antes da espera: `&Request` atravessando um `await` tira o `Send`.
+fn admit(st: &AppState, peer: SocketAddr, req: &Request) -> impl Future<Output = Result<(), Response>> + Send + use<> {
+    let guest = req.extensions().get::<crate::login_guests::gate::Login>().is_some()
+        || matches!(crate::share::caller::caller(req), Some(crate::share::caller::Caller::Guest(_)));
+    let owner = st.edge().owner_only(peer, req, OWNER_ONLY);
+    async move {
+        if guest { return Err(refuse(StatusCode::FORBIDDEN, OWNER_ONLY.0, OWNER_ONLY.1)); }
+        owner.await
+    }
+}
+
 /// `PUT` `{"enabled": bool}`: o interruptor da sessão. `DELETE`: o Cancelar da nota de espera.
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
-    let admitted = gate(&st, peer, &req).await;
-    let mut response = match admitted {
-        Err(e) => crate::auth::unavailable(e),
-        Ok((_, false)) => refuse(StatusCode::FORBIDDEN, "erro_so_dono", "só o dono liga, desliga ou cancela o continuar sozinho"),
-        Ok((_, true)) => owner_route(&st, req).await,
+    let mut response = match admit(&st, peer, &req).await {
+        Err(response) => response,
+        Ok(()) => owner_route(&st, req).await,
     };
     cors(&headers, response.headers_mut());
     response
@@ -318,6 +331,8 @@ async fn switch(st: &AppState, name: &str, enabled: bool) -> Response {
         Ok(true) => {
             // Desligar durante a espera troca a nota pelo desfecho na hora, sem esperar o tique.
             if !enabled && let Some(auto) = st.auto_continue.get() { auto.cancel(name, "off"); }
+            // A ausência de chave guardada do pane não pode atrasar a linha em 60 s.
+            crate::session_visibility::fill::forget(name);
             st.list.invalidate();
             json_response(StatusCode::OK, json!({"enabled": enabled}))
         }
@@ -330,20 +345,14 @@ async fn switch(st: &AppState, name: &str, enabled: bool) -> Response {
     }
 }
 
-/// Relê o registro na hora da gravação. `false`: a sessão não tem registro.
+/// Relê o registro na hora da gravação. `false`: a sessão não tem registro. Gravação e índice sob a mesma
+/// trava: dois toques seguidos não deixam o índice diferente do disco.
 fn store_off(home: &Path, key: &str, off: bool) -> io::Result<bool> {
-    let spec = match record::read(home, key) {
-        // Chave fora do formato do registro (pane antigo) é "sem registro".
-        Err(error) if error.kind() == io::ErrorKind::InvalidInput => None,
-        other => other?,
-    };
-    let Some(mut spec) = spec else { return Ok(false) };
-    if spec.auto_continue_off != off {
-        spec.auto_continue_off = off;
-        record::write(home, &spec)?;
-    }
-    with_off(home, |keys| if off { keys.insert(key.to_owned()); } else { keys.remove(key); });
-    Ok(true)
+    with_off(home, |keys| {
+        if !record::write_auto_continue(home, key, off)? { return Ok(false) }
+        if off { keys.insert(key.to_owned()); } else { keys.remove(key); }
+        Ok(true)
+    })
 }
 
 #[cfg(test)]
@@ -409,5 +418,26 @@ mod tests {
         assert!(!rows[0].auto_continue_off, "o índice segue a rota sem reler os registros");
         assert!(!record::read(home.path(), &off).unwrap().unwrap().auto_continue_off);
         assert!(!store_off(home.path(), &"c".repeat(32), true).unwrap(), "sem registro não há onde guardar");
+    }
+
+    #[tokio::test]
+    async fn an_invite_guest_gets_the_owner_only_403() {
+        let st = Arc::new(AppState::new(crate::config::Config {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            internal_secret: "fixture-internal".into(),
+            auth_token: "fixture-owner".into(),
+            log_path: None,
+            trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
+        }));
+        let peer: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let mut req = Request::builder().method("PUT").uri("/api/sessions/s/auto-continue")
+            .header("authorization", "Bearer guest-token").header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"enabled": false}"#)).unwrap();
+        req.extensions_mut().insert(crate::share::caller::Caller::Guest(Arc::new(crate::share::caller::GuestGrant {
+            token: "guest-token".into(), token_hash: String::new(), sessions: HashMap::new(), pair_roots: vec![], invite: true })));
+        let refused = route(State(st), ConnectInfo(peer), req).await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        let raw = axum::body::to_bytes(refused.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&raw).unwrap()["detail"]["code"], "erro_so_dono");
     }
 }

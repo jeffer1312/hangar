@@ -20,6 +20,8 @@ use hangar_server::session_open::{SessionChange, record};
 use serde_json::{Value, json};
 
 const KEY: &str = "0123456789abcdef0123456789abcdef";
+/// Convidado com login que vê as sessões do dono: passa o porteiro e chega à rota.
+const GUEST: &str = "convidado-que-ve";
 
 struct Srv { addr: SocketAddr, home: PathBuf, _tasks: Vec<tokio::task::JoinHandle<()>>, _dir: tempfile::TempDir }
 
@@ -30,8 +32,9 @@ fn write(path: PathBuf, value: &Value) {
 
 fn read(path: PathBuf) -> Option<Value> { std::fs::read(path).ok().and_then(|raw| serde_json::from_slice(&raw).ok()) }
 
-/// `ledger`: o `auto-continue.json` gravado antes de a agenda subir (a espera que ela retoma).
-async fn server(ledger: Option<Value>) -> Srv {
+/// `ledger`: o `auto-continue.json` gravado antes de a agenda subir (a espera que ela retoma). `guest`: cadastra
+/// o convidado com login `GUEST`.
+async fn server(ledger: Option<Value>, guest: bool) -> Srv {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
     let home = root.join("home");
@@ -49,6 +52,15 @@ async fn server(ledger: Option<Value>) -> Srv {
     state.hangar_dir = home.join(".hangar");
     state.mission = Arc::new(hangar_mission::Store::new(state.hangar_dir.join("mission")));
     state.accounts = AccountService::new(env.clone());
+    if guest {
+        use hangar_server::login_guests::{Service, Settings};
+        let service = Service::new(Settings { guests: home.join("guests.json"), vault: home.join("vault.json"),
+            runtime_config: home.join("runtime-config.json"), sync_enabled: false, bootstrap: String::new(),
+            secret: b"fixture".to_vec(), secure: false, rate_max: 10.into(), rate_window: 300.into() });
+        service.store.create("Bia", home.to_str().unwrap(), true, true, "bia".into(), GUEST.into()).unwrap();
+        state.share = None;
+        state.login_guests = Arc::new(service);
+    }
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new()));
@@ -110,13 +122,17 @@ fn note_states(value: &Value, out: &mut Vec<String>) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_owner_turns_it_off_and_the_spec_keeps_it_after_a_reopen() {
-    let srv = server(None).await;
+async fn the_owner_turns_it_off_and_a_rewrite_from_an_older_spec_keeps_it() {
+    let srv = server(None, false).await;
     srv.headless("s", false);
+    // A reabertura que leu o registro antes da rota e grava o dela depois.
+    let before = record::read(&srv.home, KEY).unwrap().unwrap();
     assert_eq!(srv.switch("s", OWNER, json!({"enabled": false})).await, (200, json!({"enabled": false})));
     assert_eq!(srv.spec()["auto_continue_off"], json!(true));
-    let recorded = record::read(&srv.home, KEY).unwrap().unwrap();
     let change: SessionChange = serde_json::from_value(json!({"reason": "reload"})).unwrap();
+    record::write(&srv.home, &before.with(&change)).unwrap();
+    assert_eq!(srv.spec()["auto_continue_off"], json!(true), "regravar o spec lido antes da rota não religa");
+    let recorded = record::read(&srv.home, KEY).unwrap().unwrap();
     assert!(recorded.with(&change).auto_continue_off, "a reabertura parte do spec gravado");
     let live = record::claude_live(&srv.home, &read(srv.sidecar_path("s")).unwrap(), "s").unwrap();
     assert!(live.auto_continue_off, "o spec remontado do sidecar para relançar conserva o interruptor");
@@ -130,12 +146,23 @@ async fn the_owner_turns_it_off_and_the_spec_keeps_it_after_a_reopen() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_guest_cannot_switch_it() {
-    let srv = server(None).await;
+    let srv = server(None, true).await;
     srv.headless("s", false);
-    let (status, body) = srv.switch("s", "outro", json!({"enabled": false})).await;
+    let (status, body) = srv.switch("s", GUEST, json!({"enabled": false})).await;
     assert_eq!((status, body["detail"]["code"].clone()), (403, json!("erro_so_dono")));
-    let (status, body) = srv.cancel("s", "outro").await;
+    let (status, body) = srv.cancel("s", GUEST).await;
     assert_eq!((status, body["detail"]["code"].clone()), (403, json!("erro_so_dono")));
+    assert!(srv.spec().get("auto_continue_off").is_none(), "a recusa não grava nada");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wrong_token_gets_the_counted_401() {
+    let srv = server(None, false).await;
+    srv.headless("s", false);
+    let (status, body) = srv.switch("s", "errado", json!({"enabled": false})).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (401, json!("erro_nao_autorizado")));
+    let (status, body) = srv.cancel("s", "errado").await;
+    assert_eq!((status, body["detail"]["code"].clone()), (401, json!("erro_nao_autorizado")));
     assert!(srv.spec().get("auto_continue_off").is_none(), "a recusa não grava nada");
 }
 
@@ -143,7 +170,7 @@ async fn a_guest_cannot_switch_it() {
 async fn cancel_rewrites_the_waiting_note() {
     // A agenda só olha a idade da parada no tique, bem depois do Cancelar.
     let hit = json!({"name": "s", "provider": "claude", "kind": "network", "line_id": "line-1", "at": 1_700_000_000.0, "life": format!("k:{KEY}")});
-    let srv = server(Some(json!({"sessions": {"s": {"waiting": {"hit": hit, "count": 1, "note_out": true}}}}))).await;
+    let srv = server(Some(json!({"sessions": {"s": {"waiting": {"hit": hit, "count": 1, "note_out": true}}}})), false).await;
     srv.headless("s", true);
     // A resposta sai depois de a nota trocar.
     assert_eq!(srv.cancel("s", OWNER).await, (200, json!({"cancelled": true})));

@@ -35,7 +35,7 @@ const ABSENT_RETRY: Duration = Duration::from_secs(60);
 static PANE_KEYS: LazyLock<Mutex<HashMap<(String, String), (Option<String>, Instant)>>> = LazyLock::new(Mutex::default);
 
 /// Depois de a rota gravar: uma ausência guardada não pode deixar a marca sem efeito por 60 s.
-pub(super) fn forget(name: &str) {
+pub(crate) fn forget(name: &str) {
     PANE_KEYS.lock().unwrap_or_else(PoisonError::into_inner).retain(|(n, _), _| n != name);
 }
 

@@ -10,6 +10,7 @@
 //! nasceram antes do registro.
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use serde_json::Value;
 
@@ -25,7 +26,33 @@ pub(crate) fn path(home: &Path, key: &str) -> io::Result<PathBuf> {
     Ok(dir(home).join(format!("{key}.json")))
 }
 
-pub fn write(home: &Path, spec: &SessionSpec) -> io::Result<()> { write_at(home, &path(home, &spec.key)?, spec) }
+/// O interruptor do continuar sozinho tem um escritor só, a rota do dono: quem regrava o registro a partir de um
+/// spec lido antes dela (reabertura, troca de conta) conserva o valor do disco.
+static WRITING: Mutex<()> = Mutex::new(());
+
+pub fn write(home: &Path, spec: &SessionSpec) -> io::Result<()> {
+    let path = path(home, &spec.key)?;
+    let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+    match read(home, &spec.key).ok().flatten().map(|recorded| recorded.auto_continue_off) {
+        Some(off) if off != spec.auto_continue_off => write_at(home, &path, &SessionSpec { auto_continue_off: off, ..spec.clone() }),
+        _ => write_at(home, &path, spec),
+    }
+}
+
+/// A rota do interruptor. `false`: a sessão não tem registro (chave fora do formato, de pane antigo, inclusive).
+pub(crate) fn write_auto_continue(home: &Path, key: &str, off: bool) -> io::Result<bool> {
+    let path = match path(home, key) {
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => return Ok(false),
+        other => other?,
+    };
+    let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(mut spec) = read(home, key)? else { return Ok(false) };
+    if spec.auto_continue_off != off {
+        spec.auto_continue_off = off;
+        write_at(home, &path, &spec)?;
+    }
+    Ok(true)
+}
 
 pub(crate) fn confirm_binding(home: &Path, spec: &SessionSpec) -> io::Result<()> {
     if let Some(conversation) = &spec.conversation { save_binding_history(home, spec, conversation)?; }
