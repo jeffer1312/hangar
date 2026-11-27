@@ -234,16 +234,19 @@ async fn count_update(st: &AppState) -> bool {
         let estado = crate::update::StateFile::new(&state_dir).read();
         // Rodada que não terminou não conta: o canal só é lido para a que terminou.
         if text(&estado, "fase") != "pronto" { return Ok(()); }
-        // O canal da rodada; o executor antigo não o grava, e vale o da máquina.
-        let channel = estado.get("canal").and_then(Value::as_str).map(str::to_owned)
-            .unwrap_or_else(|| crate::update::channel(&crate::update::Layout::new(&home)));
-        count_outcome(&telemetry, &estado, &channel, chrono::Utc::now())
+        count_outcome(&telemetry, &estado, &round_channel(&estado, &home), chrono::Utc::now())
     }).await;
     match counted {
         Ok(Ok(())) => true,
         Ok(Err(e)) => { crate::telemetry_routes::report(&st.diag, hangar_telemetry::Failure::Disk(e)); false }
         Err(_) => { crate::telemetry_routes::task_failed(&st.diag); false }
     }
+}
+
+/// O canal da rodada; o executor antigo não o grava (e o reinício avulso o zera), e vale o da máquina.
+fn round_channel(estado: &Map<String, Value>, home: &Path) -> String {
+    estado.get("canal").and_then(Value::as_str).map(str::to_owned)
+        .unwrap_or_else(|| crate::update::channel(&crate::update::Layout::new(home)))
 }
 
 /// A marca que não gravou não espera outra gravação do `estado.json` para tentar de novo.
@@ -428,6 +431,18 @@ mod tests {
 
     fn counter<'a>(counters: &'a [hangar_telemetry::wire::Counter], event: &str) -> &'a hangar_telemetry::wire::Counter {
         counters.iter().find(|c| c.event == event).unwrap_or_else(|| panic!("sem {event}: {counters:?}"))
+    }
+
+    #[test]
+    fn update_channel_is_the_round_one_and_falls_back_to_the_machine_one() {
+        let home = tempfile::tempdir().unwrap();
+        let file = crate::update::channel_file(&crate::update::Layout::new(home.path()));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, json!({"channel": "feat/x"}).to_string()).unwrap();
+        let machine = "feat/x";
+        assert_eq!(super::round_channel(&estado(json!({"canal": "beta"})), home.path()), "beta");
+        assert_eq!(super::round_channel(&estado(json!({"canal": null})), home.path()), machine, "canal nulo vale o da máquina");
+        assert_eq!(super::round_channel(&estado(json!({})), home.path()), machine, "executor antigo, sem o campo");
     }
 
     #[test]

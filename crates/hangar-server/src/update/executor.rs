@@ -873,10 +873,14 @@ mod tests {
         let parts = Parts::new(&env(dir.path(), None), &Args::parse(&strings(&["--dev"])).unwrap(), "x");
         std::fs::write(clone.join("a"), "editado").unwrap();
         let restart = Restart::default();
+        StateFile::new(&parts.state_dir).write(json!({"fase": "pronto", "ok": true, "origem": "manual", "codigo": "update_io", "canal": "beta", "duracoes": {"baixar": 10}}));
         assert!(!dev_update(&parts, &clone, &restart, &Health(&restart.0, false), &fast(), silent()).await);
         assert_eq!(restart.0.load(Ordering::SeqCst), 0);
         assert!(!clone.join("b").exists(), "nada foi puxado");
-        assert!(StateFile::new(&parts.state_dir).read()["erro"].as_str().unwrap().contains("com edição"));
+        let state = StateFile::new(&parts.state_dir).read();
+        assert!(state["erro"].as_str().unwrap().contains("com edição"));
+        assert_eq!((state["origem"].clone(), state["codigo"].clone(), state["canal"].clone(), state["duracoes"].clone()),
+            (json!(null), json!(null), json!(null), json!(null)), "a rodada do desenvolvedor não é lida como a atualização de antes");
 
         super::super::dev::tests::sh(&clone, "git checkout -q -- a");
         assert!(dev_update(&parts, &clone, &restart, &Health(&restart.0, false), &fast(), silent()).await);

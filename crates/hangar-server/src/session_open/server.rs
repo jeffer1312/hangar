@@ -103,7 +103,7 @@ pub(crate) fn read_guests(claude_base: &Path) -> Result<Option<Value>, OpenError
 }
 
 /// O id do convidado dono de `session` no `guests.json`. Só outra vida desfaz o dono, como no `owner_of`.
-fn session_guest(raw: &Value, session: &str, life: Option<&str>) -> Option<String> {
+pub(crate) fn session_guest(raw: &Value, session: &str, life: Option<&str>) -> Option<String> {
     let entry = &raw["sessions"][session];
     let stored = entry["life"].as_str();
     if stored.is_some() && life.is_some() && stored != life { return None; }

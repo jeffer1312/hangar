@@ -8,7 +8,7 @@ use gpui_kit::component::progress::Progress;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::checkbox::Checkbox;
 use crate::update::confirm::{Acceptance, Launch};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 /// Um pedido ao servidor e o último resultado: carregando, erro, vazio e com dados saem daqui.
 pub(super) struct Remote<T> { pub(super) value: Option<Result<T, String>>, pub(super) loading: bool, pub(super) seq: u64 }
@@ -1274,13 +1274,30 @@ struct Unsent {
     crashed: AtomicBool,
     /// Já houve falha desde o último envio bom: o `native.log` só leva a primeira da sequência.
     failing: AtomicBool,
+    /// Lotes seguidos que o servidor respondeu sem gravar.
+    rejected: AtomicU8,
 }
 
+/// Quantas vezes o lote que o servidor respondeu sem gravar volta para o próximo envio: repetir sem fim só o
+/// reenviaria a cada 5 min.
+const REJECTED_RETRIES: u8 = 3;
+
 impl Unsent {
-    /// Devolve o valor e diz se a falha é a primeira da sequência.
-    fn failed(&self, give_back: impl FnOnce(&Unsent)) -> bool {
+    /// Devolve o valor para o próximo envio e diz o que vai ao `native.log`: a primeira falha da sequência e o descarte.
+    /// `rejected`: o servidor respondeu sem gravar; passadas `REJECTED_RETRIES` seguidas, o valor sai.
+    fn failed(&self, rejected: bool, give_back: impl FnOnce(&Unsent)) -> Option<&'static str> {
+        if rejected {
+            let seen = self.rejected.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_add(1))).unwrap_or(u8::MAX);
+            if seen >= REJECTED_RETRIES {
+                return (seen == REJECTED_RETRIES).then_some("descartado depois de 3 lotes não gravados seguidos");
+            }
+        }
         give_back(self);
-        !self.failing.swap(true, Ordering::SeqCst)
+        (!self.failing.swap(true, Ordering::SeqCst)).then_some("sai no próximo envio")
+    }
+    fn sent(&self) {
+        self.failing.store(false, Ordering::SeqCst);
+        self.rejected.store(0, Ordering::SeqCst);
     }
 }
 
@@ -1331,13 +1348,13 @@ fn send_telemetry(runtime: &tokio::runtime::Runtime, api: Api, body: Value, unse
     let events = body["eventos"].as_array().map_or(0, Vec::len);
     drop(runtime.spawn(async move {
         let why = match api.server_send(reqwest::Method::POST, &["diag"], Some(body), 10).await {
-            Ok(reply) => (!written_all(&reply, events)).then(|| "lote não gravado".to_owned()),
-            Err(failure) => Some(failure.status.map_or_else(|| "sem resposta".to_owned(), |status| status.to_string())),
+            Ok(reply) => (!written_all(&reply, events)).then(|| ("lote não gravado".to_owned(), true)),
+            Err(failure) => Some((failure.status.map_or_else(|| "sem resposta".to_owned(), |status| status.to_string()), false)),
         };
         match why {
-            None => unsent.failing.store(false, Ordering::SeqCst),
-            Some(why) => if unsent.failed(give_back) {
-                crate::log_line(&format!("telemetria: evento do app não chegou ao servidor ({why}); sai no próximo envio"));
+            None => unsent.sent(),
+            Some((why, rejected)) => if let Some(next) = unsent.failed(rejected, give_back) {
+                crate::log_line(&format!("telemetria: evento do app não chegou ao servidor ({why}); {next}"));
             },
         }
     }));
@@ -1410,8 +1427,8 @@ mod telemetry_tests {
     fn telemetry_failed_send_comes_back_in_the_next_one() {
         let mut telemetry = ClientTelemetry::new(Some("pânico"));
         assert!(telemetry.take_crash().is_some());
-        assert!(telemetry.unsent.failed(|u| u.crashed.store(true, Ordering::SeqCst)), "a primeira falha vai ao log");
-        assert!(!telemetry.unsent.failed(|u| { u.ms.fetch_add(90_000, Ordering::SeqCst); }), "as seguintes, não");
+        assert!(telemetry.unsent.failed(false, |u| u.crashed.store(true, Ordering::SeqCst)).is_some(), "a primeira falha vai ao log");
+        assert!(telemetry.unsent.failed(false, |u| { u.ms.fetch_add(90_000, Ordering::SeqCst); }).is_none(), "as seguintes, não");
         assert!(telemetry.take_crash().is_some(), "a queda sai de novo");
         assert_eq!(telemetry.returned_visible(), Duration::from_secs(90));
         assert_eq!(telemetry.returned_visible(), Duration::ZERO);
@@ -1425,6 +1442,24 @@ mod telemetry_tests {
         assert_eq!(telemetry.take_slice(), Duration::from_secs(300));
         assert_eq!(telemetry.take_slice(), Duration::from_secs(240), "o resto sai no envio seguinte");
         assert_eq!(telemetry.take_slice(), Duration::ZERO);
+    }
+
+    #[test]
+    fn telemetry_batch_the_server_keeps_refusing_comes_back_three_times_then_is_dropped() {
+        let telemetry = ClientTelemetry::new(None);
+        let give_back = |u: &super::Unsent| { u.ms.fetch_add(1_000, Ordering::SeqCst); };
+        assert!(telemetry.unsent.failed(true, give_back).is_some(), "a primeira falha vai ao log");
+        assert!(telemetry.unsent.failed(true, give_back).is_none());
+        assert!(telemetry.unsent.failed(true, give_back).is_none());
+        assert_eq!(telemetry.returned_visible(), Duration::from_secs(3), "voltou três vezes");
+        assert!(telemetry.unsent.failed(true, give_back).is_some_and(|line| line.contains("descartado")), "o descarte vai ao log uma vez");
+        assert!(telemetry.unsent.failed(true, give_back).is_none());
+        assert_eq!(telemetry.returned_visible(), Duration::ZERO, "descartado, não volta");
+        assert!(telemetry.unsent.failed(false, give_back).is_none(), "sem resposta ainda volta");
+        assert_eq!(telemetry.returned_visible(), Duration::from_secs(1));
+        telemetry.unsent.sent();
+        assert!(telemetry.unsent.failed(true, give_back).is_some(), "o envio bom recomeça a conta");
+        assert_eq!(telemetry.returned_visible(), Duration::from_secs(1));
     }
 
     #[test]
