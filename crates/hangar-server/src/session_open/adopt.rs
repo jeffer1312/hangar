@@ -91,7 +91,6 @@ impl Adopting {
         }
     }
 
-    /// A abertura usou a reserva.
     pub(crate) fn was_adopted(&self) -> bool { self.outcome.as_deref() == Some("adotada") }
 
     /// O sidecar já aponta o processo: o recibo sai (a subida do servidor não pode matá-lo).

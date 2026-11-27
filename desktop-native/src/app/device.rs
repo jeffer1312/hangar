@@ -1251,7 +1251,7 @@ impl Hangar {
     }
 }
 
-/// `app.tempo` sai neste compasso; o servidor soma em minutos e corta cada evento em 5 min.
+/// `app.visible_time` sai neste compasso, o mesmo teto que o servidor aplica a cada evento.
 const VISIBLE_EVERY: Duration = Duration::from_secs(5 * 60);
 
 /// Os eventos de telemetria do app, mandados ao servidor por `POST /api/diag`; quem decide contar é o servidor, pela
@@ -1270,7 +1270,7 @@ pub(super) struct ClientTelemetry {
 #[derive(Default)]
 struct Unsent {
     ms: AtomicU64,
-    /// A execução anterior caiu: sai um `app.queda` na primeira conexão.
+    /// A execução anterior caiu: sai um `app.crash` na primeira conexão.
     crashed: AtomicBool,
     /// Já houve falha desde o último envio bom: o `native.log` só leva a primeira da sequência.
     failing: AtomicBool,
@@ -1278,8 +1278,7 @@ struct Unsent {
     rejected: AtomicU8,
 }
 
-/// Quantas vezes o lote que o servidor respondeu sem gravar volta para o próximo envio: repetir sem fim só o
-/// reenviaria a cada 5 min.
+/// Repetir sem fim só reenviaria o mesmo lote a cada passada.
 const REJECTED_RETRIES: u8 = 3;
 
 impl Unsent {
@@ -1318,7 +1317,7 @@ impl ClientTelemetry {
         }
         self.take_slice()
     }
-    /// O servidor corta cada evento em 5 min: o resto espera o próximo.
+    /// O servidor corta cada evento em `VISIBLE_EVERY`: o resto espera o próximo.
     fn take_slice(&mut self) -> Duration {
         self.visible += self.returned_visible();
         let sent = self.visible.min(VISIBLE_EVERY);
@@ -1329,7 +1328,7 @@ impl ClientTelemetry {
     fn returned_visible(&self) -> Duration { Duration::from_millis(self.unsent.ms.swap(0, Ordering::SeqCst)) }
     /// Uma vez por queda.
     fn take_crash(&mut self) -> Option<Value> {
-        self.unsent.crashed.swap(false, Ordering::SeqCst).then(|| telemetry_batch(serde_json::json!({"evento": "app.queda", "codigo": "panic"})))
+        self.unsent.crashed.swap(false, Ordering::SeqCst).then(|| telemetry_batch(serde_json::json!({"evento": "app.crash", "codigo": "panic"})))
     }
 }
 
@@ -1377,7 +1376,7 @@ impl Hangar {
         let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
         let ms = millis(self.client_telemetry.take_visible(Instant::now()));
         if ms > 0 {
-            let body = telemetry_batch(serde_json::json!({"evento": "app.tempo", "ms": ms}));
+            let body = telemetry_batch(serde_json::json!({"evento": "app.visible_time", "ms": ms}));
             send_telemetry(&self.runtime, api, body, self.client_telemetry.unsent.clone(), move |u| { u.ms.fetch_add(ms, Ordering::SeqCst); });
         }
     }
@@ -1403,7 +1402,7 @@ impl Hangar {
         let (runtime, unsent) = (self.runtime.clone(), self.client_telemetry.unsent.clone());
         window.on_next_frame(move |_, _| {
             // A medida vale para aquela abertura: perdida, não volta.
-            send_telemetry(&runtime, api, telemetry_batch(serde_json::json!({"evento": "chat.aberto", "ms": millis(started.elapsed())})), unsent, |_| {});
+            send_telemetry(&runtime, api, telemetry_batch(serde_json::json!({"evento": "chat.opened", "ms": millis(started.elapsed())})), unsent, |_| {});
         });
     }
 }
@@ -1418,7 +1417,7 @@ mod telemetry_tests {
     fn telemetry_crash_event_never_carries_the_panic_text() {
         let panic = "[2026-11-26 10:00:00] pânico na thread main (v1.2.3): called `Option::unwrap()` on a `None` value at src/app.rs:42";
         let mut telemetry = ClientTelemetry::new(Some(panic));
-        assert_eq!(telemetry.take_crash(), Some(serde_json::json!({"eventos": [{"evento": "app.queda", "codigo": "panic", "cliente": "native"}]})));
+        assert_eq!(telemetry.take_crash(), Some(serde_json::json!({"eventos": [{"evento": "app.crash", "codigo": "panic", "cliente": "native"}]})));
         assert_eq!(telemetry.take_crash(), None, "um por queda");
         assert_eq!(ClientTelemetry::new(None).take_crash(), None);
     }

@@ -38,14 +38,14 @@ it('instala sink uma vez, grava plataforma e eventos no destino capturado', asyn
   ]);
   expect(JSON.stringify(eventos)).not.toMatch(/token-a|https:/);
 
-  // A cada 5 min em primeiro plano, o tempo na tela vai ao servidor ativo.
+  // A cada passada em primeiro plano, o tempo na tela vai ao servidor ativo.
   estado.base = 'https://a.test';
   fetchMock.mockClear();
   fetchMock.mockImplementation(async (_url, init) =>
     new Response(JSON.stringify({ gravadas: JSON.parse(init!.body as string).eventos.length })));
   await vi.advanceTimersByTimeAsync(300_000 - 4000);
   const visibleTime = fetchMock.mock.calls.flatMap(([url, init]) => JSON.parse(init!.body as string).eventos
-    .filter((e: { evento: string }) => e.evento === 'app.tempo').map((e: object) => [url, e]));
+    .filter((e: { evento: string }) => e.evento === 'app.visible_time').map((e: object) => [url, e]));
   expect(visibleTime).toEqual([['https://a.test/api/diag', expect.objectContaining({ ms: 300_000, cliente: 'android' })]]);
 });
 

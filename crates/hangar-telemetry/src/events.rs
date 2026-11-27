@@ -69,7 +69,7 @@ pub struct DimValue(Cow<'static, str>);
 impl DimValue {
     pub const OTHER: DimValue = DimValue(Cow::Borrowed("other"));
 
-    /// Versão de release (`0.42.0`, ou a do pacote `0.1.0.9010`); outra forma vira `other`.
+    /// Versão de release: três ou quatro segmentos numéricos; outra forma vira `other`.
     pub fn version(value: &str) -> DimValue {
         let parts = value.split('.');
         let numeric = parts.clone().all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));

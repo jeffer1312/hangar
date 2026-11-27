@@ -6,7 +6,7 @@ import { useServers } from '../stores/servers';
 import { fatalTelemetryEvent, replayFatalError } from './fatalErrors';
 
 let iniciado = false;
-// O tempo na tela sai a cada 5 min; o servidor recusa mais que isso num evento.
+// O tempo na tela sai neste compasso; o servidor recusa mais que isso num evento.
 const VISIBLE_EVERY_MS = 5 * 60 * 1000;
 
 export function withMachineRequestDiagnostics(fetcher: typeof fetch): typeof fetch {
@@ -98,7 +98,7 @@ export function iniciarDiag(): void {
     visibleSince = now;
     const ms = visibleRest - (visibleRest % 60_000);
     visibleRest -= ms;
-    if (ms > 0) registrar({ evento: 'app.tempo', ms });
+    if (ms > 0) registrar({ evento: 'app.visible_time', ms });
   };
   setInterval(() => { visibleTime(); void transporte.enviar(); }, VISIBLE_EVERY_MS);
   useServers.subscribe(() => { void transporte.enviar(); replay(); });

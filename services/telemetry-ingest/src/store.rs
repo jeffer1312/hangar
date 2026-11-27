@@ -72,7 +72,7 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
     Ok(Insert::Accepted)
 }
 
-/// Valor que o Postgres recusou por conteúdo (classe 22, como `2026-02-31` no `day`): erro de quem mandou.
+/// Valor que o Postgres recusou por conteúdo (classe 22, como uma data que não existe no calendário no `day`): erro de quem mandou.
 pub fn is_bad_value(error: &sqlx::Error) -> bool {
     matches!(error, sqlx::Error::Database(db) if db.code().is_some_and(|code| code.starts_with("22")))
 }

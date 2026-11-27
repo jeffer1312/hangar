@@ -24,13 +24,13 @@ const OWNER_PATH: &str = "/api/telemetry/owner";
 const CONVERGE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 /// O retrato de peers sai uma vez por dia (`once`); a hora só decide quando ele é tirado.
 const SNAPSHOT_EVERY: Duration = Duration::from_secs(60 * 60);
-/// O cliente manda `app.tempo` a cada 5 min: mais que isso num evento é relógio torto ou repetição.
+/// O cliente manda `app.visible_time` neste compasso: mais que isso num evento é relógio torto ou repetição.
 const VISIBLE_CAP_MS: u64 = 5 * 60 * 1000;
 /// `detalhe` de `rota.escolhida` (`packages/core/src/rota.ts`).
 const ROUTES: &[&str] = &["principal", "rede_local", "tailscale", "connect"];
 /// `codigo` de `rota.falhou`, em minúsculas: nome do erro do JS ou o código do Expo.
 const ROUTE_FAILURES: &[&str] = &["error", "timeouterror", "aborterror", "typeerror", "route_timeout", "erro"];
-/// `codigo` de `app.queda`, em minúsculas: nome do erro do JS, ou `panic` do nativo.
+/// `codigo` de `app.crash`, em minúsculas: nome do erro do JS, ou `panic` do nativo.
 const FATAL_CODES: &[&str] = &["error", "typeerror", "referenceerror", "rangeerror", "syntaxerror", "panic"];
 
 #[derive(Deserialize)]
@@ -165,7 +165,7 @@ fn screen_event(telemetry: &Telemetry, item: &Value) {
     let took = item["ms"].as_u64();
     let dims = Dims::new().with("client", client);
     match text("evento") {
-        "app.tempo" => {
+        "app.visible_time" => {
             let minutes = took.map_or(0, |ms| (ms.min(VISIBLE_CAP_MS) + 30_000) / 60_000);
             if minutes > 0 { telemetry.count(Event::AppVisibleMinutes, dims, minutes); }
         }
@@ -180,8 +180,8 @@ fn screen_event(telemetry: &Telemetry, item: &Value) {
             let code = Code::known(&text("codigo").to_ascii_lowercase(), ROUTE_FAILURES);
             telemetry.count(Event::ClientRoute, dims.with("failed", true).with("code", code), 1);
         }
-        "chat.aberto" => if let Some(ms) = took { telemetry.duration(Event::ChatOpen, dims, Duration::from_millis(ms)); },
-        "app.queda" => {
+        "chat.opened" => if let Some(ms) = took { telemetry.duration(Event::ChatOpen, dims, Duration::from_millis(ms)); },
+        "app.crash" => {
             let code = Code::known(&text("codigo").to_ascii_lowercase(), FATAL_CODES);
             telemetry.count(Event::ClientFatal, dims.with("code", code), 1);
         }
@@ -389,15 +389,15 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let telemetry = test_telemetry(home.path(), true);
         let body = json!({"eventos": [
-            {"evento": "app.tempo", "ms": 900_000, "cliente": "ios"},
+            {"evento": "app.visible_time", "ms": 900_000, "cliente": "ios"},
             {"evento": "rota.escolhida", "detalhe": "tailscale", "ms": 250, "cliente": "android"},
             {"evento": "rota.falhou", "codigo": "TimeoutError", "cliente": "android"},
             {"evento": "rota.falhou", "codigo": "https://casa.exemplo", "cliente": "android"},
-            {"evento": "chat.aberto", "ms": 1_200, "cliente": "native"},
-            {"evento": "app.queda", "codigo": "TypeError", "cliente": "celular-do-jeff"},
+            {"evento": "chat.opened", "ms": 1_200, "cliente": "native"},
+            {"evento": "app.crash", "codigo": "TypeError", "cliente": "celular-do-jeff"},
             {"evento": "sse.conectou", "ms": 10, "cliente": "ios"},
             // Fora das linhas que o diário gravou: a tela reenvia, e aqui não conta.
-            {"evento": "app.tempo", "ms": 900_000, "cliente": "ios"},
+            {"evento": "app.visible_time", "ms": 900_000, "cliente": "ios"},
         ]}).to_string();
         count_screen(&telemetry, body.as_bytes(), 7);
         let android = || Dims::new().with("client", ClientKind::Android);

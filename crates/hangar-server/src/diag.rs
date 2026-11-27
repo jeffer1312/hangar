@@ -515,7 +515,7 @@ mod telemetry_tests {
     use hangar_telemetry::events::ClientKind;
     use hangar_telemetry::wire::Counter;
 
-    const BATCH: &str = r#"{"eventos": [{"evento": "app.tempo", "ms": 900000, "cliente": "ios"}]}"#;
+    const BATCH: &str = r#"{"eventos": [{"evento": "app.visible_time", "ms": 900000, "cliente": "ios"}]}"#;
 
     fn post(guest: bool) -> Request {
         let mut req = axum::http::Request::builder().method(Method::POST).uri("/api/diag").header("content-type", "application/json");
@@ -533,7 +533,7 @@ mod telemetry_tests {
         let counted = screen_telemetry(&st, &req, false);
         assert!(counted.is_none());
         assert_eq!(record_screen_events(Some(diary.path().to_owned()), req, counted).await.status(), StatusCode::OK);
-        assert_eq!(test_support::rows(diary.path()).iter().filter(|row| row["evento"] == "app.tempo").count(), 1);
+        assert_eq!(test_support::rows(diary.path()).iter().filter(|row| row["evento"] == "app.visible_time").count(), 1);
         assert!(telemetry.counters().is_empty());
         // Convidado que o porteiro já decidiu (`Caller::Guest`) também não conta.
         assert!(screen_telemetry(&st, &post(false), true).is_none());

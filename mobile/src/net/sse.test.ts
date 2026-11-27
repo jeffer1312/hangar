@@ -105,7 +105,7 @@ test('registra queda, reconexão e primeiro quadro no destino original sem paylo
   segundo.close();
 });
 
-test('conversa aberta registra chat.aberto com o tempo até o primeiro quadro, e a lista não', () => {
+test('conversa aberta registra chat.opened com o tempo até o primeiro quadro, e a lista não', () => {
   vi.useFakeTimers();
   const registrar = vi.fn();
   configureDiag({ registrar, novoReq: () => 'req-chat' });
@@ -117,7 +117,7 @@ test('conversa aberta registra chat.aberto com o tempo até o primeiro quadro, e
   vi.advanceTimersByTime(700);
   ultimo!.listeners.ping[0]({ data: '' });
   ultimo!.listeners.ping[0]({ data: '' });
-  const opened = registrar.mock.calls.filter(([e]) => e.evento === 'chat.aberto');
+  const opened = registrar.mock.calls.filter(([e]) => e.evento === 'chat.opened');
   expect(opened).toEqual([[expect.objectContaining({ ms: 700 }), 'https://chat-aberto.test']]);
   expect(JSON.stringify(opened)).not.toContain('nome-privado');
   source.close(); chat.close();
