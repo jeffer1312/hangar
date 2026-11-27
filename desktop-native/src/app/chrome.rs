@@ -702,10 +702,26 @@ pub fn confirm_alert(window: &mut Window, cx: &mut App, title: String, descripti
 pub fn confirm_alert_with(window: &mut Window, cx: &mut App, title: String, description: String, check: Option<(String, Rc<Cell<bool>>)>,
     ok: String, variant: ButtonVariant, act: impl Fn(&mut Window, &mut App) -> bool + 'static) {
     let body = move |_: &mut Window, _: &mut App| div()
-        .child(div().text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal().child(description.clone()))
+        .child(alert_description(description.clone()))
         .when_some(check.clone(), |el, (label, value)| el.child(confirm_check("confirm-check", label, value)))
         .into_any_element();
     confirm_dialog(window, cx, px(360.), px(150.), Some(title), Rc::new(body), Rc::new(|| true), ok, Some(variant), |d| d, act)
+}
+
+/// Título do alerta de confirmação.
+pub fn alert_title(title: String) -> Div { div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(title) }
+
+/// O texto do alerta de confirmação, abaixo do título.
+pub fn alert_description(text: String) -> Div {
+    div().text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal().child(text)
+}
+
+/// O Cancelar do alerta; o `confirm_dialog` liga foco e clique.
+pub fn alert_cancel_button() -> Button { Button::new("cancel").label(crate::i18n::tr("cancel")) }
+
+/// O confirmar do alerta: na variante pedida ou, sem ela, o `light_button`; o `confirm_dialog` liga foco e clique.
+pub fn alert_ok_button(variant: Option<ButtonVariant>, enabled: bool, ok: String, cx: &App) -> Button {
+    match variant { Some(variant) => Button::new("ok").with_variant(variant).disabled(!enabled), None => light_button("ok", enabled, cx) }.label(ok)
 }
 
 /// Botão claro de tinta escura (o inverso do texto), como o Enviar colado; apagado, o cinza do Enviar parado.
@@ -745,16 +761,15 @@ pub fn confirm_dialog(window: &mut Window, cx: &mut App, width: Pixels, height: 
         let anchor = |from: &FocusHandle| div().absolute().size_0().track_focus(from);
         let top = super::popup::centered_top(window.viewport_size().height, height);
         restyle(super::popup::dialog(dialog)).w(width).close_button(false).margin_top(top)
-            .when_some(title.clone(), |d, title| d.title(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(title)))
+            .when_some(title.clone(), |d, title| d.title(alert_title(title)))
             .child(body(window, cx))
             .footer(DialogFooter::new()
                 .child(OwnFocus { id: "cancel".into(), focus: Some(cancel_focus.clone()),
-                    button: Button::new("cancel").label(crate::i18n::tr("cancel")).child(anchor(&cancel_from))
+                    button: alert_cancel_button().child(anchor(&cancel_from))
                         .on_key_down(swap_on_arrows(cancel_focus.clone(), ok_focus.clone()))
                         .on_click(move |_, window, cx| cancel_from.dispatch_action(&Cancel, window, cx)) })
                 .child(OwnFocus { id: "ok".into(), focus: Some(ok_focus.clone()),
-                    button: match variant { Some(variant) => Button::new("ok").with_variant(variant).disabled(!enabled()),
-                        None => light_button("ok", enabled(), cx) }.label(ok.clone()).child(anchor(&ok_from))
+                    button: alert_ok_button(variant, enabled(), ok.clone(), cx).child(anchor(&ok_from))
                         .on_key_down(swap_on_arrows(cancel_focus.clone(), ok_focus.clone()))
                         .on_click(move |_, window, cx| {
                             press.set(true);

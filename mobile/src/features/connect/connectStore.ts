@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import { addMachine, approveAccountDevice, changeAccountPassword, CONNECT_SERVICE_URL, deviceStatus, endAccountSessions, installCode, listAccountDevices,
-  listMachines, normalizeGuestUser, registerDevice, registrarDiag, revokeAccountDevice, signIn, signInAnywhere as signInByName, signUp,
+  listMachines, normalizeGuestUser, registerDevice, registrarDiag, removeAccountMachine, revokeAccountDevice, signIn, signInAnywhere as signInByName, signUp,
   upgradeToDevice } from '@hangar/core';
 import type { AccountDevice, AccountDeviceKey, AccountDeviceStatus, AccountSession, ConnectMachine, Server } from '@hangar/core';
 import { validInstallField, vouchAccountDevice } from '../machines/api';
@@ -59,6 +59,8 @@ export interface ConnectState {
   answerDevice(deviceId: string, approve: boolean): Promise<void>;
   /** Este aparelho perdeu o acesso: registra outro pedido de liberação. */
   requestDeviceAgain(): Promise<void>;
+  /** Tira o computador da conta e o servidor dele deste app, e relê a lista. Falha rejeita com a frase da tela. */
+  removeMachine(machine: ConnectMachine): Promise<void>;
 }
 
 const CODES: Record<string, () => string> = {
@@ -498,6 +500,17 @@ export const useConnect = create<ConnectState>((set, get) => {
       renew = true;
       set({ device: null, deviceError: '', devices: noDevices });
       await get().refreshDevices();
+    },
+    async removeMachine(machine) {
+      const { account } = get();
+      if (!account) throw new Error(m.connect_session_ended());
+      try { await removeAccountMachine(sessionOf(account), machine.machine_id); }
+      catch (error) { throw new Error(failure(error, 'machine')); }
+      // Fora da conta ele deixa de abrir pelo Connect: a entrada guardada só ficaria recusando.
+      const servers = useServers.getState();
+      for (const server of ownServers(servers.servers).filter((candidate) => sameMachine(candidate, machine))) servers.remove(server.id);
+      setEntry(machine.machine_id, null);
+      if (get().account?.token === account.token) await get().refreshMachines();
     },
   };
 });

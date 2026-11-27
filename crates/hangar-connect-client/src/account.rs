@@ -260,6 +260,16 @@ impl<T: Transport> ConnectClient<T> {
         self.call(&session.service_url, &path, Method::Delete, None, auth(session)).await.map(drop)
     }
 
+    /// Apaga a máquina da conta: a chave dela deixa de valer e a entrada dela entre os aparelhos é revogada.
+    ///
+    /// # Errors
+    ///
+    /// Os de qualquer pedido.
+    pub async fn remove_machine(&self, session: &AccountSession, id: &str) -> Result<(), Error> {
+        let path = format!("/v1/machines/{}", segment(id));
+        self.call(&session.service_url, &path, Method::Delete, None, auth(session)).await.map(drop)
+    }
+
     /// Migração: a máquina pede a liberação de um aparelho da conta, e o serviço só libera com o segredo dele.
     ///
     /// # Errors

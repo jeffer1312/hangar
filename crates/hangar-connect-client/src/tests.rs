@@ -442,6 +442,16 @@ async fn account_devices_are_parsed_and_answered() {
 }
 
 #[tokio::test]
+async fn removing_a_machine_deletes_it_by_name() {
+    let client = client(|request| match crate::fake::route(request).as_str() {
+        "DELETE connect.hangar.dev.br/v1/machines/pc%202" => Ok(Response { status: 204, ..Response::default() }),
+        _ => json(404, json!({})),
+    });
+    client.remove_machine(&session(), "pc 2").await.unwrap();
+    assert_eq!(client.remove_machine(&session(), "outra").await.unwrap_err().status(), Some(404));
+}
+
+#[tokio::test]
 async fn machine_registration_keeps_the_service_answer() {
     let client = client(|request| {
         assert_eq!(body(request), json!({"name": "notebook"}));

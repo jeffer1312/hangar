@@ -174,7 +174,7 @@ describe('entrar no Hangar', () => {
       expect(el.textContent).toContain('fixture-pc');
       expect(el.textContent).not.toContain(m.connect_release_title());
     });
-    expect(el.textContent).toContain(m.connect_your_machines());
+    expect(el.textContent).toContain(m.connect_computers_title());
     expect(el.textContent).toContain(m.connect_machine_off_now());
   });
 

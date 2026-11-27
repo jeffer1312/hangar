@@ -498,6 +498,54 @@ describe('máquinas da conta', () => {
   });
 });
 
+describe('remover um computador da conta', () => {
+  const other: Server = { id: 'pc9', label: 'pc9', baseUrl: 'https://pc9.tail.ts.net', token: 'owner-password' };
+  beforeEach(async () => {
+    network();
+    await connect().signIn('acme', 'long-password');
+    await settle();
+  });
+
+  it('apaga na conta com a credencial do aparelho, tira só o servidor dele e relê a lista', async () => {
+    await seed([entry, other]);
+    let removed = false;
+    const calls = network({ route: (call) => {
+      if (call.url.pathname === '/v1/machines/pc1' && call.method === 'DELETE') { removed = true; return empty(); }
+      if (call.url.pathname === '/v1/machines') return json(removed ? [] : [online]);
+      return undefined;
+    } });
+    await connect().refreshMachines();
+
+    await connect().removeMachine(online);
+
+    const remove = calls.find((call) => call.method === 'DELETE' && call.url.pathname === '/v1/machines/pc1');
+    expect(remove?.device).toBe('ad1:ad-secret');
+    expect(remove?.auth).toBe('Bearer account-token');
+    expect(servers().map((server) => server.id)).toEqual(['pc9']);
+    // A lista relida depois da remoção já não traz o computador.
+    expect(calls.slice(calls.indexOf(remove!)).some((call) => call.method === 'GET' && call.url.pathname === '/v1/machines')).toBe(true);
+    expect(connect().machines).toEqual([]);
+  });
+
+  it('acha o servidor pelo host do Connect, mesmo guardado por outro endereço', async () => {
+    await seed([{ ...other, id: 'casa', baseUrl: 'https://casa.tail.ts.net', connectHost: online.host }, other]);
+    network({ route: (call) => (call.method === 'DELETE' && call.url.pathname === '/v1/machines/pc1' ? empty() : undefined) });
+
+    await connect().removeMachine(online);
+
+    expect(servers().map((server) => server.id)).toEqual(['pc9']);
+  });
+
+  it('recusa do serviço vira a frase da tela e não tira o servidor', async () => {
+    await seed([entry, other]);
+    network({ route: (call) => (call.method === 'DELETE' && call.url.pathname === '/v1/machines/pc1' ? json({ error: 'eco' }, 503) : undefined) });
+
+    await expect(connect().removeMachine(online)).rejects.toThrow(m.connect_error_unavailable());
+
+    expect(servers().map((server) => server.id)).toEqual(['pc1', 'pc9']);
+  });
+});
+
 describe('aparelho da conta', () => {
   const DEVICE_KEY = 'cp_connect_device_v1';
   const saveDevice = () => vault.set(DEVICE_KEY, JSON.stringify({ name: 'acme', serviceUrl: CONNECT_SERVICE_URL, id: 'ad1', secret: 'ad-secret' }));

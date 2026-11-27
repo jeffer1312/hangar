@@ -43,7 +43,13 @@ export function MachineDevices({ server }: { server: Server }) {
   const local = rows?.filter((row) => !row.account_device && row.status !== 'denied') ?? [];
   const pending = local.filter((row) => row.status === 'pending');
   const approved = local.filter((row) => row.status === 'approved');
+  // A chave dada a outro computador não é um app: separada, a pessoa não a tira achando que é um celular velho.
+  const peers = approved.filter((row) => !!row.peer);
+  const apps = approved.filter((row) => !row.peer);
   const busy = read.busy || answer.busy;
+  const used = (row: LocalDevice) => (row.last_seen ? m.machine_devices_seen({ when: relativeTime(row.last_seen) }) : m.connect_local_never_used());
+  const revokeRow = (row: LocalDevice) => <MachineRow key={row.device_id} title={row.name} description={used(row)}
+    value={m.connect_device_revoke()} disabled={busy} onPress={() => askRevoke(row)} />;
   const asked = (row: LocalDevice) => {
     const when = relativeTime(row.created_at);
     return row.install_code ? m.machine_devices_asked_code({ code: row.install_code, when }) : m.machine_devices_asked({ when });
@@ -56,12 +62,13 @@ export function MachineDevices({ server }: { server: Server }) {
       {pending.map((row) => <MachineRow key={row.device_id} title={row.name} description={asked(row)}
         value={m.connect_device_approve()} disabled={busy} onPress={() => askApprove(row)} />)}
     </SectionCard> : null}
-    {approved.length ? <SectionCard icon="Smartphone" title={m.machine_devices_approved()}>
-      {approved.map((row) => (row.device_id === server.deviceId
+    {apps.length ? <SectionCard icon="Smartphone" title={m.connect_local_apps()}>
+      {apps.map((row) => (row.device_id === server.deviceId
         ? <MachineRow key={row.device_id} title={row.name} value={m.connect_device_this()} />
-        : <MachineRow key={row.device_id} title={row.name}
-          description={row.last_seen ? m.machine_devices_seen({ when: relativeTime(row.last_seen) }) : undefined}
-          value={m.connect_device_revoke()} disabled={busy} onPress={() => askRevoke(row)} />))}
+        : revokeRow(row)))}
+    </SectionCard> : null}
+    {peers.length ? <SectionCard icon="Monitor" title={m.connect_local_peers()} subtitle={m.connect_local_peer_caption()}>
+      {peers.map(revokeRow)}
     </SectionCard> : null}
     {/* Com a lista antiga na tela, o erro avisa que ela pode estar velha. */}
     <Notice text={read.error || answer.error} error />

@@ -1,4 +1,5 @@
 //! Resgate do bilhete e aparelhos do dono. Falha aqui é resposta com código, nunca repasse ao Python.
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -46,19 +47,22 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/connect/preview", get(preview_state).post(open_preview).delete(close_preview).options(preflight))
         .route("/api/connect/peers", get(peer_links).options(preflight))
         .route("/api/connect/machines", get(account_list).options(preflight))
+        .route("/api/connect/machines/{id}", delete(account_machine_remove).options(preflight))
         .route("/api/connect/peers/{id}/link", post(link_peer).options(preflight))
 }
 
 pub fn matches(method: &Method, path: &str) -> bool {
     let id = path.strip_prefix("/api/connect/devices/").or_else(|| path.strip_prefix("/api/connect/account-devices/"));
     let peer = path.strip_prefix("/api/connect/peers/").and_then(|rest| rest.strip_suffix("/link"));
+    let machine = path.strip_prefix("/api/connect/machines/");
     match method.as_str() {
         "GET" => matches!(path, "/api/connect" | "/api/connect/devices" | "/api/connect/account-devices" | "/api/connect/peers" | "/api/connect/machines" | "/api/connect/preview"),
         "POST" => matches!(path, "/api/connect/link" | "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/connect/devices/self"
                 | "/api/connect/account-devices/self" | "/api/connect/preview")
             || id.and_then(|rest| rest.strip_suffix("/approve")).is_some_and(|id| !id.is_empty() && !id.contains('/'))
             || peer.is_some_and(|id| !id.is_empty() && !id.contains('/')),
-        "DELETE" => matches!(path, "/api/connect" | "/api/connect/preview") || id.is_some_and(|id| !id.is_empty() && !id.contains('/')),
+        "DELETE" => matches!(path, "/api/connect" | "/api/connect/preview")
+            || id.or(machine).is_some_and(|id| !id.is_empty() && !id.contains('/')),
         _ => false,
     }
 }
@@ -137,12 +141,39 @@ async fn status(State(st): State<Arc<AppState>>, req: Request) -> Response {
     reply(&headers, StatusCode::OK, body)
 }
 
+/// `peer`: a entrada do `peers.json` para a qual esta máquina emitiu a credencial. É o que separa as
+/// credenciais dadas a outros computadores dos apps.
 async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
     if let Err(response) = owner_gate(&st, peer, &req).await {
         return with_cors(&headers, response);
     }
-    reply(&headers, StatusCode::OK, json!(st.connect_devices.list()))
+    let issued = issued_to_peers(&st);
+    let rows: Vec<Value> = st.connect_devices.list().into_iter().map(|row| {
+        let peer = issued.get(&row.device_id).cloned();
+        let mut value = json!(row);
+        if let Some(peer) = peer {
+            value["peer"] = json!(peer);
+        }
+        value
+    }).collect();
+    reply(&headers, StatusCode::OK, json!(rows))
+}
+
+/// `connect_return_device` de cada entrada → id dela. Sem `peers.json` legível a lista sai sem o campo: os
+/// aparelhos não dependem dele.
+fn issued_to_peers(st: &Arc<AppState>) -> HashMap<String, String> {
+    let store = match crate::machine_peers::Service::from_state(st) {
+        Ok(service) => service.store,
+        Err(failure) => {
+            tracing::warn!(code = failure.code, "aparelhos do Connect listados sem as máquinas: {}", failure.msg);
+            return HashMap::new();
+        }
+    };
+    let book = store.tolerant();
+    (&book).into_iter()
+        .filter_map(|(key, entry)| Some((entry["connect_return_device"].as_str()?.to_owned(), key.clone())))
+        .collect()
 }
 
 async fn approve(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
@@ -170,7 +201,7 @@ async fn remove(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
 }
 
 #[derive(Deserialize)]
-struct EnrollBody { device_name: String }
+struct EnrollBody { device_name: String, #[serde(default)] install_id: Option<String> }
 
 /// Só a senha do dono, de fora da entrada do Connect. Aparelho não passa: quem for revogado sairia
 /// com outra credencial, ou com a máquina ligada a outro serviço.
@@ -192,7 +223,7 @@ async fn enroll(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
         return with_cors(&headers, response);
     }
     let body: EnrollBody = match parse(req).await { Ok(body) => body, Err(response) => return response };
-    match blocking(&st, move |store| store.enroll(&body.device_name)).await {
+    match blocking(&st, move |store| store.enroll_install(&body.device_name, body.install_id.as_deref())).await {
         Ok((device_id, token)) => reply(&headers, StatusCode::OK, json!({"device_id": device_id, "token": token})),
         Err(refusal) => refused(&headers, refusal),
     }
@@ -443,6 +474,54 @@ async fn account_device_revoke(State(st): State<Arc<AppState>>, ConnectInfo(peer
         Ok(()) => reply(&headers, StatusCode::OK, json!({"ok": true})),
         Err(refusal) => refused(&headers, refusal),
     }
+}
+
+async fn account_machine_remove(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let linked = match account_gate(&st, peer, &req).await { Ok(linked) => linked, Err(response) => return response };
+    if id == linked.machine_id {
+        return error(&headers, StatusCode::CONFLICT, "connect_machine_remove_self", "esta máquina não se apaga da conta por aqui");
+    }
+    if let Err(failure) = account_devices::remove_machine(&linked, &id).await {
+        return failed(&headers, failure.into());
+    }
+    let address = peers::expected_host(&linked, &id).map(|host| format!("https://{host}"));
+    match remove_machine_peers(&st, id.clone(), address).await {
+        Ok(removed) => reply(&headers, StatusCode::OK, json!({"ok": true, "peers_removed": removed})),
+        Err(cause) => {
+            tracing::warn!(code = "connect_machine_peer_left", machine = %id, "{cause}");
+            error(&headers, StatusCode::INTERNAL_SERVER_ERROR, "connect_machine_peer_left",
+                "a máquina saiu da conta, mas continua na lista de máquinas deste app")
+        }
+    }
+}
+
+/// Tira do `peers.json` toda entrada que a lista da conta mostra como "neste app" para a máquina, pelo mesmo
+/// caminho do `DELETE /api/peers/{id}`: remover da conta tira de todos os lugares.
+async fn remove_machine_peers(st: &Arc<AppState>, id: String, address: Option<String>) -> Result<Vec<String>, String> {
+    let service = crate::machine_peers::Service::from_state(st).map_err(|failure| format!("{}: {}", failure.code, failure.msg))?;
+    tokio::task::spawn_blocking(move || {
+        let book = service.store.read().map_err(|failure| format!("{}: {}", failure.code, failure.msg))?;
+        let found = added_entries(&book, &id, address.as_deref());
+        drop(book);
+        let mut removed = Vec::new();
+        for peer in found {
+            match service.remove_peer_entry(&peer) {
+                Ok(_) => removed.push(peer),
+                // Outro pedido a tirou no meio: ela já não está na lista.
+                Err(failure) if failure.code == "peers_desconhecido" => {}
+                Err(failure) => return Err(format!("{}: {}", failure.code, failure.msg)),
+            }
+        }
+        Ok(removed)
+    }).await.map_err(|cause| cause.to_string())?
+}
+
+/// A mesma regra do `added` de `account_list`: pela chave ou pelo endereço do Connect, principal ou extra.
+fn added_entries(book: &crate::machine_peers::store::Book, id: &str, address: Option<&str>) -> Vec<String> {
+    book.iter().filter(|(key, entry)| key.as_str() == id || address.is_some_and(|address| ["base_url", "connect_url"].iter()
+        .any(|field| entry[*field].as_str().is_some_and(|url| url.trim_end_matches('/') == address))))
+        .map(|(key, _)| key.clone()).collect()
 }
 
 #[derive(Deserialize)]

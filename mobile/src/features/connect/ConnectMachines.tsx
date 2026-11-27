@@ -84,6 +84,10 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
   };
   const enterLabel = picked.length === 1 ? m.login_guest_enter_one() : m.login_guest_enter_many({ n: String(picked.length) });
   const account = useConnect((s) => s.account?.name ?? '');
+  // Pelo id: a lista relida troca os objetos, e o computador que saiu da conta fecha o detalhe sozinho.
+  const [detail, setDetail] = useState<string | null>(null);
+  const opened = detail ? machines?.find((machine) => machine.machine_id === detail) : undefined;
+  useEffect(() => { if (detail && machines && !opened) setDetail(null); }, [detail, machines, opened]);
   return <>
     <View style={[styles.header, { borderColor: c.border }]}>
       <ConnectMark size={40} />
@@ -92,24 +96,28 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
         <Text style={[styles.headerSub, { color: c.muted }]}>{m.connect_signed_in_as({ name: account })}</Text>
       </View>
     </View>
+    {/* O pedido esperando vem antes de tudo: quem pediu está com o celular na mão agora. */}
+    {status === 'approved' ? <PendingRequests /> : null}
     <DeviceState />
     {/* Máquina sem a versão nova ainda pede a aprovação nela mesma. */}
     {waiting.map((machine) => <View key={machine.machine_id} style={styles.waiting}>
       <ActivityIndicator color={c.accent} />
       <View style={styles.waitingText}><Notice text={m.connect_waiting_notice({ name: machine.name })} /></View>
     </View>)}
-    <SectionCard icon="Laptop" title={m.connect_your_machines()} subtitle={m.connect_machines_pull()}>
+    <SectionCard icon="Laptop" title={m.connect_computers_title()} subtitle={m.connect_computers_help({ account })}>
       {machines === null && !error ? <MachineRow title={loading ? m.mobile_machines_busy() : m.comum_carregando()} /> : null}
       {machines?.length === 0 ? <MachineRow title={m.connect_machines_empty()} /> : null}
       {machines?.map((machine) => {
         const id = machine.machine_id;
+        // O toque marca para entrar; as opções, como Remover da conta, ficam no toque longo.
         if (choosable.includes(machine)) {
-          return <CheckRow key={id} title={machine.name} dot="on" checked={!unpicked.has(id)} disabled={blocked} onToggle={() => toggle(id)} />;
+          return <CheckRow key={id} title={machine.name} dot="on" checked={!unpicked.has(id)} disabled={blocked} onToggle={() => toggle(id)}
+            onLongPress={() => setDetail(id)} longPressLabel={m.connect_computer_more({ name: machine.name })} />;
         }
         if (!machine.online && !entries[id] && !own.some((server) => sameMachine(server, machine))) {
-          return <CheckRow key={id} title={machine.name} dot="off" description={m.connect_machine_off_now()} checked={false} disabled onToggle={() => {}} />;
+          return <MachineRow key={id} title={machine.name} description={m.connect_machine_off_now()} onPress={() => setDetail(id)} />;
         }
-        return <MachineItem key={id} machine={machine} blocked={blocked} onEntered={entered} onOpen={onDone} />;
+        return <MachineItem key={id} machine={machine} onOpen={() => setDetail(id)} />;
       })}
     </SectionCard>
     {choosable.length > 0 && !blocked ? <LoginSubmit label={enterLabel} blocked={!picked.length} onPress={enterPicked} /> : null}
@@ -118,9 +126,12 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
     {error ? <MachineGroup>
       <MachineRow title={m.mobile_machines_retry()} action disabled={loading} onPress={() => { void useConnect.getState().refreshMachines(); }} />
     </MachineGroup> : null}
+    {machines?.length ? <MachineHelp>{choosable.length ? m.connect_computers_tip_checks() : m.connect_computers_tip()}</MachineHelp> : null}
     <ConnectRecovery servers={enabled} />
     {status === 'approved' ? <AccountDevices /> : null}
     <AccountRows />
+    {opened ? <ComputerSheet key={opened.machine_id} machine={opened} blocked={blocked} onEntered={entered} onDone={onDone}
+      onClose={() => setDetail(null)} /> : null}
   </>;
 }
 
@@ -170,24 +181,92 @@ function ReleaseCard() {
   </View>;
 }
 
-function MachineItem({ machine, blocked, onEntered, onOpen }: { machine: ConnectMachine; blocked: boolean; onEntered: () => void; onOpen: () => void }) {
+/** Linha de um computador da conta: diz o estado, e o toque abre o detalhe com as ações dele. */
+function MachineItem({ machine, onOpen }: { machine: ConnectMachine; onOpen: () => void }) {
   const entry = useConnect((s) => s.entries[machine.machine_id]);
   const server = useServers((s) => ownServers(s.servers).find((candidate) => sameMachine(candidate, machine)));
+  const title = machine.name;
+  if (entry?.phase === 'asking') return <MachineRow title={title} value={m.mobile_machines_busy()} />;
+  if (entry?.phase === 'waiting') return <MachineRow title={title} value={m.connect_waiting()} />;
+  const refused = server?.disabled ? m.connect_refused_help() : undefined;
+  if (!machine.online) return <MachineRow title={title} value={m.mobile_machines_offline()} valueTone="error" description={entry?.error ?? refused} onPress={onOpen} />;
+  if (entry?.phase === 'failed') return <MachineRow title={title} description={entry.error} value={m.mobile_machines_retry()} onPress={onOpen} />;
+  if (refused) return <MachineRow title={title} description={refused} value={m.connect_reenter()} onPress={onOpen} />;
+  if (server) return <MachineRow title={title} value={m.connect_machine_added()} valueTone="success" onPress={onOpen} />;
+  return <MachineRow title={title} value={m.login_entrar()} onPress={onOpen} />;
+}
+
+/** Detalhe de um computador: estado, a ação que cabe agora e Remover da conta. */
+function ComputerSheet({ machine, blocked, onEntered, onDone, onClose }: {
+  machine: ConnectMachine; blocked: boolean; onEntered: () => void; onDone: () => void; onClose: () => void;
+}) {
+  const entry = useConnect((s) => s.entries[machine.machine_id]);
+  const server = useServers((s) => ownServers(s.servers).find((candidate) => sameMachine(candidate, machine)));
+  const remove = useMachineAction();
+  const entering = entry?.phase === 'asking' || entry?.phase === 'waiting';
   const enter = () => {
+    haptic.selection();
+    // A espera aparece na linha da lista: o detalhe fecha para ela ficar à vista.
+    onClose();
     void useConnect.getState().enter(machine).then((saved) => {
       if (saved) { haptic.success(); onEntered(); }
       else if (useConnect.getState().entries[machine.machine_id]?.phase === 'failed') haptic.error();
     });
   };
-  const title = machine.name;
-  if (entry?.phase === 'asking') return <MachineRow title={title} value={m.mobile_machines_busy()} />;
-  if (entry?.phase === 'waiting') return <MachineRow title={title} value={m.connect_waiting()} />;
-  const refused = server?.disabled ? m.connect_refused_help() : undefined;
-  if (!machine.online) return <MachineRow title={title} value={m.mobile_machines_offline()} valueTone="error" description={entry?.error ?? refused} disabled />;
-  if (entry?.phase === 'failed') return <MachineRow title={title} description={entry.error} value={m.mobile_machines_retry()} disabled={blocked} onPress={enter} />;
-  if (refused) return <MachineRow title={title} description={refused} value={m.connect_reenter()} disabled={blocked} onPress={enter} />;
-  if (server) return <MachineRow title={title} value={m.connect_machine_added()} valueTone="success" onPress={onOpen} />;
-  return <MachineRow title={title} value={m.login_entrar()} disabled={blocked} onPress={enter} />;
+  const askRemove = () => confirm(m.connect_computer_remove_title({ name: machine.name }), m.connect_computer_remove_body(),
+    m.connect_computer_remove(), () => {
+      void remove.run(async () => {
+        try { await useConnect.getState().removeMachine(machine); }
+        catch (error) { haptic.error(); throw error; }
+        haptic.success();
+      }, onClose);
+    }, true);
+  const refused = !!server?.disabled;
+  const canEnter = machine.online && !blocked && !entering && !remove.busy;
+  let next: { title: string; description?: string } | null = null;
+  if (entry?.phase === 'failed') next = { title: m.mobile_machines_retry(), description: entry.error };
+  else if (refused) next = { title: m.connect_reenter(), description: m.connect_refused_help() };
+  else if (!server && machine.online) next = { title: m.connect_computer_add() };
+  return <MachineSheet title={machine.name} onClose={onClose}>
+    <ComputerDetail online={machine.online} inApp={!!server && !refused} next={next} busy={remove.busy} canEnter={canEnter}
+      removeDisabled={blocked || entering || remove.busy} onOpen={() => { onClose(); onDone(); }} onEnter={enter} onRemove={askRemove} />
+    <Notice text={remove.error} error />
+  </MachineSheet>;
+}
+
+/** O corpo do detalhe de um computador, só com dados: a folha e a miniatura da novidade desenham o mesmo. */
+export function ComputerDetail({ online, inApp, next, busy, canEnter, removeDisabled, onOpen, onEnter, onRemove }: {
+  online: boolean;
+  /** Já está neste app e entra sem pedido. */
+  inApp: boolean;
+  /** A ação que cabe agora (entrar, tentar de novo), quando há uma. */
+  next: { title: string; description?: string } | null;
+  /** Remover da conta em andamento. */
+  busy: boolean;
+  canEnter: boolean;
+  removeDisabled: boolean;
+  onOpen: () => void;
+  onEnter: () => void;
+  onRemove: () => void;
+}) {
+  return <>
+    <MachineGroup>
+      <MachineRow title={m.connect_computer_state()} value={online ? m.connect_computer_online() : m.mobile_machines_offline()}
+        valueTone={online ? 'success' : 'error'} />
+      {inApp ? <MachineRow title={m.connect_computer_in_app()} selected /> : null}
+    </MachineGroup>
+    {inApp ? <MachineGroup>
+      <MachineRow title={m.connect_computer_open()} action disabled={busy} onPress={onOpen} />
+    </MachineGroup> : null}
+    {next ? <MachineGroup>
+      <MachineRow title={next.title} description={next.description} action disabled={!canEnter} onPress={onEnter} />
+    </MachineGroup> : null}
+    <MachineGroup>
+      <MachineRow title={busy ? m.connect_computer_removing() : m.connect_computer_remove()} danger action
+        disabled={removeDisabled} onPress={onRemove} />
+    </MachineGroup>
+    <MachineHelp>{m.connect_computer_remove_help()}</MachineHelp>
+  </>;
 }
 
 /** O caminho de volta de quem foi recusado: pedir a entrada de novo, ou religar o Connect sobre a senha guardada. */
@@ -214,10 +293,8 @@ export function ConnectRecovery({ servers }: { servers: Server[] }) {
   </>;
 }
 
-/** Aparelhos da conta: o pendente se libera ou recusa num toque, valendo para todas as máquinas; o liberado perde o acesso. */
-function AccountDevices() {
-  const { rows, error } = useConnect((s) => s.devices);
-  const self = useConnect((s) => s.device?.id);
+/** Liberar e Recusar um aparelho da conta, com a mesma confirmação nas duas listas. */
+function useAnswerDevice() {
   const action = useMachineAction();
   const answer = (row: AccountDevice, approve: boolean) => {
     void action.run(async () => {
@@ -228,30 +305,59 @@ function AccountDevices() {
   };
   const release = (row: AccountDevice) => Alert.alert(m.connect_account_device_release_title({ name: row.name }), m.connect_account_device_release_body(), [
     { text: m.comum_cancelar(), style: 'cancel' },
-    { text: m.connect_device_deny(), style: 'destructive', onPress: () => answer(row, false) },
     { text: m.connect_account_device_release(), onPress: () => answer(row, true) },
   ]);
-  // Revogado fica no serviço só para as máquinas o tirarem; pedidos esperando vêm em cima.
-  const visible = (rows ?? []).filter((row) => row.status !== 'revoked')
-    .sort((a, b) => Number(b.status === 'pending') - Number(a.status === 'pending'));
+  return { action, answer, release };
+}
+
+/** Os pedidos esperando liberação na conta, um grupo em destaque cada, no topo da tela. */
+function PendingRequests() {
+  const rows = useConnect((s) => s.devices.rows);
+  const self = useConnect((s) => s.device?.id);
+  const { action, answer, release } = useAnswerDevice();
+  const pending = (rows ?? []).filter((row) => row.status === 'pending' && row.device_id !== self);
   return <>
-    <SectionCard icon="Smartphone" title={m.connect_account_devices()}>
+    {pending.map((row) => {
+      const asked = m.connect_account_device_asked({ when: relativeTime(row.created_at) });
+      return <SectionCard key={row.device_id} icon="Smartphone" tone="warning" title={m.connect_request_title({ name: row.name })}
+        subtitle={m.connect_request_help()}>
+        {/* O código é o que o celular que pediu mostra: quem libera confere que é ele. */}
+        {row.install_code ? <MachineRow title={m.connect_request_code({ code: row.install_code })} description={asked} />
+          : <MachineRow title={asked} />}
+        <MachineRow title={m.connect_account_device_release()} accessibilityLabel={m.connect_request_release_label({ name: row.name })}
+          action disabled={action.busy} onPress={() => release(row)} />
+        <MachineRow title={m.connect_device_deny()} accessibilityLabel={m.connect_request_deny_label({ name: row.name })}
+          danger action disabled={action.busy} onPress={() => answer(row, false)} />
+      </SectionCard>;
+    })}
+    <Notice text={action.error} error />
+  </>;
+}
+
+/** Celulares com acesso: liberados na conta, entram em todos os computadores dela; o liberado perde o acesso daqui. */
+function AccountDevices() {
+  const { rows, error } = useConnect((s) => s.devices);
+  const self = useConnect((s) => s.device?.id);
+  const { action, answer } = useAnswerDevice();
+  // Pendente sobe para o topo da tela; revogado fica no serviço só para as máquinas o tirarem.
+  const released = (rows ?? []).filter((row) => row.status === 'approved');
+  return <>
+    <SectionCard icon="Smartphone" title={m.connect_devices_all()} subtitle={m.connect_phones_help()}>
       {rows === null && !error ? <MachineRow title={m.comum_carregando()} /> : null}
-      {rows && !visible.length ? <MachineRow title={m.connect_account_devices_empty()} /> : null}
-      {visible.map((row) => (row.device_id === self
+      {rows && !released.length ? <MachineRow title={m.connect_phones_empty()} /> : null}
+      {released.map((row) => (row.device_id === self
         ? <MachineRow key={row.device_id} title={Constants.deviceName || row.name} value={m.connect_device_this()} />
-        : row.status === 'pending'
-          // O código é o que o celular que pediu mostra: quem libera confere que é ele.
-          ? <MachineRow key={row.device_id} title={row.name} description={row.install_code
-            ? m.connect_account_device_asked_code({ code: row.install_code, when: relativeTime(row.created_at) })
-            : m.connect_account_device_asked({ when: relativeTime(row.created_at) })}
-            value={m.connect_account_device_release()} disabled={action.busy} onPress={() => release(row)} />
-          : <MachineRow key={row.device_id} title={row.name} value={m.connect_device_revoke()} disabled={action.busy}
-            onPress={() => confirm(m.connect_device_revoke_title({ name: row.name }), m.connect_account_device_revoke_body(),
-              m.connect_device_revoke(), () => answer(row, false), true)} />))}
+        : <MachineRow key={row.device_id} title={row.name}
+          description={row.approved_at ? m.connect_phone_released({ when: relativeTime(row.approved_at) }) : undefined}
+          value={m.connect_device_revoke()} disabled={action.busy}
+          onPress={() => confirm(m.connect_device_revoke_title({ name: row.name }), m.connect_account_device_revoke_body(),
+            m.connect_device_revoke(), () => answer(row, false), true)} />))}
     </SectionCard>
     {/* Com a lista antiga na tela, o erro avisa que ela pode estar velha. */}
     <Notice text={error} error />
+    {error ? <MachineGroup>
+      <MachineRow title={m.mobile_machines_retry()} action onPress={() => { void useConnect.getState().refreshDevices(); }} />
+    </MachineGroup> : null}
     <Notice text={action.error} error />
     <MachineHelp>{m.connect_account_devices_help()}</MachineHelp>
   </>;

@@ -129,6 +129,16 @@ pub async fn revoke(linked: &Linked, id: &str) -> Result<(), Failure> {
     }
 }
 
+/// Outra máquina da conta. Já apagada vale como feito: quem pediu só quer que ela suma da lista.
+pub async fn remove_machine(linked: &Linked, id: &str) -> Result<(), Failure> {
+    checked(id)?;
+    let (client, session) = connect(linked)?;
+    match client.remove_machine(&session, id).await.map_err(Failure::from) {
+        Err(Failure::DeviceUnknown) => Ok(()),
+        other => other,
+    }
+}
+
 /// Migração: o serviço só libera se o segredo for o do aparelho.
 pub async fn vouch(linked: &Linked, id: &str, secret: &str) -> Result<(), Failure> {
     checked(id)?;

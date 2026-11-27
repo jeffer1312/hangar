@@ -13,6 +13,7 @@ mod code_comments;
 mod compact_idle;
 mod composer_history;
 mod connect_approval;
+mod connect_remove_computer;
 mod connect_sign_in;
 mod conversation_gallery;
 mod desktop_tool_look;
@@ -121,6 +122,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "whatsapp-somente-leitura" => Some(whatsapp_readonly::render),
         "whatsapp-draft" => Some(whatsapp_draft::render),
         "entrar-pelo-connect" => Some(connect_sign_in::render),
+        "connect-remover-computador" => Some(connect_remove_computer::render),
         "portas-da-sessao" => Some(session_ports::render),
         "antigravity" => Some(antigravity::render),
         "termos-antigravity" => Some(agy_terms::render),

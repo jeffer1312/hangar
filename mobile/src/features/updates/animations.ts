@@ -16,6 +16,7 @@ import { CompactIdleAnimation } from './CompactIdleAnimation';
 import { DesktopToolLookAnimation } from './DesktopToolLookAnimation';
 import { ConnectAnimation } from './ConnectAnimation';
 import { ConnectSignInAnimation } from './ConnectSignInAnimation';
+import { ConnectRemoveComputerAnimation } from './ConnectRemoveComputerAnimation';
 import { ConversationGalleryAnimation } from './ConversationGalleryAnimation';
 import { DreamAnimation } from './DreamAnimation';
 import { FolderBranchAnimation } from './FolderBranchAnimation';
@@ -64,6 +65,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'galeria-da-conversa': ConversationGalleryAnimation,
   'hangar-connect': ConnectAnimation,
   'entrar-pelo-connect': ConnectSignInAnimation,
+  'connect-remover-computador': ConnectRemoveComputerAnimation,
   'login-usuario-senha': LoginPasswordAnimation,
   'ocultar-da-lista': HideFromListAnimation,
   'plugins-do-claude': PluginsAnimation,

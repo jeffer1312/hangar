@@ -101,6 +101,11 @@ export async function revokeAccountDevice(session: AccountSession, id: string): 
   await request(session.serviceUrl, `/v1/devices/${encodeURIComponent(id)}`, { method: 'DELETE', headers: auth(session) });
 }
 
+/** Tira o computador da conta: a chave dele deixa de valer e ele some da lista de todos os aparelhos. */
+export async function removeAccountMachine(session: AccountSession, machineId: string): Promise<void> {
+  await request(session.serviceUrl, `/v1/machines/${encodeURIComponent(machineId)}`, { method: 'DELETE', headers: auth(session) });
+}
+
 async function accountSession(serviceUrl: string, path: string, name: string, password: string): Promise<AccountSession> {
   const { token } = record(await post(serviceUrl, path, { name, password }));
   if (!filled(token)) throw fail('connect_response_invalid');
@@ -278,9 +283,11 @@ export async function addMachine(session: AccountSession, machine: ConnectMachin
 
 async function enroll(server: Server): Promise<Server> {
   if (!await readConnectUrl(server)) return server;
-  const name = `Hangar ${apiEnv().deviceIdentity?.()?.kind ?? 'app'}`;
+  const identity = apiEnv().deviceIdentity?.();
+  const name = (apiEnv().deviceName?.()?.trim() || `Hangar ${identity?.kind ?? 'app'}`).slice(0, 64);
+  // A mesma instalação pedindo de novo volta à entrada dela na máquina, em vez de somar outra.
   const response = await probeServerResponse(server, '/api/connect/devices/self', {
-    method: 'POST', body: JSON.stringify({ device_name: name }), redirect: 'error',
+    method: 'POST', body: JSON.stringify({ device_name: name, ...(identity ? { install_id: identity.id } : {}) }), redirect: 'error',
   });
   if (!response.ok) throw fail('connect_enroll_failed', response.status);
   const { device_id: deviceId, token } = record(await response.json());

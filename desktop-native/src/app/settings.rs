@@ -109,8 +109,8 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("sync_config_desativar", Some("sync_config_desativar_aviso")), ("sync_config_copiar", None)]),
     (Page::Guests, &[("convidados_adicionar", Some("guests_connect_description")), ("convidados_ve_minhas", None),
         ("guests_legacy_title", Some("guests_legacy_bring"))]),
-    (Page::Connect, &[("connect_devices_title", None), ("connect_machines_title", Some("connect_machines_help")),
-        ("connect_preview_title", Some("connect_preview_help"))]),
+    (Page::Connect, &[("connect_computers_title", Some("connect_computers_tip")), ("connect_phones_title", Some("connect_phones_help")),
+        ("connect_local_title_plain", Some("connect_local_help")), ("connect_site_title", Some("connect_site_tip"))]),
     (Page::Appearance, &APPEARANCE_ROWS),
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search")),
         ("settings_delivery_mode", Some("settings_delivery_mode_search")),
@@ -941,8 +941,8 @@ impl Hangar {
         let servers_wide = page == Page::Servers;
         // O artigo do Manual leva o "Nesta página" ao lado do texto.
         let article_wide = page == Page::Manual && self.article_wide(window);
-        // Status é um painel de gráficos e Agentes e Contas são tabelas: ocupam a largura toda ao lado da navegação.
-        let status_wide = matches!(page, Page::Status | Page::Harnesses | Page::Accounts);
+        // Status é um painel de gráficos, Agentes e Contas são tabelas e o Connect vira duas colunas: ocupam a largura toda.
+        let status_wide = matches!(page, Page::Status | Page::Harnesses | Page::Accounts | Page::Connect);
         let body = match page {
             Page::Updates => self.render_updates(window, cx),
             Page::Manual => self.render_manual(window, cx),
@@ -968,7 +968,7 @@ impl Hangar {
             Page::Servers => self.render_machines(window.viewport_size().width, cx),
             Page::Sync => self.render_sync(cx),
             Page::Guests => self.render_guests_page(cx),
-            Page::Connect => self.render_connect(cx),
+            Page::Connect => self.render_connect(window.viewport_size().width, cx),
             Page::SharedConfig => self.render_shared_config(cx),
             Page::Windows => self.render_computer(cx),
             Page::Devices => self.render_devices(window, cx),
@@ -1306,6 +1306,14 @@ mod tests {
     fn jev_search_finds_every_jev_field() {
         let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Jev).expect("Jev na busca");
         for label in ["server_jev_key", "server_jev_default", "server_jev_endpoint", "server_jev_model", "server_jev_aux_endpoint", "server_jev_aux_key", "server_jev_aux_model", "server_jev_aux_effort", "server_jev_provider"] {
+            assert!(rows.iter().any(|(row, _)| *row == label), "{label} fora da busca");
+        }
+    }
+
+    #[test]
+    fn connect_search_finds_each_section_of_the_page() {
+        let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Connect).expect("Connect na busca");
+        for label in ["connect_computers_title", "connect_phones_title", "connect_local_title_plain", "connect_site_title"] {
             assert!(rows.iter().any(|(row, _)| *row == label), "{label} fora da busca");
         }
     }
