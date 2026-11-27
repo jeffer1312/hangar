@@ -94,7 +94,7 @@ pub(crate) use quotes::ref_chip;
 pub(crate) use desktop_look::{call_button as desktop_call_button, desktop_summary, group_block as desktop_group_block, summary_button as desktop_summary_button};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
-pub(crate) use notice_line::{api_error_box, fix_open_button, fix_result_row, ignore_button, ignored_text, notice_action_button, notice_body,
+pub(crate) use notice_line::{api_error_box, auto_continue_row, fix_open_button, fix_result_row, ignore_button, ignored_text, notice_action_button, notice_body,
     notice_fixed, notice_fixing, notice_head, notice_head_marked, notice_reinstalled, notice_rule_line, notice_spin, undo_button};
 pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, equalizer as voice_equalizer, mute_button, speech_pause_button, stop_button};
 pub(crate) use rename_suggest::{Strip as RenameStrip, beta_rename_strip, rename_strip};
@@ -131,7 +131,8 @@ pub(crate) use controls::{picker as model_picker, providers as provider_picker};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
     search_scope_summary, search_status_line, search_who};
-pub(crate) use sidebar::{Sub as RowSub, group_header_look, menu_item_height, menu_item_look, menu_label, menu_list_look, menu_surface_look};
+pub(crate) use sidebar::{Sub as RowSub, close_children_buttons, close_children_footer, close_children_text, group_header_look, menu_item_height,
+    menu_item_look, menu_label, menu_list_look, menu_surface_look};
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;

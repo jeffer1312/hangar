@@ -38,6 +38,8 @@ import { WhatsAppReadonlyAnimation } from './WhatsAppReadonlyAnimation';
 import { WhatsAppDraftAnimation } from './WhatsAppDraftAnimation';
 import { PortsAnimation } from './PortsAnimation';
 import { TelemetryConsentAnimation } from './TelemetryConsentAnimation';
+import { AutoContinueAnimation } from './AutoContinueAnimation';
+import { LinkedChildrenAnimation } from './LinkedChildrenAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
@@ -80,6 +82,8 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'whatsapp-draft': WhatsAppDraftAnimation,
   'portas-da-sessao': PortsAnimation,
   'contagens-anonimas': TelemetryConsentAnimation,
+  'continuar-depois-da-queda': AutoContinueAnimation,
+  'filhas-ligadas': LinkedChildrenAnimation,
 };
 
 export const animationFor = (name: string | null): ComponentType<{ width: number }> | null =>

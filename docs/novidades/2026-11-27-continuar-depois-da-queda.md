@@ -3,6 +3,7 @@ titulo: A conversa continua sozinha quando a internet volta
 tipo: novo
 onde: todos
 experimente: No menu de uma conversa do Claude ou do Codex, veja a opção Continuar sozinho.
+animacao: continuar-depois-da-queda
 ---
 
 Quando a internet cai no meio de uma resposta do Claude ou do Codex, o Hangar espera a conexão voltar e manda a conversa continuar, uma vez, sem você precisar escrever "continua".

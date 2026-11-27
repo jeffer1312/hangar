@@ -4,6 +4,7 @@ mod account_tags;
 mod agent_fix;
 mod agy_terms;
 mod antigravity;
+mod auto_continue;
 mod auto_report;
 mod claude_notices;
 mod cliproxy_wizard;
@@ -31,6 +32,7 @@ mod adopt_cliproxy;
 mod scheduled_tasks;
 mod hide_from_list;
 mod image_reveal;
+mod linked_children;
 mod rename_suggestion;
 mod search_conversations;
 mod server_status;
@@ -125,6 +127,8 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "antigravity" => Some(antigravity::render),
         "termos-antigravity" => Some(agy_terms::render),
         "contagens-anonimas" => Some(telemetry_consent::render),
+        "continuar-depois-da-queda" => Some(auto_continue::render),
+        "filhas-ligadas" => Some(linked_children::render),
         _ => None,
     }
 }

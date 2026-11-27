@@ -174,6 +174,21 @@ pub(super) fn close_children_of(lists: &[(&str, &[SessionInfo])], parent: &Targe
     kids
 }
 
+/// O texto do fechar com filhas: o de sempre e a pergunta das filhas. A novidade `filhas-ligadas` desenha o mesmo.
+pub(crate) fn close_children_text(body: String, question: String) -> Div {
+    div().flex().flex_col().gap(px(10.)).text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal()
+        .child(body).child(question)
+}
+
+/// Os botões do fechar com filhas, sem o clique: Cancelar, Fechar só esta e Fechar com as filhas.
+pub(crate) fn close_children_buttons(n: &str) -> [Button; 3] {
+    [Button::new("close-cancel").label(tr("cancel")),
+        Button::new("close-only-this").danger().label(tr_shared("session_close_only_this", &[])),
+        Button::new("close-with-children").danger().label(tr_shared("session_close_with_children", &[("n", n)]))]
+}
+
+pub(crate) fn close_children_footer(buttons: [Button; 3]) -> Div { div().flex().justify_end().gap_2().children(buttons) }
+
 /// Git no menu só com pasta num repositório: o backend manda `branch` nulo fora de um (como o web, SCM:162).
 pub(super) fn has_git(s: &SessionInfo) -> bool { s.cwd.as_deref().is_some_and(|c| !c.is_empty()) && s.branch.is_some() }
 
@@ -1439,21 +1454,18 @@ impl Hangar {
         let n = kids.len().to_string();
         let question = tr_shared("session_close_children_question", &[("name", &target.name), ("n", &n)]);
         window.open_dialog(cx, move |dialog, _, _| {
-            let run = |id: &'static str, label: String, with: bool| {
+            let run = |button: Button, with: bool| {
                 let (weak, target, kids) = (weak.clone(), target.clone(), kids.clone());
-                Button::new(id).danger().label(label).on_click(move |_, window, cx| {
+                button.on_click(move |_, window, cx| {
                     window.close_dialog(cx);
                     let kids = if with { kids.clone() } else { Vec::new() };
                     let _ = weak.update(cx, |this, cx| this.close_confirmed(target.clone(), kids, window, cx));
                 })
             };
+            let [cancel, only_this, with_children] = close_children_buttons(&n);
             popup::dialog(dialog).w(px(420.)).title(tr("sidebar_close_title"))
-                .child(div().flex().flex_col().gap(px(10.)).text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal()
-                    .child(body.clone()).child(question.clone()))
-                .footer(div().flex().justify_end().gap_2()
-                    .child(Button::new("close-cancel").label(tr("cancel")).on_click(|_, window, cx| window.close_dialog(cx)))
-                    .child(run("close-only-this", tr_shared("session_close_only_this", &[]), false))
-                    .child(run("close-with-children", tr_shared("session_close_with_children", &[("n", &n)]), true)))
+                .child(close_children_text(body.clone(), question.clone()))
+                .footer(close_children_footer([cancel.on_click(|_, window, cx| window.close_dialog(cx)), run(only_this, false), run(with_children, true)]))
                 .on_ok(enter_to_focused)
         });
     }
