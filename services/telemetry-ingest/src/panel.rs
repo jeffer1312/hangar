@@ -45,7 +45,10 @@ async fn guard(State(panel): State<Panel>, request: Request, next: Next) -> Resp
 
 /// Basic com qualquer usuário: só a senha conta.
 fn allowed(authorization: Option<&str>, password: &str) -> bool {
-    let Some(encoded) = authorization.and_then(|v| v.strip_prefix("Basic ")) else { return false };
+    let Some((scheme, encoded)) = authorization.and_then(|v| v.split_once(' ')) else { return false };
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return false;
+    }
     let Ok(decoded) = STANDARD.decode(encoded.trim()) else { return false };
     let Some(given) = decoded.splitn(2, |b| *b == b':').nth(1) else { return false };
     same(given, password.as_bytes())
@@ -79,6 +82,7 @@ mod tests {
         assert!(allowed(Some(&basic(":segredo")), "segredo"));
         assert!(!allowed(Some(&basic("segredo:errada")), "segredo"));
         assert!(!allowed(Some(&basic("sem-dois-pontos")), "segredo"));
+        assert!(allowed(Some(&basic("x:segredo").replace("Basic", "basic")), "segredo"), "o esquema não tem caixa");
         assert!(!allowed(Some("Bearer segredo"), "segredo"));
         assert!(!allowed(Some("Basic !!!"), "segredo"));
         assert!(!allowed(None, "segredo"));
