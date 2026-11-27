@@ -178,6 +178,8 @@ impl Failure {
     fn transport(post: bool) -> Self {
         Self { uncertain: post, ..Self::local(if post { "delivery_uncertain" } else { "network_error" }) }
     }
+    /// `/input` que nem saiu daqui: o texto volta ao campo sem o risco de duplicar.
+    fn not_sent() -> Self { Self::local("send_not_sent") }
     /// Sem resposta: entra nas falhas recentes do servidor com status 0.
     fn lost(method: &str, error: &reqwest::Error, post: bool) -> Self {
         if let Some(url) = error.url() { recent::record(method, url, 0, Some("transport")); }
@@ -480,7 +482,7 @@ impl Api {
             let (body, failure) = failed_response(r, true, "POST", Some(self.base.as_str())).await;
             return if rejects_delivery_field(body.as_ref()) {
                 self.send(name, text).await.map(|delivery| Delivery { conversation: Some(false), ..delivery })
-            } else { Err(failure) };
+            } else { Err(settle_input_refusal(failure)) };
         }
         self.delivery(r).await
     }
@@ -497,11 +499,12 @@ impl Api {
     async fn post_input(&self, name: &str, body: &Value) -> Result<Response, Failure> {
         self.client.post(self.endpoint(Some(name), Some("input")))
             .json(body).timeout(Duration::from_secs(60))
-            .send().await.map_err(|_| Failure::transport(true))
+            .send().await.map_err(|e| if input_not_sent(&e) { Failure::not_sent() } else { Failure::transport(true) })
     }
 
     async fn delivery(&self, r: Response) -> Result<Delivery, Failure> {
-        let delivery: Delivery = self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))?;
+        let delivery: Delivery = self.checked(r, true).await.map_err(settle_input_refusal)?
+            .json().await.map_err(|_| Failure::transport(true))?;
         if !delivery.ok { return Err(Failure::transport(true)); }
         Ok(delivery)
     }
@@ -1369,6 +1372,22 @@ async fn failed_response(response: Response, post: bool, method: &str, identity:
     (body, Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
 }
 
+/// O `/input` não saiu daqui: a conexão não abriu (porta fechada, nome que não resolve) ou o pedido nem se montou.
+/// Corte depois de conectar fica incerto: o servidor pode ter gravado.
+fn input_not_sent(error: &reqwest::Error) -> bool { error.is_connect() || error.is_builder() }
+
+/// A regra "não saiu" do `/input`, a mesma do `isInputRefusal` do core: 503 com código o servidor dá antes de gravar,
+/// menos `runtime_reply_lost`, que pode vir depois do append. 408 é prazo de quem estava no meio: incerto.
+fn settle_input_refusal(mut failure: Failure) -> Failure {
+    match failure.status {
+        Some(503) if failure.detail == "server_starting"
+            || failure.code.as_deref().is_some_and(|code| code != "runtime_reply_lost") => failure.uncertain = false,
+        Some(408) => failure.uncertain = true,
+        _ => {}
+    }
+    failure
+}
+
 /// A recusa do `/input` anterior ao "Na conversa": campo desconhecido `delivery` (`extra_forbidden`).
 fn rejects_delivery_field(body: Option<&Value>) -> bool {
     body.and_then(|b| b.get("detail")).and_then(Value::as_array).is_some_and(|items| items.iter().any(|item|
@@ -1992,5 +2011,88 @@ mod tests {
         assert_eq!(account_holders(&empty), None);
         let other = json!({"detail": {"code": "erro_conta_cheia", "params": {"sessoes": ["web"]}}});
         assert_eq!(account_holders(&other), None);
+    }
+
+    /// Servidor de um pedido só: lê o `/input` inteiro e devolve `reply` (vazio: fecha sem responder).
+    async fn input_server(reply: String) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let (mut first, mut length) = (String::new(), 0usize);
+            loop {
+                let mut line = String::new();
+                assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                if first.is_empty() { first = line.clone(); }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap(); }
+                if line == "\r\n" { break; }
+            }
+            assert!(first.starts_with("POST /api/sessions/fixture/input "), "{first}");
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).await.unwrap();
+            stream.write_all(reply.as_bytes()).await.unwrap();
+        });
+        (address, server)
+    }
+
+    fn input_reply(status: &str, body: &str) -> String {
+        format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    }
+
+    async fn send_through(reply: String) -> Failure {
+        let (address, server) = input_server(reply).await;
+        let failure = super::Api::new(&address, "fixture-owner").unwrap().send("fixture", "oi").await.unwrap_err();
+        server.await.unwrap();
+        failure
+    }
+
+    #[tokio::test]
+    async fn send_to_a_refused_port_is_not_sent() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let failure = super::Api::new(&format!("http://{address}"), "fixture-owner").unwrap().send("fixture", "oi").await.unwrap_err();
+        assert!(!failure.uncertain, "{failure:?}");
+        assert_eq!(failure.detail, "send_not_sent");
+        assert_eq!(failure.status, None);
+    }
+
+    #[tokio::test]
+    async fn send_cut_after_connect_stays_uncertain() {
+        let failure = send_through(String::new()).await;
+        assert!(failure.uncertain, "{failure:?}");
+        assert_eq!(failure.detail, "delivery_uncertain");
+    }
+
+    #[tokio::test]
+    async fn send_503_with_code_is_a_refusal() {
+        let unhealthy = send_through(input_reply("503 Service Unavailable",
+            r#"{"detail":{"code":"runtime_unhealthy","params":{},"msg":"runtime unhealthy"}}"#)).await;
+        assert!(!unhealthy.uncertain, "{unhealthy:?}");
+        assert_eq!(unhealthy.status, Some(503));
+        assert_eq!(unhealthy.code.as_deref(), Some("runtime_unhealthy"));
+        assert_eq!(Some(unhealthy.detail), crate::i18n::tr_web("runtime_unhealthy", &std::collections::HashMap::new()));
+        let starting = send_through(input_reply("503 Service Unavailable", r#"{"detail":"server_starting"}"#)).await;
+        assert!(!starting.uncertain, "{starting:?}");
+        assert_eq!(starting.status, Some(503));
+        assert_eq!(starting.code, None);
+        assert_eq!(starting.detail, "server_starting");
+    }
+
+    #[tokio::test]
+    async fn send_503_reply_lost_and_bare_502_stay_uncertain() {
+        let lost = send_through(input_reply("503 Service Unavailable",
+            r#"{"detail":{"code":"runtime_reply_lost","params":{},"msg":"reply lost"}}"#)).await;
+        assert!(lost.uncertain, "{lost:?}");
+        assert_eq!(lost.code.as_deref(), Some("runtime_reply_lost"));
+        let bare = send_through(input_reply("502 Bad Gateway", "")).await;
+        assert!(bare.uncertain, "{bare:?}");
+        assert_eq!(bare.status, Some(502));
+        let proxy = send_through(input_reply("503 Service Unavailable", "")).await;
+        assert!(proxy.uncertain, "503 sem código: {proxy:?}");
+        let timeout = send_through(input_reply("408 Request Timeout", "")).await;
+        assert!(timeout.uncertain, "408: {timeout:?}");
     }
 }
