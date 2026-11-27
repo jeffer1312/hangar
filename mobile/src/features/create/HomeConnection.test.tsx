@@ -152,6 +152,9 @@ beforeEach(() => {
       '/api/model-options': { models: [], reduced: false }, '/api/fs/roots': [], '/api/worktrees': { repos: [] },
       '/api/session-defaults': { configured: false, defaults: null },
       '/api/me': { role: 'owner', name: null },
+      // Balanceamento desligado: a conversa nova não pergunta a máquina a ninguém além do ativo.
+      '/api/placement/config': { ui_mode: 'off' },
+      '/api/placement/suggest': { server: 'healthy', reason: { code: 'not_balanced', why: 'mode_off' }, clone: null, warnings: [] },
     };
     if (!(path in payloads)) { unexpected.push(path); throw new Error(`unexpected_http:${path}`); }
     return new Response(JSON.stringify(payloads[path]));

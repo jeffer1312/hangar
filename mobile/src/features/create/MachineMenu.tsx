@@ -75,16 +75,20 @@ function Accounts({ accounts }: { accounts: Record<string, AccountBadge> | undef
 }
 
 // O menu de máquinas da conversa nova: cada máquina com o ícone dela e as contas que tem; a demonstração por último.
-export function MachineMenu({ machines, active, onPick }: { machines: MachineEntry[]; active: string; onPick: (id: string) => void }) {
+// `suggested`: a máquina que o balanceamento marcou, com o motivo na linha dela.
+export function MachineMenu({ machines, active, onPick, suggested }: {
+  machines: MachineEntry[]; active: string; onPick: (id: string) => void; suggested?: { serverId: string; text: string } | null;
+}) {
   const { theme } = useUnistyles();
   const real = machines.filter((sv) => !sv.demo);
   const demos = machines.filter((sv) => sv.demo);
   const row = (sv: MachineEntry) => {
     const on = sv.id === active;
     const state = sv.demo ? m.native_new_chat_machine_demo() : sv.offline ? m.native_new_chat_machine_offline() : '';
+    const reason = suggested?.serverId === sv.id ? m.native_new_chat_machine_suggested({ motivo: suggested.text }) : '';
     return (
       <Pressable key={sv.id} onPress={() => { haptic.selection(); onPick(sv.id); }}
-        accessibilityRole="button" accessibilityLabel={[sv.label, sv.server, state].filter(Boolean).join(', ')} accessibilityState={{ selected: on }}
+        accessibilityRole="button" accessibilityLabel={[sv.label, sv.server, state, reason].filter(Boolean).join(', ')} accessibilityState={{ selected: on }}
         style={({ pressed }) => [styles.row, { backgroundColor: on ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' },
           sv.offline && styles.offline]}>
         <MachineTile icon={sv.icon} color={sv.color} />
@@ -95,6 +99,7 @@ export function MachineMenu({ machines, active, onPick }: { machines: MachineEnt
             {state ? <Text style={styles.state}>{` · ${state}`}</Text> : null}
           </Text>
           {sv.demo ? <Text style={styles.accountName}>{m.native_new_chat_machine_demo_hint()}</Text> : <Accounts accounts={sv.accounts} />}
+          {reason ? <Text style={styles.accountName}>{reason}</Text> : null}
         </View>
         <View style={styles.check}>{on ? <Icon name="Check" size={18} color={theme.tokens.accent.base} /> : null}</View>
       </Pressable>

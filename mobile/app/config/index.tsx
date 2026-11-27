@@ -70,6 +70,8 @@ const SERVER: Page[] = [
   { route: '/config/shortcuts', icon: 'Keyboard', title: m.native_settings_page_shortcuts, rows: [] },
   { route: '/config/attachments', icon: 'Paperclip', title: m.native_settings_page_attachments, rows: [] },
   { route: '/config/worktrees', icon: 'GitBranch', title: m.worktrees_titulo, rows: [] },
+  { route: '/config/placement', icon: 'Workflow', title: m.native_settings_page_placement,
+    rows: [m.native_placement_when, m.native_placement_limits, m.native_placement_projects, m.native_placement_schedules, m.native_placement_clone] },
   { route: '/config/advanced', icon: 'SlidersHorizontal', title: m.native_settings_page_advanced, rows: [] },
 ];
 

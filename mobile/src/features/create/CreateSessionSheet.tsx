@@ -9,7 +9,8 @@ import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount, getAn
   getEnginesForServer, getSessionDefaultsForServer, getConfigForServer, getMeForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
-  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory, getRootsForServer, pickFolderRoot } from '@hangar/core';
+  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory, getRootsForServer, pickFolderRoot,
+  isOwnMachine, ownUpdatableServers, placementSuggestionFor, type PlacementSuggestion } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
   CREATE_SESSION_PROVIDERS, canChooseSurface, permissionModes, effortLevels, contextRefsPlainText, machineLabel, serverColor, tagHex } from '@hangar/core';
 import type { AccountBadge } from '@hangar/core';
@@ -86,6 +87,9 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
 }) {
   const servers = useServers((s) => s.servers);
   const activeId = useServers((s) => s.activeId);
+  // Máquina pedida por quem abriu, trocada à mão ou pasta já escolhida: a sugestão que chega depois não a desfaz.
+  const chosen = useRef(!!initial?.server);
+  const [suggestion, setSuggestion] = useState<PlacementSuggestion | null>(null);
   // A máquina escolhida na pílula vale só para onde a conversa nasce; o servidor ativo é das Configurações.
   const [machine, setMachine] = useState(() => {
     const remembered = readMachine();
@@ -96,18 +100,38 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
   // Fixa também o destino que apareceu após a carga das máquinas ou a remoção da escolhida.
   useEffect(() => { if (target && target.id !== machine) setMachine(target.id); }, [machine, target?.id]);
   const pickMachine = useCallback((id: string) => {
+    chosen.current = true;
     rememberMachine(id);
     setMachine(id);
   }, []);
+  const keepChoice = useCallback(() => { chosen.current = true; }, []);
+  // Uma pergunta por abertura ao servidor ativo; com a tela em "sugerir", a sugerida vence a última lembrada.
+  const asked = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    const active = servers.find((s) => s.id === activeId);
+    // Com a criação escondida atrás da lista, nada é pedido; a pergunta sai quando ela aparece.
+    if (asked.current || chosen.current || !active || !isOwnMachine(active) || home?.mode === 'sessions') return;
+    asked.current = true;
+    const others = ownUpdatableServers(servers).filter((s) => !isDemoUrl(`${s.baseUrl}/`));
+    placementSuggestionFor(active, others).then((found) => {
+      if (!mounted.current || !found || chosen.current) return;
+      setSuggestion(found);
+      setMachine(found.serverId);
+    }, (error: unknown) => console.warn('[nova-conversa] sugestão de máquina não lida', error));
+  }, [servers, activeId, home?.mode]);
   // O motor é de uma máquina: trocar a pílula de máquina descarta o pedido.
   const initialEngine = initial?.engine && (!initial.server || initial.server === target?.id) ? initial.engine : undefined;
-  return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} initialEngine={initialEngine} />
+  return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine}
+    suggestion={suggestion} onFolderPicked={keepChoice} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} initialEngine={initialEngine} />
     : home?.mode === 'sessions' ? <View style={{ flex: 1 }}>{home.sessions}</View>
       : <Text accessibilityRole="alert">{m.servidor_nao_existe()}</Text>;
 }
 
-function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardOffset, home, layout, initialEngine }: {
-  active: Server; machines: Server[]; onPickMachine: (id: string) => void; onClose?: () => void; keyboardOffset?: number; home?: HomePresentation;
+function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFolderPicked, onClose, keyboardOffset, home, layout, initialEngine }: {
+  active: Server; machines: Server[]; onPickMachine: (id: string) => void; suggestion: PlacementSuggestion | null; onFolderPicked: () => void;
+  onClose?: () => void; keyboardOffset?: number; home?: HomePresentation;
   layout: 'conversation' | 'form'; initialEngine?: string;
 }) {
   const router = useRouter();
@@ -647,6 +671,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       setError(cause instanceof Error ? cause.message : m.criar_sessao_erro());
     }
   }, [active]);
+  // Escolha da pessoa, não a pasta que o seletor marca sozinho ao abrir: a sugestão de máquina que chega depois não a tira.
+  const pickByHand = useCallback((p: string, root?: string) => { onFolderPicked(); return handlePick(p, root); }, [handlePick, onFolderPicked]);
 
   // O formulário abre na última pasta usada nesta máquina, como a conversa nova. Uma vez por montagem:
   // o objeto do servidor muda de identidade (rede local, token) e não pode desfazer a escolha da pessoa.
@@ -1166,7 +1192,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const branchPicker = picked && !noProject ? <BranchPicker server={active} cwd={pickedRepo ?? picked} worktreePath={pickedRepo && pickedRepo !== picked ? picked : undefined}
                               sessionName={name.trim() || basename(picked)}
                               value={worktree} onChange={onWorktree} basePicked={basePicked}
-                              onPickFolder={(path, keepOpen, repo) => { setFolderRepo(repo ? { path, repo } : null); void handlePick(path); if (!keepOpen) setBranchOpen(false); }}
+                              onPickFolder={(path, keepOpen, repo) => { setFolderRepo(repo ? { path, repo } : null); void pickByHand(path); if (!keepOpen) setBranchOpen(false); }}
                               onTakenChange={setBranchTaken} /> : null;
   const focusBranchAnchor = () => { if (branchRef.current) AccessibilityInfo.sendAccessibilityEvent(branchRef.current, 'focus'); };
   const branchPanel = (
@@ -1196,7 +1222,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     <QuietPill label={activeMachine.label} shown={m.native_new_chat_on_machine({ maquina: activeMachine.label })}
       leading={<MachineTile icon={activeMachine.icon} color={activeMachine.color} size={22} />}
       aria={m.native_new_chat_machine()} menuTitle={m.native_new_chat_machine()}
-      menu={(close) => <MachineMenu machines={machines.map(machineView)} active={active.id}
+      menu={(close) => <MachineMenu machines={machines.map(machineView)} active={active.id} suggested={suggestion}
         onPick={(id) => { close(); if (id !== active.id) onPickMachine(id); }} />}
       size="lg" />
   );
@@ -1206,7 +1232,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const lastCwds = useSessions(useShallow((s) => recentCwds(s.byServerRecord?.[active.id], Infinity)));
   const recents = active.invite ? [] : recentProjects(lastCwds, repos, picked, 3);
   const pickRecent = (path: string) => {
-    void handlePick(path);
+    void pickByHand(path);
     const generation = pickGeneration.current;
     const current = () => mounted.current && generation === pickGeneration.current;
     // Como a escolha no painel, a pasta fica lembrada com a raiz dela; sem raiz conhecida vale só a escolha.
@@ -1325,7 +1351,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         </View>
         {folderOpen ? (
           <View style={styles.folderScreen}>
-            <CwdPicker server={active} onPick={handlePick} selected={picked} autoSelect={false} onDone={() => setFolderOpen(false)} repos={repos} />
+            <CwdPicker server={active} onPick={pickByHand} selected={picked} autoSelect={false} onDone={() => setFolderOpen(false)} repos={repos} />
           </View>
         ) : (
           <ScrollView contentContainerStyle={styles.formScroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
@@ -1333,7 +1359,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             {notices}
             <RowGroup>
               <SettingRow icon="Monitor" label={m.native_new_chat_machine()} value={active.label}
-                actions={machines.map((sv) => ({ id: sv.id, title: sv.label, state: on(sv.id === active.id) }))}
+                actions={machines.map((sv) => ({ id: sv.id, title: sv.label, state: on(sv.id === active.id),
+                  subtitle: sv.id === suggestion?.serverId ? m.native_new_chat_machine_suggested({ motivo: suggestion.text }) : undefined }))}
                 onAction={(id) => { if (id !== active.id) onPickMachine(id); }} />
               <SettingRow ref={folderRef} icon="Folder" label={m.native_new_chat_folder()} detail={picked ?? undefined}
                 value={picked ? folderLabel : m.criar_escolher_pasta()} onPress={() => setFolderOpen(true)} />
@@ -1400,7 +1427,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       destination={destination}
       destinationPending={!picked}
       providerLabel={providerName(provider)}
-      folderPanel={(close) => <CwdPicker server={active} onPick={handlePick} selected={picked} autoSelect={false} onDone={close} compact repos={repos} />}
+      folderPanel={(close) => <CwdPicker server={active} onPick={pickByHand} selected={picked} autoSelect={false} onDone={close} compact repos={repos} />}
       topPills={(openFolder) => {
         // A pasta mora no título, no meio da tela: "O que vamos fazer em [pasta]?", e a máquina logo abaixo.
         return noProject ? (
@@ -1433,7 +1460,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             {hasSameFolder ? <Text style={styles.heroNote}>{m.criar_ja_existe()}</Text> : null}
             <View style={styles.heroMachine}>{machinePill}</View>
             {!active.invite ? (
-              <Pressable onPress={() => { void handlePick(NO_PROJECT_CWD); }} hitSlop={LINK_SLOP} accessibilityRole="button"
+              <Pressable onPress={() => { void pickByHand(NO_PROJECT_CWD); }} hitSlop={LINK_SLOP} accessibilityRole="button"
                 accessibilityHint={m.native_new_chat_no_project_hint()} style={styles.heroLinkRow}>
                 <Text style={[styles.headingLink, styles.heroLink]}>{m.native_new_chat_start_without_project()}</Text>
               </Pressable>
