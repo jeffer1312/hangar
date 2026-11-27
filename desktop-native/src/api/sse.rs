@@ -15,13 +15,12 @@ pub struct Frame {
 pub enum Update {
     Online,
     Frame(Frame),
-    /// A conversa terminou de chegar o que o servidor tinha guardado (mensagens, estado, mod, fila): o primeiro quadro
-    /// já aplicado e a conexão quieta por `QUIET`. Uma vez por conexão, e só no stream de uma sessão.
+    /// Entrega inicial concluída: o que o servidor guardou já chegou.
     CaughtUp,
     Offline(Failure),
 }
 
-/// Silêncio que encerra a entrega inicial: o servidor escreve o que guardou de uma vez, e o que vem depois é ao vivo.
+/// O servidor escreve o que guardou de uma vez; o silêncio depois disso marca o fim da entrega inicial.
 const QUIET: Duration = Duration::from_millis(30);
 
 pub async fn run(api: Api, name: Option<String>, tx: Sender<Update>) {
@@ -35,7 +34,7 @@ pub async fn run(api: Api, name: Option<String>, tx: Sender<Update>) {
             if tx.send(Update::Online).await.is_err() { return Ok(()); }
             let mut events = response.bytes_stream().eventsource();
             let mut wire_id = cursor.clone();
-            // Só conta depois do primeiro quadro que não é ping: o servidor manda o ping antes de ler a conversa.
+            // O ping sai antes de o servidor ler a conversa, então não conta.
             let (mut started, mut caught_up) = (false, name.is_none());
             loop {
                 let next = if started && !caught_up {

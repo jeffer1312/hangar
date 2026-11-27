@@ -202,7 +202,7 @@ const COLUMN: f32 = 780.;
 /// Abrir a sessão pede só a cauda que enche a tela: o backend lê o transcript de trás para a frente, e a janela
 /// inteira (`HISTORY_PAGE`) custa muito mais em transcript grande. Ela vem logo depois, por baixo.
 const FIRST_PAGE: usize = 60;
-/// Teto da espera do histórico pelo stream da conversa: um stream que não assenta não segura a conversa.
+/// Stream que nunca assenta não segura a conversa além disto.
 const HISTORY_HOLD_MAX: Duration = Duration::from_millis(400);
 const HISTORY_PAGE: usize = 400;
 
@@ -787,10 +787,8 @@ pub struct Hangar {
     loading: bool,
     history_started: bool,
     history_installed: bool,
-    /// O stream da conversa aberta já entregou o que o servidor tinha guardado (`Update::CaughtUp`).
     stream_caught_up: bool,
-    /// A primeira página do histórico esperando o stream assentar: entra junto com o estado, o mod e a fila, num quadro
-    /// só, em vez de aparecer e ser empurrada por eles.
+    /// Retido até o stream assentar, para o estado, o mod e a fila não empurrarem a conversa depois.
     held_history: Option<Envelope>,
     pending_chat: Vec<ChatUpdate>,
     history_limit: usize,
@@ -2501,10 +2499,10 @@ impl Hangar {
                 api::open_trace(|| "history held".into());
                 self.held_history = Some(Envelope { connection: envelope.connection, selection: envelope.selection,
                     payload: Payload::History(revision, limit, result) });
-                let selection = self.selection;
+                let (selection, revision) = (self.selection, self.revision);
                 cx.spawn_in(window, async move |this, cx| {
                     cx.background_executor().timer(HISTORY_HOLD_MAX).await;
-                    let _ = this.update_in(cx, |this, window, cx| if this.selection == selection { this.release_held_history(window, cx) });
+                    let _ = this.update_in(cx, |this, window, cx| if this.selection == selection && this.revision == revision { this.release_held_history(window, cx) });
                 }).detach();
                 visible = false;
             }
@@ -3177,6 +3175,7 @@ impl Hangar {
                     self.plugin_body_scrolls.remove(&key);
                 }
                 self.revision += 1;
+                self.held_history = None;
                 self.media_panel.release();
                 self.terminal_suggestion.clear();
                 self.plugin_band = Value::Null;
