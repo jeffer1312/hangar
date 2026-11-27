@@ -244,6 +244,8 @@ pub fn fold_tasks(events: &[ChatEvent], paired: &HashMap<usize, usize>) -> Vec<T
 pub struct AgentRun {
     pub call: usize, pub id: String, pub description: String,
     pub subagent_type: Option<String>, pub model: Option<String>, pub prompt: Option<String>, pub running: bool,
+    /// `prompt_key` do prompt, feito uma vez: a Atividade casa Agents e subagentes pelo prompt várias vezes por quadro.
+    pub prompt_key: Option<String>,
     /// Rodando, mas parado esperando o próprio trabalho de fundo (`task:waiting:<id>`).
     pub waiting: bool,
     /// O `agentId` que o resultado do Agent traz: o nome do arquivo do subagente no disco.
@@ -276,10 +278,14 @@ fn agent_run(event: &ChatEvent, call: usize, id: &str) -> AgentRun {
     } else { desc };
     let prompt = text(if codex { "message" } else { "prompt" })
         .filter(|prompt| !codex || !prompt.starts_with("gAAAA"));
+    let prompt_key = prompt.as_deref().map(prompt_key);
     AgentRun { call, id: id.to_owned(), description, subagent_type: text(if codex { "agent_type" } else { "subagent_type" }),
-        model: text("model"), prompt, running: false, waiting: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None,
+        model: text("model"), prompt, prompt_key, running: false, waiting: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None,
         background: event.tool_input.as_ref().and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) }
 }
+
+/// Prompt sem diferença de espaços e de caixa, para casar o Agent com o registro do subagente no disco.
+pub fn prompt_key(text: &str) -> String { text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase() }
 
 impl AgentRun {
     pub fn elapsed(&self, now: f64) -> Option<std::time::Duration> {
