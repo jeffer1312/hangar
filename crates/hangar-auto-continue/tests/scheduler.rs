@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use hangar_auto_continue::scheduler::{BoxFuture, CANCELLED};
+use hangar_auto_continue::scheduler::{BoxFuture, CANCELLED, cancel};
 use hangar_auto_continue::{Cap, Command, Facts, Host, Ledger, Probe, Source, StopHit, StopKind, ledger, spawn_with_probe, text};
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
@@ -30,6 +30,8 @@ struct Fake {
     /// Quanto o servidor demora a dar os fatos.
     facts_delay: Mutex<Duration>,
     send: Mutex<Result<bool, String>>,
+    /// Quanto o envio demora, como o `/input` acordando uma sessão adormecida.
+    send_delay: Mutex<Duration>,
     /// A sonda falha estas vezes antes de responder.
     fails_left: Mutex<usize>,
     /// Rede fora de vez.
@@ -48,6 +50,7 @@ impl Fake {
             facts_error: Mutex::new(None),
             facts_delay: Mutex::new(Duration::ZERO),
             send: Mutex::new(Ok(true)),
+            send_delay: Mutex::new(Duration::ZERO),
             fails_left: Mutex::new(0),
             down: Mutex::new(false),
             probes: Mutex::default(),
@@ -105,6 +108,10 @@ impl Host for Fake {
     fn send_continue<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<bool, String>> {
         Box::pin(async move {
             self.sends.lock().unwrap().push((self.clock(), name.to_owned(), text.to_owned()));
+            let delay = *self.send_delay.lock().unwrap();
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
             self.send.lock().unwrap().clone()
         })
     }
@@ -324,24 +331,63 @@ async fn cancel_during_the_jitter_sends_nothing() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_route_cancel_answers_after_the_note_changed() {
+async fn the_route_cancel_marks_and_the_note_changes_after() {
     let fake = Fake::new();
     *fake.down.lock().unwrap() = true;
     let run = start(&fake);
     run.send(Command::Stop(hit("s", "line-1", StopKind::Network, fake.clock())));
     settle().await;
     assert_eq!(fake.last_note().meta["state"], "waiting");
-    let (answer, answered) = tokio::sync::oneshot::channel();
-    run.send(Command::CancelAnswered { name: "s".into(), answer });
-    assert!(answered.await.unwrap(), "a sessão esperava a rede");
+    assert!(cancel(&run.ledger, &run.commands, "s"), "a sessão esperava a rede");
+    settle().await;
     let note = fake.last_note();
     assert_eq!(note.meta["state"], "cancelled");
     assert_eq!(note.call, "autocont:line-1:cancelled");
     assert!(run.ledger.lock().unwrap().parked().is_empty(), "a espera sai do registro");
-    let (answer, answered) = tokio::sync::oneshot::channel();
-    run.send(Command::CancelAnswered { name: "s".into(), answer });
-    assert!(!answered.await.unwrap(), "sem espera, nada a cancelar");
+    assert!(!cancel(&run.ledger, &run.commands, "s"), "sem espera, nada a cancelar");
+    settle().await;
     assert_eq!(fake.notes().len(), 2, "a segunda não escreve nota");
+}
+
+/// O Cancelar responde na hora com a agenda presa no envio lento de outra sessão, e o continue não sai.
+#[tokio::test(start_paused = true)]
+async fn the_route_cancel_answers_while_the_scheduler_is_busy_sending() {
+    let fake = Fake::new();
+    *fake.send_delay.lock().unwrap() = Duration::from_secs(60);
+    let run = start(&fake);
+    run.send(Command::Stop(hit("a", "line-a", StopKind::Server5xx, fake.clock())));
+    run.send(Command::Stop(hit("b", "line-b", StopKind::Server5xx, fake.clock())));
+    // Os dois atrasos vencem em até 30 s; o primeiro envio prende a agenda por 60 s.
+    wait(31).await;
+    let sends = fake.sends();
+    assert_eq!(sends.len(), 1, "{sends:?}");
+    let other = if sends[0].1 == "a" { "b" } else { "a" };
+    assert!(cancel(&run.ledger, &run.commands, other), "a outra sessão ainda esperava");
+    wait(120).await;
+    let sends = fake.sends();
+    assert_eq!(sends.len(), 1, "o continue da cancelada não saiu: {sends:?}");
+    let note = fake.notes().into_iter().rfind(|note| note.name == other).unwrap();
+    assert_eq!(note.meta["state"], "cancelled");
+    assert!(fake.diary().contains(&"auto_continue_skipped:cancelled".to_owned()));
+}
+
+/// Cancelada pouco antes de o servidor parar: a agenda nova troca a nota e não manda nada.
+#[tokio::test(start_paused = true)]
+async fn a_cancel_marked_before_a_restart_is_kept() {
+    let fake = Fake::new();
+    *fake.down.lock().unwrap() = true;
+    let mut run = start(&fake);
+    run.send(Command::Stop(hit("s", "line-1", StopKind::Network, fake.clock())));
+    settle().await;
+    // A rota marca, mas o servidor para antes de a agenda trocar a nota.
+    assert!(run.ledger.lock().unwrap().cancel("s"));
+    run.restart(&fake).await;
+    *fake.down.lock().unwrap() = false;
+    wait(120).await;
+    assert!(fake.sends().is_empty(), "{:?}", fake.sends());
+    let note = fake.last_note();
+    assert_eq!((note.id.as_str(), note.meta["state"].as_str()), ("autocont:line-1", Some("cancelled")));
+    assert!(run.ledger.lock().unwrap().parked().is_empty());
 }
 
 #[tokio::test(start_paused = true)]

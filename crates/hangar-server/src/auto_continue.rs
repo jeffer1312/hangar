@@ -55,11 +55,10 @@ impl AutoContinue {
         let _ = self.commands.send(Command::Cancel { name: name.to_owned(), why });
     }
 
-    /// O Cancelar da nota, respondido depois de a nota trocar. `false`: a sessão não esperava a rede.
-    pub async fn cancel_waiting(&self, name: &str) -> bool {
-        let (answer, answered) = tokio::sync::oneshot::channel();
-        if self.commands.send(Command::CancelAnswered { name: name.to_owned(), answer }).is_err() { return false; }
-        answered.await.unwrap_or(false)
+    /// O Cancelar da nota, respondido na hora; a nota trocada chega pela conversa quando a agenda a escrever.
+    /// `false`: a sessão não esperava a rede.
+    pub fn cancel_waiting(&self, name: &str) -> bool {
+        hangar_auto_continue::scheduler::cancel(&self.ledger, &self.commands, name)
     }
 
     pub fn forget(&self, name: &str) {
@@ -79,6 +78,17 @@ impl AutoContinue {
         drop(stops);
         let _ = self.commands.send(Command::Rename { old: old.to_owned(), new: new.to_owned() });
     }
+}
+
+/// A pessoa escreveu na sessão pelo `/input`: a corrente do registro zera, como no `limit_switch`.
+pub(crate) fn owner_wrote(st: &AppState, name: &str, text: &str) {
+    if let Some(auto) = st.auto_continue.get() { person_wrote(&auto.ledger, name, text); }
+}
+
+/// Recado de outra sessão (`[de: …]`, `[painel: …]`) e o próprio "continue" não são a pessoa.
+fn person_wrote(ledger: &Mutex<Ledger>, name: &str, text: &str) {
+    if crate::session_write::input::is_relay(text) || text::is_auto_continue(text) { return; }
+    lock(ledger).person_wrote(name);
 }
 
 /// A sessão fechou de vez.
@@ -327,7 +337,7 @@ pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 async fn owner_route(st: &AppState, req: Request) -> Response {
     let Some(name) = session_name(req.uri().path()) else { return StatusCode::NOT_FOUND.into_response() };
     if req.method() == Method::DELETE {
-        let cancelled = match st.auto_continue.get() { Some(auto) => auto.cancel_waiting(&name).await, None => false };
+        let cancelled = st.auto_continue.get().is_some_and(|auto| auto.cancel_waiting(&name));
         return json_response(StatusCode::OK, json!({"cancelled": cancelled}));
     }
     let enabled = axum::body::to_bytes(req.into_body(), BODY_LIMIT).await.ok()
@@ -419,6 +429,23 @@ mod tests {
         assert!(facts_of(&asking, &[], &[], None, false).question_open);
         assert!(facts_of(&asking, &[], &[], None, true).handoff);
         assert!(!facts.off && facts_of(&row(json!({"name": "s", "auto_continue_off": true})), &[], &[], None, false).off, "o interruptor vem da linha");
+    }
+
+    /// Duas continuações, a pessoa escreve "continua" e a rede cai de novo em menos de 30 min: esta continua.
+    #[test]
+    fn the_owner_typing_resets_the_chain() {
+        use hangar_auto_continue::{Cap, Source, StopKind};
+        let home = tempfile::tempdir().unwrap();
+        let ledger = Mutex::new(Ledger::load(ledger::path(home.path())));
+        for (key, at) in [("a", 0.0), ("b", 60.0)] { lock(&ledger).record("s", Source::Transient, key, StopKind::Network, at); }
+        let third = || lock(&ledger).allow("s", Source::Transient, "c", StopKind::Network, 120.0);
+        assert_eq!(third(), Err(Cap::Chain));
+        for relay in ["[de: outra] continua", "[painel: grupo de trabalho] entrou", "[grupo: x] marco", text::TRANSIENT, text::LIMIT] {
+            person_wrote(&ledger, "s", relay);
+            assert_eq!(third(), Err(Cap::Chain), "{relay}");
+        }
+        person_wrote(&ledger, "s", "continua");
+        assert_eq!(third(), Ok(()));
     }
 
     #[tokio::test]

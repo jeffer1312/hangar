@@ -89,10 +89,19 @@ pub trait Host: Send + Sync {
 pub enum Command {
     Stop(StopHit),
     Cancel { name: String, why: &'static str },
-    /// O Cancelar da nota pela rota: `answer` sai depois de a nota trocar, com `true` quando a sessão esperava.
-    CancelAnswered { name: String, answer: tokio::sync::oneshot::Sender<bool> },
     Forget(String),
     Rename { old: String, new: String },
+}
+
+/// O Cancelar da nota pela rota: marca no registro e responde na hora, mesmo com a agenda ocupada (acordando
+/// uma sessão, lendo os fatos, sondando). A agenda confere a marca antes de mandar e troca a nota quando
+/// chegar a vez dela. `false`: a sessão não esperava.
+pub fn cancel(ledger: &Mutex<Ledger>, commands: &UnboundedSender<Command>, name: &str) -> bool {
+    let waiting = ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel(name);
+    if waiting {
+        let _ = commands.send(Command::Cancel { name: name.to_owned(), why: CANCELLED });
+    }
+    waiting
 }
 
 pub fn spawn<H: Host + 'static>(host: Arc<H>, ledger: Arc<Mutex<Ledger>>) -> (UnboundedSender<Command>, JoinHandle<()>) {
@@ -142,6 +151,14 @@ pub struct Scheduler<H: Host, P: Probe> {
 
 impl<H: Host, P: Probe> Scheduler<H, P> {
     async fn run(mut self, mut commands: UnboundedReceiver<Command>) {
+        // Cancelada pouco antes de o servidor parar: a nota troca agora, sem esperar a rede.
+        let cancelled: Vec<String> = self.parked.iter()
+            .filter(|(name, parked)| self.ledger().is_cancelled(name, &parked.key))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in cancelled {
+            self.close(&name, End::Cancelled).await;
+        }
         self.arm_tick();
         loop {
             let wake = self.next_wake();
@@ -208,14 +225,6 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
                     let end = if why == CANCELLED { End::Cancelled } else { End::Skipped(why.to_owned()) };
                     self.finish(&name, parked, end).await;
                 }
-            }
-            Command::CancelAnswered { name, answer } => {
-                let parked = self.parked.remove(&name);
-                let waiting = parked.is_some();
-                if let Some(parked) = parked {
-                    self.finish(&name, parked, End::Cancelled).await;
-                }
-                let _ = answer.send(waiting);
             }
             Command::Forget(name) => {
                 // A sessão fechou: a nota vai junto com a conversa.
@@ -377,12 +386,23 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
             return self.finish(name, parked, End::Skipped(why.to_owned())).await;
         }
         let now = self.host.now();
-        let allowed = self.ledger().allow(name, Source::Transient, &parked.key, parked.hit.kind, now);
-        if let Err(cap) = allowed {
-            return self.finish(name, parked, End::Skipped(format!("capped:{}", cap.code()))).await;
+        // Cancelar, teto e saída da espera sob a mesma trava: o Cancelar da rota que chegou antes vence, e o
+        // que chega depois já acha a espera encerrada. Sair da espera gravada antes de mandar: reiniciar no
+        // meio do envio não pode mandar o continue de novo.
+        let barred = {
+            let mut ledger = self.ledger();
+            if ledger.is_cancelled(name, &parked.key) {
+                Some(End::Cancelled)
+            } else if let Err(cap) = ledger.allow(name, Source::Transient, &parked.key, parked.hit.kind, now) {
+                Some(End::Skipped(format!("capped:{}", cap.code())))
+            } else {
+                ledger.end(name, &parked.key, now);
+                None
+            }
+        };
+        if let Some(end) = barred {
+            return self.finish(name, parked, end).await;
         }
-        // Sai da espera gravada antes de mandar: reiniciar no meio do envio não pode mandar o continue de novo.
-        self.ledger().end(name, &parked.key, now);
         match self.host.send_continue(name, text::TRANSIENT).await {
             Ok(_) => {
                 let at = self.host.now();
@@ -395,6 +415,8 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
 
     /// Diário do desfecho e a nota trocada no lugar. Desistência só troca a nota que já saiu.
     async fn finish(&mut self, name: &str, mut parked: Parked, end: End) {
+        // O Cancelar da rota vence o motivo que a agenda achou depois dele.
+        let end = if self.ledger().is_cancelled(name, &parked.key) { End::Cancelled } else { end };
         self.ledger().end(name, &parked.key, self.host.now());
         let stopped = self.host.hhmm(parked.hit.at);
         let mut meta = json!({"kind": "auto_continue", "stopped_at": parked.hit.at});

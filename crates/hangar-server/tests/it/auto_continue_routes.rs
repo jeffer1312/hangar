@@ -172,13 +172,18 @@ async fn cancel_rewrites_the_waiting_note() {
     let hit = json!({"name": "s", "provider": "claude", "kind": "network", "line_id": "line-1", "at": 1_700_000_000.0, "life": format!("k:{KEY}")});
     let srv = server(Some(json!({"sessions": {"s": {"waiting": {"hit": hit, "count": 1, "note_out": true}}}})), false).await;
     srv.headless("s", true);
-    // A resposta sai depois de a nota trocar.
+    // A resposta sai na hora; a nota troca quando a agenda chegar a ela.
     assert_eq!(srv.cancel("s", OWNER).await, (200, json!({"cancelled": true})));
-    let queue = read(srv.home.join(format!(".claude/.hangar-queue/runtime/{KEY}.json"))).expect("a nota foi à fila da adormecida");
-    let mut states = Vec::new();
-    note_states(&queue, &mut states);
-    assert!(states.iter().any(|state| state == "cancelled"), "a nota de espera virou cancelada: {states:?}");
+    let queue = srv.home.join(format!(".claude/.hangar-queue/runtime/{KEY}.json"));
+    let cancelled = || {
+        let mut states = Vec::new();
+        if let Some(queue) = read(queue.clone()) { note_states(&queue, &mut states); }
+        states.iter().any(|state| state == "cancelled")
+    };
+    // A nota de espera vira cancelada na fila da adormecida.
+    fake::wait_until(cancelled).await;
     let ledger = read(srv.home.join(".hangar/auto-continue.json")).unwrap();
     assert!(ledger["sessions"]["s"].get("waiting").is_none(), "a espera sai do registro: {ledger}");
+    assert!(ledger["sessions"]["s"].get("cancelled").is_none(), "o desfecho tira a marca: {ledger}");
     assert_eq!(srv.cancel("s", OWNER).await, (200, json!({"cancelled": false})), "sem espera, nada a cancelar");
 }

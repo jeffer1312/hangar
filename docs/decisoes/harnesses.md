@@ -10,10 +10,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   provedor, até 2 h depois da parada. Toda continuação automática, inclusive a troca de conta no limite
   e o login recusado, passa pelo `Ledger` de `hangar-auto-continue` antes de reabrir: uma por linha de
   erro, 2 seguidas sem resposta real (a corrente expira em 30 min), 3 por hora. Na troca de conta o teto
-  só vale para o turno que o próprio Hangar começou com um "continue", e a mensagem da pessoa zera a
-  corrente. Barrada, nada reabre e nenhuma conta fica gasta. A espera é nota neutra na conversa, nunca faixa. Reboot da máquina continua
+  só vale para o turno que o próprio Hangar começou com um "continue". A mensagem da pessoa pelo `/input`
+  (fora recado `[de: …]`/`[painel: …]` e o próprio "continue") zera a corrente. Barrada, nada reabre e
+  nenhuma conta fica gasta. A espera é nota neutra na conversa, nunca faixa; o Cancelar é marcado no
+  registro e responde na hora, e a agenda confere a marca antes de mandar. Reboot da máquina continua
   uma vez com ressalva; falta de memória só pelo botão. O retorno da filha ligada pula o "continue"
-  automático ao decidir quem pediu o turno. Ver
+  automático ao decidir quem pediu o turno, e a linha de erro da API não volta como resposta. Ver
   [continuar sozinho](#continuar-sozinho-depois-de-parada-passageira-27112026).
 
 - **O Kimi fica só com os provedores dele: motor nenhum vai ao `config.toml` do Kimi.** O espelho de

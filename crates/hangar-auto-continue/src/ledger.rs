@@ -101,6 +101,10 @@ struct Entry {
     ended: Vec<Ended>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     waiting: Option<Waiting>,
+    /// A chave da espera que o Cancelar da nota marcou; a agenda confere antes de mandar e troca a nota.
+    /// Gravada: reiniciar entre o Cancelar e a troca não pode mandar o continue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cancelled: Option<String>,
 }
 
 impl Entry {
@@ -210,11 +214,30 @@ impl Ledger {
             .is_some_and(|entry| entry.ended.iter().any(|ended| ended.key == key && now - ended.at < KEY_KEEP_S))
     }
 
+    /// O Cancelar da nota, marcado na hora, sem esperar a agenda, que pode estar ocupada com outro envio.
+    /// `false`: nada esperava.
+    pub fn cancel(&mut self, session: &str) -> bool {
+        let Some(entry) = self.doc.sessions.get_mut(session) else { return false };
+        let Some(key) = entry.waiting.as_ref().map(|waiting| waiting.hit.key()) else { return false };
+        if entry.cancelled.as_deref() != Some(key.as_str()) {
+            entry.cancelled = Some(key);
+            self.save();
+        }
+        true
+    }
+
+    pub fn is_cancelled(&self, session: &str, key: &str) -> bool {
+        self.doc.sessions.get(session).is_some_and(|entry| entry.cancelled.as_deref() == Some(key))
+    }
+
     /// A parada teve desfecho: sai da espera gravada e a mesma chave não espera de novo.
     pub fn end(&mut self, session: &str, key: &str, now: f64) {
         let entry = self.doc.sessions.entry(session.to_owned()).or_default();
         if entry.waiting.as_ref().is_some_and(|waiting| waiting.hit.key() == key) {
             entry.waiting = None;
+        }
+        if entry.cancelled.as_deref() == Some(key) {
+            entry.cancelled = None;
         }
         entry.ended.retain(|ended| ended.key != key && now - ended.at < KEY_KEEP_S);
         entry.ended.push(Ended { key: key.to_owned(), at: now });
@@ -395,6 +418,40 @@ mod tests {
         assert_eq!(try_continue(&mut ledger, Source::LoginRetry, "c", StopKind::Other, 30.0), Ok(()));
         ledger.person_wrote("s");
         assert_eq!(ledger.allow("s", Source::LoginRetry, "d", StopKind::Other, 40.0), Err(Cap::Hourly));
+    }
+
+    #[test]
+    fn the_cancel_mark_follows_the_waiting_stop() {
+        let home = tempfile::tempdir().unwrap();
+        let file = path(home.path());
+        let mut ledger = Ledger::load(file.clone());
+        let hit = StopHit { name: "s".into(), provider: "claude".into(), kind: StopKind::Network, line_id: Some("line-1".into()), at: 0.0, life: "L1".into() };
+        assert!(!ledger.cancel("s"), "sem espera, nada a cancelar");
+        ledger.park("s", Waiting { hit, count: 1, note_out: true });
+        assert!(ledger.cancel("s"));
+        assert!(ledger.is_cancelled("s", "line-1") && !ledger.is_cancelled("s", "line-2"));
+        // Reiniciar não apaga a marca; renomear a leva junto.
+        let mut ledger = Ledger::load(file);
+        assert!(ledger.is_cancelled("s", "line-1"));
+        ledger.rename("s", "t");
+        assert!(ledger.is_cancelled("t", "line-1") && !ledger.is_cancelled("s", "line-1"));
+        ledger.end("t", "line-1", 10.0);
+        assert!(!ledger.is_cancelled("t", "line-1"));
+        assert!(!ledger.cancel("t"), "o desfecho tirou a espera");
+    }
+
+    /// A pessoa escreveu "continua" depois de duas continuações: a queda seguinte, dentro dos 30 min, continua.
+    #[test]
+    fn a_person_continue_after_two_auto_continues_allows_the_next_drop() {
+        let (_home, mut ledger) = ledger();
+        try_continue(&mut ledger, Source::Transient, "a", StopKind::Network, 0.0).unwrap();
+        try_continue(&mut ledger, Source::Transient, "b", StopKind::Network, 60.0).unwrap();
+        assert_eq!(ledger.allow("s", Source::Transient, "c", StopKind::Network, 120.0), Err(Cap::Chain));
+        ledger.person_wrote("s");
+        assert_eq!(try_continue(&mut ledger, Source::Transient, "c", StopKind::Network, 180.0), Ok(()));
+        // Os outros tetos seguem: a hora já tem três.
+        ledger.person_wrote("s");
+        assert_eq!(ledger.allow("s", Source::Transient, "d", StopKind::Network, 240.0), Err(Cap::Hourly));
     }
 
     /// O caso de 13/11: quatro logins recusados em 38 s, cada um com sua linha.
