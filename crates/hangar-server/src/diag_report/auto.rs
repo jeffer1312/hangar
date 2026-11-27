@@ -281,12 +281,24 @@ fn watch(st: Arc<AppState>, ready: Option<tokio::sync::oneshot::Sender<()>>) -> 
         let mut retry = !count_update(&st).await;
         check_failure(&st).await;
         if let Some(ready) = ready { let _ = ready.send(()); }
-        loop {
-            // A rodada fora do `FRESH` deixa de contar: a nova tentativa acaba sozinha.
-            let changed_state = if retry { tokio::time::timeout(COUNT_RETRY, changed.notified()).await.is_ok() } else { changed.notified().await; true };
-            retry = !count_update(&st).await;
-            if changed_state { check_failure(&st).await; }
-        }
+        // O envio espera minutos entre tentativas: num laço à parte, a rodada que termina nesse meio-tempo
+        // ainda é contada. Avisos que chegam durante um envio viram uma conferência só, depois dele.
+        let send = tokio::sync::Notify::new();
+        let counting = async {
+            loop {
+                // A rodada fora do `FRESH` deixa de contar: a nova tentativa acaba sozinha.
+                let changed_state = if retry { tokio::time::timeout(COUNT_RETRY, changed.notified()).await.is_ok() } else { changed.notified().await; true };
+                retry = !count_update(&st).await;
+                if changed_state { send.notify_one(); }
+            }
+        };
+        let sending = async {
+            loop {
+                send.notified().await;
+                check_failure(&st).await;
+            }
+        };
+        tokio::join!(counting, sending);
     })
 }
 
@@ -401,6 +413,32 @@ mod tests {
         task.abort();
         assert!(arrived.is_ok(), "o relatório não chegou");
         assert_eq!(m.worker.reports.lock().unwrap().len(), 1);
+    }
+
+    /// Com um envio esperando entre tentativas, as rodadas que terminam no meio-tempo ainda são contadas.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn update_rounds_are_counted_while_a_report_is_being_sent() {
+        let mut m = Machine::start(201).await;
+        let t = Arc::new(telemetry(m.home.path()));
+        Arc::get_mut(&mut m.st).unwrap().telemetry = Some(t.clone());
+        let (ready, watching) = tokio::sync::oneshot::channel();
+        let task = watch(m.st.clone(), Some(ready));
+        watching.await.unwrap();
+        // O envio em curso: `check_failure` fica parado na trava.
+        let sending = SENDING.lock().await;
+        let counted = |n: u64| {
+            let t = t.clone();
+            tokio::time::timeout(std::time::Duration::from_secs(20), async move {
+                while t.counters().iter().filter(|c| c.event == "update_finished").map(|c| c.count).sum::<u64>() < n { tokio::task::yield_now().await; }
+            })
+        };
+        for (n, to) in [(1, "0.1.0.8700"), (2, "0.1.0.8800")] {
+            crate::update::StateFile::new(&m.state_dir()).write(json!({"fase": "pronto", "ok": true, "origem": "auto", "canal": "latest",
+                "versao_de": "0.1.0.8600", "versao_para": to}));
+            assert!(counted(n).await.is_ok(), "rodada {to} não contada com o envio parado");
+        }
+        drop(sending);
+        task.abort();
     }
 
     #[tokio::test(flavor = "multi_thread")]
