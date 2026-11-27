@@ -14,6 +14,6 @@ fn a_session_server_without_its_registry_file_is_an_orphan() {
         (13, args(r"C:\bin\tmux.exe server -s teste -L sock")),
         (14, args(r"C:\bin\claude.exe server -s outro")),
         (15, args(r"C:\bin\psmux.exe server -s PM-1")),
-    ]);
+    ]).unwrap();
     assert_eq!(found, vec![Orphan { name: "hangar".into(), pid: 10 }, Orphan { name: "PM-1".into(), pid: 15 }]);
 }

@@ -44,6 +44,12 @@ pub struct Fallen {
     /// O servidor do psmux que perdeu a ficha e segue de pé: Reabrir e Dispensar o encerram antes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orphan_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphan_birth: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orphan_descendants: Vec<(u32, u64)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphan_transcript: Option<String>,
 }
 
 impl Fallen {
@@ -53,7 +59,7 @@ impl Fallen {
     /// A entrada da fotografia com que o restore a reabre.
     pub fn entry(&self, name: &str) -> Entry {
         Entry { name: name.to_owned(), provider: self.provider, conversation: self.conversation.clone(),
-            permission_mode: self.permission_mode.clone(), missing_since: None, unit: None }
+            transcript: self.orphan_transcript.clone(), permission_mode: self.permission_mode.clone(), missing_since: None, unit: None }
     }
 }
 
@@ -105,6 +111,16 @@ fn with_persisted<T>(home: &Path, change: impl FnOnce(&mut BTreeMap<String, Fall
 
 pub fn get(home: &Path, name: &str) -> Option<Fallen> { with(home, |map| (map.get(name).cloned(), false)) }
 
+#[cfg(windows)]
+pub(super) fn remember_orphan_descendants(home: &Path, name: &str, expected: &Fallen, descendants: &[(u32, u64)]) -> bool {
+    let (matched, saved) = with_persisted(home, |map| {
+        let Some(row) = map.get_mut(name).filter(|row| *row == expected) else { return (false, false); };
+        row.orphan_descendants = descendants.to_vec();
+        (true, true)
+    });
+    matched && saved
+}
+
 #[cfg(test)]
 fn insert(home: &Path, name: &str, fallen: Fallen) {
     with(home, |map| ((), map.insert(name.to_owned(), fallen.clone()).as_ref() != Some(&fallen)));
@@ -149,8 +165,10 @@ pub fn forget_live(home: &Path, live: &HashSet<String>) {
 pub fn rows(home: &Path, live: &[&SessionRow]) -> Vec<SessionRow> {
     let names: HashSet<&str> = live.iter().map(|r| r.name.as_str()).collect();
     with(home, |map| (map.iter().filter(|(name, _)| !names.contains(name.as_str())).filter_map(|(name, fallen)| {
+        let lifecycle = super::orphans::lifecycle(fallen);
+        if fallen.cause == super::orphans::CAUSE && lifecycle.is_none() { return None; }
         let row = json!({"name": name, "provider": fallen.provider.name(), "state": "dead", "problema": fallen.problem(),
-            "cwd": fallen.cwd, "last_activity": fallen.died_at});
+            "cwd": fallen.cwd, "last_activity": fallen.died_at, "lifecycle_id": lifecycle});
         serde_json::from_value::<SessionRow>(row)
             .inspect_err(|error| tracing::warn!(code = "fallen_row_invalid", %error, session = %name, "linha da sessão caída não montada"))
             .ok()
@@ -179,8 +197,9 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     let Some(fallen) = get(&dirs.home, &name) else {
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("session_not_fallen", "a sessão não está caída", json!({"name": name})));
     };
-    if let Some(pid) = fallen.orphan_pid && let Err(code) = super::orphans::end(pid, &name).await {
-        return answer(&headers, StatusCode::CONFLICT, detail_body(code, "a sessão antiga não fechou", json!({"name": name})));
+    let lifecycle = crate::auth::query_param(req.uri().query(), "lifecycle_id");
+    if !super::orphans::accepts_action(&fallen, lifecycle.as_deref()) {
+        return answer(&headers, StatusCode::CONFLICT, detail_body("fallen_session_changed", "a linha da sessão mudou; atualize a lista", json!({})));
     }
     // Cliente que cai no meio não interrompe a abertura. O mesmo caminho do restore: agente de pé, diário, e o
     // registro só sai no sucesso.
@@ -189,12 +208,15 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     let task = tokio::spawn(async move {
         let _reopening = reopening;
         let host = super::server::ServerHost::new(st.clone()).await;
-        super::restore::restore_one(&host, &st, &program, &fallen.key, &entry).await
+        let orphan = (fallen.cause == super::orphans::CAUSE).then_some(&fallen);
+        super::restore::restore_one(&host, &st, &program, &fallen.key, &entry, orphan).await
     });
     match task.await {
         Ok(Ok(())) => answer(&headers, StatusCode::OK, json!({"ok": true})),
         Ok(Err(code)) if code == "erro_nome_em_uso" =>
             answer(&headers, StatusCode::CONFLICT, detail_body(&code, "já existe uma sessão com esse nome", json!({}))),
+        Ok(Err(code)) if code.starts_with("psmux_orphan_") =>
+            answer(&headers, StatusCode::CONFLICT, detail_body(&code, "a sessão antiga não fechou", json!({}))),
         Ok(Err(code)) => answer(&headers, StatusCode::UNPROCESSABLE_ENTITY, detail_body(&code, "a sessão não reabriu", json!({}))),
         Err(error) => {
             tracing::error!(code = "restore_open_failed", %error, session = %name, "a reabertura da sessão caída parou no meio");
@@ -239,10 +261,27 @@ pub async fn dismiss_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("session_not_fallen", "a sessão não está caída", json!({"name": name})));
     };
     // O órfão de pé voltaria na próxima busca e seguiria segurando o nome.
-    if let Some(pid) = fallen.orphan_pid && let Err(code) = super::orphans::end(pid, &name).await {
-        return answer(&headers, StatusCode::CONFLICT, detail_body(code, "a sessão antiga não fechou", json!({"name": name})));
+    let lifecycle = crate::auth::query_param(req.uri().query(), "lifecycle_id");
+    if !super::orphans::accepts_action(&fallen, lifecycle.as_deref()) {
+        return answer(&headers, StatusCode::CONFLICT, detail_body("fallen_session_changed", "a linha da sessão mudou; atualize a lista", json!({})));
     }
-    // O `forget` também tira o nome da fotografia do restore: a dispensada não volta no próximo reboot.
+    if fallen.cause == super::orphans::CAUSE {
+        let task = tokio::spawn(async move {
+            let _hold = _hold;
+            let _claim = super::open::NameClaim::take(&dirs.home, &name).map_err(|_| "erro_nome_em_uso")?;
+            super::orphans::end(&dirs.home, &name, &fallen).await?;
+            super::restore::forget(&dirs.home, &name);
+            Ok::<(), &'static str>(())
+        });
+        match task.await {
+            Ok(Ok(())) => return answer(&headers, StatusCode::OK, json!({"ok": true})),
+            Ok(Err(code)) => return answer(&headers, StatusCode::CONFLICT, detail_body(code, "a sessão antiga não fechou", json!({}))),
+            Err(error) => {
+                tracing::error!(code = "psmux_orphan_dismiss_failed", %error, "a dispensa da sessão caída parou no meio");
+                return answer(&headers, StatusCode::INTERNAL_SERVER_ERROR, detail_body("psmux_orphan_dismiss_failed", "a sessão não foi dispensada", json!({})));
+            }
+        }
+    }
     super::restore::forget(&dirs.home, &name);
     answer(&headers, StatusCode::OK, json!({"ok": true}))
 }
@@ -347,7 +386,7 @@ mod tests {
 
     fn oom(key: &str) -> Fallen {
         Fallen { key: key.into(), provider: AgentProvider::Claude, conversation: Some("c1".into()), permission_mode: None,
-            cwd: Some("/home/x".into()), died_at: 10.0, cause: "oom-kill".into(), orphan_pid: None }
+            cwd: Some("/home/x".into()), died_at: 10.0, cause: "oom-kill".into(), orphan_pid: None, orphan_birth: None, orphan_descendants: Vec::new(), orphan_transcript: None }
     }
 
     fn row(name: &str) -> SessionRow { serde_json::from_value(json!({"name": name, "provider": "claude", "state": "idle"})).unwrap() }
@@ -405,7 +444,7 @@ mod tests {
     #[test]
     fn the_problem_tells_memory_from_any_other_failure() {
         let fallen = |cause: &str| Fallen { key: "k".into(), provider: AgentProvider::Claude, conversation: None,
-            permission_mode: None, cwd: None, died_at: 0.0, cause: cause.into(), orphan_pid: None };
+            permission_mode: None, cwd: None, died_at: 0.0, cause: cause.into(), orphan_pid: None, orphan_birth: None, orphan_descendants: Vec::new(), orphan_transcript: None };
         assert_eq!(fallen("oom-kill").problem(), OOM);
         assert_eq!(fallen("signal").problem(), OTHER);
     }

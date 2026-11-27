@@ -1,4 +1,4 @@
-import { expect, test } from "claude-code/testing";
+import { expect, mock, test } from "claude-code/testing";
 import { parseNotifications } from "./verificarParse";
 import { clearBridge, setBridge } from "./bridge";
 import { agentEnd, contentText, registerState } from "./state";
@@ -20,7 +20,7 @@ test("só completed é fim normal", () => {
 type Handler = (...args: any[]) => any;
 
 /** Os hooks do state.ts com um engine de mentira; `status` responde cada POST /agent. */
-function harness(status: () => number | "hang" = () => 200, sleep: () => Promise<void> = () => new Promise(() => {})) {
+function harness(status: () => number | "hang" = () => 200, sleep: () => Promise<void> = () => new Promise(() => {}), onAgent?: (event: string) => void) {
   const handlers = new Map<string, Handler>();
   registerState(((event: string, ...args: any[]) => handlers.set(event, args.at(-1))) as never);
   const agents: string[] = [];
@@ -29,7 +29,9 @@ function harness(status: () => number | "hang" = () => 200, sleep: () => Promise
     http: { fetch: async (url: string, init: { body: string }) => {
       if (!url.endsWith("/agent")) return { status: 200, text: "" };
       const b = JSON.parse(init.body) as { agentId: string; estado: string };
-      agents.push(`${b.agentId}:${b.estado}`);
+      const event = `${b.agentId}:${b.estado}`;
+      agents.push(event);
+      onAgent?.(event);
       const s = status();
       if (s === "hang") return new Promise(() => {});
       return { status: s, text: "" };
@@ -103,23 +105,27 @@ test("aviso recusado aparece no log", () => withBridge(async () => {
 
 test("backend pendurado não segura o hook nem os avisos seguintes", () => withBridge(async () => {
   let s: number | "hang" = "hang";
-  const h = harness(() => s, async () => {});
+  const posted = Promise.withResolvers<void>();
+  const h = harness(() => s, async () => {}, (event) => {
+    if (event === "h1:finished") posted.resolve();
+  });
   await h.spawn("h1");
   s = 200;
   await h.done("h1");
-  await new Promise((r) => setTimeout(r, 0));
+  await posted.promise;
   expect(h.agents).toEqual(["h1:running", "h1:finished"]);
 }));
 
 const PONTE = { url: "http://127.0.0.1:1/api/plugin", token: "t", sessao: "s" };
 
 /** Engine de mentira do `/agent-sent`: `acks` responde cada tentativa (status ou erro de rede). */
-function delivery(acks: (number | "erro")[]) {
+function delivery(acks: (number | "erro")[], clock = { now: async () => 1_000_000 }, onSend?: () => Promise<unknown>) {
   const sends: unknown[] = [];
   const posts: unknown[] = [];
   const logs: string[] = [];
   const $ = {
-    session: { send: async (a: unknown) => { sends.push(a); return { isDelivered: true }; } },
+    clock,
+    session: { send: async (a: unknown) => { sends.push(a); await onSend?.(); return { isDelivered: true }; } },
     http: { fetch: async (_url: string, init: { body: string }) => {
       posts.push(JSON.parse(init.body));
       const a = acks.shift() ?? 200;
@@ -131,11 +137,13 @@ function delivery(acks: (number | "erro")[]) {
   return { $, sends, posts, logs };
 }
 
-test("confirmação que falha uma vez é repetida, sem segunda entrega", async () => {
-  const d = delivery(["erro", 200]);
+test("confirmação repetida mantém o horário anterior ao envio", {}, async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 });
+  const d = delivery(["erro", 200], $.clock, () => clock.advance(30));
   await deliverAgentMessage(d.$, PONTE, { id: "m-1", to: "a1", text: "oi" });
   expect(d.sends).toEqual([{ to: { agentId: "a1" }, text: "oi" }]);
-  expect(d.posts).toEqual([1, 2].map(() => ({ sessao: "s", token: "t", id: "m-1", isDelivered: true })));
+  expect(d.posts).toHaveLength(2);
+  for (const post of d.posts) expect(post).toMatchObject({ sessao: "s", token: "t", id: "m-1", isDelivered: true, attemptedAt: 1_000_000 });
   expect(d.logs).toEqual([]);
 });
 

@@ -129,20 +129,22 @@ export async function returnFocus(read: () => Promise<{ text: string }>,
   return { moved, restored };
 }
 
-type AgentSent = { isDelivered: boolean; reason?: string };
+type AgentSent = { isDelivered: boolean; reason?: string; attemptedAt: number };
 // Id já tratado: de novo, só a confirmação sai outra vez, nunca uma segunda entrega.
 const agentHandled = new Map<string, AgentSent>();
 const AGENT_HANDLED_KEPT = 32;
 
 /** O `SendMessage` direto, sem o modelo pai: agente vivo recebe na fila, o parado é retomado. */
-export async function deliverAgentMessage($: Pick<EngineInterface, "session" | "http" | "ui">, ponte: Bridge,
+export async function deliverAgentMessage($: Pick<EngineInterface, "session" | "http" | "ui" | "clock">, ponte: Bridge,
   msg: { id: string; to: string; text: string }): Promise<void> {
   let sent: AgentSent | undefined = agentHandled.get(msg.id);
   if (!sent) {
+    const attemptedAt = await $.clock.now();
     try {
-      sent = (await $.session.send({ to: { agentId: msg.to }, text: msg.text })) ?? { isDelivered: false, reason: "sem resposta do Claude Code" };
+      const result = await $.session.send({ to: { agentId: msg.to }, text: msg.text });
+      sent = { ...(result ?? { isDelivered: false, reason: "sem resposta do Claude Code" }), attemptedAt };
     } catch (err) {
-      sent = { isDelivered: false, reason: String(err) };
+      sent = { isDelivered: false, reason: String(err), attemptedAt };
     }
     agentHandled.set(msg.id, sent);
     if (agentHandled.size > AGENT_HANDLED_KEPT) agentHandled.delete(agentHandled.keys().next().value!);

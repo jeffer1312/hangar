@@ -414,12 +414,20 @@ pub async fn open_adopting(host: &dyn OpenHost, resolved: Resolved, caller: &Ope
     -> Result<Opened, OpenError> {
     // Toda recusa daqui em diante, antes ou dentro do `launch`, conta aqui.
     let provider = resolved.spec.provider.name();
-    let opened = open_resolved(host, resolved, caller, adopting).await;
+    let opened = open_resolved(host, resolved, caller, adopting, None).await;
     if let Err(error) = &opened { count_open_failed(host.telemetry(), caller, provider, error.code); }
     opened
 }
 
-async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCaller, mut adopting: Option<&mut super::adopt::Adopting>)
+pub(super) async fn reopen_orphan(host: &dyn OpenHost, resolved: Resolved, fallen: &super::fallen::Fallen) -> Result<Opened, OpenError> {
+    let provider = resolved.spec.provider.name();
+    let opened = open_resolved(host, resolved, &OpenCaller::Owner, None, Some(fallen)).await;
+    if let Err(error) = &opened { count_open_failed(host.telemetry(), &OpenCaller::Owner, provider, error.code); }
+    opened
+}
+
+async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCaller, mut adopting: Option<&mut super::adopt::Adopting>,
+    orphan: Option<&super::fallen::Fallen>)
     -> Result<Opened, OpenError> {
     let Resolved { mut spec, mut warnings, provider_source, initial_prompt, remember_provider, previous_non_plan, resume, restore } = resolved;
     let _claim = match adopting.as_deref_mut().and_then(|a| a.claim_for(&spec.name)) {
@@ -469,7 +477,7 @@ async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCal
     }
     let started = Instant::now();
     match launch(host, &mut spec, read_only, warnings, initial_prompt.as_deref(), remember_provider, previous_non_plan, &runtime, codex_home.as_deref(),
-                 resume.as_deref(), restore, adopting.as_deref_mut()).await {
+                 resume.as_deref(), restore, adopting.as_deref_mut(), orphan).await {
         Ok((jsonl, warnings, route)) => {
             // A reserva que não coube abriu frio: não é aberta pré-aquecida.
             let prewarm = adopting.as_deref().is_some_and(super::adopt::Adopting::was_adopted);
@@ -526,7 +534,7 @@ pub(crate) fn count_open_failed(telemetry: Option<&hangar_telemetry::Telemetry>,
 #[allow(clippy::too_many_arguments)]
 async fn launch(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: Option<Vec<String>>, warnings: Vec<String>, initial_prompt: Option<&str>,
                 remember_provider: bool, previous_non_plan: Option<PermissionMode>, runtime: &Value, codex_home: Option<&str>,
-                resume: Option<&str>, restore: bool, adopting: Option<&mut super::adopt::Adopting>)
+                resume: Option<&str>, restore: bool, adopting: Option<&mut super::adopt::Adopting>, orphan: Option<&super::fallen::Fallen>)
                 -> Result<(Option<String>, Vec<String>, Option<claude::EngineRoute>), OpenError> {
     // `ciclo_conta`: a guarda compartilhada da conta vale da reconciliação ao pane, e a exclusão dela
     // (exclusiva) espera a sessão que está subindo. Também na adoção: o `--prep` pode mudar a
@@ -536,7 +544,7 @@ async fn launch(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: Option<V
     progress_step(&spec.name, "criando", json!({}));
     let mut diary = Diary::new(crate::mods::state::random_hex(8), &spec.name, spec.provider.name());
     let result = match (spec.surface, codex_home) {
-        (Surface::Terminal, _) => terminal_life(host, spec, read_only.as_deref(), initial_prompt, &mut diary, remember_provider, runtime, codex_home, resume, restore).await,
+        (Surface::Terminal, _) => terminal_life(host, spec, read_only.as_deref(), initial_prompt, &mut diary, remember_provider, runtime, codex_home, resume, restore, orphan).await,
         (Surface::Headless, Some(home)) =>
             codex_headless_life(host, spec, home, initial_prompt, &mut diary, remember_provider, resume).await.map(|w| (None, w, None)),
         (Surface::Headless, None) if spec.provider == AgentProvider::Antigravity =>
@@ -923,8 +931,8 @@ async fn codex_headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, codex_
 /// Do `validar` ao `sessao.criada`: o pane e o que muda em volta dele.
 #[allow(clippy::too_many_arguments)]
 async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: Option<&[String]>, initial_prompt: Option<&str>, diary: &mut Diary,
-                       remember_provider: bool, runtime: &Value, codex_home: Option<&str>, resume: Option<&str>, restore: bool)
-                       -> Result<(Option<String>, Vec<String>, Option<claude::EngineRoute>), OpenError> {
+                       remember_provider: bool, runtime: &Value, codex_home: Option<&str>, resume: Option<&str>, restore: bool,
+                       orphan: Option<&super::fallen::Fallen>) -> Result<(Option<String>, Vec<String>, Option<claude::EngineRoute>), OpenError> {
     diary.step("validar");
     let claude = spec.provider == AgentProvider::Claude;
     if matches!(spec.provider, AgentProvider::Pi | AgentProvider::Kimi | AgentProvider::Antigravity) { sync_skills(host).await; }
@@ -960,6 +968,10 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         // O transcript nasce no 1º turno, num layout próprio: nada a semear.
         (agents::pane(spec, conversation, &ctx)?, None, None)
     };
+    if let Some(fallen) = orphan {
+        super::orphans::end(host.home(), &spec.name, fallen).await
+            .map_err(|code| OpenError::new(409, code, "a sessão anterior não pôde ser encerrada"))?;
+    }
     // O Kimi e o Antigravity novos e o Codex só sabem a conversa depois da TUI (bilhete, sidecar).
     spec.conversation = match spec.provider {
         AgentProvider::Kimi | AgentProvider::Antigravity | AgentProvider::Codex => resume.map(str::to_owned),

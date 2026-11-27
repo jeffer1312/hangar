@@ -4054,8 +4054,8 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   saindo, sem linha (decisão do usuário). Sem journal (Windows/psmux) não há registro pela queda; lá a
   linha vem do servidor do psmux vivo que perdeu a ficha em `~/.psmux` (`<nome>.port`): o `ls` não o vê, e
   ele seguia com o agente e segurando o nome. A busca roda a cada tique do restore (`session_open/orphans.rs`,
-  processo com mais de 60 s), grava a caída com `psmux_orphan` e o pid, o nome conta como ocupado, e Reabrir
-  e Dispensar encerram o órfão (`taskkill /T`, conferido depois) antes (27/11/2026). A linha caída
+  processo com mais de 60 s). O nome conta como ocupado, mas a linha só é acionável se a própria instância
+  estiver ligada ao registro da sessão, como define [Windows](windows.md#regras-vigentes). A linha caída
   fica fora do push e da varredura de grupos. O build roda em escopo próprio com teto: o `cargo-pinned`
   abre o dele (`MemoryHigh` pela memória livre) e o `verificar-local` roda inteiro no `scripts/memory-scope`
   (só `MemoryMax`: com `MemoryHigh` o Node tira o heap do teto menor e o `svelte-check` estoura). Falta de

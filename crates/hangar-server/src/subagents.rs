@@ -125,13 +125,20 @@ fn headless_lives(map: &Value) -> HashMap<String, AgentLife> {
 /// sinal do plugin (null sem sinal); Kimi e Pi dizem sozinhos que acabaram (`finished`).
 fn decorate(a: &mut Map<String, Value>, life: Option<&AgentLife>, blocked: Option<&str>, problem: Option<&str>) {
     let instant = |t: Option<&str>| t.and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok());
-    // O `running` do plugin não tem fim quando o agente é interrompido: a interrupção do arquivo, se for mais nova, vence.
-    let interrupted_after = |life: &AgentLife| life.state == AgentState::Running && a.get("state").and_then(Value::as_str) == Some("failed")
-        && instant(a.get("endedAt").and_then(Value::as_str)).zip(instant(life.since.as_deref())).is_some_and(|(ended, since)| ended > since);
+    let file_state = a.get("state").and_then(Value::as_str);
+    let file_ended = instant(a.get("endedAt").and_then(Value::as_str));
+    let file_end_wins = |life: &AgentLife| {
+        if life.state != AgentState::Running { return false; }
+        let times = file_ended.zip(instant(life.since.as_deref()));
+        match file_state {
+            Some("failed") => times.is_some_and(|(ended, since)| ended > since),
+            Some("finished") => times.is_none_or(|(ended, since)| ended >= since),
+            _ => false,
+        }
+    };
     let (state, ended) = match (life, a.get("finished").and_then(Value::as_bool)) {
-        (Some(life), _) if interrupted_after(life) => (json!("failed"), a.get("endedAt").cloned().unwrap_or(Value::Null)),
-        (Some(life), _) if life.state == AgentState::Running && a.get("state").and_then(Value::as_str) == Some("finished") =>
-            (json!("finished"), a.get("endedAt").cloned().unwrap_or(Value::Null)),
+        (Some(life), _) if file_end_wins(life) =>
+            (json!(file_state), a.get("endedAt").cloned().unwrap_or(Value::Null)),
         (Some(life), _) => (json!(life.state), json!(life.ended_at)),
         (None, Some(true)) => (json!("finished"), a.get("updatedAt").filter(|v| v.as_str().is_some_and(|t| !t.is_empty())).cloned().unwrap_or(Value::Null)),
         (None, Some(false)) => (json!("running"), Value::Null),
@@ -192,10 +199,19 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
             blocked = Some(STATE_UNAVAILABLE);
         }
     }
+    let mut resumed_at = HashMap::new();
     // Claude sem terminal: o stream-json do runtime diz o ciclo de vida e vence o sinal do plugin.
     if provider == "claude" && let Some(runtime) = st.state.runtime.get() {
         match runtime.claude_subagents(&name).await {
-            Some(Ok(map)) => lives.extend(headless_lives(&map)),
+            Some(Ok(map)) => {
+                for (id, life) in headless_lives(&map) {
+                    if life.state == AgentState::Running && life.since.is_none()
+                        && let Some(since) = lives.get(&id).and_then(|previous| previous.since.clone()) {
+                        resumed_at.insert(id.clone(), since);
+                    }
+                    lives.insert(id, life);
+                }
+            }
             Some(Err(e)) => { warn_once(&name, "runtime_subagents_unavailable"); tracing::debug!(session = %name, ?e, "subagentes do runtime"); problem = Some("runtime_subagents_unavailable".into()); }
             None => {}
         }
@@ -246,8 +262,14 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
     let problem = problem.map(|_| STATE_UNAVAILABLE);
     let done = tokio::task::spawn_blocking(move || {
         let mut fill = |mut a: Map<String, Value>| {
-            let life = a.get("agentId").and_then(Value::as_str).and_then(|id| lives.get(id));
-            decorate(&mut a, life, blocked, problem);
+            let id = a.get("agentId").and_then(Value::as_str);
+            let life = id.and_then(|id| lives.get(id));
+            // Um horário antigo do plugin não pode transformar um Running do runtime em falha.
+            let resumed = if a.get("state").and_then(Value::as_str) == Some("finished") {
+                life.zip(id.and_then(|id| resumed_at.get(id)))
+                    .map(|(life, since)| AgentLife { since: Some(since.clone()), ..life.clone() })
+            } else { None };
+            decorate(&mut a, resumed.as_ref().or(life), blocked, problem);
             if provider == "codex" {
                 let status = a.get("agentId").and_then(Value::as_str).map(|id| &codex_status[id]);
                 let can_message = status.is_some_and(|status| status["can_message"] == true);
@@ -1312,7 +1334,21 @@ mod tests {
         decorate(&mut a, Some(&running), None, None);
         assert_eq!((a["state"].clone(), a["endedAt"].clone()), (json!("finished"), json!("2027-01-15T08:00:00.000Z")));
 
-        // Retomado pelo SendMessage: escreveu de novo bem depois do fim gravado.
+        let resumed = AgentLife {
+            state: AgentState::Running,
+            ended_at: None,
+            since: Some("2027-01-15T08:00:00.100Z".into()),
+        };
+        let mut a = list_subagents("claude", &own).remove(0);
+        decorate(&mut a, Some(&resumed), None, None);
+        assert_eq!((a["state"].clone(), a["endedAt"].clone()), (json!("running"), Value::Null));
+
+        at(&meta, done + Duration::from_secs(1));
+        let mut a = list_subagents("claude", &own).remove(0);
+        decorate(&mut a, Some(&resumed), None, None);
+        assert_eq!((a["state"].clone(), a["endedAt"].clone()), (json!("finished"), json!("2027-01-15T08:00:01.000Z")));
+
+        // Uma escrita bem depois do fim indica retomada mesmo sem sinal do plugin.
         at(&f, done + Duration::from_secs(60));
         let mut a = list_subagents("claude", &own).remove(0);
         decorate(&mut a, Some(&running), None, None);

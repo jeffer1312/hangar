@@ -428,11 +428,11 @@ import * as m from '../paraglide/messages';
 
   // Sessão que o sistema derrubou: o erro sai como mensagem de ação, igual ao excluir.
   async function handleReopen(s: AggSession) {
-    const erro = await model.reopen(s.name, s.serverId);
+    const erro = await model.reopen(s.name, s.serverId, s.lifecycle_id);
     if (erro) showActionMsg(`${m.session_reopen()}: ${erro}`);
   }
   async function handleDismiss(s: AggSession) {
-    const r = await model.dismiss(s.name, s.serverId);
+    const r = await model.dismiss(s.name, s.serverId, s.lifecycle_id);
     if (r.erro !== '') showActionMsg(m.lista_flash_excluir({ nome: s.name, erro: r.erro }));
   }
 

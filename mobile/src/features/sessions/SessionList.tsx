@@ -235,20 +235,19 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     const key = `${s.serverId}::${s.name}`;
     if (reopening.current.has(key)) return;
     reopening.current.add(key);
-    reopenFallenSession(s.name, server)
+    reopenFallenSession(s.name, server, s.lifecycle_id)
       .then(() => toast.ok(s.name))
       .catch((e: unknown) => toast.erro(mensagemDe(e)))
       .finally(() => reopening.current.delete(key));
   }, []);
 
-  // Sem confirmação: não há processo para matar, só a linha e o registro para reabrir. Rota própria, não o
-  // DELETE: se o nome já voltou vivo (a linha da tela está velha), o servidor recusa em vez de fechar.
+  // A rota própria só dispensa a vida indicada pela linha, não a sessão já reaberta com o mesmo nome.
   const dismiss = useCallback((s: AggSession) => {
     const server = useServers.getState().servers.find((x) => x.id === s.serverId);
     if (!server) { toast.erro(m.servidor_nao_existe()); return; }
     if (reopening.current.has(`${s.serverId}::${s.name}`)) return;
     useSessions.getState().markDeleting(s.serverId, s.name);
-    dismissFallenSession(s.name, server).catch((e: unknown) => {
+    dismissFallenSession(s.name, server, s.lifecycle_id).catch((e: unknown) => {
       useSessions.getState().unmarkDeleting(s.serverId, s.name);
       toast.erro(mensagemDe(e));
     });

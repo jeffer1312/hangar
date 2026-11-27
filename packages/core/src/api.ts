@@ -2194,14 +2194,17 @@ export function isFallenSession(s: { state?: string | null; problema?: string | 
   return s.state === 'dead' && (FALLEN_PROBLEMS as readonly string[]).includes(s.problema ?? '');
 }
 
-// Reabre a sessão caída pelo spec dela, na mesma conversa.
-export async function reopenFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
-  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/reopen`, { method: 'POST' });
+export async function reopenFallenSession(name: string, server?: Server | null, lifecycleId?: string | null): Promise<{ ok: boolean }> {
+  return actOnFallenSession(name, 'reopen', server, lifecycleId);
 }
 
-// Tira a caída da lista; recusa (404) se o nome já voltou vivo, em vez de fechar a sessão reaberta.
-export async function dismissFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
-  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/dismiss`, { method: 'POST' });
+export async function dismissFallenSession(name: string, server?: Server | null, lifecycleId?: string | null): Promise<{ ok: boolean }> {
+  return actOnFallenSession(name, 'dismiss', server, lifecycleId);
+}
+
+function actOnFallenSession(name: string, action: 'reopen' | 'dismiss', server?: Server | null, lifecycleId?: string | null) {
+  const query = lifecycleId ? `?lifecycle_id=${encodeURIComponent(lifecycleId)}` : '';
+  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/${action}${query}`, { method: 'POST' });
 }
 
 // Relança uma sessão "sem id" com `claude --resume <uuid>` -> passa a rastreá-la, continuando a

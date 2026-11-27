@@ -143,13 +143,8 @@ struct Session {
 #[serde(rename_all = "lowercase")]
 pub enum AgentState { Running, Finished, Failed }
 #[derive(Clone, Debug, PartialEq)]
-/// `since`: quando o `running` chegou; a interrupção gravada depois dele vence o sinal.
+/// `since`: início observado da execução; um fim posterior vence o sinal.
 pub struct AgentLife { pub state: AgentState, pub ended_at: Option<String>, pub since: Option<String> }
-impl AgentLife {
-    pub fn running_now() -> Self {
-        Self { state: AgentState::Running, ended_at: None, since: Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)) }
-    }
-}
 
 /// Resultado de mandar texto a um subagente pelo plugin.
 #[derive(Clone, Debug, PartialEq)]
@@ -665,10 +660,6 @@ impl Store {
                 if s.agent_late.len() > AGENT_LATE_KEPT { s.agent_late.pop_front(); }
             }
             s.agent_outbox.retain(|(queued, ..)| *queued != id);
-            if reply == AgentSend::Delivered {
-                s.agents.insert(agent_id.to_owned(), AgentLife::running_now());
-                self.notify(&binding.key);
-            }
         }
         Ok(reply)
     }
@@ -684,24 +675,34 @@ impl Store {
         if !s.waiter.as_mut().is_some_and(|w| w.send(payload.clone())) { s.agent_outbox.push_back((task_id.to_owned(), payload, now)); }
         Ok(TaskStop::Queued)
     }
-    pub fn agent_sent(&self, binding: &InteractionBinding, id: &str, delivered: bool, reason: Option<String>) -> Result<(), ServiceError> {
+    pub fn agent_sent(&self, binding: &InteractionBinding, id: &str, delivered: bool, reason: Option<String>, attempted_at: Option<i64>) -> Result<(), ServiceError> {
         let mut memory = self.memory.lock().map_err(|_| unavailable())?;
         let s = session(&mut memory, binding)?;
-        // Sem quem espere, a resposta não volta ao app, mas o que o plugin fez vale: entregue = rodando.
-        let orphan = if let Some((agent, sender)) = s.agent_waits.remove(id) {
+        let known = if let Some((agent, sender)) = s.agent_waits.remove(id) {
             let reply = if delivered { AgentSend::Delivered } else { AgentSend::Refused(reason.clone().unwrap_or_default()) };
-            sender.send(reply).err().map(|_| agent)
+            Some((agent, sender.send(reply).is_err()))
         } else if let Some(at) = s.agent_late.iter().position(|(late, _)| late == id) {
-            s.agent_late.remove(at).map(|(_, agent)| agent)
+            s.agent_late.remove(at).map(|(_, agent)| (agent, true))
         } else {
             tracing::warn!(id, delivered, "confirmação do plugin para mensagem de subagente desconhecida");
             None
         };
-        if let Some(agent) = orphan {
-            tracing::warn!(id, agent = %agent, delivered, reason = reason.as_deref().unwrap_or(""), "confirmação do plugin chegou sem o pedido esperando");
-            if delivered {
-                s.agents.insert(agent, AgentLife::running_now());
-                self.notify(&binding.key);
+        if let Some((agent, detached)) = known {
+            if detached {
+                tracing::warn!(id, agent = %agent, delivered, reason = reason.as_deref().unwrap_or(""), "confirmação do plugin chegou sem o pedido esperando");
+            }
+            // Sem o horário da tentativa, só um pedido feito depois do fim prova a retomada.
+            let requested_at = || {
+                let (nanos, _) = id.strip_prefix("agent-msg-")?.rsplit_once('-')?;
+                Some(nanos.parse::<i64>().ok()?.div_euclid(1_000_000))
+            };
+            if delivered && let Some(at) = attempted_at.or_else(requested_at).and_then(chrono::DateTime::from_timestamp_millis) {
+                let stamp = at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                let latest = s.agents.get(&agent).and_then(|life| life.ended_at.as_deref().or(life.since.as_deref()));
+                if latest.is_none_or(|latest| latest < stamp.as_str()) {
+                    s.agents.insert(agent, AgentLife { state: AgentState::Running, ended_at: None, since: Some(stamp) });
+                    self.notify(&binding.key);
+                }
             }
         }
         Ok(())
@@ -1301,7 +1302,7 @@ mod tests {
     #[tokio::test]
     async fn agent_message_round_trip_through_the_open_pull_marks_running() {
         let (store, binding) = setup();
-        store.record_agent(&binding, "a1", AgentState::Finished, None).unwrap();
+        store.record_agent(&binding, "a1", AgentState::Finished, Some(1_000)).unwrap();
         let poll = store.begin_pull(&binding, agent_pull(), Instant::now()).unwrap();
         assert!(store.can_message_agents(&binding, Instant::now()));
         let mut send = Box::pin(store.send_agent(&binding, "a1", "olá"));
@@ -1310,9 +1311,26 @@ mod tests {
         let id = msg_id(&got);
         assert_eq!(got["agent_message"], json!({"id":id,"to":"a1","text":"olá"}));
         assert_eq!(got["text"], Value::Null, "plugin antigo não confunde com prompt");
-        store.agent_sent(&binding, &id, true, None).unwrap();
+        store.agent_sent(&binding, &id, true, None, Some(2_000)).unwrap();
         assert_eq!(send.await.unwrap(), AgentSend::Delivered);
-        assert_eq!(store.agent_lives(&binding).unwrap()["a1"].state, AgentState::Running);
+        let lives = store.agent_lives(&binding).unwrap();
+        assert_eq!(lives["a1"].state, AgentState::Running);
+        assert_eq!(lives["a1"].since.as_deref(), Some("1970-01-01T00:00:02.000Z"));
+    }
+
+    #[tokio::test]
+    async fn late_agent_message_ack_does_not_replace_a_newer_completion() {
+        let (store, binding) = setup();
+        let poll = store.begin_pull(&binding, agent_pull(), Instant::now()).unwrap();
+        let mut send = Box::pin(store.send_agent(&binding, "a1", "x"));
+        assert!(send.as_mut().now_or_never().is_none());
+        let id = msg_id(&poll.wait().await);
+        let requested_ns = id.strip_prefix("agent-msg-").unwrap().split_once('-').unwrap().0.parse::<i64>().unwrap();
+        let finished = requested_ns / 1_000_000 + 1;
+        store.record_agent(&binding, "a1", AgentState::Finished, Some(finished)).unwrap();
+        store.agent_sent(&binding, &id, true, None, None).unwrap();
+        assert_eq!(send.await.unwrap(), AgentSend::Delivered);
+        assert_eq!(store.agent_lives(&binding).unwrap()["a1"].state, AgentState::Finished);
     }
 
     fn msg_id(got: &Value) -> String { got["agent_message"]["id"].as_str().unwrap().to_owned() }
@@ -1341,7 +1359,7 @@ mod tests {
             let mut send = Box::pin(store.send_agent(&binding, "a1", "x"));
             assert!(send.as_mut().now_or_never().is_none());
             let id = msg_id(&poll.wait().await);
-            store.agent_sent(&binding, &id, true, None).unwrap();
+            store.agent_sent(&binding, &id, true, None, None).unwrap();
             send.await.unwrap();
             ids.push(id);
         }
@@ -1355,7 +1373,7 @@ mod tests {
         let mut send = Box::pin(store.send_agent(&binding, "a1", "x"));
         assert!(send.as_mut().now_or_never().is_none());
         let got = store.begin_pull(&binding, agent_pull(), Instant::now()).unwrap().wait().await;
-        store.agent_sent(&binding, &msg_id(&got), false, Some("this session has no SendMessage tool".into())).unwrap();
+        store.agent_sent(&binding, &msg_id(&got), false, Some("this session has no SendMessage tool".into()), None).unwrap();
         assert_eq!(send.await.unwrap(), AgentSend::Refused("this session has no SendMessage tool".into()));
         assert!(store.agent_lives(&binding).unwrap().is_empty());
     }
@@ -1381,13 +1399,13 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn agent_confirmation_after_the_deadline_still_marks_running() {
         let (store, binding) = setup();
-        store.record_agent(&binding, "a1", AgentState::Finished, None).unwrap();
+        store.record_agent(&binding, "a1", AgentState::Finished, Some(1_000)).unwrap();
         let poll = store.begin_pull(&binding, agent_pull(), Instant::now()).unwrap();
         let (sent, got) = tokio::join!(store.send_agent(&binding, "a1", "x"), poll.wait());
         assert_eq!(sent.unwrap(), AgentSend::NoAnswer);
-        store.agent_sent(&binding, &msg_id(&got), true, None).unwrap();
+        store.agent_sent(&binding, &msg_id(&got), true, None, None).unwrap();
         assert_eq!(store.agent_lives(&binding).unwrap()["a1"].state, AgentState::Running, "chegou depois do 504, mas chegou");
-        store.agent_sent(&binding, "agent-msg-9", true, None).unwrap();
+        store.agent_sent(&binding, "agent-msg-9", true, None, None).unwrap();
     }
 
     fn stop_pull() -> Pull { let mut p = pull("i"); p.modos.push(STOP_TASK_MODE.into()); p }
