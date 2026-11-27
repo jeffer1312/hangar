@@ -133,6 +133,13 @@ function messageOf(cause: unknown): string {
   return cause instanceof Error && cause.message ? cause.message : m.criar_sessao_erro();
 }
 
+// O porteiro da subida responde só o código: a pessoa lê a frase, não o "503: server_starting".
+function refusalOf(cause: unknown): string {
+  return (cause as { code?: unknown } | null)?.code === 'server_starting'
+    ? m.nova_conversa_envio_servidor_subindo()
+    : m.nova_conversa_envio_recusado({ erro: messageOf(cause) });
+}
+
 function newId(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -364,7 +371,7 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
         return;
       }
       setIssue(serverId, rejected
-        ? { kind: 'rejected', message: m.nova_conversa_envio_recusado({ erro: messageOf(cause) }) }
+        ? { kind: 'rejected', message: refusalOf(cause) }
         : { kind: 'unknown', message: m.nova_conversa_envio_incerto() });
       return;
     }

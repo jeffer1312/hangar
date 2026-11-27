@@ -47,6 +47,7 @@ vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: (uri: string) => ({ from
 
 import { useServers } from './servers';
 import { readDraft, writeDraft } from './drafts';
+import * as m from '../paraglide/messages';
 import {
   _resetNewConversationForTests, abandonUnknownAttempt, adoptCandidate, beginAttempt, discardAttempt, recoverAttempt,
   restoreAttempt, useNewConversation, sendFirstInput, readFirstInput, confirmFirstInput, autoSessionName,
@@ -508,6 +509,16 @@ describe('primeiro input', () => {
     expect(issue()?.kind).toBe('rejected');
     expect(readDraft('server-a', created.sessionName!)).toMatchObject({ text: 'oi', submission: { text: 'oi', status: 'rejected' } });
     expect(calls.send).toHaveBeenCalledOnce();
+  });
+
+  it('503 server_starting no primeiro envio é recusa dita em frase, sem o código cru', async () => {
+    await beginAttempt('server-a', input);
+    const created = attempt()!;
+    calls.send.mockRejectedValueOnce(Object.assign(httpError(503, '503: server_starting'), { code: 'server_starting' }));
+    await sendFirstInput('server-a', created.id);
+    expect(issue()).toEqual({ kind: 'rejected', message: m.nova_conversa_envio_servidor_subindo() });
+    expect(issue()?.message).not.toContain('server_starting');
+    expect(readDraft('server-a', created.sessionName!)).toMatchObject({ text: 'oi', submission: { text: 'oi', status: 'rejected' } });
   });
 
   it('503 runtime_reply_lost no primeiro envio continua incerto', async () => {

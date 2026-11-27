@@ -9344,6 +9344,7 @@
   "nova_conversa_tentativa_invalida": "Uma tentativa de nova conversa guardada neste aparelho estava em formato inválido e foi descartada. Confira a lista de conversas antes de escrever de novo.",
   "nova_conversa_servidor_ausente": "Esta máquina não está mais na lista; escolha outra.",
   "nova_conversa_envio_recusado": "A conversa foi criada, mas a mensagem foi recusada: {erro}. Você pode enviar novamente nesta mesma conversa.",
+  "nova_conversa_envio_servidor_subindo": "A conversa foi criada, mas o servidor ainda está subindo e a mensagem não saiu. Envie de novo em instantes nesta mesma conversa.",
   "nova_conversa_envio_incerto": "Não deu para confirmar se a mensagem chegou. Abra a conversa e confira antes de enviar novamente.",
   "nova_conversa_envio_conferir_erro": "Não consegui conferir a mensagem nesta conversa: {erro}",
   "nova_conversa_resultado_salvar_erro": "Não foi possível guardar o resultado do envio neste aparelho. Confira a conversa antes de enviar novamente.",
