@@ -159,8 +159,11 @@ impl Spent {
 
 /// A última mensagem da conversa principal no fim do transcript; as linhas de controle e as do subagente não contam.
 pub fn last_main_line(tail:&str) -> Option<Value> {
-    tail.lines().rev().filter_map(|line|serde_json::from_str::<Value>(line).ok())
-        .find(|line|matches!(line["type"].as_str(),Some("user" | "assistant")) && line["isSidechain"] != true)
+    tail.lines().rev().filter_map(|line|serde_json::from_str::<Value>(line).ok()).find(is_main_line)
+}
+
+pub fn is_main_line(line:&Value) -> bool {
+    matches!(line["type"].as_str(),Some("user" | "assistant")) && line["isSidechain"] != true
 }
 
 /// A última mensagem da conversa principal, se for um erro da API.

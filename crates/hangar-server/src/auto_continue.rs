@@ -27,7 +27,7 @@ use crate::runtime::gateway::RuntimeRegistry;
 use crate::session_open::{SessionSpec, record};
 use crate::session_write::{BODY_LIMIT, detail_body, json_response, session_name};
 
-const EVENT: &str = "session.auto_continue";
+pub(crate) const EVENT: &str = "session.auto_continue";
 /// De quanto em quanto se confere se alguém ainda precisa da lista produzindo sem cliente aberto.
 const HOLD_CHECK: Duration = Duration::from_secs(60);
 /// Espera pela primeira produção da lista quando a assinatura acabou de nascer.
@@ -174,13 +174,17 @@ impl Native {
         if row.provider == "claude" && !row.headless && let Err(error) = self.runtime.adopt_claude_terminal(name).await {
             return Err(error.code);
         }
-        let id = format!("autocont-load:{}", crate::mods::state::random_hex(8));
-        let queue = match self.runtime.queue_action(name, id, crate::runtime::queue::Action::Load).await {
-            Ok(Value::Array(queue)) => queue,
-            Ok(_) => return Err("auto_continue_queue_unreadable".to_owned()),
-            Err(error) => return Err(error.code),
-        };
+        let queue = self.queue(name).await?;
         Ok(Some(facts_of(row, &rows, &queue, Some(since), self.runtime.handoff_held(name))))
+    }
+
+    async fn queue(&self, name: &str) -> Result<Vec<Value>, String> {
+        let id = format!("autocont-load:{}", crate::mods::state::random_hex(8));
+        match self.runtime.queue_action(name, id, crate::runtime::queue::Action::Load).await {
+            Ok(Value::Array(queue)) => Ok(queue),
+            Ok(_) => Err("auto_continue_queue_unreadable".to_owned()),
+            Err(error) => Err(error.code),
+        }
     }
 
     /// O endereço do motor da sessão, quando ela roda num.
@@ -233,12 +237,8 @@ impl Host for Native {
         Box::pin(async move {
             let rows = self.rows().await?;
             let Some(row) = rows.iter().find(|row| row.name == name) else { return Ok(None) };
-            let id = format!("autocont-load:{}", crate::mods::state::random_hex(8));
             // Fila que não se lê (sessão adormecida, sem ator) não prova mensagem nenhuma esperando.
-            let queue = match self.runtime.queue_action(name, id, crate::runtime::queue::Action::Load).await {
-                Ok(Value::Array(queue)) => queue,
-                _ => Vec::new(),
-            };
+            let queue = self.queue(name).await.unwrap_or_default();
             let stopped_at = lock(&self.stops).get(name).map(|(at, _)| *at);
             Ok(Some(facts_of(row, &rows, &queue, stopped_at, self.runtime.handoff_held(name))))
         })
@@ -252,11 +252,7 @@ impl Host for Native {
     }
 
     fn send_continue<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<bool, String>> {
-        Box::pin(async move {
-            let (status, reply) = crate::session_write::input::write_input(&self.st, name, text, false).await;
-            if status.is_success() { return Ok(reply["delivered"] == true); }
-            Err(reply["detail"]["code"].as_str().unwrap_or("auto_continue_send_refused").to_owned())
-        })
+        Box::pin(send_text(&self.st, name, text))
     }
 
     fn note<'a>(&'a self, name: &'a str, id: &'a str, call: &'a str, text: String, meta: Value) -> BoxFuture<'a, Result<(), String>> {
@@ -267,8 +263,17 @@ impl Host for Native {
 
     fn now(&self) -> f64 { crate::state::monitor::wall_now() }
 
-    fn hhmm(&self, at: f64) -> String { crate::runtime::local_policy::local_hhmm(at.floor() as i64).unwrap_or_default() }
+    fn hhmm(&self, at: f64) -> String { hhmm(at) }
 }
+
+/// O texto automático pelo `/input`. `Ok(true)`: entregue; `Ok(false)`: na fila da sessão.
+pub(crate) async fn send_text(st: &AppState, name: &str, text: &str) -> Result<bool, String> {
+    let (status, reply) = crate::session_write::input::write_input(st, name, text, false).await;
+    if status.is_success() { return Ok(reply["delivered"] == true); }
+    Err(reply["detail"]["code"].as_str().unwrap_or("auto_continue_send_refused").to_owned())
+}
+
+pub(crate) fn hhmm(at: f64) -> String { crate::runtime::local_policy::local_hhmm(at.floor() as i64).unwrap_or_default() }
 
 /// As chaves de registro com o interruptor desligado, por casa: a lista não relê os registros a cada rodada.
 /// Lidas uma vez, na primeira consulta da casa; a rota mantém o índice.
@@ -276,7 +281,7 @@ static OFF: LazyLock<Mutex<HashMap<PathBuf, HashSet<String>>>> = LazyLock::new(M
 const OFF_MARK: &[u8] = b"auto_continue_off";
 
 fn with_off<R>(home: &Path, change: impl FnOnce(&mut HashSet<String>) -> R) -> R {
-    let mut all = OFF.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut all = lock(&OFF);
     change(all.entry(home.to_owned()).or_insert_with(|| scan_off(&record::dir(home))))
 }
 

@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{AgentProvider, OpenCaller, Surface};
+use crate::auto_continue::EVENT as CONTINUE_EVENT;
 
 pub const FILE: &str = "session-restore.json";
 /// Ausente por mais que isto com o servidor de pé: fechada de propósito.
@@ -523,7 +524,7 @@ fn closes_turn(line: &Value) -> bool {
 /// fim lido (o turno escreveu muito depois dela), decide a última linha da conversa principal.
 fn claude_turn_open(tail: &str, last_line: Option<&str>) -> bool {
     let main: Vec<Value> = tail.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|line| matches!(line["type"].as_str(), Some("user" | "assistant")) && line["isSidechain"] != true).collect();
+        .filter(crate::session_write::limit_switch::is_main_line).collect();
     if main.is_empty() { return false; }
     let after = match last_line.and_then(|id| main.iter().rposition(|line| line["uuid"] == id)) {
         Some(at) => &main[at + 1..],
@@ -546,11 +547,7 @@ pub(crate) struct LiveResume<'s>(pub(crate) &'s crate::routes::AppState);
 
 impl Resume for LiveResume<'_> {
     fn send<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), String>> {
-        Box::pin(async move {
-            let (status, reply) = crate::session_write::input::write_input(self.0, name, text, false).await;
-            if status.is_success() { return Ok(()); }
-            Err(reply["detail"]["code"].as_str().unwrap_or("auto_continue_send_refused").to_owned())
-        })
+        Box::pin(async move { crate::auto_continue::send_text(self.0, name, text).await.map(|_| ()) })
     }
 
     fn note<'a>(&'a self, name: &'a str, id: &'a str, call: &'a str, text: String, meta: Value) -> BoxFuture<'a, Result<(), String>> {
@@ -561,10 +558,8 @@ impl Resume for LiveResume<'_> {
 
     fn now(&self) -> f64 { crate::state::monitor::wall_now() }
 
-    fn hhmm(&self, at: f64) -> String { crate::runtime::local_policy::local_hhmm(at.floor() as i64).unwrap_or_default() }
+    fn hhmm(&self, at: f64) -> String { crate::auto_continue::hhmm(at) }
 }
-
-const CONTINUE_EVENT: &str = "session.auto_continue";
 
 /// O turno cortado pelo reboot continua uma vez por boot: a chave do registro é o boot e os tetos valem.
 /// A nota troca o texto da queda pelo do reboot (`cause`). `true`: o texto saiu.
