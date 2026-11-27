@@ -495,8 +495,15 @@ pub(crate) async fn interrupt_by_name(st: &AppState, name: &str) -> (StatusCode,
     let Some(runtime) = st.state.runtime.get() else {
         return (StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_unavailable", "o servidor está sem o registro de sessões", json!({})));
     };
-    // Adormecida não tem turno: acordá-la só para o Esc seria trabalho à toa.
-    if runtime.writable(name).await.is_none() && runtime.asleep(name).await.is_some() { return sem_turno(MSG_NO_TURN); }
+    // Adormecida ou estacionada (Claude sem terminal sem ator, com o processo parado) não tem turno:
+    // acordá-la ou subir o processo só para o Esc seria trabalho à toa. A que o Rust perdeu com o
+    // processo de pé segue pela rota e responde o código dela.
+    if runtime.writable(name).await.is_none()
+        && (runtime.asleep(name).await.is_some()
+            || (runtime.claude_headless_key(name).await.is_some() && runtime.runtime_lost(name).await.is_none()))
+    {
+        return sem_turno(MSG_NO_TURN);
+    }
     match route_write(runtime, name, WriteRoute::Interrupt, st.write_gate_wait).await {
         Write::Rust(held, target) => {
             let result = interrupt_target(name, &target, false).await;
@@ -515,6 +522,7 @@ pub(crate) async fn interrupt_by_name(st: &AppState, name: &str) -> (StatusCode,
 const CASCADE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 const CASCADE_UNOWNED: &str = "session_unowned";
 const MSG_CASCADE_UNOWNED: &str = "nenhum agente do Hangar nesta sessão para interromper";
+const CASCADE_UNCONFIRMED: &str = "interrupt_unconfirmed";
 
 /// Para as descendentes ligadas de `root` ao mesmo tempo; `None` = nenhuma descendente.
 async fn cascade_from(st: &Arc<AppState>, root: &str) -> Option<Value> {
@@ -564,8 +572,11 @@ fn linked_parents(all: &[(String, Sidecar)]) -> std::collections::BTreeMap<Strin
 fn cascade_outcome((status, body): &Answer) -> Result<(), String> {
     let detail = &body["detail"];
     let no_turn = *status == StatusCode::CONFLICT
-        && (detail["code"] == "erro_sem_turno" || (detail["code"] == "erro_codex_controle" && detail["msg"] == MSG_CODEX_NO_TURN));
+        && ((detail["code"] == "erro_sem_turno" && detail["msg"] == MSG_NO_TURN)
+            || (detail["code"] == "erro_codex_controle" && detail["msg"] == MSG_CODEX_NO_TURN));
     if status.is_success() || no_turn { return Ok(()); }
+    // O mesmo `erro_sem_turno` sai do ator que falhou, recusou ou ficou incerto: no diário não pode dizer "sem turno".
+    if detail["code"] == "erro_sem_turno" { return Err(CASCADE_UNCONFIRMED.to_owned()); }
     Err(detail["code"].as_str().filter(|c| !c.is_empty()).map_or_else(|| status.as_u16().to_string(), str::to_owned))
 }
 
@@ -922,6 +933,24 @@ pub fn steer_after_promote(moved: &Result<Value, RuntimeError>, returned: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Só o "sem turno" de fato conta como parada; o ator que falhou, recusou ou ficou incerto é falha da cascata.
+    #[test]
+    fn only_a_real_no_turn_counts_as_stopped_in_the_cascade() {
+        let reply = |disposition: Disposition, payload: Value| -> Result<RuntimeReply, RuntimeError> {
+            Ok(RuntimeReply { operation_id: "op".into(), disposition, payload })
+        };
+        for (codex, sent) in [(false, reply(Disposition::Accepted, json!({"interrupted": false}))), (false, reply(Disposition::Accepted, json!({}))),
+            (true, reply(Disposition::Accepted, json!({"interrupted": false}))), (true, reply(Disposition::Accepted, json!({})))] {
+            assert_eq!(cascade_outcome(&interrupt_headless_answer(codex, &sent)), Ok(()), "codex={codex} {sent:?}");
+        }
+        for sent in [reply(Disposition::Unknown, json!({})), reply(Disposition::Rejected, json!({})), reply(Disposition::Deferred, json!({})),
+            Err(RuntimeError::new("cano_closed", "o cano da sessão fechou"))] {
+            assert_eq!(cascade_outcome(&interrupt_headless_answer(false, &sent)), Err(CASCADE_UNCONFIRMED.to_owned()), "{sent:?}");
+        }
+        assert_eq!(cascade_outcome(&interrupt_headless_answer(true, &reply(Disposition::Unknown, json!({})))), Err("erro_codex_controle".to_owned()));
+        assert_eq!(cascade_outcome(&(StatusCode::NOT_FOUND, json!({}))), Err("404".to_owned()));
+    }
 
     #[test]
     fn clear_reads_like_a_fastapi_bool() {

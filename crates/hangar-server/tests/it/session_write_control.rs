@@ -788,6 +788,25 @@ async fn interrupting_a_parent_interrupts_its_linked_children_and_reports_each()
     assert!(diary.iter().any(|d| d["sessao"] == "b" && d["codigo"] == code), "a falha vai ao diário com o código: {diary:?}");
 }
 
+/// Filha Claude sem terminal estacionada (só o arquivo dela, sem processo nem entrada aqui): sem turno, conta
+/// como parada, e o Parar do pai não sobe um processo novo só para mandar o Esc.
+#[tokio::test]
+async fn a_parked_child_counts_as_stopped_without_launching_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecars = dir.path().join(".hangar/claude-headless");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    let parked = json!({"name": "a", "key": "ab".repeat(16), "cwd": dir.path(), "session_id": "sid-a", "headless": true, "permission_mode": "manual"});
+    std::fs::write(sidecars.join("a.json"), parked.to_string()).unwrap();
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), dir.path().to_string_lossy().into_owned())].into());
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(env));
+    open_headless(&registry, dir.path(), "p").await;
+    let (_python, server, _diag) = linked_family(registry.clone(), dir.path()).await;
+    let (_, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
+    assert_eq!(body["cascade"]["interrupted"], json!(["a"]), "a estacionada não tinha turno: {body}");
+    assert!(registry.writable("a").await.is_none(), "a estacionada não subiu só para o Esc");
+}
+
 #[tokio::test]
 async fn a_plain_interrupt_does_not_cascade() {
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
