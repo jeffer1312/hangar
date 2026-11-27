@@ -468,7 +468,7 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
         Err(error) => {
             if let Some(events) = super::open::refusal_diary(crate::mods::state::random_hex(8), request.name.as_deref().unwrap_or(""), super::open::requested_provider(request), &error) {
                 host.diary(events);
-                super::open::count_open_failed(host, super::open::requested_provider(request), error.code);
+                super::open::count_open_failed(host.telemetry(), caller, super::open::requested_provider(request), error.code);
             }
             return Decision::Refused(error);
         }

@@ -510,12 +510,22 @@ impl Tools {
             _ => Err(format!("Unknown tool: {name}")),
         };
         let result = outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]));
-        if let Some(telemetry) = self.st.counting() {
+        if let Some(telemetry) = self.st.counting() && self.owner_session(headers).await {
             use hangar_telemetry::events::{Code, Dims, Event};
             let dims = Dims::new().with("tool", Code::known(name, &super::TOOL_NAMES)).with("error", result.is_error == Some(true));
             telemetry.count(Event::McpTool, dims, 1);
         }
         result
+    }
+
+    /// A tool vem de sessão do dono: a de convidado com login usa o token do dono, e só o `guests.json`
+    /// a separa. Sessão que não se resolve, ou convidados ilegíveis, também não contam.
+    async fn owner_session(&self, headers: &HeaderMap) -> bool {
+        let Ok((name, _)) = self.resolve(headers).await else { return false };
+        let base = self.st.accounts.env.claude_base.clone();
+        tokio::task::spawn_blocking(move || matches!(crate::session_open::server::read_guests(&base),
+            Ok(guests) if guests.as_ref().is_none_or(|g| g["sessions"].get(&name).is_none())))
+            .await.unwrap_or(false)
     }
 
     fn home(&self) -> PathBuf {

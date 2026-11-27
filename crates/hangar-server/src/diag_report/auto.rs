@@ -224,24 +224,30 @@ fn count_outcome(telemetry: &hangar_telemetry::Telemetry, estado: &Map<String, V
     Ok(())
 }
 
-/// Quem conta é o servidor de pé, que lê o `estado.json`: o executor é outro processo.
-async fn count_update(st: &AppState) {
-    let Some(telemetry) = st.telemetry.clone().filter(|t| t.enabled()) else { return };
+/// Quem conta é o servidor de pé, que lê o `estado.json`: o executor é outro processo. `false` quando a
+/// contagem falhou e precisa de outra tentativa.
+async fn count_update(st: &AppState) -> bool {
+    let Some(telemetry) = st.telemetry.clone().filter(|t| t.enabled()) else { return true };
     let home = st.accounts.env.home.clone();
     let state_dir = crate::update::state_dir(&st.accounts.env.claude_base);
     let counted = tokio::task::spawn_blocking(move || {
         let estado = crate::update::StateFile::new(&state_dir).read();
         // Rodada que não terminou não conta: o canal só é lido para a que terminou.
         if text(&estado, "fase") != "pronto" { return Ok(()); }
-        let channel = crate::update::channel(&crate::update::Layout::new(&home));
+        // O canal da rodada; o executor antigo não o grava, e vale o da máquina.
+        let channel = estado.get("canal").and_then(Value::as_str).map(str::to_owned)
+            .unwrap_or_else(|| crate::update::channel(&crate::update::Layout::new(&home)));
         count_outcome(&telemetry, &estado, &channel, chrono::Utc::now())
     }).await;
     match counted {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => crate::telemetry_routes::report(&st.diag, hangar_telemetry::Failure::Disk(e)),
-        Err(_) => crate::telemetry_routes::task_failed(&st.diag),
+        Ok(Ok(())) => true,
+        Ok(Err(e)) => { crate::telemetry_routes::report(&st.diag, hangar_telemetry::Failure::Disk(e)); false }
+        Err(_) => { crate::telemetry_routes::task_failed(&st.diag); false }
     }
 }
+
+/// A marca que não gravou não espera outra gravação do `estado.json` para tentar de novo.
+const COUNT_RETRY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// Avisa a cada gravação do `estado.json`. O executor é outro processo: depois do reinício, quem está
 /// de pé não o lançou e só vê o arquivo.
@@ -269,13 +275,14 @@ fn watch(st: Arc<AppState>, ready: Option<tokio::sync::oneshot::Sender<()>>) -> 
             tracing::warn!(code = "auto_report_watch_unavailable", "relatório automático: estado sem vigia: {e}");
             st.diag.report("rust.diag_report_auto", "", "auto_report_watch_unavailable", "falha de atualização só é conferida na subida");
         });
-        count_update(&st).await;
+        let mut retry = !count_update(&st).await;
         check_failure(&st).await;
         if let Some(ready) = ready { let _ = ready.send(()); }
         loop {
-            changed.notified().await;
-            count_update(&st).await;
-            check_failure(&st).await;
+            // A rodada fora do `FRESH` deixa de contar: a nova tentativa acaba sozinha.
+            let changed_state = if retry { tokio::time::timeout(COUNT_RETRY, changed.notified()).await.is_ok() } else { changed.notified().await; true };
+            retry = !count_update(&st).await;
+            if changed_state { check_failure(&st).await; }
         }
     })
 }

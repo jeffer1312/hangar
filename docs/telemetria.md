@@ -38,7 +38,7 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 | `turn_finished` (faixa) | `provider` | Turno do agente, do começo do trabalho até parar |
 | `session_opened` (faixa) | `provider`, `surface`, `model` (lista curta de modelos; motor do `engines.json` sai `engine`, nunca o nome), `effort`, `permission`, e sim/não para `restore`, `jev`, `prewarm`, `worktree` | Sessão que você abriu, com o tempo que levou. Sessão aberta por convidado não conta |
 | `feature_used` | `feature` (código da lista `FEATURE_ROUTES`, como `session.rename` ou `search`) | Ação sua que deu certo numa rota da lista. Leituras que os apps repetem sozinhos (lista, conversa, status) não contam |
-| `mcp_tool` | `tool` (nome da tool do MCP `hangar`), `error` (sim/não) | Chamada de tool do MCP `hangar` por um agente |
+| `mcp_tool` | `tool` (nome da tool do MCP `hangar`), `error` (sim/não) | Chamada de tool do MCP `hangar` por um agente. Sessão de convidado com login não conta |
 | `voice_call` (faixa) | — | Duração da chamada de voz |
 | `dictation` (faixa) | `route` (`ditado`, `relimpar`, `sessao`), `status` (`ok`, `warning`, `error`, `cancelled`) | Ditado, com o tempo total |
 
@@ -50,7 +50,7 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 |---|---|---|
 | `problem_shown` | `code` (lista de avisos de tela) | Aviso que apareceu na lista de sessões; conta quando ele aparece, não a cada atualização da lista |
 | `problem_hidden` | `code` (lista de avisos só de diagnóstico) | Aviso que o Hangar tirou da tela por ser só diagnóstico; no máximo um por minuto por sessão e código |
-| `session_open_failed` | `provider`, `code` | Sessão que não abriu, também a recusada antes de começar (nome em uso, pasta fora do permitido, worktree), qualquer que seja quem pediu |
+| `session_open_failed` | `provider`, `code` | Sessão que você pediu e não abriu, também a recusada antes de começar (nome em uso, pasta fora do permitido, worktree) |
 | `send_failed` | `code` | Mensagem recusada |
 | `session_fallen` | `cause` (`terminal_out_of_memory`, `terminal_died`) | Sessão com terminal que caiu |
 | `server_exit` | `kind` (`crash`, `update`, `requested`), `cause` | Como o servidor anterior parou; contado na subida seguinte |
@@ -81,8 +81,8 @@ máquina, endereço e IP, user-agent, detalhe e texto de erro, nome de skill, no
 custo, modelo do aparelho, horário dentro do dia, multiplexador.
 
 O que convidado faz (porta de convidado, convite, par, login de convidado) não conta: mensagem,
-sessão aberta, tela, ação na API e evento do app dele ficam fora. Fim de turno, sessão que não abriu, erros, quedas,
-troca por limite e tools do MCP contam para todas as sessões da máquina, sem dizer de quem é a sessão.
+sessão aberta ou que não abriu, tela, ação na API, evento do app dele e tool do MCP na sessão dele ficam fora.
+Fim de turno, erros, quedas e troca por limite contam para todas as sessões da máquina, sem dizer de quem é a sessão.
 
 ## Quando sai
 
@@ -112,7 +112,8 @@ No Windows, `~` é a pasta do seu usuário.
 - Para mudar depois: linha "Contagens anônimas de uso" nas Configurações da máquina.
 - "Não enviar" apaga a fila na hora.
 
-Sem resposta, nada é contado nem gravado.
+Sem resposta, nenhum contador é contado nem gravado: só existe o `telemetry.json`, com `consent: null` e
+os dois números aleatórios.
 
 ## Desligar pela máquina
 

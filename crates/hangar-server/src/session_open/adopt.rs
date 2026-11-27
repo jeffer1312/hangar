@@ -92,6 +92,9 @@ impl Adopting {
     }
 
     /// O sidecar já aponta o processo: o recibo sai (a subida do servidor não pode matá-lo).
+    /// A abertura usou a reserva.
+    pub(crate) fn was_adopted(&self) -> bool { self.outcome.as_deref() == Some("adotada") }
+
     pub(crate) async fn adopted(&mut self) {
         let Some(reserve) = self.reserve.take() else { return };
         self.store.adopted(&reserve.key, &reserve.name).await;

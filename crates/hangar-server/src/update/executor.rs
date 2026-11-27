@@ -340,6 +340,7 @@ pub fn start(home: &Path, claude_base: &Path, args: &Args, spawner: &dyn Spawner
     fresh["origem"] = match &args.task { Task::Update { origin, .. } => origin.as_str().into(), _ => serde_json::Value::Null };
     fresh["codigo"] = serde_json::Value::Null;
     fresh["duracoes"] = serde_json::Value::Null;
+    fresh["canal"] = serde_json::Value::Null;
     let request_id = match &args.task {
         Task::Restart { request_id } => {
             fresh["texto"] = "Começando o reinício".into();
@@ -385,6 +386,8 @@ pub async fn restart_only<R: Restarter, H: HealthProbe>(parts: &Parts, request_i
         "pid": std::process::id(), "reinicio_erro": null, "avisos": [], "log": [], "commit_de": "", "commit_para": null,
         // As versões são da última atualização: a subida leria este reinício como ela.
         "versao_de": null, "versao_para": null,
+        // Chamado direto pela CLI, sem o `start`: sem isto a subida contaria de novo a atualização de antes.
+        "origem": null, "codigo": null, "duracoes": null, "canal": null,
         "reiniciar_manual": false, "shell_mudou": false, "waiting_for_server_build": false, "request_id": request_id})) { return false; }
     for note in &parts.notes { state.warn(note); }
     state.step("reiniciar");
@@ -426,7 +429,8 @@ pub async fn dev_update<R: Restarter, H: HealthProbe>(parts: &Parts, root: &Path
     };
     if !state.publish(json!({"fase": "rodando", "ok": null, "erro": null, "resgate": null, "voltou": null, "no_ar": null, "pid": std::process::id(),
         "commit_de": "", "commit_para": null, "reiniciar_manual": false, "shell_mudou": false, "waiting_for_server_build": false,
-        "request_id": null, "log": [], "avisos": [], "passos_invalidos": []})) { return false; }
+        "request_id": null, "log": [], "avisos": [], "passos_invalidos": [],
+        "origem": null, "codigo": null, "duracoes": null, "canal": null})) { return false; }
     for note in &parts.notes { state.warn(note); }
     state.step("baixar");
     let root_owned = root.to_path_buf();
@@ -787,8 +791,11 @@ mod tests {
         let args = Args::parse(&strings(&["--restart", "--request-id", "r1"])).unwrap();
         let parts = Parts::new(&env(dir.path(), None), &args, "x");
         let restart = Restart::default();
+        StateFile::new(&parts.state_dir).write(json!({"fase": "pronto", "ok": true, "origem": "manual", "canal": "beta", "duracoes": {"baixar": 10}}));
         assert!(restart_only(&parts, "r1", &restart, &Health(&restart.0, false), &fast()).await);
         let state = StateFile::new(&parts.state_dir).read();
+        assert_eq!((state["origem"].clone(), state["canal"].clone(), state["duracoes"].clone()), (json!(null), json!(null), json!(null)),
+            "o reinício pela CLI não é lido como a atualização de antes");
         assert_eq!((state["fase"].clone(), state["ok"].clone(), state["request_id"].clone(), state["pid"].clone()),
             (json!("pronto"), json!(true), json!("r1"), json!(std::process::id())));
         assert_eq!(*restart.1.lock().unwrap(), [RestartIntent::new(ExitKind::Requested, "restart_only")], "a marca diz que foi o reinício avulso");

@@ -192,6 +192,10 @@ impl Telemetry {
             return Ok(false);
         }
         let _io = lock(&self.io)?;
+        // `refresh` desliga sob a mesma trava: a marca não sai depois da revogação.
+        if !self.enabled() {
+            return Ok(false);
+        }
         let mut keys = match queue::read_once(&self.home) {
             Ok(keys) => keys,
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
@@ -323,10 +327,11 @@ impl Telemetry {
     /// apaga a fila.
     fn refresh(&self) -> io::Result<()> {
         let dotenv = hangar_core::user_data::read_env_raw(&self.home, self.backend.as_deref());
-        // `.env` que não se lê não confirma a escolha da pessoa: desliga, sem dizer que ela pediu.
+        // `.env` que não se lê não confirma a escolha da pessoa: desliga, sem dizer que ela pediu. O
+        // desligamento pelo ambiente do processo vale mesmo assim.
         let (disabled, unreadable) = match &dotenv {
             Ok(text) => (switch::disabled_by(&*self.lookup, text.as_deref()), None),
-            Err(e) => (None, Some(io::Error::other(format!("telemetria: .env não lido: {e}")))),
+            Err(e) => (switch::disabled_by(&*self.lookup, None), Some(io::Error::other(format!("telemetria: .env não lido: {e}")))),
         };
         let env_unreadable = unreadable.is_some();
         let _io = lock(&self.io)?;
@@ -342,7 +347,9 @@ impl Telemetry {
         let on = consent == Some(true) && disabled.is_none() && !env_unreadable;
         let today = day_of((self.clock)());
         if on {
-            if !self.enabled() {
+            // O que a passada do `.env` ilegível não conseguiu gravar ainda está na memória e vale.
+            let held = lock(&self.live).map(|live| live.dirty || !live.closed.is_empty())?;
+            if !self.enabled() && !held {
                 let live = match queue::read_day(&self.home, &today) {
                     Ok(Some(file)) => Live::new(Day::from_file(file), true),
                     Ok(None) => Live::new(Day::new(today), false),
@@ -354,12 +361,14 @@ impl Telemetry {
                     Err(e) => return Err(e),
                 };
                 *lock(&self.live)? = live;
-                self.enabled.store(true, Ordering::SeqCst);
             }
+            self.enabled.store(true, Ordering::SeqCst);
             return Ok(());
         }
         // `.env` que não se lê não é a pessoa pedindo para parar: o que só está na memória vai à fila antes.
-        if env_unreadable && self.enabled() {
+        // A contagem para já; gravação que falha deixa o dia na memória para a passada seguinte.
+        if env_unreadable && consent == Some(true) && disabled.is_none() {
+            self.enabled.store(false, Ordering::SeqCst);
             self.save_held()?;
         }
         self.enabled.store(false, Ordering::SeqCst);
@@ -400,7 +409,10 @@ pub(crate) mod tests {
         }
 
         /// Com o consentimento que estiver gravado (ou nenhum).
-        pub(crate) fn start_as_is(&self) -> Telemetry {
+        pub(crate) fn start_as_is(&self) -> Telemetry { self.start_with(Arc::new(|_: &str| -> Option<String> { None })) }
+
+        /// Como `start_as_is`, com o ambiente do processo de `lookup`.
+        fn start_with(&self, lookup: EnvLookup) -> Telemetry {
             let config = Config {
                 home: self.home.path().to_owned(),
                 backend: None,
@@ -408,7 +420,7 @@ pub(crate) mod tests {
                 release_commit: None,
                 channel: "latest".into(),
             };
-            Telemetry::with(config, self.clock(), Arc::new(|_: &str| -> Option<String> { None })).unwrap()
+            Telemetry::with(config, self.clock(), lookup).unwrap()
         }
 
         pub(crate) fn next_day(&self) { *self.now.lock().unwrap() += chrono::TimeDelta::days(1); }
@@ -542,6 +554,60 @@ pub(crate) mod tests {
         telemetry.tick().unwrap();
         assert!(telemetry.enabled());
         assert_eq!(telemetry.counters()[0].count, 2, "o dia volta da fila");
+    }
+
+    #[test]
+    fn unreadable_dotenv_stops_counting_even_when_saving_fails() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.count(Event::MessageSent, message(), 1);
+        let dotenv = fx.home.path().join(".hangar/config/.env");
+        std::fs::create_dir_all(&dotenv).unwrap();
+        // Uma pasta no lugar do dia: a gravação falha.
+        let today = fx.queue().join("2026-11-26.json");
+        std::fs::create_dir_all(&today).unwrap();
+        assert!(telemetry.tick().is_err());
+        assert!(!telemetry.enabled(), "a contagem parou");
+        telemetry.count(Event::MessageSent, message(), 5);
+        std::fs::remove_dir(&today).unwrap();
+        telemetry.tick().unwrap();
+        assert_eq!(queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap().counters[0].count, 1, "a passada seguinte grava");
+        std::fs::remove_dir(&dotenv).unwrap();
+        telemetry.tick().unwrap();
+        assert!(telemetry.enabled());
+        assert_eq!(telemetry.counters()[0].count, 1);
+    }
+
+    #[test]
+    fn unsaved_day_survives_the_dotenv_coming_back() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.count(Event::MessageSent, message(), 3);
+        let dotenv = fx.home.path().join(".hangar/config/.env");
+        std::fs::create_dir_all(&dotenv).unwrap();
+        let today = fx.queue().join("2026-11-26.json");
+        std::fs::create_dir_all(&today).unwrap();
+        assert!(telemetry.tick().is_err());
+        std::fs::remove_dir(&dotenv).unwrap();
+        std::fs::remove_dir(&today).unwrap();
+        telemetry.tick().unwrap();
+        assert!(telemetry.enabled());
+        assert_eq!(telemetry.counters()[0].count, 3, "o dia da memória não foi trocado pelo da fila");
+        assert_eq!(queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap().counters[0].count, 3);
+    }
+
+    #[test]
+    fn process_switch_wipes_even_with_an_unreadable_dotenv() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.count(Event::MessageSent, message(), 1);
+        telemetry.save().unwrap();
+        drop(telemetry);
+        std::fs::create_dir_all(fx.home.path().join(".hangar/config/.env")).unwrap();
+        let telemetry = fx.start_with(Arc::new(|key: &str| (key == "HANGAR_TELEMETRY").then(|| "0".to_owned())));
+        assert!(!telemetry.enabled());
+        assert_eq!(telemetry.disabled_by(), Some(Disabled::Env));
+        assert!(!fx.queue().join("2026-11-26.json").exists(), "a fila foi apagada");
     }
 
     #[test]

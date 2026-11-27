@@ -95,11 +95,14 @@ pub(crate) fn test_telemetry(home: &std::path::Path, consent: bool) -> Arc<Telem
 
 /// Um servidor de teste com o motor de `test_telemetry`; o token do dono é `owner`.
 #[cfg(test)]
-pub(crate) fn test_state(home: &std::path::Path, consent: bool) -> Arc<AppState> {
+pub(crate) fn test_state(home: &std::path::Path, consent: bool) -> Arc<AppState> { Arc::new(test_app_state(home, consent)) }
+
+#[cfg(test)]
+fn test_app_state(home: &std::path::Path, consent: bool) -> AppState {
     let mut st = AppState::new(crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), internal_secret: "s".into(),
         auth_token: "owner".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") });
     st.telemetry = Some(test_telemetry(home, consent));
-    Arc::new(st)
+    st
 }
 
 /// O motor de `installed()` nos testes: um por processo, com consentimento; cada teste confere só os
@@ -181,7 +184,13 @@ mod tests {
         let probe = axum::middleware::from_fn(|req: Request, _: Next| async move {
             req.extensions().get::<MatchedPath>().map_or_else(String::new, |path| path.as_str().to_owned())
         });
-        let app = crate::routes::router(test_state(home.path(), false)).layer(probe);
+        // Convite e par externo só montam com o `shares.json`; sem ele as rotas do par não existem.
+        let mut st = test_app_state(home.path(), false);
+        let dirs = crate::list::discover_other::Dirs { home: home.path().into(), claude: home.path().join(".claude"),
+            codex_home: home.path().join(".codex"), pi_sessions: home.path().join("pi"), omp_config: home.path().join("omp"),
+            omp_agent: home.path().join("omp/agent"), kimi_home: home.path().join("kimi") };
+        st.share = crate::share::from_env(Some(home.path().join("shares.json")), Some(&dirs), "missing-test-mux".into(), None);
+        let app = crate::routes::router(Arc::new(st)).layer(probe);
         for (method, template, _) in hangar_telemetry::events::FEATURE_ROUTES {
             let path: String = template.split('/').map(|part| if part.starts_with('{') { "x" } else { part }).collect::<Vec<_>>().join("/");
             let response = app.clone().oneshot(request(method, &path)).await.unwrap();

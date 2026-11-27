@@ -36,10 +36,6 @@ pub enum Failure {
     Disk(io::Error),
 }
 
-fn jitter() -> Duration {
-    Duration::from_secs(u64::from_str_radix(&random_hex(4), 16).unwrap_or(0) % MAX_JITTER_SECS)
-}
-
 impl Telemetry {
     /// `POST` ao `HANGAR_TELEMETRY_URL` do ambiente ou ao endereço padrão.
     pub fn http_post(&self) -> reqwest::Result<Post> {
@@ -207,6 +203,10 @@ impl Telemetry {
         let _io = lock(&self.io)?;
         queue::remove_day(&self.home, day)
     }
+}
+
+fn jitter() -> Duration {
+    Duration::from_secs(u64::from_str_radix(&random_hex(4), 16).unwrap_or(0) % MAX_JITTER_SECS)
 }
 
 #[cfg(test)]

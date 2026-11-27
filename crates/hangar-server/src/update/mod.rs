@@ -912,7 +912,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
         "versao_de": before.as_ref().map(|m| m.version.clone()), "versao_para": null,
         "pid": std::process::id(), "backend_pid": null, "reiniciar_manual": false, "shell_mudou": false,
         "waiting_for_server_build": false, "request_id": null, "log": [], "avisos": [], "passos_invalidos": [],
-        "origem": job.origin.map(executor::Origin::as_str), "codigo": null, "duracoes": null})) {return failed_before(&state,&timeline,health,UpdateError::Io(error)).await;}
+        "origem": job.origin.map(executor::Origin::as_str), "canal": job.release.channel, "codigo": null, "duracoes": null})) {return failed_before(&state,&timeline,health,UpdateError::Io(error)).await;}
     for note in &job.notes { state.warn(note); }
 
     timeline.step(&state, "baixar");

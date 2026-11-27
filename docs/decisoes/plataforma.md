@@ -5781,14 +5781,17 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   axum + Postgres na VPS (`services/telemetry-ingest`), com workspace próprio para o driver do
   Postgres não entrar no `Cargo.lock` nem no portão do PR; ele reusa só o módulo `wire` do
   `hangar-telemetry`. Grafana é provisório.
-- **Opt-out com aviso, e nada antes da resposta.** O padrão é ligado, mas `consent: null` não conta
-  nem grava nada; só "Pode enviar" ou "Não enviar" gravam, e fechar o aviso pergunta de novo na
-  próxima abertura. `false`, `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1` e as variáveis de CI apagam a
+- **Opt-out com aviso, e nenhum contador antes da resposta.** O padrão é ligado, mas `consent: null`
+  não conta nem grava contador. A subida já cria o `~/.hangar/telemetry.json` com `consent: null` e
+  os dois ids aleatórios; só "Pode enviar" ou "Não enviar" gravam a escolha, e fechar o aviso pergunta
+  de novo na próxima abertura. `false`, `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1` e as variáveis de CI apagam a
   fila. O `.env` vale porque exportar no shell não chega ao systemd nem à tarefa do Windows.
 - **Convidado nunca conta.** Mensagem, rota, tela e evento de cliente vindos da 8766, de convite,
   par ou login de convidado ficam fora: ele não aceitou nada, e o `/api/diag` e as rotas dele passam
   pelos mesmos handlers do dono. Saúde do servidor (fim de turno, queda, erro, troca por limite)
-  conta para todas as sessões da máquina: os ganchos por sessão não sabem quem a abriu.
+  conta para todas as sessões da máquina: os ganchos por sessão não sabem quem a abriu. Onde dá para
+  saber, o convidado fica fora: a falha de abertura conta só a pedida pelo dono, e a tool do MCP de
+  sessão listada no `guests.json` (ou que não se resolve) não conta.
 - **Dono comum entre as máquinas.** `machine_id` e `owner_id` são aleatórios e próprios; não
   reaproveitam `device-id`, `install_id` do Connect nem `CP_SERVER_ID`, que já vão a outro serviço
   ou são nomes da pessoa. Uma vez por dia a máquina pergunta aos peers habilitados do `peers.json`

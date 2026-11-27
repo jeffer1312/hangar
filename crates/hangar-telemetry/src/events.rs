@@ -69,9 +69,11 @@ pub struct DimValue(Cow<'static, str>);
 impl DimValue {
     pub const OTHER: DimValue = DimValue(Cow::Borrowed("other"));
 
-    /// Versão de release (`0.42.0`); outra forma vira `other`.
+    /// Versão de release (`0.42.0`, ou a do pacote `0.1.0.9010`); outra forma vira `other`.
     pub fn version(value: &str) -> DimValue {
-        if is_name(value) && value.starts_with(|c: char| c.is_ascii_digit()) {
+        let parts = value.split('.');
+        let numeric = parts.clone().all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
+        if is_name(value) && numeric && (3..=4).contains(&parts.count()) {
             DimValue(Cow::Owned(value.to_owned()))
         } else {
             DimValue::OTHER
@@ -327,6 +329,9 @@ mod tests {
         assert_eq!(DimValue::version("0.42.0").as_str(), "0.42.0");
         assert_eq!(DimValue::version("../etc"), DimValue::OTHER);
         assert_eq!(DimValue::version("dev build"), DimValue::OTHER);
+        assert_eq!(DimValue::version("0.1.0.9010").as_str(), "0.1.0.9010");
+        assert_eq!(DimValue::version("1-cliente-acme"), DimValue::OTHER);
+        assert_eq!(DimValue::version("1.2.3-acme"), DimValue::OTHER);
         assert_eq!(DimValue::from(true).as_str(), "true");
     }
 }

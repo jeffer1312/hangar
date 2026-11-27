@@ -412,10 +412,10 @@ async fn claim_name(host: &dyn OpenHost, name: &str) -> Result<NameClaim, OpenEr
 /// ela ainda cabe; senão ela sai e a abertura segue como sempre. Quem chama fecha com `Adopting::finish`.
 pub async fn open_adopting(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCaller, adopting: Option<&mut super::adopt::Adopting>)
     -> Result<Opened, OpenError> {
-    // Toda recusa daqui em diante, antes ou dentro do `launch`, conta aqui; de qualquer quem chama.
+    // Toda recusa daqui em diante, antes ou dentro do `launch`, conta aqui.
     let provider = resolved.spec.provider.name();
     let opened = open_resolved(host, resolved, caller, adopting).await;
-    if let Err(error) = &opened { count_open_failed(host, provider, error.code); }
+    if let Err(error) = &opened { count_open_failed(host.telemetry(), caller, provider, error.code); }
     opened
 }
 
@@ -467,10 +467,12 @@ async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCal
             }
         }
     }
-    let (started, prewarm) = (Instant::now(), adopting.is_some());
+    let started = Instant::now();
     match launch(host, &mut spec, read_only, warnings, initial_prompt.as_deref(), remember_provider, previous_non_plan, &runtime, codex_home.as_deref(),
-                 resume.as_deref(), restore, adopting).await {
+                 resume.as_deref(), restore, adopting.as_deref_mut()).await {
         Ok((jsonl, warnings, route)) => {
+            // A reserva que não coube abriu frio: não é aberta pré-aquecida.
+            let prewarm = adopting.as_deref().is_some_and(super::adopt::Adopting::was_adopted);
             count_opened(host.telemetry(), caller, &spec, restore, prewarm, started.elapsed());
             // O Codex sem terminal já subiu dentro da abertura (`warm_codex`).
             if spec.surface == Surface::Headless && matches!(spec.provider, AgentProvider::Claude | AgentProvider::Antigravity) { host.wake(&spec.name); }
@@ -513,10 +515,10 @@ fn count_opened(telemetry: Option<&hangar_telemetry::Telemetry>, caller: &OpenCa
     telemetry.duration(Event::SessionOpened, dims, took);
 }
 
-/// `session_open_failed` da abertura e da recusa da resolução (`refusal_diary`).
-pub(crate) fn count_open_failed(host: &dyn OpenHost, provider: &str, code: Option<&'static str>) {
+/// `session_open_failed` da abertura e da recusa da resolução (`refusal_diary`), só do dono.
+pub(crate) fn count_open_failed(telemetry: Option<&hangar_telemetry::Telemetry>, caller: &OpenCaller, provider: &str, code: Option<&'static str>) {
     use hangar_telemetry::events::{Code, Dims, Event};
-    let Some(telemetry) = host.telemetry() else { return };
+    let Some(telemetry) = telemetry.filter(|_| matches!(caller, OpenCaller::Owner)) else { return };
     let dims = Dims::new().with("provider", wire_provider(provider)).with("code", Code::fixed(code.unwrap_or("none")));
     telemetry.count(Event::SessionOpenFailed, dims, 1);
 }
@@ -1073,5 +1075,15 @@ mod telemetry_tests {
         assert_eq!(counters[0].event, Event::SessionOpened.as_str());
         assert_eq!((counters[0].dims["model"].as_str(), counters[0].dims["permission"].as_str()), ("engine", "bypass_permissions"));
         assert!(counters[0].dims.values().all(|v| !v.contains("motor") && !v.contains("minha-sessao")));
+    }
+
+    #[test]
+    fn telemetry_session_open_failed_counts_the_owner_only() {
+        let home = tempfile::tempdir().unwrap();
+        let telemetry = crate::telemetry_hooks::test_telemetry(home.path(), true);
+        count_open_failed(Some(&*telemetry), &OpenCaller::Guest { root: "/x".into() }, "claude", Some("erro_nome_em_uso"));
+        assert!(telemetry.counters().is_empty(), "falha de convidado não conta");
+        count_open_failed(Some(&*telemetry), &OpenCaller::Owner, "claude", Some("erro_nome_em_uso"));
+        assert_eq!(telemetry.counters().len(), 1);
     }
 }
