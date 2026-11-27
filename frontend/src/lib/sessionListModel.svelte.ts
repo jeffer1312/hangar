@@ -424,9 +424,12 @@ export function createSessionListModel(opts: SessionListModelOptions) {
   // A rota só dispensa a vida da linha, sem fechar outra sessão com o mesmo nome.
   async function dismiss(name: string, serverId: string, lifecycleId?: string | null): Promise<{ ok: boolean; erro: string }> {
     if (reopening.has(reopenKey(name, serverId))) return { ok: false, erro: '' };
-    sessionsStore.markDeleting(serverId, name);
+    if (!lifecycleId) sessionsStore.markDeleting(serverId, name);
     try { await dismissFallenSession(name, sessionServerFor(serverId)(), lifecycleId); return { ok: true, erro: '' }; }
-    catch (e) { sessionsStore.unmarkDeleting(serverId, name); return { ok: false, erro: errMsg(e) }; }
+    catch (e) {
+      if (!lifecycleId) sessionsStore.unmarkDeleting(serverId, name);
+      return { ok: false, erro: errMsg(e) };
+    }
   }
 
   // Git/Loop miram o servidor ATIVO (api.ts): aponta pro dono enquanto a folha está aberta e

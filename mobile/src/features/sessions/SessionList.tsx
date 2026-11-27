@@ -246,9 +246,9 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     const server = useServers.getState().servers.find((x) => x.id === s.serverId);
     if (!server) { toast.erro(m.servidor_nao_existe()); return; }
     if (reopening.current.has(`${s.serverId}::${s.name}`)) return;
-    useSessions.getState().markDeleting(s.serverId, s.name);
+    if (!s.lifecycle_id) useSessions.getState().markDeleting(s.serverId, s.name);
     dismissFallenSession(s.name, server, s.lifecycle_id).catch((e: unknown) => {
-      useSessions.getState().unmarkDeleting(s.serverId, s.name);
+      if (!s.lifecycle_id) useSessions.getState().unmarkDeleting(s.serverId, s.name);
       toast.erro(mensagemDe(e));
     });
   }, []);

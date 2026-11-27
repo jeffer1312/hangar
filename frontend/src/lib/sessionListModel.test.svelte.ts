@@ -572,6 +572,7 @@ describe('sessão caída: reabrir e dispensar', () => {
     const d = createSessionListModel(opts('desktop'));
     expect(await d.dismiss('s', 'srv-b', 'o:123:456')).toEqual({ ok: true, erro: '' });
     expect(vi.mocked(dismissFallenSession).mock.calls[0]).toEqual(['s', expect.objectContaining({ id: 'srv-b' }), 'o:123:456']);
+    expect(store.markDeleting).not.toHaveBeenCalled();
     expect(deleteSession).not.toHaveBeenCalled();
     expect(selectServer).not.toHaveBeenCalled();
   });

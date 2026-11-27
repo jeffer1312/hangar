@@ -199,7 +199,12 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     };
     let lifecycle = crate::auth::query_param(req.uri().query(), "lifecycle_id");
     if !super::orphans::accepts_action(&fallen, lifecycle.as_deref()) {
-        return answer(&headers, StatusCode::CONFLICT, detail_body("fallen_session_changed", "a linha da sessão mudou; atualize a lista", json!({})));
+        let (code, message) = if lifecycle.is_none() {
+            ("fallen_lifecycle_missing", "atualize o app para agir nesta sessão caída")
+        } else {
+            ("fallen_session_changed", "a linha da sessão mudou; atualize a lista")
+        };
+        return answer(&headers, StatusCode::CONFLICT, detail_body(code, message, json!({})));
     }
     // Cliente que cai no meio não interrompe a abertura. O mesmo caminho do restore: agente de pé, diário, e o
     // registro só sai no sucesso.
@@ -263,7 +268,12 @@ pub async fn dismiss_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     // O órfão de pé voltaria na próxima busca e seguiria segurando o nome.
     let lifecycle = crate::auth::query_param(req.uri().query(), "lifecycle_id");
     if !super::orphans::accepts_action(&fallen, lifecycle.as_deref()) {
-        return answer(&headers, StatusCode::CONFLICT, detail_body("fallen_session_changed", "a linha da sessão mudou; atualize a lista", json!({})));
+        let (code, message) = if lifecycle.is_none() {
+            ("fallen_lifecycle_missing", "atualize o app para agir nesta sessão caída")
+        } else {
+            ("fallen_session_changed", "a linha da sessão mudou; atualize a lista")
+        };
+        return answer(&headers, StatusCode::CONFLICT, detail_body(code, message, json!({})));
     }
     if fallen.cause == super::orphans::CAUSE {
         let task = tokio::spawn(async move {

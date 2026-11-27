@@ -1051,8 +1051,10 @@ impl Hangar {
     /// A rota própria não dispensa uma vida diferente da que a linha mostrava.
     pub(super) fn dismiss_target(&mut self, target: Target, lifecycle: Option<String>, cx: &mut Context<Self>) {
         if self.sidebar.reopening.contains(&target) { return; }
-        self.sidebar.deleting.insert(target.clone());
-        self.sidebar.dismissing.insert(target.clone());
+        if lifecycle.is_none() {
+            self.sidebar.deleting.insert(target.clone());
+            self.sidebar.dismissing.insert(target.clone());
+        }
         self.write(target, Write::Dismiss(lifecycle), cx);
     }
 

@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   psmux-probe:
-    if: github.event_name == 'workflow_dispatch' && inputs.psmux_probe
+    if: github.event_name == 'workflow_dispatch' && inputs.psmux_probe && github.ref_name == 'fix/subagentes-branch-orfaos-psmux'
     runs-on: windows-latest
     timeout-minutes: 45
     env:
@@ -72,8 +72,13 @@ jobs:
           New-Item -ItemType Directory $registry | Out-Null
           "PSMUX_DATA_DIR=$registry" >> $env:GITHUB_ENV
           "HANGAR_TEST_PSMUX=$(Join-Path $bin 'psmux.exe')" >> $env:GITHUB_ENV
-      - name: Recuperar e dispensar sessões descartáveis
-        run: cargo test --locked -p hangar-server --lib a_real_psmux_orphan_can_be_recovered_and_dismissed -- --ignored --nocapture
+      - name: Conferir vínculo e encerramento no psmux real
+        shell: pwsh
+        run: |
+          cargo test --locked -p hangar-server --lib session_open::orphans::windows_test::a_real_psmux_orphan_can_be_recovered_and_dismissed -- --exact --ignored --nocapture 2>&1 | Tee-Object -Variable output
+          if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') {
+            throw 'O teste real do psmux não passou'
+          }
   server:
     if: github.event_name != 'workflow_dispatch' || !inputs.psmux_probe
     uses: ./.github/workflows/server-jobs.yml
