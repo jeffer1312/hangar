@@ -518,7 +518,7 @@ pub fn settle_switches(env:&crate::accounts::environment::AccountEnvironment) {
                         key: to.key.clone(), provider: to.provider, conversation: to.conversation,
                         permission_mode: to.permission_mode.map(|mode| mode.name().to_owned()), cwd: Some(to.cwd),
                         died_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
-                        cause: "provider_switch_interrupted".into(),
+                        cause: "provider_switch_interrupted".into(), orphan_pid: None,
                     });
                     if !recorded { continue; }
                 }

@@ -17,6 +17,7 @@ pub mod fallen;
 pub mod legacy_restore;
 pub mod local;
 pub mod open;
+pub mod orphans;
 pub mod record;
 pub mod resolve;
 pub mod restore;

@@ -102,6 +102,15 @@ pub(crate) fn archived_claude(home: &Path, conversation: &str) -> Option<Session
     active_record.or_else(|| serde_json::from_slice(&std::fs::read(binding_history_path(home, conversation)?).ok()?).ok())
 }
 
+/// O registro com terminal mais novo que nasceu com `name`: o servidor órfão do psmux só diz o nome.
+pub fn newest_named(home: &Path, name: &str) -> Option<SessionSpec> {
+    std::fs::read_dir(dir(home)).ok()?.flatten().filter_map(|entry| {
+        let path = entry.path();
+        if path.extension()?.to_str()? != "json" { return None; }
+        read(home, path.file_stem()?.to_str()?).ok().flatten()
+    }).filter(|spec| spec.name == name && spec.surface == Surface::Terminal).max_by(|a, b| a.created_at.total_cmp(&b.created_at))
+}
+
 /// `Ok(None)` só quando não existe; arquivo ilegível ou de outra versão é erro, nunca um spec inventado.
 pub fn read(home: &Path, key: &str) -> io::Result<Option<SessionSpec>> {
     let bytes = match crate::runtime::queue::read_replaced(&path(home, key)?) {

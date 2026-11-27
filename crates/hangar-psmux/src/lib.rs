@@ -173,5 +173,36 @@ pub fn command(dir: &Path, base: &str, args: &[String], deadline: Instant) -> Re
     }
 }
 
+/// Servidor de sessão vivo cuja ficha (`<nome>.port`) sumiu da pasta de dados: o `ls` não o vê, e ele segura o nome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Orphan { pub name: String, pub pid: u32 }
+
+/// O nome do servidor de sessão pela linha de comando (`tmux.exe server -s <nome> …`). O de reserva
+/// (`__warm__`) e o de outro socket (`-L`, os testes) não são sessões da pasta de dados padrão.
+fn session_server(args: &[String]) -> Option<&str> {
+    let program = args.first()?.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
+    let program = program.strip_suffix(".exe").unwrap_or(&program);
+    if !matches!(program, "tmux" | "psmux" | "pmux") || args.get(1)? != "server" { return None; }
+    let mut name = None;
+    let mut rest = args[2..].iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-s" => name = Some(rest.next()?.as_str()),
+            "-L" => return None,
+            _ => {}
+        }
+    }
+    name.filter(|n| *n != "__warm__")
+}
+
+pub fn orphans(dir: &Path, processes: impl IntoIterator<Item = (u32, Vec<String>)>) -> Vec<Orphan> {
+    processes.into_iter().filter_map(|(pid, args)| {
+        let name = session_server(&args)?;
+        (!dir.join(format!("{name}.port")).exists()).then(|| Orphan { name: name.to_owned(), pid })
+    }).collect()
+}
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod orphan_tests;

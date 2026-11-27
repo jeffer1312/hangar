@@ -249,7 +249,7 @@ async fn confirm_fallen(home: PathBuf, program: std::ffi::OsString, key: String,
     // que voltou viva sai pelo `forget_live` do próximo tique.
     let name = entry.name.clone();
     if super::fallen::insert_unless_forgotten(&home, &name, started, super::fallen::Fallen { key, provider: entry.provider,
-        conversation: entry.conversation, permission_mode: entry.permission_mode, cwd, died_at: now(), cause: cause.clone() }) {
+        conversation: entry.conversation, permission_mode: entry.permission_mode, cwd, died_at: now(), cause: cause.clone(), orphan_pid: None }) {
         tracing::warn!(session = %name, %cause, %unit, "o systemd derrubou a sessão; ela fica na lista para reabrir");
     }
 }
@@ -534,6 +534,7 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
         let (current, count) = mux_now(&program).await;
         let live = st.list.discover(None).await.ok().map(|rows| rows.iter().map(|r| r.name.clone()).collect::<HashSet<String>>());
         if let Some(names) = &live { super::fallen::forget_live(&home, names); }
+        super::orphans::scan(&home).await;
         if cfg!(windows) && windows.is_none() { windows = windows_startup(current, &snap); }
         let discovered=live.is_some();
         let same = if cfg!(windows) { windows == Some(false) } else { matches!(current, MuxStart::Started(at) if snap.mux_started == Some(at)) };

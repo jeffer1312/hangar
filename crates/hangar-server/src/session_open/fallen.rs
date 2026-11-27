@@ -39,8 +39,11 @@ pub struct Fallen {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     pub died_at: f64,
-    /// O `<r>` de `Failed with result '<r>'` (`oom-kill`, …).
+    /// O `<r>` de `Failed with result '<r>'` (`oom-kill`, …), ou `psmux_orphan`.
     pub cause: String,
+    /// O servidor do psmux que perdeu a ficha e segue de pé: Reabrir e Dispensar o encerram antes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphan_pid: Option<u32>,
 }
 
 impl Fallen {
@@ -176,6 +179,9 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     let Some(fallen) = get(&dirs.home, &name) else {
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("session_not_fallen", "a sessão não está caída", json!({"name": name})));
     };
+    if let Some(pid) = fallen.orphan_pid && let Err(code) = super::orphans::end(pid, &name).await {
+        return answer(&headers, StatusCode::CONFLICT, detail_body(code, "a sessão antiga não fechou", json!({"name": name})));
+    }
     // Cliente que cai no meio não interrompe a abertura. O mesmo caminho do restore: agente de pé, diário, e o
     // registro só sai no sucesso.
     let entry = fallen.entry(&name);
@@ -229,8 +235,12 @@ pub async fn dismiss_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     let Some(_hold) = Reopening::begin(&name) else {
         return answer(&headers, StatusCode::CONFLICT, detail_body("session_reopening", "a sessão está reabrindo", json!({"name": name})));
     };
-    if get(&dirs.home, &name).is_none() {
+    let Some(fallen) = get(&dirs.home, &name) else {
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("session_not_fallen", "a sessão não está caída", json!({"name": name})));
+    };
+    // O órfão de pé voltaria na próxima busca e seguiria segurando o nome.
+    if let Some(pid) = fallen.orphan_pid && let Err(code) = super::orphans::end(pid, &name).await {
+        return answer(&headers, StatusCode::CONFLICT, detail_body(code, "a sessão antiga não fechou", json!({"name": name})));
     }
     // O `forget` também tira o nome da fotografia do restore: a dispensada não volta no próximo reboot.
     super::restore::forget(&dirs.home, &name);
@@ -337,7 +347,7 @@ mod tests {
 
     fn oom(key: &str) -> Fallen {
         Fallen { key: key.into(), provider: AgentProvider::Claude, conversation: Some("c1".into()), permission_mode: None,
-            cwd: Some("/home/x".into()), died_at: 10.0, cause: "oom-kill".into() }
+            cwd: Some("/home/x".into()), died_at: 10.0, cause: "oom-kill".into(), orphan_pid: None }
     }
 
     fn row(name: &str) -> SessionRow { serde_json::from_value(json!({"name": name, "provider": "claude", "state": "idle"})).unwrap() }
@@ -395,7 +405,7 @@ mod tests {
     #[test]
     fn the_problem_tells_memory_from_any_other_failure() {
         let fallen = |cause: &str| Fallen { key: "k".into(), provider: AgentProvider::Claude, conversation: None,
-            permission_mode: None, cwd: None, died_at: 0.0, cause: cause.into() };
+            permission_mode: None, cwd: None, died_at: 0.0, cause: cause.into(), orphan_pid: None };
         assert_eq!(fallen("oom-kill").problem(), OOM);
         assert_eq!(fallen("signal").problem(), OTHER);
     }
