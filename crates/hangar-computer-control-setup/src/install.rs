@@ -54,6 +54,13 @@ pub struct Policy {
     pub package_channel: Option<String>,
 }
 
+impl Policy {
+    /// Como o automático do Hangar: só no modo pacote, no canal `latest` e com automações ligadas.
+    pub fn allows_update(&self) -> bool {
+        self.automations && self.package_channel.as_deref() == Some("latest")
+    }
+}
+
 /// Se o binário do pacote mudou: quem registra o MCP refaz o registro.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Swapped {
@@ -129,7 +136,7 @@ pub async fn install_if_missing(paths: &Paths, http: &reqwest::Client, github: &
 /// # Errors
 /// Rede, GitHub, release sem binário ou disco; já gravada no diário.
 pub async fn update_tick(paths: &Paths, http: &reqwest::Client, github: &Github, policy: &Policy, diary: Option<&Path>) -> Result<Swapped, Error> {
-    if !crate::supported() || !policy.automations || policy.package_channel.as_deref() != Some("latest") {
+    if !crate::supported() || !policy.allows_update() {
         return Ok(Swapped::No);
     }
     let outcome = latest(paths, http, github, true).await;

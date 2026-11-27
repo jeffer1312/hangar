@@ -15,7 +15,7 @@ use hangar_managed_binary::service::{Error as ServiceError, ProcessState};
 use serde_json::{Map, Value, json};
 
 use crate::client::{CallError, Client, Reply};
-use crate::install::{self, Busy, Context, Installer};
+use crate::install::{self, AutoUpdate, Busy, Context, Installed, Installer, UpdateCheck};
 use crate::outbox::{self, Outbox};
 
 const MAX_BODY: usize = 64 * 1024;
@@ -31,6 +31,10 @@ const SEND_UNSUPPORTED: (&str, &str) = ("whatsapp_send_unsupported", "o hangar-w
 const EDIT_UNSUPPORTED: (&str, &str) = ("whatsapp_edit_unsupported",
     "o hangar-whatsapp instalado não envia texto editado; atualize o hangar-whatsapp. Nada foi enviado");
 const OUTDATED_MSG: &str = "o WhatsApp recusou a versão do hangar-whatsapp; atualize o hangar-whatsapp";
+/// Frase do envio recusado porque uma troca de versão, do dono ou do relógio, segura a vez.
+const UPDATING_MSG: &str = "o WhatsApp está atualizando; tente de novo em instantes";
+/// A tarefa da passada do relógio: as telas reagem só a `update`, que é a do dono.
+pub(crate) const AUTO_UPDATE_KIND: &str = "auto_update";
 
 /// O WhatsApp de uma máquina: instalação, aceite e o cliente do serviço.
 pub struct WhatsApp {
@@ -40,6 +44,11 @@ pub struct WhatsApp {
     /// O último texto do QR e o desenho dele: o resumo relido com o mesmo QR não o desenha de novo.
     qr: Mutex<Option<(String, Option<String>)>>,
     outbox: Outbox,
+    /// Um envio por vez segura a vez do instalador: dois envios seguidos não se recusam como "atualizando".
+    sending: tokio::sync::Mutex<()>,
+    /// Avisa quando um envio fica esperando outro: a prova da fila não depende de relógio.
+    #[cfg(test)]
+    send_waiting: tokio::sync::Notify,
 }
 
 struct Http {
@@ -66,7 +75,46 @@ impl WhatsApp {
     /// `outbox` com a subida desta vida já marcada ([`Outbox::started_at`]).
     pub fn with_outbox(ctx: Context, outbox: Outbox) -> Arc<Self> {
         let client = Client::new(ctx.paths.data.clone());
-        Arc::new(Self { ctx, installer: Installer::default(), client, qr: Mutex::default(), outbox })
+        Arc::new(Self {
+            ctx, installer: Installer::default(), client, qr: Mutex::default(), outbox, sending: tokio::sync::Mutex::default(),
+            #[cfg(test)]
+            send_waiting: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// A atualização do relógio ([`install::Mode::Auto`]). A procura no GitHub e as regras da passada correm fora da
+    /// vez ([`install::auto_wants`]): só a troca a reserva, e roda como tarefa que o `GET` mostra.
+    /// `None`: WhatsApp não instalado, ou troca a fazer com outra tarefa, operação ou envio segurando a vez.
+    pub async fn auto_update(&self) -> Option<AutoUpdate> {
+        // Arquivos de uma volta fora do lugar vêm antes de procurar versão, e na vez: "Apagar dados" e a troca do
+        // dono mexem nos mesmos arquivos. Com o serviço parado nenhum envio segura a vez.
+        if install::recovery_pending(&self.ctx.paths) {
+            let _turn = self.installer.inline().ok()?;
+            return install::auto_recover(&self.ctx).await;
+        }
+        match install::auto_wants(&self.ctx).await {
+            install::AutoPlan::NotInstalled => None,
+            install::AutoPlan::Done(done) => Some(done),
+            install::AutoPlan::Switch { from, latest } => {
+                let reservation = self.installer.reserve(AUTO_UPDATE_KIND, install::Step::Download).ok()?;
+                Some(self.run_auto_update(reservation, from, latest).await)
+            }
+        }
+    }
+
+    /// A troca na vez já guardada; `from` é a tag instalada antes dela.
+    async fn run_auto_update(&self, reservation: install::Reservation, from: String, latest: crate::release::Release) -> AutoUpdate {
+        let (sent, got) = tokio::sync::oneshot::channel();
+        let ctx = self.ctx.clone();
+        let to = latest.tag.clone();
+        reservation.start(move |progress| async move {
+            let result = install::update_to(&ctx, install::Mode::Auto, &latest, &*progress).await;
+            let _ = sent.send(result.clone());
+            result
+        }).await;
+        // Sem resultado, a tarefa caiu no meio: o `Jobs` já gravou a queda para a tela.
+        let result = got.await.unwrap_or_else(|_| Err(install::Failure::new("whatsapp_job_crashed", "a atualização automática parou no meio")));
+        AutoUpdate { from, to, result }
     }
 
     /// Os rascunhos pendentes (evento `whatsapp_outbox`).
@@ -146,7 +194,10 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
             Ok(body) => start_install(wa, &body),
             Err(response) => response,
         },
-        (Method::POST, "/update") => start_update(wa),
+        (Method::POST, "/update") => match body(request).await {
+            Ok(body) => start_update(wa, &body),
+            Err(response) => response,
+        },
         (Method::POST, "/pair") => match body(request).await {
             Ok(body) => pair(wa, &body).await,
             Err(response) => response,
@@ -182,7 +233,8 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
     }
 }
 
-/// `GET /api/whatsapp`: instalação, aceite, serviço, tarefa e o `status` do C2 com o QR em SVG.
+/// `GET /api/whatsapp`: instalação, aceite, serviço, tarefa, o `status` do C2 com o QR em SVG, a tag instalada e a
+/// versão nova da última procura.
 async fn overview(wa: &WhatsApp) -> Response {
     let paths = &wa.ctx.paths;
     let current = install::current(paths);
@@ -205,18 +257,34 @@ async fn overview(wa: &WhatsApp) -> Response {
         }
     };
     let qr_svg = status["qr"].as_str().filter(|q| !q.is_empty()).and_then(|q| wa.qr_svg(q));
+    let check = install::read_update_check(paths);
     json_response(StatusCode::OK, json!({
         "installed": installed, "accepted_at": install::accepted_at(paths), "service": service,
         "job": wa.installer.job(), "status": status, "qr_svg": qr_svg, "status_error": status_error,
+        "installed_tag": current.as_ref().map(|c| c.tag.as_str()),
+        "update_checked_at": check.as_ref().map(|c| c.checked_at.as_str()),
+        "update": available_update(current.as_ref(), check.clone()),
     }))
 }
 
+/// A última procura só vale como versão nova quando a `latest` dela passa da instalada.
+fn available_update(current: Option<&Installed>, check: Option<UpdateCheck>) -> Value {
+    match (current, check) {
+        (Some(current), Some(check)) if crate::release::newer(&check.latest, &current.tag) => {
+            serde_json::to_value(check).unwrap_or(Value::Null)
+        }
+        _ => Value::Null,
+    }
+}
+
 /// Com o serviço parado, `whatsapp_schema_newer` quando o último processo saiu porque os dados são de uma
-/// versão mais nova do binário: religar não adianta, só atualizar. Gerenciador que não responde deixa o
-/// parado de sempre e vai ao log.
+/// versão mais nova do binário: religar não adianta, só atualizar. `whatsapp_backup_failed` quando ele não gravou a
+/// cópia de antes de migrar (disco cheio, permissão): os dados ficaram como estavam. Gerenciador que não responde
+/// deixa o parado de sempre e vai ao log.
 fn stopped_error(process: Result<ProcessState, ServiceError>) -> Value {
     match process {
         Ok(process) if process.last_exit == Some(i32::from(install::SCHEMA_NEWER_EXIT)) => json!("whatsapp_schema_newer"),
+        Ok(process) if process.last_exit == Some(i32::from(install::BACKUP_FAILED_EXIT)) => json!("whatsapp_backup_failed"),
         Ok(_) => Value::Null,
         Err(error) => {
             tracing::warn!(step = %error.step, detail = %error.detail, "whatsapp: estado do serviço ilegível");
@@ -249,15 +317,43 @@ fn start_install(wa: &WhatsApp, body: &Value) -> Response {
         tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: aceite não gravado");
         return refused(StatusCode::INTERNAL_SERVER_ERROR, failure.code, "não consegui gravar o aceite");
     }
-    install::begin(reservation, wa.ctx.clone());
+    install::begin(reservation, wa.ctx.clone(), install::Mode::Manual, None);
     started(wa, Ok(()))
 }
 
-fn start_update(wa: &WhatsApp) -> Response {
+fn start_update(wa: &WhatsApp, body: &Value) -> Response {
+    let mode = match update_mode(body) {
+        Ok(mode) => mode,
+        Err(response) => return response,
+    };
     if install::current(&wa.ctx.paths).is_none() {
         return refused(StatusCode::CONFLICT, "whatsapp_not_installed", "o WhatsApp não está instalado");
     }
-    started(wa, install::spawn(&wa.installer, "update", wa.ctx.clone()))
+    let expected = match confirmed_tag(body) {
+        Ok(expected) => expected,
+        Err(response) => return response,
+    };
+    // A confirmação vale só para a tag que o dono viu: sem ela, a troca volta a perguntar.
+    let mode = if mode == install::Mode::Confirmed && expected.is_none() { install::Mode::Manual } else { mode };
+    started(wa, install::spawn(&wa.installer, "update", wa.ctx.clone(), mode, expected))
+}
+
+/// `confirm_migration` ausente ou `false` é o botão de sempre; `true`, o dono confirmou a mudança de formato dos dados.
+fn update_mode(body: &Value) -> Result<install::Mode, Response> {
+    match &body["confirm_migration"] {
+        Value::Null | Value::Bool(false) => Ok(install::Mode::Manual),
+        Value::Bool(true) => Ok(install::Mode::Confirmed),
+        _ => Err(refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "confirm_migration deve ser true ou false")),
+    }
+}
+
+/// `tag`: a release que a confirmação mostrou; outra mais nova na hora volta a perguntar.
+fn confirmed_tag(body: &Value) -> Result<Option<String>, Response> {
+    match &body["tag"] {
+        Value::Null => Ok(None),
+        Value::String(tag) => Ok(Some(tag.clone())),
+        _ => Err(refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "tag deve ser texto")),
+    }
 }
 
 fn started(wa: &WhatsApp, result: Result<(), Busy>) -> Response {
@@ -284,8 +380,21 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     }
     // Atualização em curso troca o processo no meio do pedido: apagar espera a vez, de pé ou parado.
     let Ok(_guard) = wa.installer.inline() else { return busy() };
+    // As cópias saem antes do banco: as de uma volta são do Hangar (a versão antiga religada por ela não conhece as
+    // `.bak`), e uma que não sai deixa o banco no lugar. Banco apagado com a cópia ao lado seria lido como volta presa,
+    // e as mensagens voltariam.
+    let data = wa.ctx.paths.data.clone();
+    match tokio::task::spawn_blocking(move || wipe_copies(&data, Vec::new())).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(partial)) => return partial_wipe(partial),
+        Err(_) => return refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),
+    }
     // De pé é o serviço respondendo: só a falta de conexão leva ao ramo do disco, com as guardas dele.
     match wa.client.call(reqwest::Method::POST, "/v1/wipe", &[], Some(&json!({"confirm": true}))).await {
+        Ok(reply) if (200..300).contains(&reply.status) => {
+            let _ = std::fs::remove_file(wa.ctx.paths.restore_pending());
+            return relay(reply);
+        }
         Ok(reply) => return relay(reply),
         Err(CallError::Off(_)) => {}
         Err(error) => return call_error(&error),
@@ -298,18 +407,24 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     }
     let data = wa.ctx.paths.data.clone();
     match tokio::task::spawn_blocking(move || wipe_data(&data)).await {
-        Ok(Ok(())) => json_response(StatusCode::OK, json!({"logout": "not_done"})),
-        Ok(Err(partial)) => {
-            tracing::warn!(detail = %partial.detail, removed = ?partial.removed, "whatsapp: apagar os dados falhou");
-            let (code, msg) = if partial.removed.is_empty() {
-                ("whatsapp_wipe_failed", "não consegui apagar os dados do WhatsApp")
-            } else {
-                ("whatsapp_wipe_partial", "apaguei só parte dos dados do WhatsApp")
-            };
-            detail(StatusCode::INTERNAL_SERVER_ERROR, code, msg, json!({"removed": partial.removed, "failed": partial.failed}))
+        // Apagados os dados, o que o marcador da volta guardava não existe mais: ele sai, e o serviço pode subir.
+        Ok(Ok(())) => {
+            let _ = std::fs::remove_file(wa.ctx.paths.restore_pending());
+            json_response(StatusCode::OK, json!({"logout": "not_done"}))
         }
+        Ok(Err(partial)) => partial_wipe(partial),
         Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),
     }
+}
+
+fn partial_wipe(partial: Partial) -> Response {
+    tracing::warn!(detail = %partial.detail, removed = ?partial.removed, "whatsapp: apagar os dados falhou");
+    let (code, msg) = if partial.removed.is_empty() {
+        ("whatsapp_wipe_failed", "não consegui apagar os dados do WhatsApp")
+    } else {
+        ("whatsapp_wipe_partial", "apaguei só parte dos dados do WhatsApp")
+    };
+    detail(StatusCode::INTERNAL_SERVER_ERROR, code, msg, json!({"removed": partial.removed, "failed": partial.failed}))
 }
 
 async fn uninstall(wa: &WhatsApp, body: &Value) -> Response {
@@ -418,6 +533,16 @@ async fn draft(wa: &WhatsApp, method: Method, rest: &str, request: Request) -> R
                 };
                 out["text"] = json!(text);
             }
+            // Uma troca de versão no meio cortaria o envio (fica `unconfirmed`): ele segura a vez do instalador.
+            let _turn = match wa.sending.try_lock() {
+                Ok(turn) => turn,
+                Err(_) => {
+                    #[cfg(test)]
+                    wa.send_waiting.notify_one();
+                    wa.sending.lock().await
+                }
+            };
+            let Ok(_guard) = wa.installer.inline() else { return send_busy(wa) };
             let response = match wa.client.call(Method::POST, &format!("{path}/{action}"), &[], Some(&out)).await {
                 // O 404 que não é de rascunho é a rota que não existe (binário antigo que se anuncia novo): vira a mesma
                 // recusa do `api` antigo, nunca sucesso.
@@ -516,6 +641,13 @@ pub(crate) fn call_failure(error: &CallError) -> (StatusCode, &'static str, &'st
     }
 }
 
+/// Envio recusado com a vez ocupada: `whatsapp_updating` só com uma troca de versão em curso; o resto é a operação de
+/// sempre.
+fn send_busy(wa: &WhatsApp) -> Response {
+    let updating = matches!(wa.installer.running_kind(), Some(kind) if kind == "update" || kind == AUTO_UPDATE_KIND);
+    if updating { refused(StatusCode::CONFLICT, "whatsapp_updating", UPDATING_MSG) } else { busy() }
+}
+
 fn busy() -> Response {
     refused(StatusCode::CONFLICT, "whatsapp_busy", "outra instalação ou remoção do WhatsApp está em curso")
 }
@@ -548,10 +680,11 @@ fn pick(query: &str, allowed: &[&str]) -> Vec<(String, String)> {
 /// Apaga bancos (com o WAL e o journal do SQLite) e mídia; `control.*` fica, para o binário subir igual.
 /// Parar no meio (no Windows, arquivo aberto) devolve o que já saiu.
 fn wipe_data(data: &Path) -> Result<(), Partial> {
-    let mut removed = Vec::new();
+    // As cópias antes do banco, pelo mesmo motivo do `wipe`.
+    let mut removed = wipe_copies(data, Vec::new())?;
     let stop = |name: String, e: std::io::Error, removed: Vec<String>| Partial { detail: format!("{name}: {e}"), failed: name, removed };
     for db in ["messages.db", "session.db"] {
-        for suffix in ["", "-wal", "-shm", "-journal"] {
+        for suffix in install::DB_FILES {
             let name = format!("{db}{suffix}");
             match std::fs::remove_file(data.join(&name)) {
                 Ok(()) => removed.push(name),
@@ -564,6 +697,36 @@ fn wipe_data(data: &Path) -> Result<(), Partial> {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(stop("media".into(), e, removed)),
         _ => Ok(()),
     }
+}
+
+/// Cópias do `messages.db` também são mensagens: as do binário antes de migrar (`.schema<v>.bak`, que o `/v1/wipe`
+/// de uma versão antiga não conhece) e as que a volta de uma atualização deixa.
+fn wipe_copies(data: &Path, mut removed: Vec<String>) -> Result<Vec<String>, Partial> {
+    let entries = match std::fs::read_dir(data) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
+        Err(e) => return Err(Partial { detail: format!("{}: {e}", data.display()), failed: data.display().to_string(), removed }),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => return Err(Partial { detail: format!("{}: {e}", data.display()), failed: data.display().to_string(), removed }),
+        };
+        if let Ok(name) = entry.file_name().into_string()
+            && (name.starts_with(install::MIGRATED) || name == install::RESTORING || install::backup_schema(&name, true).is_some()) {
+            names.push(name);
+        }
+    }
+    names.sort();
+    for name in names {
+        match std::fs::remove_file(data.join(&name)) {
+            Ok(()) => removed.push(name),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Partial { detail: format!("{name}: {e}"), failed: name, removed }),
+        }
+    }
+    Ok(removed)
 }
 
 #[cfg(test)]

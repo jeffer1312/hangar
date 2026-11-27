@@ -25,6 +25,15 @@ struct Scene {
     seen: Arc<Mutex<Vec<String>>>,
     /// Os rascunhos do C5 de mentira.
     drafts: Arc<Mutex<Vec<Value>>>,
+    stall: Arc<Stall>,
+}
+
+/// Ligado, o C2 de mentira segura cada `…/send` até `release`, depois de avisar em `arrived`.
+#[derive(Default)]
+struct Stall {
+    on: std::sync::atomic::AtomicBool,
+    arrived: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -37,10 +46,27 @@ enum Signing {
 
 impl Scene {
     fn new() -> Self {
+        Self::with_github(None)
+    }
+
+    /// `api`: o GitHub de mentira; sem ele, o de verdade, que nenhuma prova destas chama.
+    fn with_github(api: Option<String>) -> Self {
         let home = tempfile::tempdir().unwrap();
         let started = chrono::DateTime::parse_from_rfc3339(STARTED).unwrap().with_timezone(&chrono::Utc);
-        let wa = WhatsApp::with_outbox(Context::new(home.path()), outbox::Outbox::started_at(started));
-        Self { home, wa, seen: Arc::default(), drafts: Arc::default() }
+        let mut ctx = Context::new(home.path());
+        if let Some(api) = api {
+            ctx.github = crate::release::Github { api, download: "http://127.0.0.1:9/nada".into() };
+        }
+        let wa = WhatsApp::with_outbox(ctx, outbox::Outbox::started_at(started));
+        Self { home, wa, seen: Arc::default(), drafts: Arc::default(), stall: Arc::default() }
+    }
+
+    /// `install.json` apontando para um programa `tag` que existe no disco (e nunca roda nestas provas).
+    fn install(&self, tag: &str) {
+        let binary = self.paths().service.join(format!("bin/{tag}/hangar-whatsapp"));
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"x").unwrap();
+        hangar_managed_binary::record::write(&self.paths().record(), tag, &binary).unwrap();
     }
 
     fn paths(&self) -> &install::Paths {
@@ -64,10 +90,10 @@ impl Scene {
     }
 
     async fn serve_api(&self, signing: Signing, api: u32) {
-        let (seen, drafts) = (self.seen.clone(), self.drafts.clone());
+        let (seen, drafts, stall) = (self.seen.clone(), self.drafts.clone(), self.stall.clone());
         let app = Router::new().fallback(move |request: Request| {
-            let (seen, drafts) = (seen.clone(), drafts.clone());
-            async move { fake_c2(request, signing, &seen, &drafts).await }
+            let (seen, drafts, stall) = (seen.clone(), drafts.clone(), stall.clone());
+            async move { fake_c2(request, signing, &seen, &drafts, &stall).await }
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -102,7 +128,7 @@ impl Scene {
 }
 
 /// Confere o pedido como o `control.VerifyRequest` do binário e responde como as rotas do C2.
-async fn fake_c2(request: Request, signing: Signing, seen: &Mutex<Vec<String>>, drafts: &Mutex<Vec<Value>>) -> Response {
+async fn fake_c2(request: Request, signing: Signing, seen: &Mutex<Vec<String>>, drafts: &Mutex<Vec<Value>>, stall: &Stall) -> Response {
     let method = request.method().as_str().to_owned();
     let uri = request.uri().path_and_query().map_or("/", |p| p.as_str()).to_owned();
     let header = request.headers().get(control::SIGNATURE_HEADER).and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
@@ -114,6 +140,10 @@ async fn fake_c2(request: Request, signing: Signing, seen: &Mutex<Vec<String>>, 
     };
     if signing == Signing::Redirect && first {
         return (StatusCode::TEMPORARY_REDIRECT, [("location", uri.as_str())]).into_response();
+    }
+    if method == "POST" && uri.ends_with("/send") && stall.on.load(std::sync::atomic::Ordering::SeqCst) {
+        stall.arrived.notify_one();
+        stall.release.notified().await;
     }
     let (ts, _) = header.split_once('.').unwrap_or_default();
     let valid = ts.parse::<i64>().is_ok_and(|ts| control::sign_request(&KEY, &method, &uri, ts, &body) == header);
@@ -290,12 +320,14 @@ async fn a_stale_control_with_a_live_pid_counts_as_stopped() {
     assert!(!s.paths().data.join("messages.db").exists());
 }
 
-/// Só a saída 3 sem processo de pé vira o aviso de dados mais novos; o resto é o parado de sempre, também
+/// Só a saída 3 vira o aviso de dados mais novos, e a 4, o da cópia que não gravou; o resto é o parado de sempre, também
 /// quando o gerenciador não responde.
 #[test]
 fn a_service_that_quit_on_newer_data_says_so() {
     assert_eq!(stopped_error(Ok(ProcessState { running: false, last_exit: Some(3) })), json!("whatsapp_schema_newer"));
     assert_eq!(stopped_error(Ok(ProcessState { running: true, last_exit: Some(3) })), json!("whatsapp_schema_newer"), "unit antiga religando");
+    assert_eq!(stopped_error(Ok(ProcessState { running: false, last_exit: Some(4) })), json!("whatsapp_backup_failed"),
+        "a cópia de antes de migrar não gravou");
     assert_eq!(stopped_error(Ok(ProcessState { running: false, last_exit: Some(1) })), Value::Null);
     assert_eq!(stopped_error(Ok(ProcessState::default())), Value::Null);
     let unknown = ServiceError { step: "systemctl show".into(), detail: "Failed to connect to bus".into() };
@@ -336,6 +368,54 @@ async fn a_wipe_during_an_update_waits_even_with_the_service_up() {
     let (status, body) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
     assert_eq!((status, code(&body)), (409, "whatsapp_busy"), "{body}");
     assert!(!s.seen.lock().unwrap().iter().any(|r| r.ends_with("/v1/wipe")), "o pedido não chegou ao serviço");
+}
+
+/// Apagar leva também as cópias do banco, parado ou de pé: de pé pode estar a versão antiga que a volta religou, e o
+/// `/v1/wipe` dela não conhece as `.bak`.
+#[tokio::test]
+async fn a_wipe_takes_the_copies_of_the_messages_too() {
+    let copies = ["messages.db.schema1.bak", "messages.db.schema1.bak.tmp", "messages.db.migrated", "messages.db.migrated-wal", "messages.db.restoring"];
+    let s = Scene::new();
+    let data = s.paths().data.clone();
+    std::fs::create_dir_all(&data).unwrap();
+    for name in copies.iter().chain(&["messages.db", "control.key"]) {
+        std::fs::write(data.join(name), b"x").unwrap();
+    }
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
+    assert_eq!((status, body), (200, json!({"logout": "not_done"})));
+    for name in copies.iter().chain(&["messages.db"]) {
+        assert!(!data.join(name).exists(), "{name} ficou");
+    }
+    assert!(data.join("control.key").exists(), "o control fica para o binário subir igual");
+
+    let s = Scene::new();
+    s.serve(Signing::Signed).await;
+    let data = s.paths().data.clone();
+    std::fs::create_dir_all(&data).unwrap();
+    for name in copies {
+        std::fs::write(data.join(name), b"x").unwrap();
+    }
+    let (status, _) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
+    assert_eq!(status, 200);
+    for gone in copies {
+        assert!(!data.join(gone).exists(), "{gone} ficou com o serviço de pé");
+    }
+}
+
+/// Uma cópia que não sai para o apagar antes do banco: o serviço nem é chamado, e o banco fica no lugar (banco
+/// apagado com a cópia ao lado seria lido como volta presa, e as mensagens voltariam).
+#[tokio::test]
+async fn a_copy_that_does_not_go_stops_the_wipe_before_the_database() {
+    let s = Scene::new();
+    s.serve(Signing::Signed).await;
+    let data = s.paths().data.clone();
+    std::fs::create_dir_all(data.join("messages.db.schema1.bak/x")).unwrap();
+    std::fs::write(data.join("messages.db"), b"x").unwrap();
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
+    assert_eq!((status, code(&body)), (500, "whatsapp_wipe_failed"), "{body}");
+    assert_eq!(body["detail"]["params"]["failed"], "messages.db.schema1.bak");
+    assert!(!s.seen.lock().unwrap().iter().any(|r| r.ends_with("/v1/wipe")), "o serviço apagou com a cópia ainda no disco");
+    assert!(data.join("messages.db").exists());
 }
 
 /// Um arquivo que não sai no meio (no Windows, aberto pelo serviço): a resposta diz o que já saiu.
@@ -730,4 +810,231 @@ async fn interop_with_the_real_binary() {
     assert_eq!(chats.status, 200);
     let missing = client.call(reqwest::Method::GET, "/v1/messages", &[], None).await.unwrap();
     assert_eq!(missing.status, 400, "erro também vem assinado");
+}
+
+
+/// GitHub de mentira com as releases `tags`, sem download; devolve o endereço da API.
+async fn fake_github(tags: &[&str]) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let body = Value::from(tags.iter().map(|tag| json!({"tag_name": tag})).collect::<Vec<_>>()).to_string();
+    let app = Router::new().route("/repos/{owner}/{repo}/releases", axum::routing::get(move || {
+        let body = body.clone();
+        async move { ([(header::CONTENT_TYPE, "application/json")], body) }
+    }));
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// O resumo diz a tag instalada e a versão nova da última procura; sem instalação, procura ou
+/// release mais nova que a instalada, `update` é `null`.
+#[tokio::test]
+async fn the_overview_says_the_installed_tag_and_a_newer_release() {
+    let s = Scene::new();
+    s.serve(Signing::Signed).await;
+    let check = |latest: &str, failed: Option<install::CheckFailure>| install::UpdateCheck {
+        latest: latest.into(), migration: true, checked_at: "2026-11-26T12:00:00Z".into(), failed, last_error: None };
+    let failed = install::CheckFailure { tag: "v0.2.0".into(), code: "whatsapp_not_started".into() };
+    install::write_update_check(s.paths(), &check("v0.2.0", Some(failed))).unwrap();
+    let (status, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    assert_eq!((status, &body["installed_tag"], &body["update"]), (200, &Value::Null, &Value::Null), "sem instalação, nada a comparar: {body}");
+
+    s.install("v0.1.1");
+    let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    assert_eq!(body["installed_tag"], json!("v0.1.1"));
+    assert_eq!(body["update"], json!({"latest": "v0.2.0", "migration": true, "checked_at": "2026-11-26T12:00:00Z",
+        "failed": {"tag": "v0.2.0", "code": "whatsapp_not_started"}, "last_error": null}));
+
+    let last_error = install::CheckFailure { tag: "v0.2.0".into(), code: "whatsapp_download_failed".into() };
+    install::write_update_check(s.paths(), &install::UpdateCheck { last_error: Some(last_error), ..check("v0.2.0", None) }).unwrap();
+    let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    assert_eq!((&body["update"]["failed"], &body["update"]["last_error"]),
+        (&Value::Null, &json!({"tag": "v0.2.0", "code": "whatsapp_download_failed"})), "{body}");
+
+    install::write_update_check(s.paths(), &check("v0.1.1", None)).unwrap();
+    let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    assert_eq!(body["update"], Value::Null, "a procura achou a instalada");
+
+    std::fs::remove_file(s.paths().update_check()).unwrap();
+    let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    assert_eq!((&body["installed_tag"], &body["update"]), (&json!("v0.1.1"), &Value::Null), "nenhuma procura ainda");
+}
+
+/// `confirm_migration` decide o modo; outro tipo para em 400 antes de olhar a instalação.
+#[tokio::test]
+async fn the_update_reads_the_migration_confirmation() {
+    let s = Scene::new();
+    for bad in [r#"{"confirm_migration":"sim"}"#, r#"{"confirm_migration":1}"#, "[]"] {
+        let (status, body) = s.call(Method::POST, "/api/whatsapp/update", true, Some(bad)).await;
+        assert_eq!((status, code(&body)), (400, "whatsapp_bad_request"), "{bad}: {body}");
+    }
+    for good in [None, Some("{}"), Some(r#"{"confirm_migration":false}"#), Some(r#"{"confirm_migration":true}"#)] {
+        let (status, body) = s.call(Method::POST, "/api/whatsapp/update", true, good).await;
+        assert_eq!((status, code(&body)), (409, "whatsapp_not_installed"), "o corpo passou: {good:?}");
+    }
+    assert_eq!(s.wa.installer.job(), Value::Null, "nenhuma tarefa começou");
+    assert_eq!(update_mode(&json!({})).ok(), Some(install::Mode::Manual));
+    assert_eq!(update_mode(&json!({"confirm_migration": null})).ok(), Some(install::Mode::Manual));
+    assert_eq!(update_mode(&json!({"confirm_migration": false})).ok(), Some(install::Mode::Manual));
+    assert_eq!(update_mode(&json!({"confirm_migration": true})).ok(), Some(install::Mode::Confirmed));
+    assert_eq!(confirmed_tag(&json!({"confirm_migration": true, "tag": "v0.3.1"})).ok(), Some(Some("v0.3.1".to_owned())));
+    assert_eq!(confirmed_tag(&json!({})).ok(), Some(None));
+    assert!(confirmed_tag(&json!({"tag": 3})).is_err());
+}
+
+/// Com uma troca de versão em curso (do dono ou do relógio), os dois envios recusam com "atualizando" sem chegar ao
+/// binário; com outra operação na vez, a recusa é a de sempre.
+#[tokio::test]
+async fn a_send_during_an_update_is_refused_as_updating() {
+    let s = Scene::new();
+    s.serve_api(Signing::Signed, 3).await;
+    s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"5564999","text":"oi","origin":"casa::s0"}"#)).await;
+    let sends = [("/api/whatsapp/outbox/d1/send", r#"{"via":"desktop"}"#),
+        ("/api/whatsapp/outbox/d1/send-edited", r#"{"via":"mobile","text":"olá"}"#)];
+    for kind in ["update", AUTO_UPDATE_KIND] {
+        let (release, wait) = tokio::sync::oneshot::channel::<()>();
+        let done = s.wa.installer.start(kind, install::Step::Download, |_| async move {
+            let _ = wait.await;
+            Ok(install::Outcome::AlreadyLatest)
+        }).unwrap();
+        for (uri, body) in sends {
+            let (status, reply) = s.call(Method::POST, uri, true, Some(body)).await;
+            assert_eq!((status, code(&reply)), (409, "whatsapp_updating"), "{kind} {uri}: {reply}");
+            assert_eq!(reply["detail"]["msg"], json!(UPDATING_MSG), "{kind} {uri}");
+        }
+        release.send(()).unwrap();
+        done.await;
+    }
+    let guard = s.wa.installer.inline().unwrap();
+    for (uri, body) in sends {
+        let (status, reply) = s.call(Method::POST, uri, true, Some(body)).await;
+        assert_eq!((status, code(&reply)), (409, "whatsapp_busy"), "{uri}: {reply}");
+        assert_ne!(reply["detail"]["msg"], json!(UPDATING_MSG), "apagar ou remover não é atualizar: {reply}");
+    }
+    drop(guard);
+    assert!(!s.seen.lock().unwrap().iter().any(|r| r.contains("/send")), "{:?}", s.seen.lock().unwrap());
+    assert_eq!(s.drafts.lock().unwrap()[0]["state"], json!("pending"), "nada saiu");
+}
+
+/// Com um envio parado no binário, a atualização não pega a vez; o segundo envio espera na fila sem chegar ao binário
+/// e sem se recusar, e sai depois do primeiro.
+#[tokio::test]
+async fn a_send_holds_the_turn_and_the_next_send_waits_for_it() {
+    // Com release nova: a passada tem troca a fazer, e só a troca pede a vez.
+    let s = Scene::with_github(Some(fake_github(&["v0.2.0", "v0.1.1"]).await));
+    s.serve_api(Signing::Signed, 3).await;
+    s.install("v0.1.1");
+    for _ in 0..2 {
+        let (status, _) = s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"5564999","text":"oi","origin":"casa::s0"}"#)).await;
+        assert_eq!(status, 201);
+    }
+    let sends = |s: &Scene| s.seen.lock().unwrap().iter().filter(|r| r.ends_with("/send")).cloned().collect::<Vec<_>>();
+
+    s.stall.on.store(true, std::sync::atomic::Ordering::SeqCst);
+    let first = s.call(Method::POST, "/api/whatsapp/outbox/d1/send", true, Some(r#"{"via":"desktop"}"#));
+    let second = async {
+        s.stall.arrived.notified().await;
+        s.call(Method::POST, "/api/whatsapp/outbox/d2/send", true, Some(r#"{"via":"mobile"}"#)).await
+    };
+    let control = async {
+        s.wa.send_waiting.notified().await;
+        assert_eq!(sends(&s), ["POST /v1/outbox/d1/send"], "o segundo espera fora do binário");
+        assert!(s.wa.installer.reserve("update", install::Step::Download).is_err(), "o envio em curso segura a vez");
+        assert_eq!(s.wa.auto_update().await, None, "o relógio não troca a versão no meio do envio");
+        s.stall.release.notify_one();
+        s.stall.arrived.notified().await;
+        assert_eq!(sends(&s), ["POST /v1/outbox/d1/send", "POST /v1/outbox/d2/send"], "um de cada vez, na ordem");
+        s.stall.release.notify_one();
+    };
+    let (first, second, ()) = tokio::join!(first, second, control);
+    assert_eq!((first.0, &first.1["state"]), (202, &json!("sending")), "{}", first.1);
+    assert_eq!((second.0, &second.1["state"]), (202, &json!("sending")), "{}", second.1);
+    assert!(!s.wa.installer.busy(), "terminados os envios, a vez está livre");
+    assert_eq!(s.wa.installer.job(), Value::Null, "a recusa do relógio não publicou tarefa");
+}
+
+/// Só a troca de versão roda na vez do instalador, como tarefa que o `GET` mostra, e diz as duas tags; sem
+/// instalação nem começa, e com a vez ocupada a troca fica para a próxima passada.
+#[tokio::test]
+async fn the_automatic_update_runs_as_a_job_only_to_switch() {
+    let s = Scene::with_github(Some(fake_github(&["v0.2.0", "v0.1.1"]).await));
+    s.serve(Signing::Signed).await;
+    assert_eq!(s.wa.auto_update().await, None, "sem instalação");
+    s.install("v0.1.1");
+    let guard = s.wa.installer.inline().unwrap();
+    assert_eq!(s.wa.auto_update().await, None, "outra operação na vez");
+    drop(guard);
+    assert_eq!(s.wa.installer.job(), Value::Null);
+
+    // O GitHub de mentira não serve download: a troca falha antes de registrar a nova.
+    let got = s.wa.auto_update().await.unwrap();
+    assert_eq!((got.from.as_str(), got.to.as_str()), ("v0.1.1", "v0.2.0"));
+    let code = got.result.unwrap_err().code;
+    assert_eq!(code, crate::release::CODES.download_failed);
+    let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    assert_eq!((&body["job"]["kind"], &body["job"]["done"], &body["job"]["error"]["code"]),
+        (&json!(AUTO_UPDATE_KIND), &json!(true), &json!(code)), "a passada não se passa pelo botão do dono: {body}");
+    assert_eq!((&body["update"]["latest"], &body["update"]["failed"], &body["update"]["last_error"]),
+        (&json!("v0.2.0"), &Value::Null, &json!({"tag": "v0.2.0", "code": code})), "falha antes do registro não prende a tag: {body}");
+}
+
+/// Com arquivos de uma volta fora do lugar, a passada só recupera na vez: com ela ocupada (um "Apagar dados" em curso),
+/// não mexe em nada e o marcador fica.
+#[tokio::test]
+async fn the_automatic_recovery_waits_for_the_turn() {
+    let s = Scene::with_github(Some(fake_github(&["v0.2.0", "v0.1.1"]).await));
+    s.serve(Signing::Signed).await;
+    s.install("v0.1.1");
+    let data = s.paths().data.clone();
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("messages.db.migrated"), b"x").unwrap();
+    let guard = s.wa.installer.inline().unwrap();
+    assert_eq!(s.wa.auto_update().await, None);
+    drop(guard);
+    assert!(data.join("messages.db.migrated").exists() && !data.join("messages.db").exists(), "mexeu nos arquivos sem a vez");
+}
+
+/// Sem release nova, a passada não pede a vez: nem com ela ocupada, nem deixa tarefa no `GET`.
+#[tokio::test]
+async fn the_automatic_update_without_a_new_release_does_not_take_the_turn() {
+    let s = Scene::with_github(Some(fake_github(&["v0.1.1", "v0.1.0"]).await));
+    s.serve(Signing::Signed).await;
+    s.install("v0.1.1");
+    let guard = s.wa.installer.inline().unwrap();
+    let got = s.wa.auto_update().await.unwrap();
+    assert_eq!(got, AutoUpdate { from: "v0.1.1".into(), to: "v0.1.1".into(), result: Ok(install::Outcome::AlreadyLatest) });
+    drop(guard);
+    let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    assert_eq!((&body["job"], &body["update"]), (&Value::Null, &Value::Null), "{body}");
+    assert_eq!(install::read_update_check(s.paths()).map(|c| c.latest).as_deref(), Some("v0.1.1"));
+}
+
+/// Tag que a última procura já viu esperando confirmação: o relógio pula sem pedir a vez, e `to` é a `latest` dela.
+#[tokio::test]
+async fn the_automatic_update_names_the_release_it_skipped() {
+    let s = Scene::with_github(Some(fake_github(&["v0.2.0", "v0.1.1"]).await));
+    s.serve(Signing::Signed).await;
+    s.install("v0.1.1");
+    install::write_update_check(s.paths(), &install::UpdateCheck { latest: "v0.2.0".into(), migration: true,
+        checked_at: "2026-11-26T12:00:00Z".into(), failed: None, last_error: None }).unwrap();
+    let guard = s.wa.installer.inline().unwrap();
+    let got = s.wa.auto_update().await.unwrap();
+    drop(guard);
+    assert_eq!(got, AutoUpdate { from: "v0.1.1".into(), to: "v0.2.0".into(), result: Ok(install::Outcome::Skipped) });
+    let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    assert_eq!((&body["job"], &body["update"]["latest"], &body["update"]["migration"]),
+        (&Value::Null, &json!("v0.2.0"), &json!(true)), "{body}");
+}
+
+/// GitHub fora: a falha volta sem tarefa (a procura não pede a vez), e `to` fica na instalada.
+#[tokio::test]
+async fn an_automatic_update_that_fails_keeps_the_installed_tag() {
+    let s = Scene::with_github(Some("http://127.0.0.1:9".into()));
+    s.serve(Signing::Signed).await;
+    s.install("v0.1.1");
+    let got = s.wa.auto_update().await.unwrap();
+    assert_eq!((got.from.as_str(), got.to.as_str()), ("v0.1.1", "v0.1.1"));
+    assert_eq!(got.result.map_err(|f| f.code), Err(crate::release::CODES.download_failed));
+    assert_eq!(s.wa.installer.job(), Value::Null);
+    assert!(!s.wa.installer.busy());
 }

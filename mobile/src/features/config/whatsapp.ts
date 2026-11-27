@@ -21,6 +21,13 @@ function isJob(v: unknown): boolean {
   return isFields(v) && typeof v.done === 'boolean' && typeof v.kind === 'string' && optText(v.step) && optCode(v.error);
 }
 
+function isUpdate(v: unknown): boolean {
+  if (v === undefined || v === null) return true;
+  if (!isFields(v) || typeof v.latest !== 'string' || typeof v.migration !== 'boolean' || typeof v.checked_at !== 'string') return false;
+  const tagged = (f: unknown) => f === undefined || f === null || (isFields(f) && typeof f.tag === 'string' && typeof f.code === 'string');
+  return tagged(v.failed) && tagged(v.last_error);
+}
+
 function isStatus(v: unknown): boolean {
   if (v === undefined || v === null) return true;
   if (!isFields(v) || typeof v.state !== 'string' || !optCode(v.error)) return false;
@@ -35,11 +42,12 @@ function isStatus(v: unknown): boolean {
 export function isWhatsAppState(v: unknown): v is WhatsAppState {
   if (!isFields(v)) return false;
   return typeof v.installed === 'boolean' && (v.service === 'running' || v.service === 'stopped' || v.service === 'absent')
-    && optText(v.accepted_at) && optText(v.qr_svg) && optText(v.status_error) && isJob(v.job) && isStatus(v.status);
+    && optText(v.accepted_at) && optText(v.qr_svg) && optText(v.status_error) && isJob(v.job) && isStatus(v.status)
+    && optText(v.installed_tag) && optText(v.update_checked_at) && isUpdate(v.update);
 }
 
 export function viewOf(state: WhatsAppState): WhatsAppView {
-  if (state.job && !state.job.done) return 'working';
+  if (jobRunning(state)) return 'working';
   if (!state.installed) return 'off';
   // Parado porque os dados são de um binário mais novo: religar não adianta, só atualizar; e atualizar que
   // não achou outro também não.
@@ -63,6 +71,12 @@ function alreadyLatest(state: WhatsAppState): boolean {
   return !!job?.done && job.kind === 'update' && job.outcome === 'already_latest';
 }
 
+/** Parado porque o binário não conseguiu guardar a cópia do arquivo antes de converter: religar é o caminho,
+ * só o texto muda. */
+export function stoppedByBackup(state: WhatsAppState): boolean {
+  return viewOf(state) === 'stopped' && state.status_error === 'whatsapp_backup_failed';
+}
+
 /** Instalar ou religar vale com o aceite gravado no servidor ou marcado agora. */
 export function installAccepted(state: WhatsAppState, acceptedNow: boolean): boolean {
   return acceptedNow || !!state.accepted_at;
@@ -80,12 +94,63 @@ export function codeOf(error: unknown): string | null {
   return code || null;
 }
 
-/** O job que terminou com erro: o tipo dele e o código. */
+/** O job do dono (instalar ou atualizar) que terminou com erro: o tipo dele e o código. A passada automática
+ * não entra: a falha dela aparece por `autoUpdateFailure`. */
 export function failedJob(state: WhatsAppState): { kind: string; code: string } | null {
   const job = state.job;
-  if (!job?.done) return null;
+  if (!job?.done || (job.kind !== 'install' && job.kind !== 'update')) return null;
   const code = codeOf(job.error);
   return code ? { kind: job.kind, code } : null;
+}
+
+export function jobRunning(state: WhatsAppState): boolean {
+  return !!state.job && !state.job.done;
+}
+
+/** A passada automática também troca o programa de verdade. */
+export function isUpdateJob(job: WhatsAppState['job']): boolean {
+  return job?.kind === 'update' || job?.kind === 'auto_update';
+}
+
+/** A linha da versão no cartão de conectado. Com uma falha registrada, a faixa do topo já oferece a nova
+ * versão: a linha só diz quando procurou. `checkedAt` em segundos epoch, `null` sem procura legível. */
+export type VersionLine =
+  | { kind: 'current' | 'checked'; tag: string; checkedAt: number | null }
+  | { kind: 'available'; tag: string; latest: string }
+  | { kind: 'migration'; tag: string; latest: string };
+
+export function versionLine(state: WhatsAppState): VersionLine | null {
+  const tag = state.installed_tag;
+  if (!tag || viewOf(state) !== 'connected') return null;
+  const update = state.update;
+  const checkedAt = epochSeconds(state.update_checked_at);
+  if (!update) return { kind: 'current', tag, checkedAt };
+  if (update.failed) return { kind: 'checked', tag, checkedAt };
+  return { kind: update.migration ? 'migration' : 'available', tag, latest: update.latest };
+}
+
+function epochSeconds(at: string | null | undefined): number | null {
+  const ms = at ? Date.parse(at) : NaN;
+  return Number.isNaN(ms) ? null : ms / 1000;
+}
+
+/** A atualização registrada que falhou (a automática, ou uma do dono que o servidor não guarda mais em memória).
+ * Com a faixa do job do dono na tela, ela já diz o mesmo. Só com o serviço de pé: a faixa diz que a instalada
+ * continua rodando, e parado a vista do parado já explica. */
+export function autoUpdateFailure(state: WhatsAppState): { tag: string; code: string; installed: string; migration: boolean } | null {
+  const update = state.update;
+  const failed = update?.failed;
+  if (!update || !failed || !state.installed_tag || state.service !== 'running' || jobRunning(state) || failedJob(state)) return null;
+  return { tag: failed.tag, code: failed.code, installed: state.installed_tag, migration: update.migration };
+}
+
+/** A atualização que esta tela pediu (`own`) terminou? `confirm`: parou porque muda o formato dos dados e a
+ * confirmação abre sozinha; `ended`: terminou de outro jeito (ou o servidor não tem mais o job); `null`: segue
+ * andando, ou não foi esta tela que pediu, e aí nada abre sozinho. */
+export function ownUpdateEnd(state: WhatsAppState, own: boolean): 'confirm' | 'ended' | null {
+  const job = state.job;
+  if (!own || (job && !job.done)) return null;
+  return job?.kind === 'update' && job.outcome === 'needs_confirm' && state.update && state.installed_tag ? 'confirm' : 'ended';
 }
 
 /** A frase de um código, com ou sem o prefixo `whatsapp_`; sem frase própria, a genérica leva o código cru. */

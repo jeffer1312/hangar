@@ -125,6 +125,11 @@ impl<S: Step, O: Outcome, F: Failure> Jobs<S, O, F> {
         }
     }
 
+    /// O `kind` da tarefa que ainda não terminou, ou `None` sem tarefa em curso (reserva e operação na hora não contam).
+    pub fn running_kind(&self) -> Option<&'static str> {
+        lock(&self.slot).job.as_ref().filter(|job| job.result.is_none()).map(|job| job.kind)
+    }
+
     /// `{kind,step,done,error,outcome}` ou `null`.
     pub fn job(&self) -> Value {
         let slot = lock(&self.slot);
@@ -269,6 +274,7 @@ mod tests {
         let jobs = TestJobs::default();
         assert!(!jobs.busy());
         let guard = jobs.inline().unwrap();
+        assert_eq!(jobs.running_kind(), None, "operação na hora não é tarefa");
         assert_eq!(jobs.inline().err(), Some(Busy));
         assert!(jobs.start("install", Stage::Download, |_| async { Ok(Done) }).is_err(), "operação na hora ocupa a vez");
         assert!(jobs.busy());
@@ -286,8 +292,10 @@ mod tests {
         assert_eq!(jobs.inline().err(), Some(Busy));
         assert!(jobs.start("update", Stage::Download, |_| async { Ok(Done) }).is_err());
         assert_eq!(jobs.job(), json!({"kind": "install", "step": "service", "done": false, "error": null, "outcome": null}));
+        assert_eq!(jobs.running_kind(), Some("install"));
         release.send(()).unwrap();
         done.await;
+        assert_eq!(jobs.running_kind(), None, "terminada");
         assert_eq!(jobs.job(), json!({"kind": "install", "step": "service", "done": true,
             "error": {"code": "x_hash", "detail": "x"}, "outcome": null}));
         assert!(jobs.inline().is_ok(), "terminada, a vez está livre");
