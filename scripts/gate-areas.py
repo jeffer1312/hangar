@@ -25,7 +25,7 @@ CRATES = ROOT / "crates"
 # mudança aqui vale para os crates cujo código cita o caminho, e para todos quando nenhum o cita.
 RUST_READS = ("backend/tests/fixtures/", "resources/", "messages/", "packages/core/src/installCode.fixtures.json",
               "docs/atualizacoes/", "scripts/shell/", "scripts/omp/", "scripts/hangar-codex", "scripts/tests/",
-              "examples/connectors/")
+              "examples/connectors/", "scripts/install-hangar-send.sh")
 SERVER = ("crates/",) + RUST_READS
 NATIVE = ("desktop-native/", "crates/Cargo.toml", "packages/core/src/contextRefs.fixtures.json",
           "packages/core/src/whatsappInvisible.fixtures.json")

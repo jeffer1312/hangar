@@ -1841,7 +1841,6 @@ name = "hangar-delegation"
 version = "0.1.0"
 dependencies = [
  "hangar-core",
- "serde_json",
 ]
 
 [[package]]
