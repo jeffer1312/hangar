@@ -111,5 +111,6 @@ const NOT_RECORDED: &str = "a marca de filha sem pai não foi gravada";
 
 fn failed(st: &AppState, name: &str, code: &str, reason: &'static str) -> Value {
     st.diag.report(FAILED_EVENT, name, code, reason);
-    json!({"sessao": name, "erro": crate::session_write::bridge::cleanup_warning(code)})
+    json!({"sessao": name, "erro": {"code": "link_orphan_mark_failed", "params": {"codigo": code},
+        "msg": format!("a marca de filha sem pai não foi atualizada ({code})")}})
 }

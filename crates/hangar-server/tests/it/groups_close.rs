@@ -95,7 +95,7 @@ async fn closing_a_parent_interrupts_and_keeps_its_linked_child_marked_orphan() 
     // A filha parada conta como interrompida; a que não existe é a falha, no aviso do fechamento e no diário.
     let warnings = body["warning"]["params"]["avisos"].as_array().cloned().unwrap_or_default();
     assert_eq!(warnings.iter().map(|w| w["sessao"].as_str().unwrap_or_default()).collect::<Vec<_>>(), ["fantasma"], "{body}");
-    assert_eq!(warnings[0]["erro"]["code"], "erro_limpeza_fechamento_falhou", "{body}");
+    assert_eq!(warnings[0]["erro"]["code"], "linked_child_not_stopped", "a filha não fechou, só não parou: {body}");
     let code = warnings[0]["erro"]["params"]["codigo"].as_str().filter(|c| !c.is_empty()).expect("a falha leva o código").to_owned();
     assert!(e.diary_has("fantasma", &code).await, "{:?}", e.python.diag());
     assert!(e.registry.writable("filha").await.is_some(), "a filha segue aberta");

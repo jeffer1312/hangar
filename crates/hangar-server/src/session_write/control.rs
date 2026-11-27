@@ -19,7 +19,7 @@ use super::input::{
     Diary, MSG_CODEX_CONTROL, MSG_CONTROL_DEFERRED, MSG_CONTROL_UNCONFIRMED, MSG_STEER_REFUSED, MSG_STEER_UNKNOWN, answer, codex_control,
     control_failed, diary_code, json_content_type, payload_code, runtime_failed, sem_turno,
 };
-use super::{Ctx, Write, WriteRoute, admit, busy_body, detail_body, failed_status, invalid_body, json_response, route_write};
+use super::{BODY_LIMIT, Ctx, Write, WriteRoute, admit, admit_reach, busy_body, detail_body, failed_status, invalid_body, json_response, route_write};
 use crate::mods::state::random_hex;
 use crate::interactions::{ExpectedInteraction, InteractionError};
 use crate::routes::{AppState, cors};
@@ -458,19 +458,58 @@ pub async fn select_submit(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
 
 pub async fn interrupt(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let query = req.uri().query().map(str::to_owned);
-    let (ctx, _) = match admit(&st, peer, req, WriteRoute::Interrupt).await {
+    // Só o Parar pede a cascata: cancelar o cartão de pergunta também chama esta rota e não para as filhas.
+    let asked = crate::auth::query_param(query.as_deref(), "cascade").as_deref() == Some("1");
+    let headers = req.headers().clone();
+    let (ctx, _) = match admit_reach(&st, peer, req, WriteRoute::Interrupt).await {
         Ok(admitted) => admitted,
-        Err(response) => return response,
+        // O pai recusado (adormecido, abrindo, sem agente) não segura as filhas: a pessoa pediu parar tudo.
+        Err((refused, Some(root))) if asked => return refused_with_cascade(refused, cascade_from(&st, &root).await, &headers).await,
+        Err((refused, _)) => return refused,
     };
     let Some(clear) = parse_clear(query.as_deref()) else { return invalid_body(ctx.headers()) };
-    // Só o Parar pede a cascata: cancelar o cartão de pergunta também chama esta rota e não para as filhas.
     // O convidado alcança a sessão, não a árvore dela.
-    let cascade = ctx.owner && crate::auth::query_param(query.as_deref(), "cascade").as_deref() == Some("1");
+    let cascade = ctx.owner && asked;
     let own = interrupt_target(&ctx.name, &ctx.target, clear);
     // O pai que falha na própria interrupção não segura as filhas: a pessoa pediu parar tudo.
-    let (mut result, cascaded) = if cascade { tokio::join!(own, cascade_from(&st, &ctx.name)) } else { (own.await, None) };
-    if let (Some(cascaded), Some(body)) = (cascaded, result.1.as_object_mut()) { body.insert("cascade".into(), cascaded); }
-    answer(&ctx, result)
+    let (result, cascaded) = if cascade { tokio::join!(own, cascade_from(&st, &ctx.name)) } else { (own.await, None) };
+    answer(&ctx, with_cascade(result, cascaded))
+}
+
+/// Junta à resposta do pai o que as descendentes fizeram. Pai sem turno (parado, adormecido, abrindo a
+/// conversa) não é falha do Parar que alcançou filhas: vira 200 com `interrupted: false`, senão a tela
+/// mostraria erro e jogaria fora o resultado delas. Sem descendente conhecida, a resposta de sempre.
+fn with_cascade((status, mut body): Answer, cascaded: Option<Value>) -> Answer {
+    let Some(cascaded) = cascaded else { return (status, body) };
+    let opening = status == StatusCode::CONFLICT && body["detail"]["code"].as_str()
+        .is_some_and(|code| code == crate::runtime::codex_relaunch::STARTING || code == "other_terminal_starting");
+    if !status.is_success() && (opening || cascade_outcome(&(status, body.clone())).is_ok()) {
+        return (StatusCode::OK, json!({"ok": true, "interrupted": false, "cascade": cascaded}));
+    }
+    if let Some(object) = body.as_object_mut() { object.insert("cascade".into(), cascaded); }
+    (status, body)
+}
+
+/// A recusa pronta do `admit` com a cascata junto, pelas mesmas regras de `with_cascade`.
+async fn refused_with_cascade(refused: Response, cascaded: Option<Value>, headers: &axum::http::HeaderMap) -> Response {
+    let Some(cascaded) = cascaded else { return refused };
+    let status = refused.status();
+    let bytes = axum::body::to_bytes(refused.into_body(), BODY_LIMIT).await.unwrap_or_default();
+    let body = serde_json::from_slice::<Value>(&bytes).unwrap_or_else(|_| json!({}));
+    let (status, body) = with_cascade((status, body), Some(cascaded));
+    let mut response = json_response(status, body);
+    cors(headers, response.headers_mut());
+    response
+}
+
+/// Adormecida ou estacionada (Claude sem terminal sem ator, com o processo parado) não tem turno:
+/// acordá-la ou subir o processo só para o Esc seria trabalho à toa. A que o Rust perdeu com o
+/// processo de pé segue pela rota e responde o código dela.
+pub(super) async fn parked_no_turn(runtime: &RuntimeRegistry, name: &str) -> Option<Answer> {
+    let parked = runtime.writable(name).await.is_none()
+        && (runtime.asleep(name).await.is_some()
+            || (runtime.claude_headless_key(name).await.is_some() && runtime.runtime_lost(name).await.is_none()));
+    parked.then(|| sem_turno(MSG_NO_TURN))
 }
 
 /// A interrupção de uma entrada já admitida; a porta fica com quem chamou.
@@ -494,15 +533,7 @@ pub(crate) async fn interrupt_by_name(st: &AppState, name: &str) -> (StatusCode,
     let Some(runtime) = st.state.runtime.get() else {
         return (StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_unavailable", "o servidor está sem o registro de sessões", json!({})));
     };
-    // Adormecida ou estacionada (Claude sem terminal sem ator, com o processo parado) não tem turno:
-    // acordá-la ou subir o processo só para o Esc seria trabalho à toa. A que o Rust perdeu com o
-    // processo de pé segue pela rota e responde o código dela.
-    if runtime.writable(name).await.is_none()
-        && (runtime.asleep(name).await.is_some()
-            || (runtime.claude_headless_key(name).await.is_some() && runtime.runtime_lost(name).await.is_none()))
-    {
-        return sem_turno(MSG_NO_TURN);
-    }
+    if let Some(no_turn) = parked_no_turn(runtime, name).await { return no_turn; }
     match route_write(runtime, name, WriteRoute::Interrupt, st.write_gate_wait).await {
         Write::Rust(held, target) => {
             let result = interrupt_target(name, &target, false).await;

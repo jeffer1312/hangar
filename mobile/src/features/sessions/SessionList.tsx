@@ -155,7 +155,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   // As filhas antes do pai, uma a uma pelo DELETE de sempre (vale em servidor antigo), sempre na máquina
   // da linha: o servidor ativo pode mudar entre um fechamento e outro. As linhas somem na hora, as que
   // falharem voltam, e as falhas vêm num aviso só no fim.
-  const fecharComFilhas = useCallback(async (server: Server, s: AggSession, kids: AggSession[]) => {
+  const closeWithChildren = useCallback(async (server: Server, s: AggSession, kids: AggSession[]) => {
     const order = [...kids, s];
     for (const x of order) useSessions.getState().markDeleting(x.serverId, x.name);
     const failed: string[] = [];
@@ -191,7 +191,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
       const cancel = () => {
         if (!reservation.confirmed) release();
       };
-      const fechar = (kids: AggSession[]) => {
+      const close = (kids: AggSession[]) => {
         if (deleting.current.get(key) !== reservation || reservation.confirmed) return;
         reservation.confirmed = true;
         if (kids.length) {
@@ -200,7 +200,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
             release();
             return;
           }
-          fecharComFilhas(server, s, kids).finally(release);
+          closeWithChildren(server, s, kids).finally(release);
           return;
         }
         if (!comServidor(s, () => {
@@ -221,21 +221,21 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
       };
       // Pai com filhas ligadas abertas: fechar só ele (elas param e ficam, sem pai) ou junto com elas.
       const kids = linkedChildren(useSessions.getState().rows, s);
-      const cancelar = { text: m.comum_cancelar(), style: 'cancel' as const, onPress: cancel };
+      const cancelAction = { text: m.comum_cancelar(), style: 'cancel' as const, onPress: cancel };
       if (kids.length) {
         Alert.alert(m.sessao_excluir(), m.session_close_children_question({ name: s.name, n: kids.length }), [
-          cancelar,
-          { text: m.session_close_only_this(), style: 'destructive', onPress: () => fechar([]) },
-          { text: m.session_close_with_children({ n: kids.length }), style: 'destructive', onPress: () => fechar(kids) },
+          cancelAction,
+          { text: m.session_close_only_this(), style: 'destructive', onPress: () => close([]) },
+          { text: m.session_close_with_children({ n: kids.length }), style: 'destructive', onPress: () => close(kids) },
         ], { cancelable: true, onDismiss: cancel });
         return;
       }
       Alert.alert(m.sessao_excluir(), s.name, [
-        cancelar,
-        { text: m.sessao_excluir_curto(), style: 'destructive', onPress: () => fechar([]) },
+        cancelAction,
+        { text: m.sessao_excluir_curto(), style: 'destructive', onPress: () => close([]) },
       ], { cancelable: true, onDismiss: cancel });
     },
-    [comServidor, fecharComFilhas],
+    [comServidor, closeWithChildren],
   );
 
   const renomear = useCallback(

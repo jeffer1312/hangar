@@ -45,6 +45,9 @@ const BACKOFF: Duration = Duration::from_secs(30);
 const EVENT: &str = "rust.link_return_failed";
 /// Texto da pergunta da filha no recado ao pai, em `char`.
 const ASK_CHARS: usize = 300;
+/// Tipo da interação ainda ilegível (vínculo da conversa por ligar): espera isto além do `SETTLE` antes de
+/// avisar como pedido do dono, que não se refaz como pergunta depois.
+const KIND_GRACE: Duration = Duration::from_secs(60);
 
 static WAKE: LazyLock<Notify> = LazyLock::new(Notify::new);
 
@@ -225,6 +228,8 @@ struct Watcher {
     /// Avisos de pergunta ao pai: limite próprio, fora do das respostas.
     question_rate: RateLimit,
     question_retry_at: HashMap<String, Instant>,
+    /// Tirar da fila do pai o aviso que perdeu o sentido falhou passageiro: tenta de novo depois disso.
+    cancel_retry_at: HashMap<String, Instant>,
     /// Filhas com aviso ainda na fila do pai, pela última leitura: a rodada relê o arquivo por elas.
     open_asks: HashSet<String>,
     /// O arquivo já foi lido uma vez nesta vigia: aviso pendente de antes do reinício entra em `open_asks`.
@@ -256,6 +261,7 @@ impl Watcher {
         self.known.retain(|n| present(n));
         self.asking.retain(|n, _| present(n));
         self.question_retry_at.retain(|n, _| present(n));
+        self.cancel_retry_at.retain(|n, _| present(n));
         self.open_asks.retain(|n| present(n));
         self.notified.retain(|n, _| present(n));
         self.rate.forget_old(now);
@@ -361,6 +367,7 @@ impl Watcher {
         }
         if let Some(queued) = &link.asked_queue_id { return QuestionStep::Cancel(queued.clone()); }
         if now - since < SETTLE { return QuestionStep::Wait; }
+        if kind.is_none() && now - since < SETTLE + KIND_GRACE { return QuestionStep::Wait; }
         if !self.question_rate.allow(child, now) { return QuestionStep::Limited; }
         QuestionStep::Send(text)
     }
@@ -383,9 +390,17 @@ impl Watcher {
                 self.question_retry_at.insert(child.to_owned(), now + BACKOFF);
             }
             QuestionStep::Cancel(queued) => {
-                if let Err(code) = crate::session_write::control::cancel_waiting(st, parent, &queued).await {
-                    report(st, child, "link_question_cancel_failed", "pergunta já resolvida segue na fila do pai", &code);
+                if self.cancel_retry_at.get(child).is_some_and(|t| now < *t) { return; }
+                let cancelled = crate::session_write::control::cancel_waiting(st, parent, &queued).await;
+                if let Err(code) = &cancelled {
+                    report(st, child, "link_question_cancel_failed", "pergunta já resolvida segue na fila do pai", code);
                 }
+                // Pai ocupado ou acordando: a linha segue registrada e a tentativa volta depois.
+                if !cancel_settled(&cancelled) {
+                    self.cancel_retry_at.insert(child.to_owned(), now + BACKOFF);
+                    return;
+                }
+                self.cancel_retry_at.remove(child);
                 self.open_asks.remove(child);
                 record_ask(st, child, move |entry| if entry.asked_queue_id.as_deref() == Some(queued.as_str()) { entry.asked_queue_id = None; }).await;
             }
@@ -440,7 +455,14 @@ fn open_interaction(row: &SessionRow) -> Option<String> {
         .filter(|id| !id.is_empty()).map(str::to_owned)
 }
 
-/// O tipo pela identidade publicada; vínculo ou ID ilegível é `None`, tratado como permissão.
+/// O cancelamento do aviso acabou: tirado, já fora da fila, ou recusado de vez. Falha passageira não.
+fn cancel_settled(cancelled: &Result<bool, String>) -> bool {
+    let Err(code) = cancelled else { return true };
+    !(matches!(code.as_str(), "busy" | "asleep_waking" | "runtime_watcher" | "runtime_unhealthy" | "other_terminal_starting" | "session_transfer_busy")
+        || code == crate::runtime::gateway::ASLEEP_WAKING || code == crate::runtime::codex_relaunch::STARTING)
+}
+
+/// O tipo pela identidade publicada; vínculo ou ID ilegível é `None`: espera `KIND_GRACE`, depois vale como permissão.
 async fn interaction_kind(st: &AppState, child: &str, id: &str) -> Option<InteractionKind> {
     let runtime = st.state.runtime.get()?;
     let binding = runtime.interaction_binding_readonly(child).await.ok()?;
@@ -1072,11 +1094,32 @@ mod tests {
         }
     }
 
+    /// Tipo ilegível (vínculo ainda por ligar) espera: lido depois, a pergunta vai como pergunta; nunca lido,
+    /// vira o aviso ao dono passado `KIND_GRACE`.
     #[tokio::test(start_paused = true)]
-    async fn unknown_kind_is_a_permission() {
-        let row = waiting("x1", "Qual pasta?", &["src"]);
-        let QuestionStep::Send(text) = settled_step(&row, None, Instant::now()) else { panic!("esperava Send") };
+    async fn an_unread_kind_waits_before_it_counts_as_a_permission() {
+        let (row, t0) = (waiting("x1", "Qual pasta?", &["src"]), Instant::now());
+        let mut w = Watcher::default();
+        assert_eq!(w.question_step(&row, &linked(), None, t0), QuestionStep::Wait);
+        assert_eq!(w.question_step(&row, &linked(), None, t0 + SETTLE), QuestionStep::Wait);
+        let QuestionStep::Send(text) = w.question_step(&row, &linked(), Some(&InteractionKind::Question), t0 + SETTLE + Duration::from_secs(2))
+            else { panic!("esperava Send") };
+        assert!(text.contains("child_answer"), "{text}");
+        let mut w = Watcher::default();
+        w.question_step(&row, &linked(), None, t0);
+        assert_eq!(w.question_step(&row, &linked(), None, t0 + SETTLE + KIND_GRACE - Duration::from_secs(1)), QuestionStep::Wait);
+        let QuestionStep::Send(text) = w.question_step(&row, &linked(), None, t0 + SETTLE + KIND_GRACE) else { panic!("esperava Send") };
         only_notifies(&text, "Qual pasta?");
+    }
+
+    /// Só a falha passageira do cancelamento mantém a linha do aviso registrada para tentar de novo.
+    #[test]
+    fn a_transient_cancel_failure_keeps_the_line() {
+        assert!(cancel_settled(&Ok(true)) && cancel_settled(&Ok(false)));
+        for code in ["busy", "asleep_waking", "runtime_unhealthy", crate::runtime::codex_relaunch::STARTING] {
+            assert!(!cancel_settled(&Err(code.into())), "{code}");
+        }
+        for code in ["unowned", "queue_entry_not_found"] { assert!(cancel_settled(&Err(code.into())), "{code}"); }
     }
 
     #[tokio::test(start_paused = true)]

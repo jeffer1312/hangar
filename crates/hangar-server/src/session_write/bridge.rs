@@ -41,14 +41,14 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let vault_files = crate::vault::files::before_close(&st, &name).await;
     if let Some(closed) = runtime.close_other(&name).await {
         match closed {
-            Ok(mut body) => {
+            Ok(body) => {
                 if let Some(files) = vault_files { files.done(); }
                 closed_line(&st, &name, owner, req.headers(), peer);
                 let stopped = stop_children(&st, children).await;
-                if let Some(warnings) = body.get_mut("warnings").and_then(Value::as_array_mut) { warnings.extend(stopped); }
                 let mut response = super::json_response(StatusCode::OK, body);
                 crate::routes::cors(req.headers(), response.headers_mut());
-                return response;
+                // No `warning`, que os clientes leem, como no fechamento pelo Rust.
+                return with_warnings(&name, response, stopped, Vec::new()).await;
             },
             // A sessão já acabou: fecha pelo nome, como qualquer outra que acabou (D17).
             Err(error) if error.code == "other_terminal_dead" => {},
@@ -112,9 +112,15 @@ fn cleanup_failed(st: &AppState, name: &str, code: &str, reason: &'static str) -
 }
 
 /// O corpo do aviso de limpeza que não terminou, com o código.
-pub(crate) fn cleanup_warning(code: &str) -> Value {
+fn cleanup_warning(code: &str) -> Value {
     json!({"code": "erro_limpeza_fechamento_falhou", "params": {"codigo": code},
         "msg": format!("a sessão fechou, mas a limpeza não terminou ({code})")})
+}
+
+/// A filha ligada que não parou junto com o pai: ela segue aberta, não fechou.
+fn child_not_stopped(code: &str) -> Value {
+    json!({"code": "linked_child_not_stopped", "params": {"codigo": code},
+        "msg": format!("a filha ligada não parou junto e segue aberta ({code})")})
 }
 
 /// O nome que a conversa tinha, para o Arquivo e o "reabre a X" (o `closed_names.record` do Python, na
@@ -155,7 +161,7 @@ async fn children_to_stop(st: &AppState, name: &str, owner: bool) -> Vec<hangar_
 async fn stop_children(st: &Arc<AppState>, targets: Vec<hangar_delegation::cascade::CascadeTarget>) -> Vec<Value> {
     if targets.is_empty() { return Vec::new(); }
     let (_, failed) = crate::session_write::control::interrupt_descendants(st, targets).await;
-    failed.into_iter().map(|(child, code)| json!({"sessao": child, "erro": cleanup_warning(&code)})).collect()
+    failed.into_iter().map(|(child, code)| json!({"sessao": child, "erro": child_not_stopped(&code)})).collect()
 }
 
 /// A saída do grupo de quem já morreu, e depois a interrupção das descendentes `children`, lidas antes.

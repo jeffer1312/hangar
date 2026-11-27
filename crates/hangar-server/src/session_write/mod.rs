@@ -80,16 +80,35 @@ pub(crate) fn session_name(path: &str) -> Option<String> {
 /// Decide quem atende. `Ok`: o Rust atende, com o passe na mão e o corpo já lido. `Err`: a resposta
 /// pronta (recusa de quem não pode na sessão, recusa da porta fechada, ou a recusa do Rust).
 pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute) -> Result<(Ctx, Bytes), Response> {
-    let (_, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
+    admit_reach(st, peer, req, route).await.map_err(|(response, _)| response)
+}
+
+/// O `admit`, com o nome da sessão junto da recusa quando quem chamou é o dono: a recusa do pai (sem
+/// turno, abrindo, ocupado) não impede o Parar de alcançar as filhas dele.
+pub(crate) async fn admit_reach(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute)
+    -> Result<(Ctx, Bytes), (Response, Option<String>)> {
+    let (_, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err((crate::auth::unavailable(e), None)) };
     let runtime = st.state.runtime.get().cloned();
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
-    let Some(name) = name else { return Err(stranger(st, peer, req, who.as_ref()).await) };
+    let Some(name) = name else { return Err((stranger(st, peer, req, who.as_ref()).await, None)) };
     let owner = matches!(who, Some(Caller::Owner));
+    let reach = owner.then(|| name.clone());
+    admit_named(st, peer, req, route, name, owner, runtime).await.map_err(|response| (response, reach))
+}
+
+async fn admit_named(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute, name: String, owner: bool,
+                     runtime: Option<Arc<RuntimeRegistry>>) -> Result<(Ctx, Bytes), Response> {
     if matches!(route, WriteRoute::Input | WriteRoute::Interrupt)
         && let Some(response) = orchestration_guard(st, &name, req.headers()).await {
         return Err(response);
     }
     let Some(runtime) = runtime else { return Err(no_runtime(req.headers())) };
+    // Sem turno não há o que parar: o Esc não acorda a adormecida nem sobe a estacionada.
+    if route == WriteRoute::Interrupt && let Some((status, body)) = control::parked_no_turn(&runtime, &name).await {
+        let mut response = json_response(status, body);
+        cors(req.headers(), response.headers_mut());
+        return Err(response);
+    }
     // A troca de agente à espera segurou a fila para o Codex: orientar ou "Enviar agora" entregaria ao Claude.
     if matches!(route, WriteRoute::Steer | WriteRoute::QueueSteer) && runtime.handoff_held(&name) {
         let mut response = json_response(StatusCode::CONFLICT, detail_body("session_transfer_busy", "a sessão está trocando de agente", json!({})));

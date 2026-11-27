@@ -778,6 +778,68 @@ async fn delete_r1_02_a_guest_closes_a_live_pi_through_the_route_with_the_owner_
     assert_eq!(names[&*transcript.to_string_lossy()]["name"], "pi-a", "{names}");
 }
 
+/// O dono fecha um pai Pi com a filha ligada `fantasma` (nenhuma sessão com esse nome): a filha que não
+/// parou volta no `warning`, que os clientes leem, com o código dela, e não como limpeza do fechamento.
+#[tokio::test]
+async fn closing_a_pi_parent_reports_the_child_that_did_not_stop_in_the_warning() {
+    use hangar_server::groups::{orq::OrqVault, service::GroupService, store::PairDir};
+    use hangar_server::runtime::other_terminal::{OtherDiscovery, OtherDiscoveryState, OtherOptions, OtherTarget};
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let tmux = fake_tmux(&root, "pi-a");
+    std::fs::write(root.join("sessions"), "pi-a\n").unwrap();
+    let dirs = hangar_server::list::discover_other::Dirs { home: root.join("home"), claude: root.join(".claude"), codex_home: root.join(".codex"),
+        pi_sessions: root.join(".pi/agent/sessions"), omp_config: root.join(".omp"), omp_agent: root.join(".omp/agent"), kimi_home: root.join(".kimi-code") };
+    std::fs::create_dir_all(&dirs.home).unwrap();
+    let transcript = root.join("c.jsonl");
+    std::fs::write(&transcript, "").unwrap();
+    let target = OtherTarget { key: "life-a".into(), generation: 1, name: "pi-a".into(), provider: hangar_transcript::Provider::Pi,
+        binding: hangar_server::terminal_input::TerminalBinding { name: "pi-a".into(), pane: "%1".into(), conversation: "c".into(), generation: 1,
+            created: 100, mux_argv: vec![tmux.to_string_lossy().into_owned()], windows: false, clipboard_lock_path: None },
+        pane_address: "%1".into(), dirs: dirs.clone(), cwd: root.to_string_lossy().into_owned(), pane_pid: 1, agent_pid: i64::from(exited_pid()), agent_birth: 1.0,
+        transcript: transcript.clone(), state_path: root.join("runtime/life-a.json"), lease_path: root.join("runtime/life-a.lock"),
+        projection_dir: root.join("queue"), config_dirs: vec![root.clone()], created: 100.0 };
+    let pair = root.join("pair");
+    std::fs::create_dir_all(&pair).unwrap();
+    let harness = json!({"pi-a": "pi", "fantasma": "claude"});
+    std::fs::write(pair.join("pi-a.json"), json!({"peers": ["fantasma"], "task": "", "gid": "g1", "harness": harness}).to_string()).unwrap();
+    std::fs::write(pair.join("fantasma.json"), json!({"peers": ["pi-a"], "task": "", "gid": "g1", "harness": harness, "linked_by": "pi-a"}).to_string()).unwrap();
+    let mut state = AppState::new(fake::config("127.0.0.1"));
+    let (home, base) = (root.join("home").to_string_lossy().into_owned(), root.join("conta").to_string_lossy().into_owned());
+    state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home), ("CLAUDE_CONFIG_DIR".to_owned(), base)].into()));
+    let list_dirs = parse_dirs(&json!({"home": dirs.home, "claude": dirs.claude, "codex_home": dirs.codex_home, "pi_sessions": dirs.pi_sessions,
+        "omp_config": dirs.omp_config, "omp_agent": dirs.omp_agent, "kimi_home": dirs.kimi_home}).to_string());
+    state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&tmux, Duration::from_secs(5)), capture_program: tmux.clone().into_os_string(),
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: list_dirs }, FactsClient::new()));
+    state.share = None;
+    state.hangar_dir = root.join(".hangar");
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair, root.join("arquivo")), Arc::new(OrqVault::from_state(&state)), "casa".into())));
+    let registry = crate::runtime_open::registry().await;
+    assert!(state.state.runtime.set(registry.clone()).is_ok());
+    let st = Arc::new(state);
+    let mut options = OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(), hangar_server::provider_models::inbox::Store::new(),
+        Arc::new(hangar_server::list::procs::SystemProcs::default()), Arc::new(hangar_server::interactions::InteractionStore::default()));
+    options.after_closed = Some(hangar_server::session_write::bridge::other_cleanup(Arc::downgrade(&st)));
+    let found = target.clone();
+    registry.bind_other(options, OtherDiscovery {
+        find: Arc::new(move |_| { let found = found.clone(); Box::pin(async move { Some(Ok(OtherDiscoveryState::Ready(found))) }) }),
+        names: Arc::new(|| Box::pin(async { Ok(vec![]) })),
+    }).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = listener.local_addr().unwrap();
+    let router = hangar_server::routes::router(st.clone());
+    tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
+    let response = fake::client().delete(format!("http://{server}/api/sessions/pi-a")).bearer_auth(OWNER).send().await.unwrap();
+    let status = response.status().as_u16();
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(status, 200, "{body}");
+    let avisos = body["warning"]["params"]["avisos"].as_array().cloned().unwrap_or_default();
+    let child = avisos.iter().find(|w| w["sessao"] == "fantasma").unwrap_or_else(|| panic!("a filha que não parou no `warning`: {body}"));
+    assert_eq!(child["erro"]["code"], "linked_child_not_stopped", "{body}");
+    assert!(child["erro"]["params"]["codigo"].as_str().is_some_and(|c| !c.is_empty()), "{body}");
+}
+
 /// R1-05 (`tmux.alvo_de_kill`): fechar `cat` mata só ela, pelo alvo exato `=cat`; a irmã `cat-2` fica. No
 /// Windows o alvo é o nome cru: `state::capture` tem o teste de lá.
 #[tokio::test]

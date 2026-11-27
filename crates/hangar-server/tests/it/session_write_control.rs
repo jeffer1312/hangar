@@ -775,8 +775,8 @@ async fn interrupting_a_parent_interrupts_its_linked_children_and_reports_each()
     let child = open_headless(&registry, dir.path(), "a").await;
     let (python, server, diag) = linked_family(registry, dir.path()).await;
     let (status, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
-    // O pai sem turno responde como sempre, e a cascata corre mesmo assim.
-    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
+    // O pai sem turno não é falha do Parar que alcançou as filhas: a tela não descarta o resultado delas.
+    assert_eq!((status, &body["ok"], &body["interrupted"]), (200, &json!(true), &json!(false)), "{body}");
     assert_eq!(body["cascade"]["interrupted"], json!(["a"]), "filha parada sem turno conta como interrompida: {body}");
     let failed = body["cascade"]["failed"].as_array().expect("lista das que falharam");
     assert_eq!(failed.len(), 1, "{body}");
@@ -805,6 +805,31 @@ async fn a_parked_child_counts_as_stopped_without_launching_it() {
     let (_, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
     assert_eq!(body["cascade"]["interrupted"], json!(["a"]), "a estacionada não tinha turno: {body}");
     assert!(registry.writable("a").await.is_none(), "a estacionada não subiu só para o Esc");
+}
+
+/// Pai Claude sem terminal estacionado (só o arquivo dele): a recusa sem turno vem antes da entrada, e o
+/// Parar com `cascade=1` ainda alcança as filhas, sem subir o pai só para o Esc.
+#[tokio::test]
+async fn a_parked_parent_still_stops_its_children() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecars = dir.path().join(".hangar/claude-headless");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    let parked = json!({"name": "p", "key": "cd".repeat(16), "cwd": dir.path(), "session_id": "sid-p", "headless": true, "permission_mode": "manual"});
+    std::fs::write(sidecars.join("p.json"), parked.to_string()).unwrap();
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), dir.path().to_string_lossy().into_owned())].into());
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(env));
+    open_headless(&registry, dir.path(), "a").await;
+    let (_python, server, _diag) = linked_family(registry.clone(), dir.path()).await;
+    let (status, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
+    assert_eq!((status, &body["interrupted"]), (200, &json!(false)), "{body}");
+    assert_eq!(body["cascade"]["interrupted"], json!(["a"]), "{body}");
+    assert_eq!(body["cascade"]["failed"][0]["name"], "b", "{body}");
+    assert!(registry.writable("p").await.is_none(), "o pai estacionado não subiu só para o Esc");
+    // Sem `cascade=1` a recusa sem turno é a de sempre.
+    let (status, body) = send(server, "POST", "p/interrupt", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
+    assert!(body.get("cascade").is_none(), "{body}");
 }
 
 #[tokio::test]

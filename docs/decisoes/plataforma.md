@@ -4199,7 +4199,10 @@ ninguém.
   aviso não cita o ID e a chave é o texto, então não se repete, e o `child_answer` recusa com
   `erro_permissao_do_dono`. No Claude com terminal todo menu é `Menu`, inclusive "Do you want to
   proceed?". Interação resolvida com o aviso ainda na fila do pai tira a linha dela
-  (`asked_queue_id`). `[de: …]` e não `[painel: …]`: o painel diz "não responda".
+  (`asked_queue_id`); pai ocupado ou acordando mantém a linha registrada e tenta de novo em 30 s.
+  Tipo ilegível (vínculo da conversa ainda por ligar logo ao subir) espera mais `KIND_GRACE` (60 s)
+  antes de virar aviso ao dono: o aviso não se refaz como pergunta depois. `[de: …]` e não
+  `[painel: …]`: o painel diz "não responda".
 - **`child_answer` passa pela `/answer` com o `interaction_id` do aviso.** Codex com terminal não
   informa quem resolveu: a resposta sai "enviada, sem confirmação" e não se tenta de novo.
 - **Parar só cascateia com `?cascade=1`.** Cancelar um cartão de pergunta também chama
@@ -4209,11 +4212,16 @@ ninguém.
   que não há turno; a que não parou vai no `cascade.failed` da resposta, num aviso só, e no diário
   (`rust.link_cascade_failed`). Arquivos de grupo ilegíveis não dão filha conhecida: a resposta sai sem
   `cascade` e a falha fica só no diário, porque nenhuma parada pedida falhou à vista da pessoa.
+  O pai sem turno é o caso normal depois de delegar: adormecido ou estacionado responde sem turno sem
+  acordar, e a recusa da admissão (sem turno, abrindo) não segura a cascata. Com descendente
+  conhecida, pai sem turno ou abrindo vira 200 `{"interrupted": false, "cascade": …}`; senão a tela
+  mostraria erro e jogaria fora o resultado das filhas.
 - **Fechar o pai interrompe as filhas e as mantém abertas (4B).** Só no fechamento do dono: o
   convidado alcança a sessão, não a árvore dela, como no `/interrupt`. Só depois de a morte do pai ser
   confirmada: com o kill falho, nada muda nelas. As descendentes são lidas antes do fechamento (o de
   Pi/omp/Kimi sai do grupo por dentro, e a saída apaga o `linked_by`) e interrompidas depois dele; o
-  Pi/omp/Kimi que some sozinho só marca, como a varredura. Toda saída do grupo grava a marca em
+  Pi/omp/Kimi que some sozinho só marca, como a varredura. A filha que não parou volta no `warning` do
+  fechamento (`linked_child_not_stopped`), em todo agente do pai: é o campo que os clientes leem. Toda saída do grupo grava a marca em
   `~/.hangar/link-orphans.json` (`hangar_delegation::orphans`): o DELETE (dono ou convidado), a
   limpeza de Pi/omp/Kimi, o `DELETE /pair` e a varredura de membro morto, que é quem tira o pai que
   morreu sozinho. A linha leva

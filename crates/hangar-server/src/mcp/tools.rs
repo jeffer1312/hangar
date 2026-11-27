@@ -838,7 +838,7 @@ impl Tools {
         // Parar a filha para também as filhas dela, como o Parar da tela.
         let (status, value) = self.route_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt?cascade=1", segment(alvo)), None).await;
         if (200..300).contains(&status) { return Ok(dict(value)); }
-        // A filha sem turno pode ter parado as dela: o erro leva a cascata junto.
+        // Sem turno com netas já vem 200; outra recusa da filha (ocupada, abrindo) leva a cascata junto.
         let cascade = value.get("cascade").map(|c| format!(" (cascade: {c})")).unwrap_or_default();
         Err(format!("{}{cascade}", detail(status, &value)))
     }

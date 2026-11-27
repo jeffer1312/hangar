@@ -898,6 +898,27 @@ describe('ações e atualização da conversa na rota', () => {
     }
   });
 
+  it('Parar com o pai sem turno e filhas paradas mantém o pendente onde estava', async () => {
+    vi.mocked(interrupt).mockResolvedValueOnce({ ok: true, interrupted: false, cascade: { interrupted: ['filha'], failed: [] } });
+    const alert = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const { container, root } = await render(createElement(ChatScreen));
+    try {
+      const chat = chatStore('s1', 'sess');
+      const pending = [{ id: 'pending-a', text: 'esperando' }];
+      act(() => chat.use.setState({ pending, stateEvent: { session: 'sess', state: 'working' } }));
+      act(() => button(container, 'composer_parar')!.click());
+      const choices = alert.mock.calls[0][2] as { style?: string; onPress?: () => void }[];
+      await act(async () => choices.find((choice) => choice.style === 'destructive')!.onPress!());
+      expect(interrupt).toHaveBeenCalledExactlyOnceWith('sess', true, useServers.getState().servers[0], { cascade: true });
+      // Nenhum Esc saiu: a mensagem não volta ao campo nem some da fila.
+      expect(chat.use.getState().pending).toEqual(pending);
+      expect(container.querySelector('textarea')!.value).toBe('');
+    } finally {
+      act(() => root.unmount());
+      alert.mockRestore();
+    }
+  });
+
   it.each(['recarregar', 'codex', 'claude'])('%s usa o servidor da rota e conserva o destino na reversão', async (action) => {
     chatRow.extra = { provider: action === 'codex' ? 'codex' : 'claude' };
     const { container, root } = await render(createElement(ChatScreen));

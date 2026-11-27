@@ -418,6 +418,8 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
         if (failed.length && rotaAtual.current === rota) {
           mostrarAviso(m.interrupt_cascade_failed({ names: failed.join(', ') }));
         }
+        // Pai sem turno: nenhum Esc saiu, a mensagem pendente segue onde estava.
+        if (result?.interrupted === false) return;
         if (!last || !chat.use.getState().pending.some((p) => p.id === last.id)) return;
         chat.use.setState((live) => ({ pending: live.pending.filter((p) => p.id !== last.id) }));
         // Só depois do Esc confirmado: com falha a mensagem segue na fila e voltaria em dobro.
