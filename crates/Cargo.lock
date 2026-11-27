@@ -2104,6 +2104,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-placement"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "hangar-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hangar-plugins"
 version = "0.1.0"
 dependencies = [

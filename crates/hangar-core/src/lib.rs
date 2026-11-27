@@ -36,6 +36,7 @@ pub mod paths;
 #[allow(unsafe_code)]
 pub mod private_acl;
 pub mod process;
+pub mod project;
 pub mod provider_state;
 pub mod pycompat;
 pub mod qr;
