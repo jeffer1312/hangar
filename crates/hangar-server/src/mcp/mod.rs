@@ -135,7 +135,7 @@ impl ServerHandler for Handler {
         let capture = if parts.is_some_and(|p| p.extensions.get::<OwnerTransport>().is_some())
             && let Some(telemetry) = self.tools.telemetry() {
             let epoch = telemetry.consent_epoch();
-            match (telemetry.collection(), self.tools.owner_session(&headers).await) {
+            match (telemetry.collection(), Box::pin(self.tools.owner_session(&headers)).await) {
                 (Some(period), Some(owner)) if telemetry.consent_epoch() == epoch && telemetry.enabled() => Some((period, epoch, owner)),
                 _ => None,
             }
@@ -147,7 +147,8 @@ impl ServerHandler for Handler {
             || name.starts_with("int__");
         let external_started = is_integration.then(|| Arc::new(AtomicBool::new(false)));
         let start = std::time::Instant::now();
-        let call = self.tools.call(name, args, &headers, draft.clone(), external_started.clone());
+        // Em debug o futuro de todas as tools junto estoura a pilha de 2 MiB do worker do tokio.
+        let call = Box::pin(self.tools.call(name, args, &headers, draft.clone(), external_started.clone()));
         let call = tools::ARGUMENTS_REJECTED.scope(std::cell::Cell::new(false), async move {
             let result = crate::telemetry_hooks::NO_TELEMETRY.scope((), call).await;
             (result, tools::ARGUMENTS_REJECTED.with(std::cell::Cell::get))
@@ -178,7 +179,7 @@ impl ServerHandler for Handler {
         let took = start.elapsed();
         if let Some((period, epoch, owner)) = capture
             && self.tools.telemetry().is_some_and(|telemetry| telemetry.consent_epoch() == epoch)
-            && self.tools.owner_session(&headers).await.as_ref() == Some(&owner) {
+            && Box::pin(self.tools.owner_session(&headers)).await.as_ref() == Some(&owner) {
             let (stage, code) = if cancelled { ("cancelled", Some("tool_cancelled")) }
                 else if invalid_arguments { ("arguments", Some("invalid_arguments")) }
                 else if result.is_error != Some(true) { ("dispatch", None) }
@@ -249,8 +250,15 @@ mod tests {
         (session, String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes()).into_owned())
     }
 
-    #[tokio::test]
-    async fn telemetry_mcp_bearer_without_a_verified_session_is_not_counted() {
+    #[test]
+    fn telemetry_mcp_bearer_without_a_verified_session_is_not_counted() {
+        // O futuro do roteador inteiro, em debug, passa de 8 MiB de pilha.
+        const STACK: usize = 256 << 20;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        std::thread::Builder::new().stack_size(STACK).spawn(move || rt.block_on(bearer_without_session_body())).unwrap().join().unwrap();
+    }
+
+    async fn bearer_without_session_body() {
         use tower::ServiceExt;
         let home = tempfile::tempdir().unwrap();
         let st = crate::telemetry_hooks::test_state(home.path(), true);
