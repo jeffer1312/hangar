@@ -3759,6 +3759,7 @@ dependencies = [
  "chrono",
  "hangar-api",
  "libc",
+ "rayon",
  "regex",
  "ring",
  "serde",
