@@ -4,18 +4,19 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
 use crate::buckets::Bucket;
-use crate::events::{Dims, Event, LogLevel};
+use crate::diary::DetailSource;
+use crate::events::{Dims, Event};
 use crate::queue::{self, DayFile};
 use crate::send::Failure;
-use crate::state::{self, State};
+use crate::state::{self, Acceptance, Collection, State};
 use crate::switch::{self, Disabled};
-use crate::wire::{Counter, Env, LogLine, MAX_COUNT, MAX_LOG_CHARS, MAX_LOG_LINES, is_id, is_invisible, is_name};
+use crate::wire::{Counter, Env, MAX_COUNT, is_id};
 
 /// Relógio de parede; os testes injetam o deles.
 pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
@@ -46,52 +47,35 @@ pub struct Telemetry {
     live: Mutex<Live>,
     /// Ordena quem toca o disco: gravação, envio, consentimento. Ordem das travas: `io`, `settings`, `live`.
     pub(crate) io: Mutex<()>,
+    /// Só protege a admissão do primeiro poll do POST; nunca fica presa enquanto ele espera a rede.
+    pub(crate) post_gate: Mutex<Option<String>>,
     /// O que não fez a operação falhar mas o diário precisa saber (arquivo ilegível recomeçado, dias
     /// apagados pelo teto); a tarefa de fundo entrega.
     notes: Mutex<Vec<Failure>>,
     /// O dia (UTC) do último receptor fora do ar já avisado: um aviso por dia.
     pub(crate) unreachable_day: Mutex<Option<String>>,
+    /// Quem projeta falhas e trilha do diário; sem ele o pacote sai só com contadores.
+    pub(crate) detail: OnceLock<DetailSource>,
 }
 
 pub(crate) struct Settings {
     pub(crate) state: State,
     disabled: Option<Disabled>,
-    /// `.env` que não se lê: desliga sem apagar a fila, porque a pessoa não pediu para parar.
+    /// `.env` ilegível pausa o envio e invalida a época, sem apagar os arquivos na hora.
     env_unreadable: bool,
+    invalidate_period: bool,
+    revocation_unwritten: bool,
 }
 
 type Key = (String, BTreeMap<String, String>, Option<String>);
-/// Nível, alvo e mensagem.
-type LogKey = (String, String, String);
 
 struct Day {
     day: String,
     counters: BTreeMap<Key, u64>,
-    logs: BTreeMap<LogKey, u64>,
 }
 
 impl Day {
-    fn new(day: String) -> Day { Day { day, counters: BTreeMap::new(), logs: BTreeMap::new() } }
-
-    /// `false` quando a linha é nova e o dia já tem `MAX_LOG_LINES` distintas: o pacote não passa do teto.
-    fn add_log(&mut self, line: LogLine) -> bool {
-        let key = (line.level, line.target, line.message);
-        if let Some(slot) = self.logs.get_mut(&key) {
-            *slot = slot.saturating_add(line.count).min(MAX_COUNT);
-            return true;
-        }
-        if self.logs.len() >= MAX_LOG_LINES {
-            return false;
-        }
-        self.logs.insert(key, line.count.min(MAX_COUNT));
-        true
-    }
-
-    fn to_logs(&self) -> Vec<LogLine> {
-        self.logs.iter()
-            .map(|((level, target, message), count)| LogLine { level: level.clone(), target: target.clone(), message: message.clone(), count: *count })
-            .collect()
-    }
+    fn new(day: String) -> Day { Day { day, counters: BTreeMap::new() } }
 
     fn add(&mut self, counter: Counter) {
         let slot = self.counters.entry((counter.event, counter.dims, counter.bucket)).or_default();
@@ -101,8 +85,7 @@ impl Day {
 
     fn from_file(file: DayFile) -> Day {
         let mut day = Day::new(file.day);
-        file.counters.into_iter().for_each(|counter| day.add(counter));
-        file.logs.into_iter().for_each(|line| { day.add_log(line); });
+        for counter in file.counters { day.add(counter); }
         day
     }
 
@@ -112,7 +95,13 @@ impl Day {
             .collect()
     }
 
-    fn file(&self) -> DayFile { DayFile { day: self.day.clone(), batch_id: None, counters: self.to_counters(), logs: self.to_logs() } }
+    fn file(&self) -> DayFile {
+        // Os produtores antigos desses contadores não comprovam autoria ou horário da ocorrência.
+        let counters = self.to_counters().into_iter().filter(|counter| !matches!(counter.event.as_str(),
+            "turn_finished" | "limit_switch" | "problem_hidden" | "problem_shown" | "session_fallen" | "server_exit"))
+            .collect();
+        DayFile { day: self.day.clone(), counters, ..DayFile::default() }
+    }
 }
 
 struct Live {
@@ -170,7 +159,7 @@ impl Telemetry {
 
     pub fn with(config: Config, clock: Clock, lookup: EnvLookup) -> io::Result<Telemetry> {
         let now = clock();
-        let (state, recovered) = state::load(&config.home, now.timestamp())?;
+        let (state, recovered) = state::load(&config.home, now)?;
         let telemetry = Telemetry {
             batch_env: Env::new(&config.version, config.release_commit.as_deref(), &config.channel),
             home: config.home,
@@ -178,11 +167,13 @@ impl Telemetry {
             lookup,
             enabled: AtomicBool::new(false),
             consent_epoch: AtomicU64::new(0),
-            settings: Mutex::new(Settings { state, disabled: None, env_unreadable: false }),
+            settings: Mutex::new(Settings { state, disabled: None, env_unreadable: false, invalidate_period: false, revocation_unwritten: false }),
             live: Mutex::new(Live::new(Day::new(day_of(now)), false)),
             io: Mutex::new(()),
+            post_gate: Mutex::new(None),
             notes: Mutex::new(recovered.into_iter().map(Failure::Disk).collect()),
             unreachable_day: Mutex::new(None),
+            detail: OnceLock::new(),
             clock,
         };
         telemetry.refresh()?;
@@ -209,41 +200,23 @@ impl Telemetry {
     }
 
     pub fn duration(&self, event: Event, dims: Dims, took: Duration) {
-        if self.enabled() {
-            self.add(Counter::new(event, dims, Some(Bucket::of(took)), 1));
-        }
+        if self.enabled() { self.duration_in_epoch(self.consent_epoch(), event, dims, took); }
     }
 
-    /// Uma linha de aviso ou erro do log, já limpa por quem chama; o mesmo portão do `count`. Alvo fora
-    /// do formato sai `other`; caractere de controle vira espaço e a mensagem é cortada em `MAX_LOG_CHARS`.
-    pub fn log(&self, level: LogLevel, target: &str, message: &str) {
-        if !self.enabled() {
-            return;
-        }
-        let message: String = message.chars().map(|c| if is_invisible(c) { ' ' } else { c }).take(MAX_LOG_CHARS).collect();
-        let message = message.trim();
-        if message.is_empty() {
-            return;
-        }
-        let target = if is_name(target) { target } else { "other" };
-        let line = LogLine { level: level.as_str().to_owned(), target: target.to_owned(), message: message.to_owned(), count: 1 };
-        let today = day_of((self.clock)());
-        let Ok(mut live) = self.live.lock() else { return };
-        // A revogação desliga antes de limpar a memória sob esta trava: conferida aqui, não grava depois dela.
-        if !self.enabled() {
-            return;
-        }
-        live.roll(today);
-        if !live.current.add_log(line) {
-            live.current.add(Counter::new(Event::LogDropped, Dims::new(), None, 1));
-        }
-        live.dirty = true;
+    pub fn duration_in_epoch(&self, epoch: u64, event: Event, dims: Dims, took: Duration) {
+        self.add_in_epoch(epoch, Counter::new(event, dims, Some(Bucket::of(took)), 1));
     }
 
-    fn add(&self, counter: Counter) {
-        let today = day_of((self.clock)());
+    pub fn count_in_epoch(&self, epoch: u64, event: Event, dims: Dims, n: u64) {
+        self.add_in_epoch(epoch, Counter::new(event, dims, None, n));
+    }
+
+    fn add(&self, counter: Counter) { self.add_in_epoch(self.consent_epoch(), counter); }
+
+    fn add_in_epoch(&self, epoch: u64, counter: Counter) {
+        let today = self.today();
         let Ok(mut live) = self.live.lock() else { return };
-        if !self.enabled() {
+        if !self.enabled() || self.consent_epoch() != epoch {
             return;
         }
         live.roll(today);
@@ -254,16 +227,14 @@ impl Telemetry {
     /// `Ok(true)` só na primeira vez que `key` passa por aqui, também entre reinícios; desligada,
     /// `Ok(false)`. Marca que não se lê nem se grava volta `Err`: quem chama não conta nem dá o
     /// feito por feito. Arquivo ilegível recomeça vazio e vai ao diário. Lê e grava disco.
-    pub fn once(&self, key: &str) -> io::Result<bool> {
+    pub fn once(&self, key: &str) -> io::Result<bool> { self.once_in_epoch(self.consent_epoch(), key) }
+
+    pub fn once_in_epoch(&self, epoch: u64, key: &str) -> io::Result<bool> {
         const KEEP: usize = 64;
-        if !self.enabled() {
-            return Ok(false);
-        }
+        if !self.enabled() { return Ok(false); }
         let _io = lock(&self.io)?;
-        // `refresh` desliga sob a mesma trava: a marca não sai depois da revogação.
-        if !self.enabled() {
-            return Ok(false);
-        }
+        let Some(period) = self.collection().filter(|_| self.consent_epoch() == epoch) else { return Ok(false) };
+        let key = format!("{}:{key}", period.id);
         let mut keys = match queue::read_once(&self.home) {
             Ok(keys) => keys,
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
@@ -272,10 +243,8 @@ impl Telemetry {
             }
             Err(e) => return Err(e),
         };
-        if keys.iter().any(|known| known == key) {
-            return Ok(false);
-        }
-        keys.push(key.to_owned());
+        if keys.contains(&key) { return Ok(false); }
+        keys.push(key);
         let excess = keys.len().saturating_sub(KEEP);
         keys.drain(..excess);
         queue::write_once(&self.home, &keys)?;
@@ -291,7 +260,28 @@ impl Telemetry {
     pub fn consent_epoch(&self) -> u64 { self.consent_epoch.load(Ordering::SeqCst) }
 
     /// `None` = ainda sem resposta.
-    pub fn consent(&self) -> Option<bool> { lock(&self.settings).ok().and_then(|s| s.state.consent) }
+    pub fn consent(&self) -> Option<bool> { lock(&self.settings).ok().and_then(|s| s.state.consent()) }
+
+    /// Carimbo local para só marcar linhas capturadas no período em vigor.
+    pub fn collection(&self) -> Option<Collection> {
+        let settings = lock(&self.settings).ok()?;
+        self.enabled().then_some(())?;
+        settings.state.collection.clone()
+    }
+
+    /// Liga a projeção de falhas e trilha do diário no pacote; só a primeira vale.
+    pub fn set_detail(&self, source: DetailSource) { let _ = self.detail.set(source); }
+
+    pub(crate) fn seal_through_held(&self, day: String) -> io::Result<()> {
+        let mut settings = lock(&self.settings)?;
+        let mut next = settings.state.clone();
+        if let Some(period) = next.collection.as_mut() {
+            period.sealed_through = Some(day);
+            state::store(&self.home, &next)?;
+            settings.state = next;
+        }
+        Ok(())
+    }
 
     /// O que desliga apesar do consentimento, na última leitura (subida, consentimento ou tarefa de fundo).
     pub fn disabled_by(&self) -> Option<Disabled> { lock(&self.settings).ok().and_then(|s| s.disabled) }
@@ -300,15 +290,32 @@ impl Telemetry {
     /// vale: a falha ao aplicá-la (ler o dia, apagar a fila) volta em `Ok(Some)` para o diário, e a
     /// passada seguinte tenta de novo. Bloqueante.
     pub fn set_consent(&self, consent: bool) -> io::Result<Option<io::Error>> {
+        let _io = lock(&self.io)?;
         {
-            let _io = lock(&self.io)?;
             let mut settings = lock(&self.settings)?;
             let mut next = settings.state.clone();
-            next.consent = Some(consent);
-            state::store(&self.home, &next)?;
-            settings.state = next;
+            let now = (self.clock)();
+            if consent && now.timestamp() <= 0 {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "relógio inválido para gravar consentimento"));
+            }
+            next.legacy = Some(false);
+            if !consent {
+                next.option_b = None;
+                next.collection = None;
+            } else if next.option_b.as_ref().is_none_or(|choice| choice.at > now) {
+                next.option_b = Some(Acceptance { scope: state::CONSENT_SCOPE, at: now });
+                next.collection = None;
+            }
+            if !consent || next.collection != settings.state.collection { self.close_post_gate()?; }
+            let stored = state::store(&self.home, &next);
+            // Se o disco recusar a revogação, não volta a enviar nesta vida.
+            if !consent || stored.is_ok() {
+                settings.state = next;
+                settings.revocation_unwritten = stored.is_err();
+            }
+            stored?;
         }
-        Ok(self.refresh().err())
+        Ok(self.refresh_held().err())
     }
 
     /// O dono desta máquina e quando ele nasceu (segundos Unix), para a convergência com os peers.
@@ -338,29 +345,37 @@ impl Telemetry {
     /// Os contadores do dia corrente em memória.
     pub fn counters(&self) -> Vec<Counter> { lock(&self.live).map(|live| live.current.to_counters()).unwrap_or_default() }
 
-    /// As linhas de log do dia corrente em memória.
-    pub fn logs(&self) -> Vec<LogLine> { lock(&self.live).map(|live| live.current.to_logs()).unwrap_or_default() }
-
-    /// Grava na fila os dias que viraram e o corrente, se mudaram; o desligamento do servidor
-    /// chama. Bloqueante.
+    /// Grava na fila os dias que viraram e o corrente, e congela os dias encerrados. Bloqueante.
     pub fn save(&self) -> io::Result<()> {
         let _io = lock(&self.io)?;
-        if !self.enabled() {
-            return Ok(());
+        self.refresh_held()?;
+        if let Some(period) = self.collection() {
+            let now = (self.clock)();
+            self.save_held(&period, day_of(now))?;
+            self.checkpoint_held(&period, now)?;
         }
-        self.save_held()
+        Ok(())
     }
 
-    /// `save` com a trava `io` já segura.
-    fn save_held(&self) -> io::Result<()> {
+    fn save_held(&self, period: &Collection, today: String) -> io::Result<()> {
         let (closed, current, new_file) = {
             let mut live = lock(&self.live)?;
-            live.roll(day_of((self.clock)()));
+            live.roll(today);
             let current = std::mem::take(&mut live.dirty).then(|| live.current.file());
             let new_file = !live.closed.is_empty() || (current.is_some() && !live.on_disk);
             (live.closed.iter().map(Day::file).collect::<Vec<_>>(), current, new_file)
         };
-        let written = closed.iter().chain(&current).try_for_each(|file| queue::write_day(&self.home, file));
+        let written = closed.iter().chain(&current).try_for_each(|latest| {
+            let mut file = queue::read_day(&self.home, &latest.day)?
+                .filter(|file| file.collection == period.id && file.day == latest.day).unwrap_or_else(|| DayFile {
+                    day: latest.day.clone(), collection: period.id.clone(), ..DayFile::default()
+                });
+            if !file.sealed {
+                file.counters.clone_from(&latest.counters);
+                if !file.counters.is_empty() || !file.detail.is_empty() { queue::write_day(&self.home, &file)?; }
+            }
+            Ok(())
+        });
         {
             let mut live = lock(&self.live)?;
             let same_day = current.as_ref().is_some_and(|file| file.day == live.current.day);
@@ -385,7 +400,7 @@ impl Telemetry {
 
     pub(crate) fn pending_days(&self) -> io::Result<(String, Vec<String>)> { lock(&self.live).map(|live| live.pending()) }
 
-    fn note(&self, failure: Failure) {
+    pub(crate) fn note(&self, failure: Failure) {
         if let Ok(mut notes) = self.notes.lock() {
             notes.push(failure);
         }
@@ -396,68 +411,73 @@ impl Telemetry {
     }
 
     /// Relê os desligamentos e grava: a passada periódica da tarefa de fundo.
-    pub(crate) fn tick(&self) -> io::Result<()> {
-        self.refresh()?;
-        self.save()
+    #[cfg(test)]
+    fn tick(&self) -> io::Result<()> { self.save() }
+
+    fn refresh(&self) -> io::Result<()> {
+        let _io = lock(&self.io)?;
+        self.refresh_held()
     }
 
-    /// Aplica consentimento e desligamentos. Ligar relê o dia corrente da fila; desligar ou `false`
-    /// apaga a fila.
-    fn refresh(&self) -> io::Result<()> {
+    /// Relê o ambiente; invalidar o período no disco vem antes de apagar a fila.
+    pub(crate) fn refresh_held(&self) -> io::Result<()> {
         let dotenv = hangar_core::user_data::read_env_raw(&self.home, self.backend.as_deref());
-        // `.env` que não se lê não confirma a escolha da pessoa: desliga, sem dizer que ela pediu. O
-        // desligamento pelo ambiente do processo vale mesmo assim.
-        let (disabled, unreadable) = match &dotenv {
-            Ok(text) => (switch::disabled_by(&*self.lookup, text.as_deref()), None),
-            Err(e) => (switch::disabled_by(&*self.lookup, None), Some(io::Error::other(format!("telemetria: .env não lido: {e}")))),
-        };
-        let env_unreadable = unreadable.is_some();
-        let _io = lock(&self.io)?;
-        let consent = {
-            let mut settings = lock(&self.settings)?;
-            settings.disabled = disabled;
-            let was_unreadable = std::mem::replace(&mut settings.env_unreadable, env_unreadable);
-            if let Some(error) = unreadable.filter(|_| !was_unreadable) {
-                self.note(Failure::Disk(error));
-            }
-            settings.state.consent
-        };
-        let on = consent == Some(true) && disabled.is_none() && !env_unreadable;
-        let today = day_of((self.clock)());
-        if on {
-            // O que a passada do `.env` ilegível não conseguiu gravar ainda está na memória e vale.
-            let held = lock(&self.live).map(|live| live.dirty || !live.closed.is_empty())?;
-            if !self.enabled() && !held {
-                let live = match queue::read_day(&self.home, &today) {
-                    Ok(Some(file)) => Live::new(Day::from_file(file), true),
-                    Ok(None) => Live::new(Day::new(today), false),
-                    Err(e) if e.kind() == io::ErrorKind::InvalidData => {
-                        queue::remove_day(&self.home, &today)?;
-                        self.note(Failure::Disk(e));
-                        Live::new(Day::new(today), false)
-                    }
-                    Err(e) => return Err(e),
-                };
-                *lock(&self.live)? = live;
-            }
-            // A época sobe antes de ligar: quem vê ligada já vê a época nova.
-            if !self.enabled() {
-                self.consent_epoch.fetch_add(1, Ordering::SeqCst);
-            }
-            self.enabled.store(true, Ordering::SeqCst);
+        let disabled = switch::disabled_by(&*self.lookup, dotenv.as_ref().ok().and_then(|text| text.as_deref()));
+        let now = (self.clock)();
+        let today = day_of(now);
+        let mut settings = lock(&self.settings)?;
+        let was_unreadable = std::mem::replace(&mut settings.env_unreadable, dotenv.is_err());
+        if let Err(error) = &dotenv && !was_unreadable { self.note(Failure::Disk(io::Error::other(format!("telemetria: .env não lido: {error}")))); }
+        settings.disabled = disabled;
+        let on = settings.state.option_b.as_ref().is_some_and(|choice| choice.at <= now)
+            && disabled.is_none() && !settings.env_unreadable;
+        let mut next = settings.state.clone();
+        settings.invalidate_period |= !on || next.collection.as_ref().is_some_and(|period| period.since > now);
+        if settings.invalidate_period {
+            self.close_post_gate()?;
+            next.collection = None;
+            *lock(&self.live)? = Live::new(Day::new(today.clone()), false);
+        }
+        if on && next.collection.is_none() {
+            next.collection = Some(Collection { id: hangar_core::ids::random_hex(16), since: now, sealed_through: None });
+        }
+        if next != settings.state || settings.revocation_unwritten {
+            state::store(&self.home, &next)?;
+            settings.state = next;
+            settings.revocation_unwritten = false;
+        }
+        settings.invalidate_period = false;
+        if !on {
+            if disabled.is_some() || settings.state.consent() == Some(false) { queue::wipe(&self.home)?; }
             return Ok(());
         }
-        // `.env` que não se lê não é a pessoa pedindo para parar: o que só está na memória vai à fila antes.
-        // A contagem para já; gravação que falha deixa o dia na memória para a passada seguinte.
-        if env_unreadable && consent == Some(true) && disabled.is_none() {
-            self.enabled.store(false, Ordering::SeqCst);
-            self.save_held()?;
+        if !self.enabled() {
+            let period = settings.state.collection.as_ref().expect("coleta ativa tem período");
+            let file = match queue::read_day(&self.home, &today) {
+                Ok(file) => file.filter(|file| file.collection == period.id && file.day == today && !file.sealed),
+                Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                    queue::remove_day(&self.home, &today)?;
+                    self.note(Failure::Disk(e));
+                    None
+                }
+                Err(e) => return Err(e),
+            };
+            *lock(&self.live)? = match file {
+                Some(file) => Live::new(Day::from_file(file), true),
+                None => Live::new(Day::new(today), false),
+            };
+            let mut gate = lock(&self.post_gate)?;
+            *gate = Some(period.id.clone());
+            self.consent_epoch.fetch_add(1, Ordering::SeqCst);
+            self.enabled.store(true, Ordering::SeqCst);
         }
+        Ok(())
+    }
+
+    fn close_post_gate(&self) -> io::Result<()> {
+        let mut gate = lock(&self.post_gate)?;
+        *gate = None;
         self.enabled.store(false, Ordering::SeqCst);
-        *lock(&self.live)? = Live::new(Day::new(today), false);
-        if consent == Some(false) || disabled.is_some() {
-            queue::wipe(&self.home)?;
-        }
         Ok(())
     }
 }
@@ -507,53 +527,10 @@ pub(crate) mod tests {
 
         pub(crate) fn next_day(&self) { *self.now.lock().unwrap() += chrono::TimeDelta::days(1); }
 
-        pub(crate) fn queue(&self) -> PathBuf { self.home.path().join(".hangar/telemetry/queue") }
+        pub(crate) fn queue(&self) -> PathBuf { self.home.path().join(".hangar/telemetry-v3/queue") }
     }
 
     pub(crate) fn message() -> Dims { Dims::new().with("provider", Provider::Claude).with("surface", Surface::Terminal) }
-
-    #[test]
-    fn log_lines_stop_at_the_cap_and_count_what_was_dropped() {
-        let fx = Fixture::new();
-        let telemetry = fx.start();
-        for n in 0..MAX_LOG_LINES {
-            telemetry.log(LogLevel::Warn, "hangar_server::list", &format!("aviso {n}"));
-        }
-        telemetry.log(LogLevel::Warn, "hangar_server::list", "aviso 0");
-        telemetry.log(LogLevel::Error, "hangar_server::list", "nova depois do teto");
-        telemetry.log(LogLevel::Error, "hangar_server::list", "outra nova");
-        let logs = telemetry.logs();
-        assert_eq!(logs.len(), MAX_LOG_LINES);
-        assert_eq!(logs.iter().find(|l| l.message == "aviso 0").map(|l| l.count), Some(2), "a linha já vista ainda soma");
-        assert!(!logs.iter().any(|l| l.message.contains("nova")));
-        assert_eq!(telemetry.counters(), vec![Counter::new(Event::LogDropped, Dims::new(), None, 2)]);
-    }
-
-    #[test]
-    fn log_message_is_cut_and_has_no_control_character() {
-        let fx = Fixture::new();
-        let telemetry = fx.start();
-        telemetry.log(LogLevel::Error, "Fora Do Formato", &format!("primeira\nsegunda {}", "é".repeat(400)));
-        telemetry.log(LogLevel::Error, "hangar_server::x", " \n ");
-        let logs = telemetry.logs();
-        assert_eq!(logs.len(), 1, "mensagem vazia não entra");
-        assert_eq!(logs[0].target, "other");
-        assert!(logs[0].message.starts_with("primeira segunda é"));
-        assert_eq!(logs[0].message.chars().count(), MAX_LOG_CHARS);
-    }
-
-    #[test]
-    fn log_waiting_for_the_live_lock_is_not_written_after_revocation() {
-        let fx = Fixture::new();
-        let telemetry = Arc::new(fx.start());
-        let held = telemetry.live.lock().unwrap();
-        let writer = { let telemetry = telemetry.clone(); std::thread::spawn(move || telemetry.log(LogLevel::Error, "hangar_server::x", "falhou")) };
-        // Com a trava presa aqui, a escrita só a pega depois de desligada, como na revogação.
-        telemetry.enabled.store(false, Ordering::SeqCst);
-        drop(held);
-        writer.join().unwrap();
-        assert!(telemetry.logs().is_empty());
-    }
 
     #[test]
     fn consent_epoch_rises_each_time_counting_turns_on() {
@@ -575,45 +552,6 @@ pub(crate) mod tests {
         telemetry.count(Event::MessageSent, message(), MAX_COUNT);
         telemetry.count(Event::MessageSent, message(), 5);
         assert_eq!(telemetry.counters()[0].count, MAX_COUNT);
-    }
-
-    #[test]
-    fn invisible_characters_become_spaces() {
-        let fx = Fixture::new();
-        let telemetry = fx.start();
-        telemetry.log(LogLevel::Error, "hangar_server::x", "a\u{2028}b\u{2029}c\u{202E}d\u{200B}e\u{FEFF}f");
-        assert_eq!(telemetry.logs()[0].message, "a b c d e f");
-    }
-
-    #[test]
-    fn log_without_consent_records_nothing() {
-        let fx = Fixture::new();
-        let telemetry = fx.start_as_is();
-        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
-        telemetry.save().unwrap();
-        assert!(telemetry.logs().is_empty());
-        telemetry.set_consent(false).unwrap();
-        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
-        telemetry.save().unwrap();
-        assert!(telemetry.logs().is_empty() && telemetry.counters().is_empty());
-        assert!(!fx.queue().exists());
-    }
-
-    #[test]
-    fn log_lines_go_through_the_queue_and_back() {
-        let fx = Fixture::new();
-        let telemetry = fx.start();
-        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
-        telemetry.log(LogLevel::Warn, "hangar_server::list", "devagar");
-        telemetry.save().unwrap();
-        drop(telemetry);
-        let file = queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap();
-        assert_eq!(file.logs.len(), 2);
-        let telemetry = fx.start();
-        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
-        let logs = telemetry.logs();
-        assert_eq!(logs.iter().find(|l| l.message == "falhou").map(|l| (l.level.as_str(), l.count)), Some(("error", 2)));
-        assert_eq!(logs.len(), 2);
     }
 
     #[test]
@@ -701,9 +639,9 @@ pub(crate) mod tests {
         let fx = Fixture::new();
         let telemetry = fx.start();
         // Uma pasta no lugar do arquivo: a leitura falha em todo sistema, sem ser arquivo ilegível.
-        std::fs::create_dir_all(fx.home.path().join(".hangar/telemetry/once.json")).unwrap();
+        std::fs::create_dir_all(fx.home.path().join(".hangar/telemetry-v3/once.json")).unwrap();
         assert!(telemetry.once("x").is_err());
-        std::fs::remove_dir(fx.home.path().join(".hangar/telemetry/once.json")).unwrap();
+        std::fs::remove_dir(fx.home.path().join(".hangar/telemetry-v3/once.json")).unwrap();
         assert!(telemetry.once("x").unwrap(), "a marca não ficou dada por feita");
     }
 
@@ -716,7 +654,8 @@ pub(crate) mod tests {
         assert!(telemetry.set_consent(true).unwrap().is_some());
         assert_eq!(telemetry.consent(), Some(true));
         let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(fx.home.path().join(".hangar/telemetry.json")).unwrap()).unwrap();
-        assert_eq!(stored["consent"], true, "a escolha foi gravada");
+        assert_eq!(stored["consent"], false, "a versão revertida não pode ligar logs");
+        assert_eq!(stored["option_b"]["scope"], 3, "a escolha de B foi gravada em separado");
         assert!(!telemetry.enabled());
         std::fs::remove_dir(&today).unwrap();
         telemetry.tick().unwrap();
@@ -724,44 +663,24 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn unreadable_dotenv_saves_what_was_only_in_memory() {
+    fn telemetry_unreadable_environment_cannot_revive_a_previous_collection_on_restart() {
         let fx = Fixture::new();
         let telemetry = fx.start();
+        let first = telemetry.collection().unwrap();
         telemetry.count(Event::MessageSent, message(), 1);
-        fx.next_day();
-        telemetry.count(Event::MessageSent, message(), 2);
+        telemetry.save().unwrap();
         let dotenv = fx.home.path().join(".hangar/config/.env");
         std::fs::create_dir_all(&dotenv).unwrap();
         telemetry.tick().unwrap();
         assert!(!telemetry.enabled());
-        assert_eq!(queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap().counters[0].count, 1);
-        assert_eq!(queue::read_day(fx.home.path(), "2026-11-27").unwrap().unwrap().counters[0].count, 2);
-        std::fs::remove_dir(&dotenv).unwrap();
-        telemetry.tick().unwrap();
-        assert!(telemetry.enabled());
-        assert_eq!(telemetry.counters()[0].count, 2, "o dia volta da fila");
-    }
-
-    #[test]
-    fn unreadable_dotenv_stops_counting_even_when_saving_fails() {
-        let fx = Fixture::new();
-        let telemetry = fx.start();
-        telemetry.count(Event::MessageSent, message(), 1);
-        let dotenv = fx.home.path().join(".hangar/config/.env");
-        std::fs::create_dir_all(&dotenv).unwrap();
-        // Uma pasta no lugar do dia: a gravação falha.
-        let today = fx.queue().join("2026-11-26.json");
-        std::fs::create_dir_all(&today).unwrap();
-        assert!(telemetry.tick().is_err());
-        assert!(!telemetry.enabled(), "a contagem parou");
         telemetry.count(Event::MessageSent, message(), 5);
-        std::fs::remove_dir(&today).unwrap();
-        telemetry.tick().unwrap();
-        assert_eq!(queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap().counters[0].count, 1, "a passada seguinte grava");
+        drop(telemetry);
         std::fs::remove_dir(&dotenv).unwrap();
-        telemetry.tick().unwrap();
+        fx.next_day();
+        let telemetry = fx.start_as_is();
         assert!(telemetry.enabled());
-        assert_eq!(telemetry.counters()[0].count, 1);
+        assert_ne!(telemetry.collection().unwrap().id, first.id);
+        assert!(telemetry.counters().is_empty());
     }
 
     #[test]
@@ -786,24 +705,6 @@ pub(crate) mod tests {
         let mut live = Live::new(day("2026-11-26", 4), true);
         live.unsaved(day("2026-11-26", 4).file());
         assert!(live.dirty && live.closed.is_empty());
-    }
-
-    #[test]
-    fn unsaved_day_survives_the_dotenv_coming_back() {
-        let fx = Fixture::new();
-        let telemetry = fx.start();
-        telemetry.count(Event::MessageSent, message(), 3);
-        let dotenv = fx.home.path().join(".hangar/config/.env");
-        std::fs::create_dir_all(&dotenv).unwrap();
-        let today = fx.queue().join("2026-11-26.json");
-        std::fs::create_dir_all(&today).unwrap();
-        assert!(telemetry.tick().is_err());
-        std::fs::remove_dir(&dotenv).unwrap();
-        std::fs::remove_dir(&today).unwrap();
-        telemetry.tick().unwrap();
-        assert!(telemetry.enabled());
-        assert_eq!(telemetry.counters()[0].count, 3, "o dia da memória não foi trocado pelo da fila");
-        assert_eq!(queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap().counters[0].count, 3);
     }
 
     #[test]
@@ -883,8 +784,8 @@ pub(crate) mod tests {
     fn unreadable_once_file_counts_as_empty() {
         let fx = Fixture::new();
         let telemetry = fx.start();
-        std::fs::create_dir_all(fx.home.path().join(".hangar/telemetry")).unwrap();
-        std::fs::write(fx.home.path().join(".hangar/telemetry/once.json"), "{").unwrap();
+        std::fs::create_dir_all(fx.home.path().join(".hangar/telemetry-v3")).unwrap();
+        std::fs::write(fx.home.path().join(".hangar/telemetry-v3/once.json"), "{").unwrap();
         assert!(telemetry.once("x").unwrap());
         assert!(matches!(telemetry.take_notes().as_slice(), [Failure::Disk(e)] if e.kind() == io::ErrorKind::InvalidData));
         assert!(!telemetry.once("x").unwrap());
@@ -897,7 +798,7 @@ pub(crate) mod tests {
         telemetry.save().unwrap();
         assert!(!fx.queue().exists(), "sem contagem nada é gravado");
         for n in 12..=25 {
-            queue::write_day(fx.home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), logs: Vec::new() }).unwrap();
+            queue::write_day(fx.home.path(), &DayFile { day: format!("2026-11-{n:02}"), ..DayFile::default() }).unwrap();
         }
         telemetry.count(Event::MessageSent, message(), 1);
         telemetry.save().unwrap();

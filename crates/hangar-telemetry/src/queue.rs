@@ -1,28 +1,29 @@
-//! A fila em disco: um arquivo por dia (UTC) em `~/.hangar/telemetry/queue/<dia>.json`, e as marcas
-//! de `once`.
+//! Fila e marcas em disco exclusivas do escopo 3: um binário antigo não pode enviar lotes de B.
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 // O resto da pasta (temporários da gravação atômica) não passa no formato de dia.
-use crate::wire::{Counter, LogLine, is_day};
+use crate::diary::DayDetail;
+use crate::wire::{Counter, is_day};
 
 /// Teto da fila: acima dele sai o dia mais antigo.
 pub(crate) const MAX_DAYS: usize = 14;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct DayFile {
     pub(crate) day: String,
+    pub(crate) collection: String,
     /// Gravado antes do primeiro envio: a repetição leva o mesmo, e o receptor não grava duas vezes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) batch_id: Option<String>,
     pub(crate) counters: Vec<Counter>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) logs: Vec<LogLine>,
+    pub(crate) detail: DayDetail,
+    pub(crate) sealed: bool,
 }
 
-fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry") }
+fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry-v3") }
 
 fn queue_dir(home: &Path) -> PathBuf { root(home).join("queue") }
 
@@ -108,7 +109,7 @@ mod tests {
     fn fifteen_days_keep_fourteen() {
         let home = tempfile::tempdir().unwrap();
         for n in 1..=15 {
-            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), logs: Vec::new() }).unwrap();
+            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), ..DayFile::default() }).unwrap();
         }
         assert_eq!(cap(home.path()).unwrap(), 1);
         let days = days(home.path()).unwrap();

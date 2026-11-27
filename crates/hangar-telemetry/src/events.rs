@@ -62,6 +62,7 @@ named_enum!(Event {
     ChatOpen => "chat_open",
     LogDropped => "log_dropped",
     Settings => "settings",
+    DiaryDropped => "diary_dropped",
 });
 
 named_enum!(

@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"], optional = true }
-chrono = { workspace = true, optional = true }
+chrono = { workspace = true, features = ["serde"], optional = true }
 hangar-core = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "time"], optional = true }
 reqwest = { workspace = true, optional = true }
