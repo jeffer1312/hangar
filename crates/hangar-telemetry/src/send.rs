@@ -189,6 +189,9 @@ impl Telemetry {
             env: self.batch_env.clone(),
             counters: file.counters,
             logs: file.logs,
+            partial: false,
+            records: Vec::new(),
+            trail: Vec::new(),
         };
         // Fora da forma o receptor recusaria sempre: vale como arquivo ilegível.
         if let Err(field) = batch.validate() {
