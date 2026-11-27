@@ -541,6 +541,42 @@
   }
  },
  {
+  "name": "child_answer",
+  "description": "Responde a pergunta (AskUserQuestion) que uma filha que você abriu com `link` está esperando, a que chega a você como `[de: <filha>] pergunta (interaction_id …)`. `interaction_id` é o do recado (ou o de `child_status`). `answers`: um item por pergunta, na ordem; escolha `{\"kind\": \"option\", \"indices\": [0], \"multi\": false, \"labels\": [\"<rótulo>\"]}` (índice a partir de 0: a opção 1 do recado é o 0; `multi: true` com vários índices) ou texto livre `{\"kind\": \"text\", \"value\": \"<texto>\", \"type_index\": <número de opções da pergunta>, \"labels\": [\"<texto>\"]}`. Só pergunta: menu, aprovação de plano e permissão são do dono e voltam erro_permissao_do_dono. `erro_interacao_desatualizada` = a pergunta mudou ou já foi respondida (pelo dono, talvez): confira com `child_status`. `confirmed: false` = a resposta foi enviada sem confirmação: não tente de novo. Só alcança filhas ligadas a você; qualquer outra é recusada com erro_nao_ligada.",
+  "inputSchema": {
+   "properties": {
+    "alvo": {
+     "title": "Alvo",
+     "type": "string"
+    },
+    "interaction_id": {
+     "title": "Interaction Id",
+     "type": "string"
+    },
+    "answers": {
+     "items": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "title": "Answers",
+     "type": "array"
+    }
+   },
+   "required": [
+    "alvo",
+    "interaction_id",
+    "answers"
+   ],
+   "title": "child_answerArguments",
+   "type": "object"
+  },
+  "outputSchema": {
+   "additionalProperties": true,
+   "title": "child_answerDictOutput",
+   "type": "object"
+  }
+ },
+ {
   "name": "contract",
   "description": "Lê ou grava o contrato do grupo desta sessão (as decisões que o grupo consulta), como `hangar-send --contrato`. Vale para grupo desta máquina e para grupo entre máquinas. Sem `conteudo`, lê: volta `content`, `mtime` e `owner` (a máquina que guarda o arquivo; `path` só vem preenchido nela). Com `conteudo`, grava o texto inteiro no lugar do atual e volta o `mtime` novo; passe o `mtime` da sua última leitura (nulo só cria, quando o contrato ainda não existe). `erro_contrato_mudou` (409) = alguém gravou depois da sua leitura: leia de novo, junte e grave. `sessao`: só para a assistente de voz, que não é sessão: a sessão em nome de quem agir; quem é sessão age sempre como ela mesma.",
   "inputSchema": {

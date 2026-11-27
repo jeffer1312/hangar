@@ -532,6 +532,88 @@ async fn child_status_pages_the_final_answer_of_a_linked_child_only() {
     assert!(failed(&interrupt) && first_text(&interrupt).starts_with("erro_interromper_nao_ligada"), "{interrupt}");
 }
 
+/// O `/answer` falso atrás do MCP: anota cada `POST` (sessão e corpo) e responde o que o teste deixou em `reply`.
+struct AnswerScene { s: Scene, mcp: SocketAddr, seen: Arc<Mutex<Vec<(String, Value)>>>, reply: Arc<Mutex<(u16, Value)>>, ids: [String; 3] }
+
+/// `s0` é filha ligada de `beta` (pane `%7`), com pergunta, menu e permissão abertos ao mesmo tempo (IDs nessa
+/// ordem); o MCP fala com um roteador que só tem o `/answer` falso.
+async fn answer_scene() -> AnswerScene {
+    use hangar_server::interactions::{InteractionKind, native_target};
+    let s = scene_owned().await;
+    let seen: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let reply = Arc::new(Mutex::new((200, json!({"ok": true, "fallback": false}))));
+    let (log, answer) = (seen.clone(), reply.clone());
+    let api = axum::Router::new().route("/api/sessions/{name}/answer", axum::routing::post(
+        move |axum::extract::Path(name): axum::extract::Path<String>, body: String| {
+            let (log, answer) = (log.clone(), answer.clone());
+            async move {
+                log.lock().unwrap().push((name, serde_json::from_str(&body).unwrap()));
+                let (status, value) = answer.lock().unwrap().clone();
+                (axum::http::StatusCode::from_u16(status).unwrap(), [("content-type", "application/json")], value.to_string())
+            }
+        }));
+    let app = hangar_server::mcp::router(s.state.clone(), api).into_make_service_with_connect_info::<SocketAddr>();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mcp = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    write_json(&s.home.join(".claude/.hangar-pair/s0.json"), json!({"peers": ["beta"], "task": "", "gid": "g1", "harness": {}, "linked_by": "beta"}));
+    let binding = s.state.state.runtime.get().unwrap().interaction_binding("s0").await.unwrap();
+    let store = &s.state.interactions;
+    store.bind(&binding).unwrap();
+    let shown = |kind: InteractionKind, request: &str| store
+        .observe(&binding, &native_target(kind, &binding.conversation, &json!(request)), Some(json!({"pedido": request}))).unwrap().unwrap();
+    let ids = [shown(InteractionKind::Question, "ask"), shown(InteractionKind::Menu, "menu"), shown(InteractionKind::Approval, "perm")];
+    AnswerScene { s, mcp, seen, reply, ids }
+}
+
+/// `child_answer` só responde a pergunta da filha ligada, pela rota `/answer`; menu e permissão são do dono e
+/// nem chegam à rota. ID trocado, voz e filha de outra sessão são recusados.
+#[tokio::test(flavor = "multi_thread")]
+async fn child_answer_answers_a_question_and_never_a_menu_or_permission() {
+    let scene = answer_scene().await;
+    let [question, menu, permission] = scene.ids.clone();
+    let answers = json!([{"kind": "option", "indices": [0], "multi": false, "labels": ["sim"]}]);
+    let mut mcp = Mcp::open(scene.mcp, &[("x-hangar-pane", "%7")]).await;
+    let answered = mcp.call("child_answer", json!({"alvo": "s0", "interaction_id": question, "answers": answers})).await;
+    assert!(!failed(&answered), "{answered}");
+    assert_eq!(answered["structuredContent"]["ok"], true, "{answered}");
+    assert_eq!(scene.seen.lock().unwrap().clone(), vec![("s0".to_owned(), json!({"answers": answers, "interaction_id": question}))]);
+    for (id, what) in [(&menu, "menu"), (&permission, "permissão")] {
+        let refused = mcp.call("child_answer", json!({"alvo": "s0", "interaction_id": id, "answers": answers})).await;
+        assert!(failed(&refused) && first_text(&refused).starts_with("erro_permissao_do_dono"), "{what}: {refused}");
+    }
+    assert_eq!(scene.seen.lock().unwrap().len(), 1, "menu e permissão não chamam a rota");
+    // ID que não está mais aberto (trocado, ou respondido pelo dono): a recusa é a da rota, repassada.
+    *scene.reply.lock().unwrap() = (409, json!({"detail": {"code": "erro_interacao_desatualizada", "msg": "Essa pergunta mudou ou já foi encerrada."}}));
+    let stale = mcp.call("child_answer", json!({"alvo": "s0", "interaction_id": "velho", "answers": answers})).await;
+    assert!(failed(&stale) && first_text(&stale).starts_with("erro_interacao_desatualizada"), "{stale}");
+    let other = mcp.call("child_answer", json!({"alvo": "s1", "interaction_id": question, "answers": answers})).await;
+    assert!(failed(&other) && first_text(&other).starts_with("erro_nao_ligada"), "{other}");
+    let voice = hangar_server::voice::machines::voice_signature(SECRET).unwrap();
+    let spoken = Mcp::open(scene.mcp, &[("x-hangar-voice", &voice)]).await
+        .call("child_answer", json!({"alvo": "s0", "interaction_id": question, "answers": answers})).await;
+    assert!(failed(&spoken) && first_text(&spoken).contains("voz"), "{spoken}");
+    assert_eq!(scene.seen.lock().unwrap().len(), 2, "só a pergunta e o ID velho chegaram à rota");
+    drop(scene.s);
+}
+
+/// Codex com terminal: a rota escreve a resposta e diz 409 `erro_sem_confirmacao_resposta`, porque o Codex não conta
+/// quem resolveu. A tool devolve "enviada, sem confirmação" como resultado, depois de um `POST` só.
+#[tokio::test(flavor = "multi_thread")]
+async fn child_answer_reports_an_unconfirmed_codex_answer_as_sent() {
+    let scene = answer_scene().await;
+    *scene.reply.lock().unwrap() = (409, json!({"detail": {"code": "erro_sem_confirmacao_resposta", "msg": "sem confirmação"}}));
+    let mut mcp = Mcp::open(scene.mcp, &[("x-hangar-pane", "%7")]).await;
+    let answers = json!([{"kind": "text", "value": "segue", "type_index": 2, "labels": ["segue"]}]);
+    let sent = mcp.call("child_answer", json!({"alvo": "s0", "interaction_id": scene.ids[0], "answers": answers})).await;
+    assert!(!failed(&sent), "{sent}");
+    let got = &sent["structuredContent"];
+    assert_eq!((&got["sent"], &got["confirmed"]), (&json!(true), &json!(false)), "{sent}");
+    assert!(got["message"].as_str().is_some_and(|m| m.starts_with("enviada, sem confirmação") && m.contains("não tente de novo")), "{sent}");
+    assert_eq!(scene.seen.lock().unwrap().len(), 1, "um POST só");
+    drop(scene.s);
+}
+
 /// O servidor do app desktop (`POST /cmd`): anota cada pedido e responde por verbo.
 async fn desktop(home: &Path, answer: fn(&str) -> String) -> Arc<Mutex<Vec<Value>>> {
     let seen = Arc::new(Mutex::new(Vec::new()));

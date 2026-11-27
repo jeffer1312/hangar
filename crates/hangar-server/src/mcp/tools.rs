@@ -27,6 +27,7 @@ use crate::groups::exit::segment;
 use crate::groups::{link_return, link_state};
 use crate::groups::model::Sidecar;
 use crate::groups::peers::PeerClient;
+use crate::interactions::InteractionKind;
 use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
 use crate::vault::{VaultError, exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
@@ -126,6 +127,10 @@ struct Close { alvo: String }
 
 #[derive(Deserialize)]
 struct ChildStatus { alvo: String, #[serde(default)] offset: Option<usize> }
+
+/// `answers` no formato do corpo do `/answer`, que confere cada item.
+#[derive(Deserialize)]
+struct ChildAnswer { alvo: String, interaction_id: String, answers: Vec<Value> }
 
 #[derive(Deserialize)]
 struct RequestSecret { label: String, reason: String, #[serde(default)] placeholder: Option<String> }
@@ -403,8 +408,8 @@ fn verb_refusal(verb: &str) -> Option<String> {
     (!NAV_VERBS.contains(&verb)).then(|| format!("verbo desconhecido: {verb} (aceitos: {})", NAV_VERBS.join(", ")))
 }
 
-/// `interrupt` e `child_status`: a voz não abre filha ligada (nasce sem `creator`), e Esc na própria sessão mataria o
-/// turno de quem chama.
+/// `interrupt`, `child_status` e `child_answer`: a voz não abre filha ligada (nasce sem `creator`), e Esc na própria
+/// sessão mataria o turno de quem chama.
 fn interrupt_caller_refusal(me: &str, voice: bool, alvo: &str) -> Option<String> {
     if voice { return Some("recusado: a voz não tem filha ligada; só quem abriu a filha com `link` a alcança".into()); }
     if alvo.contains("::") { return Some("só alcança filha desta máquina".into()); }
@@ -414,6 +419,25 @@ fn interrupt_caller_refusal(me: &str, voice: bool, alvo: &str) -> Option<String>
 /// O vínculo só vale com o pai ainda no grupo da filha: sair do grupo desfaz o poder sobre ela. `code` é o da tool.
 fn link_refusal(me: &str, alvo: &str, sidecar: Option<&Sidecar>, code: &str) -> Option<String> {
     (sidecar.and_then(Sidecar::linked_parent) != Some(me)).then(|| format!("{code}: '{alvo}' não é filha ligada a você (aberta por você com new_session `link`)"))
+}
+
+/// Só a pergunta (`AskUserQuestion`) é do pai; menu da TUI, aprovação de plano e permissão são do dono. Tipo
+/// desconhecido segue à rota, que confere a identidade e só responde pergunta.
+fn answer_refusal(kind: Option<&InteractionKind>, alvo: &str) -> Option<String> {
+    matches!(kind, Some(InteractionKind::Menu | InteractionKind::Approval)).then(|| format!(
+        "erro_permissao_do_dono: o pedido aberto em '{alvo}' é menu ou permissão, e quem decide é o dono no app; child_answer só responde pergunta"))
+}
+
+const ANSWER_UNCONFIRMED: &str = "enviada, sem confirmação; não tente de novo";
+
+/// A resposta da rota. Sem confirmação a escrita já foi feita (o Codex com terminal não diz quem resolveu):
+/// é resultado, não erro, para o pai não repetir.
+fn answer_outcome(status: u16, value: Value) -> Outcome {
+    if (200..300).contains(&status) { return Ok(dict(value)); }
+    if status == 409 && value["detail"]["code"] == "erro_sem_confirmacao_resposta" {
+        return Ok(dict(json!({"sent": true, "confirmed": false, "message": ANSWER_UNCONFIRMED})));
+    }
+    Err(coded(status, &value))
 }
 
 /// Janelas do histórico lidas para trás até a última mensagem do usuário: a resposta final é a do turno que ela abriu.
@@ -483,6 +507,7 @@ impl Tools {
             "close_session" => match args::<Close>(name, raw) { Ok(a) => self.close_session(headers, &a.alvo).await, Err(e) => Err(e) },
             "interrupt" => match args::<Close>(name, raw) { Ok(a) => self.interrupt(headers, &a.alvo).await, Err(e) => Err(e) },
             "child_status" => match args(name, raw) { Ok(a) => self.child_status(headers, a).await, Err(e) => Err(e) },
+            "child_answer" => match args(name, raw) { Ok(a) => self.child_answer(headers, a).await, Err(e) => Err(e) },
             "browser_open" => match args(name, raw) { Ok(a) => self.browser_open(headers, a).await, Err(e) => Err(e) },
             "html_render" => match args(name, raw) { Ok(a) => self.html_render(headers, a).await, Err(e) => Err(e) },
             "browser" => match args(name, raw) { Ok(a) => self.browser(headers, a).await, Err(e) => Err(e) },
@@ -842,6 +867,26 @@ impl Tools {
             "last_reply_at": row.and_then(|r| r.last_reply_at), "returned": returned,
             "answer": answer.map(|text| answer_page(&text, a.offset.unwrap_or(0))),
         })))
+    }
+
+    /// Responde a pergunta aberta na filha ligada pela rota `/answer` de sempre, uma vez só: a rota confere o
+    /// `interaction_id` e recusa o que mudou (`erro_interacao_desatualizada`).
+    async fn child_answer(&self, headers: &HeaderMap, a: ChildAnswer) -> Outcome {
+        let (me, voice) = self.caller(headers).await?;
+        let alvo = a.alvo.as_str();
+        if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo) { return Err(refusal); }
+        self.linked_child(&me, alvo, "erro_nao_ligada").await?;
+        if let Some(refusal) = answer_refusal(self.interaction_kind(alvo, &a.interaction_id).await.as_ref(), alvo) { return Err(refusal); }
+        let body = json!({"answers": a.answers, "interaction_id": a.interaction_id});
+        let (status, value) = self.route_from(Some(&me), Method::POST, &format!("/api/sessions/{}/answer", segment(alvo)), Some(body)).await;
+        answer_outcome(status, value)
+    }
+
+    /// O tipo da interação pelo mesmo vínculo que a rota confere; vínculo ilegível ou ID fora da loja é `None`.
+    async fn interaction_kind(&self, alvo: &str, id: &str) -> Option<InteractionKind> {
+        let runtime = self.st.state.runtime.get()?;
+        let binding = runtime.interaction_binding(alvo).await.ok()?;
+        self.st.interactions.expected(&binding, Some(id)).ok().map(|expected| expected.target.kind)
     }
 
     /// O fim do histórico até a última mensagem do usuário. Rota com erro ou corpo torto é erro, nunca página vazia.
