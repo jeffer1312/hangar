@@ -35,12 +35,19 @@ fn find() -> Option<Vec<Orphan>> {
 
 /// Cada órfão com spec vira sessão caída, e todos seguram o nome.
 pub fn register(home: &Path, found: &[Orphan]) {
-    *NAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = found.iter().map(|o| o.name.clone()).collect();
+    let before = std::mem::replace(&mut *NAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        found.iter().map(|o| o.name.clone()).collect());
     // Dispensado há pouco (o encerrar e a busca se cruzaram) não volta nesta passada.
     let since = Instant::now().checked_sub(Duration::from_secs(5)).unwrap_or_else(Instant::now);
     for orphan in found {
         if super::fallen::get(home, &orphan.name).is_some_and(|f| f.orphan_pid == Some(orphan.pid)) { continue; }
-        let Some(spec) = super::record::newest_named(home, &orphan.name) else { continue };
+        let Some(spec) = super::record::newest_named(home, &orphan.name) else {
+            if !before.contains(&orphan.name) {
+                tracing::warn!(code = "psmux_orphan_no_spec", session = %orphan.name, pid = orphan.pid,
+                    "servidor do psmux sem a ficha e sem registro da sessão; o nome fica ocupado até ele sair");
+            }
+            continue;
+        };
         let fallen = super::fallen::Fallen { key: spec.key, provider: spec.provider, conversation: spec.conversation, permission_mode: None,
             cwd: Some(spec.cwd), died_at: now(), cause: CAUSE.into(), orphan_pid: Some(orphan.pid) };
         if super::fallen::insert_unless_forgotten(home, &orphan.name, since, fallen) {
@@ -63,17 +70,21 @@ pub async fn scan(home: &Path) {
 /// depois, não o código de retorno do `taskkill`.
 pub async fn end(pid: u32, name: &str) -> Result<(), &'static str> {
     let alive = || async { tokio::task::spawn_blocking(find).await.ok().flatten().map(|f| f.iter().any(|o| o.pid == pid && o.name == name)) };
-    if !alive().await.ok_or("psmux_orphan_unknown")? { return Ok(()); }
+    let freed = || { NAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(name); Ok(()) };
+    if !alive().await.ok_or("psmux_orphan_unknown")? { return freed(); }
     let mut command = tokio::process::Command::new("taskkill");
     command.args(["/PID", &pid.to_string(), "/T", "/F"]).stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
-    if tokio::time::timeout(Duration::from_secs(10), command.status()).await.is_err() {
-        tracing::warn!(code = "psmux_orphan_kill_timeout", session = %name, pid, "taskkill passou de 10 s");
+    match tokio::time::timeout(Duration::from_secs(10), command.status()).await {
+        Err(_) => tracing::warn!(code = "psmux_orphan_kill_timeout", session = %name, pid, "taskkill passou de 10 s"),
+        Ok(Err(error)) => tracing::warn!(code = "psmux_orphan_kill_failed", session = %name, pid, %error, "taskkill não rodou"),
+        Ok(Ok(status)) if !status.success() => tracing::info!(session = %name, pid, code = ?status.code(), "taskkill saiu com erro; vale a conferência"),
+        Ok(Ok(_)) => {}
     }
     match alive().await {
-        Some(false) => { NAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(name); Ok(()) }
+        Some(false) => freed(),
         _ => Err("psmux_orphan_not_ended"),
     }
 }
