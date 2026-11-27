@@ -146,3 +146,18 @@ dialog p { margin: 0 0 16px; color: var(--secondary); font-size: 13px; }
 .skeleton { height: 96px; border-radius: var(--radius); background: linear-gradient(90deg, var(--card), var(--raised), var(--card)); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } .row .fill { transition: none; } }
+
+/* Redesenho: explicação curta, frase dos tempos, minilinha e ajuda. */
+.card .explain { color: var(--secondary); font-size: 12.5px; margin: 4px 0 12px; line-height: 1.45; }
+.card .headline { margin: 0 0 14px; font-size: 14px; color: var(--text); font-weight: 500; }
+.kpi .label { display: flex; align-items: center; gap: 6px; }
+.kpi .spark { display: block; margin-top: 10px; width: 100%; max-width: 160px; height: 32px; }
+.kpi .spark polyline { stroke: var(--accent); }
+.kpi.bad .spark polyline { stroke: var(--error); }
+.help { width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 1px solid var(--line-strong); background: transparent;
+  color: var(--muted); font-size: 11px; line-height: 16px; cursor: help; flex: none; }
+.help:hover, .help:focus-visible { color: var(--text); border-color: var(--accent); }
+.card h3 { display: flex; align-items: center; gap: 8px; }
+.grid.two { grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); }
+.chart { margin-top: 10px; }
+svg .col.bad { fill: var(--error); }

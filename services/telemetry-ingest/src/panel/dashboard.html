@@ -35,32 +35,73 @@
 <div id="tip" role="tooltip"></div>
 <script>
 "use strict";
+// [título, grupo, o que mede, em uma frase].
 const EVENTS = {
-  app_visible_minutes: ["Minutos com o app à vista", "uso"],
-  message_sent: ["Mensagens enviadas", "uso"],
-  turn_finished: ["Turnos concluídos", "uso"],
-  session_opened: ["Sessões abertas", "uso"],
-  feature_used: ["Recursos usados", "uso"],
-  mcp_tool: ["Ferramentas do MCP", "uso"],
-  voice_call: ["Chamadas de voz", "uso"],
-  dictation: ["Ditado", "uso"],
-  chat_open: ["Conversa aberta", "uso"],
-  client_route: ["Rota do cliente até o servidor", "uso"],
-  peers: ["Máquinas ligadas", "uso"],
-  problem_shown: ["Problemas mostrados na tela", "saude"],
-  problem_hidden: ["Problemas só no diário", "saude"],
-  session_open_failed: ["Falhas ao abrir sessão", "saude"],
-  send_failed: ["Falhas ao enviar", "saude"],
-  session_fallen: ["Sessões que caíram", "saude"],
-  server_exit: ["Saídas do servidor", "saude"],
-  limit_switch: ["Troca de conta no limite", "saude"],
-  client_fatal: ["Erros fatais do app", "saude"],
-  update_finished: ["Atualizações", "saude"],
-  update_step: ["Passos de atualização", "saude"],
-  update_failed_code: ["Falhas de atualização", "saude"],
-  server_startup: ["Subida do servidor", "saude"],
-  log_dropped: ["Linhas de log fora do teto do dia", "saude"],
+  app_visible_minutes: ["Minutos com o app aberto", "uso", "Tempo com o app do Hangar na tela, no celular ou no PC."],
+  message_sent: ["Mensagens enviadas", "uso", "Mensagens que as pessoas mandaram aos agentes pelo app ou pela API."],
+  turn_finished: ["Respostas do agente", "uso", "Cada vez que o agente trabalhou numa mensagem, do começo até parar."],
+  session_opened: ["Sessões abertas", "uso", "Sessões novas, com o tempo do pedido até a sessão abrir."],
+  feature_used: ["Recursos usados", "uso", "Ações que deram certo: responder pergunta, renomear, buscar, parear…"],
+  mcp_tool: ["Ferramentas usadas pelos agentes", "uso", "Chamadas das ferramentas do Hangar (navegador, página, recado) feitas por um agente."],
+  voice_call: ["Chamadas de voz", "uso", "Conversas por voz com o agente, com a duração."],
+  dictation: ["Ditado", "uso", "Textos ditados, do fim da fala até o texto ficar pronto."],
+  chat_open: ["Abrir uma conversa", "uso", "Do toque numa conversa até ela aparecer na tela."],
+  client_route: ["Caminho até o servidor", "uso", "Por onde o app chegou ao servidor (rede local, Tailscale, Connect) e quanto levou para achar."],
+  peers: ["Máquinas ligadas entre si", "uso", "Quantas outras máquinas cada servidor conhece, por tipo de ligação."],
+  problem_shown: ["Avisos de problema na tela", "saude", "Avisos que apareceram na lista de sessões para a pessoa."],
+  problem_hidden: ["Problemas só no diário", "saude", "Problemas que o Hangar registrou sem mostrar na tela, por serem só de diagnóstico."],
+  session_open_failed: ["Sessões que não abriram", "saude", "Pedidos de sessão nova que falharam, com o motivo."],
+  send_failed: ["Mensagens recusadas", "saude", "Mensagens que o servidor não conseguiu entregar ao agente."],
+  session_fallen: ["Sessões que caíram", "saude", "Sessões com terminal que morreram sozinhas (falta de memória ou terminal fechado)."],
+  server_exit: ["Como o servidor parou", "saude", "Contado na subida seguinte: queda, atualização ou parada pedida."],
+  limit_switch: ["Troca de conta no limite", "saude", "Quando uma conta bate o limite de uso e o Hangar tenta outra."],
+  client_fatal: ["Quedas do app", "saude", "O app do celular ou do PC fechou por erro."],
+  update_finished: ["Atualizações", "saude", "Fim de cada atualização: de qual versão para qual, e se deu certo."],
+  update_step: ["Etapas da atualização", "saude", "Cada etapa da atualização: baixar, trocar a versão, rodar os passos e reiniciar."],
+  update_failed_code: ["Falhas de atualização", "saude", "O código do erro de cada atualização que falhou."],
+  server_startup: ["Subida do servidor", "saude", "Do início do servidor até ele aceitar pedidos, depois de ligar, reiniciar ou atualizar."],
+  log_dropped: ["Linhas de log que sobraram", "saude", "Linhas novas de aviso ou erro que não couberam no teto de 100 por dia."],
 };
+// Valores das dimensões em português; o que não está aqui aparece como veio.
+const VALUES = {
+  provider: { claude: "Claude", codex: "Codex", pi: "Pi", omp: "omp", kimi: "Kimi", antigravity: "Antigravity", other: "outro agente" },
+  surface: { terminal: "com terminal", headless: "sem terminal" },
+  origin: { person: "pela pessoa", session: "por outra sessão", manual: "pelo botão", auto: "automática" },
+  client: { ios: "iPhone/iPad", android: "Android", pwa: "navegador", native: "app do PC", other: "outro app" },
+  kind: { lan: "rede local", tailscale: "Tailscale", connect: "Hangar Connect", public: "endereço público", disabled: "desligada",
+    crash: "queda", update: "atualização", requested: "parada pedida" },
+  cause: { package: "troca de versão", terminal_out_of_memory: "sem memória", terminal_died: "terminal fechou" },
+  result: { updated: "atualizou", updated_manual: "atualizou (à mão)", up_to_date: "já estava em dia", failed: "falhou" },
+  step: { download: "baixar", swap: "trocar a versão", steps: "rodar os passos", restart: "reiniciar", other: "outra" },
+  route: { principal: "endereço principal", rede_local: "rede local", tailscale: "Tailscale", connect: "Hangar Connect",
+    ditado: "ditado", relimpar: "refazer limpeza", sessao: "na sessão" },
+  channel: { latest: "estável", beta: "testes", other: "outro" },
+  status: { ok: "deu certo", warning: "com aviso", error: "com erro", cancelled: "cancelado" },
+  effort: { low: "esforço baixo", medium: "esforço médio", high: "esforço alto", xhigh: "esforço muito alto", max: "esforço máximo" },
+  permission: { default: "pede permissão", acceptEdits: "aceita edições", plan: "modo plano", bypassPermissions: "sem pedir permissão",
+    bypass_permissions: "sem pedir permissão", auto: "automático", "read-only": "só leitura", "workspace-write": "escreve na pasta",
+    "danger-full-access": "acesso total" },
+  feature: { search: "busca", ask_history: "perguntar ao histórico", broadcast: "mandar para várias", tags: "etiquetas",
+    "session.answer": "responder pergunta", "session.select": "escolher opção", "session.question_skip": "pular pergunta",
+    "session.interrupt": "interromper", "session.task_stop": "parar tarefa", "session.btw": "comentário de lado",
+    "session.rename": "renomear sessão", "session.reopen": "reabrir sessão", "session.dismiss": "dispensar sessão",
+    "session.close": "fechar sessão", "session.resume": "retomar sessão", "session.reload": "recarregar sessão",
+    "session.surface": "trocar terminal/sem terminal", "session.account": "trocar conta", "session.model": "trocar modelo",
+    "session.provider": "trocar agente", "session.permission_mode": "trocar permissão", "session.codex_mode": "modo do Codex",
+    "session.plan_implement": "implementar plano", "session.service_tier": "modo rápido", "session.notice_fix": "corrigir aviso",
+    "session.queue": "mexer na fila", "session.hide": "esconder sessão", "session.shell": "abrir shell",
+    "session.open_editor": "abrir no editor", "session.open_terminal": "abrir terminal", "session.browser": "navegador da sessão",
+    "session.loop": "repetir (loop)", "session.then": "depois disso", "session.subagent_message": "falar com subagente",
+    "session.port_stop": "parar porta", "session.pair": "parear sessões", "session.pair_external": "parear com outra pessoa",
+    "session.group_message": "recado ao grupo", "session.share": "compartilhar sessão", "archive.resume": "retomar do arquivo",
+    "plugins.install": "instalar plugin", "vault.add": "guardar senha", "vault.use": "usar senha do cofre",
+    keyring_unlock: "destrancar chaveiro", diag_report: "reportar problema", device_install: "instalar no aparelho",
+    config_sync: "sincronizar configuração", "push.mute": "silenciar notificações" },
+};
+const KEYS = { from: "de", to: "para", tool: "ferramenta", code: "código", model: "modelo", effort: "esforço", permission: "permissão", status: "resultado" };
+// Sim/não que só vale dizer quando é "sim" (ou quando "não" é a notícia).
+const FLAGS = { steer: ["corrigindo o rumo", null], restore: ["restaurada", null], jev: ["com Jev", null], prewarm: ["pré-aquecida", null],
+  worktree: ["em worktree", null], failed: ["falhou", null], error: ["com erro", "sem erro"], ok: ["deu certo", "falhou"] };
 // Eventos que são falha de verdade: vão à seção Erros, em vermelho.
 const BAD = new Set(["problem_shown", "session_open_failed", "send_failed", "session_fallen", "client_fatal", "update_failed_code"]);
 const BUCKETS = ["lt100ms", "lt300ms", "lt1s", "lt3s", "lt10s", "lt30s", "ge30s"];
@@ -100,10 +141,18 @@ function withTip(node, text) {
 }
 
 function dimsLabel(dims) {
-  const entries = Object.entries(dims || {});
-  if (!entries.length) return "(sem dimensão)";
-  if (entries.length === 1) return entries[0][1];
-  return entries.map(([k, v]) => k + ": " + v).join(" · ");
+  const parts = [];
+  for (const [k, v] of Object.entries(dims || {}).sort()) {
+    if (Object.hasOwn(FLAGS, k)) {
+      const said = FLAGS[k][v === "true" ? 0 : 1];
+      if (said) parts.push(said);
+    } else if (Object.hasOwn(VALUES, k) && Object.hasOwn(VALUES[k], v)) {
+      parts.push(VALUES[k][v]);
+    } else {
+      parts.push(Object.hasOwn(KEYS, k) ? KEYS[k] + " " + v : v);
+    }
+  }
+  return parts.length ? parts.join(" · ") : "todas";
 }
 
 // Lista de barras: nome, figura e barra alinhadas; o maior valor enche a trilha.
@@ -126,7 +175,7 @@ function card(title, name, body, code) {
 }
 
 // Colunas por dia, uma série: o título diz o que é, sem legenda.
-function daysChart(daily, days) {
+function daysChart(daily, days, unit = ["máquina", "máquinas"], cls = "col", height = 200, width = 0) {
   const byDay = new Map(daily.map(d => [d.day, d.machines]));
   const end = new Date(); end.setUTCHours(0, 0, 0, 0);
   const series = [];
@@ -135,7 +184,7 @@ function daysChart(daily, days) {
     series.push({ day: d, value: byDay.get(d) || 0 });
   }
   // Na largura real do cartão: o texto dos eixos fica do mesmo tamanho no celular e no PC.
-  const W = Math.max(280, document.querySelector("main").clientWidth - 78), H = 200, L = 36, B = 22, T = 8;
+  const W = width || Math.max(280, document.querySelector("main").clientWidth - 78), H = height, L = 36, B = 22, T = 8;
   const max = Math.max(1, ...series.map(s => s.value));
   const ticks = Math.min(4, max);
   const step = Math.ceil(max / ticks);
@@ -154,11 +203,11 @@ function daysChart(daily, days) {
     const y = H - B - h;
     if (s.value > 0) {
       const r = Math.min(4, bw / 2, h);
-      svg.append(svgEl("path", { class: "col", d: "M" + x + "," + (H - B) + "V" + (y + r) + "Q" + x + "," + y + " " + (x + r) + "," + y +
+      svg.append(svgEl("path", { class: cls, d: "M" + x + "," + (H - B) + "V" + (y + r) + "Q" + x + "," + y + " " + (x + r) + "," + y +
         "H" + (x + bw - r) + "Q" + (x + bw) + "," + y + " " + (x + bw) + "," + (y + r) + "V" + (H - B) + "Z" }));
     }
     const hit = svgEl("rect", { class: "hit", x: L + i * band, y: T, width: band, height: H - B - T, tabindex: "0" });
-    withTip(hit, s.day.split("-").reverse().join("/") + ": " + s.value + " máquina" + (s.value === 1 ? "" : "s"));
+    withTip(hit, s.day.split("-").reverse().join("/") + ": " + fmt.format(s.value) + " " + unit[s.value === 1 ? 0 : 1]);
     svg.append(hit);
     const every = Math.ceil(series.length / Math.max(2, Math.floor((W - L) / 70)));
     if (i === 0 || i === series.length - 1 || (i % every === 0 && series.length - 1 - i >= every / 2)) {
@@ -220,6 +269,50 @@ function section(title, note) {
   return el("div", { class: "section-title" }, el("h2", { text: title }), note ? el("span", { text: note }) : null);
 }
 
+// Série diária completa do período (dia sem pacote = 0), em UTC como os pacotes.
+function series(days, valueOf) {
+  const end = new Date(); end.setUTCHours(0, 0, 0, 0);
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const day = new Date(end.getTime() - i * 86400000).toISOString().slice(0, 10);
+    out.push({ day, machines: valueOf(day) });
+  }
+  return out;
+}
+
+// Minilinha do cartão: só a forma da tendência; o número exato está no cartão e no gráfico do dia.
+function sparkline(values) {
+  const W = 120, H = 32, max = Math.max(1, ...values);
+  const step = values.length > 1 ? W / (values.length - 1) : W;
+  const pts = values.map((v, i) => (i * step).toFixed(1) + "," + (H - 3 - (H - 6) * v / max).toFixed(1));
+  const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, class: "spark", "aria-hidden": "true" });
+  svg.append(svgEl("polyline", { points: pts.join(" "), fill: "none", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  return svg;
+}
+
+function help(text) {
+  return withTip(el("button", { class: "help", type: "button", "aria-label": text, text: "?" }), text);
+}
+
+// Faixas de tempo em frase: a faixa onde fica a metade das vezes e onde ficam 9 em cada 10.
+const UPPER = { lt100ms: "100 ms", lt300ms: "300 ms", lt1s: "1 s", lt3s: "3 s", lt10s: "10 s", lt30s: "30 s", ge30s: "mais de 30 s" };
+function quantileBucket(buckets, q) {
+  const order = [...buckets.keys()].sort((x, y) => BUCKETS.indexOf(x) - BUCKETS.indexOf(y));
+  const total = order.reduce((s, b) => s + buckets.get(b).value, 0);
+  let seen = 0;
+  for (const b of order) {
+    seen += buckets.get(b).value;
+    if (seen >= q * total) return b;
+  }
+  return order[order.length - 1];
+}
+function timeSentence(buckets) {
+  const total = [...buckets.values()].reduce((s, b) => s + b.value, 0);
+  const say = b => b === "ge30s" ? "leva mais de 30 s" : "fica em até " + UPPER[b];
+  if (total < 5) return "Poucas medidas ainda (" + total + "): o retrato fica confiável com mais dias.";
+  return "Metade das vezes " + say(quantileBucket(buckets, 0.5)) + "; 9 em cada 10 " + say(quantileBucket(buckets, 0.9)) + ".";
+}
+
 function render(data) {
   const root = document.getElementById("content");
   root.replaceChildren();
@@ -229,6 +322,7 @@ function render(data) {
   // As linhas já vêm agrupadas pelo banco: uma por combinação, mesmo quando dois rótulos saem iguais.
   for (const c of data.by_dims) entry(c.event).dims.push({ label: dimsLabel(c.dims), value: c.count, machines: c.machines });
   for (const c of data.by_bucket) entry(c.event).buckets.set(c.bucket, { value: c.count, machines: c.machines });
+  const total = event => (byEvent.get(event)?.dims || []).reduce((s, d) => s + d.value, 0);
 
   // Falha é o evento de falha inteiro, ou a linha que diz que deu errado (ferramenta com erro, passo que não deu certo).
   const failed = (event, dims) => BAD.has(event) || dims.error === "true" || dims.ok === "false"
@@ -242,22 +336,32 @@ function render(data) {
   failures.sort((x, y) => y.value - x.value);
   const failTotal = failures.reduce((s, f) => s + f.value, 0);
 
-  const kpi = (label, value, extra = {}) => el("div", { class: "card kpi" + (extra.cls ? " " + extra.cls : "") },
-    el("div", { class: "label", text: label }), el("div", { class: "value", text: compact.format(value) }),
-    extra.note ? el("div", { class: "note", text: extra.note }) : null);
+  const perDay = (keep) => {
+    const sums = new Map();
+    for (const t of data.trend || []) if (keep(t.event, t.dims || {})) sums.set(t.day, (sums.get(t.day) || 0) + t.count);
+    return series(data.days, day => sums.get(day) || 0);
+  };
+  const daily = event => perDay(e => e === event);
+  const machinesDaily = series(data.days, day => (data.daily.find(d => d.day === day) || {}).machines || 0);
+  const failDaily = perDay(failed);
+
+  const kpi = (label, value, explain, spark, cls) => el("div", { class: "card kpi" + (cls ? " " + cls : "") },
+    el("div", { class: "label" }, label, help(explain)),
+    el("div", { class: "value", text: compact.format(value) }),
+    spark ? sparkline(spark.map(s => s.machines)) : null);
   root.append(el("div", { class: "kpis" },
-    kpi("Máquinas ativas em 30 dias", a.machines_30d, { cls: "hero", note: a.machines_7d + " nos últimos 7 dias" }),
-    kpi("Donos em 30 dias", a.owners_30d, { note: a.owners_7d + " em 7 dias" }),
-    kpi("Pacotes no período", data.period.batches, { note: data.period.machines + " máquina" + (data.period.machines === 1 ? "" : "s") }),
-    kpi("Falhas no período", failTotal, { cls: failTotal ? "bad" : "", note: failTotal ? failures.length + " tipo" + (failures.length === 1 ? "" : "s") : "nenhuma registrada" }),
-    kpi("Eventos contados", data.by_dims.reduce((s, d) => s + d.count, 0), { note: byEvent.size + " tipos de evento" })));
+    kpi("Máquinas ativas", a.machines_30d, "Máquinas que mandaram pelo menos um pacote nos últimos 30 dias. Nos últimos 7: " + a.machines_7d + ".", machinesDaily, "hero"),
+    kpi("Pessoas", a.owners_30d, "Pessoas que usam o Hangar, contadas uma vez mesmo com várias máquinas (cada instalação guarda um número aleatório do dono). Nos últimos 7 dias: " + a.owners_7d + "."),
+    kpi("Mensagens enviadas", total("message_sent"), EVENTS.message_sent[2], daily("message_sent")),
+    kpi("Respostas do agente", total("turn_finished"), EVENTS.turn_finished[2], daily("turn_finished")),
+    kpi("Falhas", failTotal, "Tudo o que deu errado para quem usa no período: sessão que não abriu, mensagem recusada, queda do app, ferramenta com erro, atualização que falhou.", failDaily, failTotal ? "bad" : "")));
 
   if (!data.period.batches) {
-    root.append(el("div", { class: "card empty big" }, "Nenhum pacote chegou neste período. Cada máquina manda o dia depois que ele fecha em UTC."));
+    root.append(el("div", { class: "card empty big" }, "Nenhum pacote chegou neste período. Cada máquina manda o dia depois que ele fecha em UTC (21h em Brasília)."));
     return;
   }
 
-  root.append(section("Erros", "o que falhou para quem usa, por código"));
+  root.append(section("Erros", "o que falhou para quem usa"));
   root.append(failures.length
     ? el("div", { class: "card" }, barList(failures.slice(0, 15), { bad: true }),
         failures.length > 15 ? el("div", { class: "minor", text: "+ " + (failures.length - 15) + " na tabela no fim" }) : null)
@@ -265,40 +369,61 @@ function render(data) {
 
   root.append(section("Log de erros", "linhas de aviso e erro do servidor, limpas na máquina antes de sair"), logCard(data.logs || []));
 
-  root.append(section("Máquinas por dia"), el("div", { class: "card" }, daysChart(data.daily, data.days)));
+  // Gráficos pequenos lado a lado, um por medida: cada um tem a própria escala e dispensa legenda.
+  const mainW = document.querySelector("main").clientWidth;
+  const cols = mainW >= 860 ? 2 : 1;
+  const chartW = Math.max(260, Math.floor((mainW - 12 * (cols - 1)) / cols) - 40);
+  const mini = (title, explain, rows, unit, cls) => el("section", { class: "card" },
+    el("h3", {}, title, help(explain)), el("div", { class: "chart" }, daysChart(rows, data.days, unit, cls, 150, chartW)));
+  root.append(section("Por dia", "dias em UTC"), el("div", { class: "grid two" },
+    mini("Máquinas ativas", "Quantas máquinas mandaram pacote em cada dia.", machinesDaily, ["máquina", "máquinas"], "col"),
+    mini("Mensagens enviadas", EVENTS.message_sent[2], daily("message_sent"), ["mensagem", "mensagens"], "col"),
+    mini("Respostas do agente", EVENTS.turn_finished[2], daily("turn_finished"), ["resposta", "respostas"], "col"),
+    mini("Falhas", "Soma das falhas de cada dia.", failDaily, ["falha", "falhas"], "col bad")));
+
+  // Tempos: a frase responde "isso está rápido?"; as barras mostram como as vezes se espalham.
+  const times = [];
+  for (const [event, e] of [...byEvent].sort()) {
+    if (!e.buckets.size) continue;
+    const [title, , explain] = Object.hasOwn(EVENTS, event) ? EVENTS[event] : [event, "", ""];
+    const order = [...e.buckets.keys()].sort((x, y) => BUCKETS.indexOf(x) - BUCKETS.indexOf(y));
+    times.push(el("section", { class: "card" },
+      el("h3", { text: title }), el("p", { class: "explain", text: explain }),
+      el("p", { class: "headline", text: timeSentence(e.buckets) }),
+      barList(order.map(b => ({ label: BUCKET_LABEL[b] || b, ...e.buckets.get(b) })))));
+  }
+  if (times.length) root.append(section("Quanto demora", "cada barra é uma faixa de tempo; quanto maior, mais vezes caiu ali"), el("div", { class: "grid" }, ...times));
+
+  const sections = { uso: [], saude: [], outros: [] };
+  for (const [event, e] of [...byEvent].sort()) {
+    if (BAD.has(event)) continue;
+    const [title, group, explain] = Object.hasOwn(EVENTS, event) ? EVENTS[event] : [event, "outros", "Evento novo, ainda sem descrição neste painel."];
+    const items = [...e.dims].sort((x, y) => y.value - x.value);
+    const shown = items.slice(0, 12);
+    sections[group].push(el("section", { class: "card" },
+      el("h3", { text: title }), el("p", { class: "explain", text: explain }),
+      barList(shown),
+      items.length > shown.length ? el("div", { class: "minor", text: "+ " + (items.length - shown.length) + " na tabela no fim" }) : null));
+  }
+  if (sections.uso.length) root.append(section("Como usam", "o que as pessoas fazem com o Hangar"), el("div", { class: "grid" }, ...sections.uso));
 
   root.append(section("Onde roda", "pelo último pacote de cada máquina"));
   const envGrid = el("div", { class: "grid" });
-  for (const key of ["version", "os", "channel"]) {
-    const items = data.env.filter(e => e.key === key).map(e => ({ label: e.value, value: e.machines }));
-    envGrid.append(card(ENV_LABEL[key], "máquinas", items.length ? barList(items) : el("div", { class: "empty", text: "Sem dados." })));
+  for (const [key, title, explain] of [["version", "Versão do Hangar", "Versão instalada em cada máquina."],
+      ["os", "Sistema", "Sistema operacional de cada máquina."], ["channel", "Canal de atualização", "Estável recebe só versões publicadas; testes recebe antes."]]) {
+    const items = data.env.filter(e => e.key === key).map(e => ({ label: key === "channel" ? (VALUES.channel[e.value] || e.value) : e.value, value: e.machines }));
+    envGrid.append(el("section", { class: "card" }, el("h3", { text: title }), el("p", { class: "explain", text: explain }),
+      items.length ? barList(items) : el("div", { class: "empty", text: "Sem dados." })));
   }
-  envGrid.append(card("Máquinas por dono", "donos ativos em 30 dias", data.per_owner.length
-    ? barList(data.per_owner.map(p => ({ label: p.machines + " máquina" + (p.machines === 1 ? "" : "s"), value: p.owners })))
-    : el("div", { class: "empty", text: "Sem dados." })));
+  envGrid.append(el("section", { class: "card" }, el("h3", { text: "Máquinas por pessoa" }),
+    el("p", { class: "explain", text: "Quantas pessoas usam o Hangar em 1, 2, 3… máquinas (últimos 30 dias)." }),
+    data.per_owner.length
+      ? barList(data.per_owner.map(p => ({ label: p.machines + " máquina" + (p.machines === 1 ? "" : "s"), value: p.owners })))
+      : el("div", { class: "empty", text: "Sem dados." })));
   root.append(envGrid);
 
-  const sections = { uso: [], saude: [], tempos: [], outros: [] };
-  for (const [event, e] of [...byEvent].sort()) {
-    const [title, group] = Object.hasOwn(EVENTS, event) ? EVENTS[event] : [event, "outros"];
-    if (BAD.has(event)) continue;
-    const items = [...e.dims].sort((x, y) => y.value - x.value);
-    const shown = items.slice(0, 12);
-    const body = el("div", {}, barList(shown),
-      items.length > shown.length ? el("div", { class: "minor", text: "+ " + (items.length - shown.length) + " na tabela no fim" }) : null);
-    sections[group].push(card(title, event, body, true));
-  }
-  for (const [event, e] of [...byEvent].sort()) {
-    if (!e.buckets.size) continue;
-    const title = Object.hasOwn(EVENTS, event) ? EVENTS[event][0] : event;
-    const order = [...e.buckets.keys()].sort((x, y) => BUCKETS.indexOf(x) - BUCKETS.indexOf(y));
-    sections.tempos.push(card(title, event, barList(order.map(b => ({ label: BUCKET_LABEL[b] || b, ...e.buckets.get(b) }))), true));
-  }
-  for (const [key, title, note] of [["uso", "Uso", "o que as pessoas fazem"], ["saude", "Saúde do servidor", "subidas, saídas e atualizações"],
-      ["tempos", "Tempos", "quanto cada coisa demorou"], ["outros", "Outros eventos", "ainda sem rótulo neste painel"]]) {
-    if (!sections[key].length) continue;
-    root.append(section(title, note), el("div", { class: "grid" }, ...sections[key]));
-  }
+  if (sections.saude.length) root.append(section("Saúde do servidor", "subidas, saídas e atualizações"), el("div", { class: "grid" }, ...sections.saude));
+  if (sections.outros.length) root.append(section("Outros eventos", "ainda sem descrição neste painel"), el("div", { class: "grid" }, ...sections.outros));
 
   const rows = data.counters.map(c => el("tr", {},
     el("td", {}, el("code", { text: c.event })), el("td", { text: dimsLabel(c.dims) }), el("td", { text: c.bucket ? (BUCKET_LABEL[c.bucket] || c.bucket) : "" }),
@@ -306,8 +431,8 @@ function render(data) {
   root.append(section("Todos os contadores"), el("details", { class: "card table" },
     el("summary", { text: data.counters.length + " linhas, como chegaram" }),
     el("div", { class: "table-wrap" }, el("table", {},
-      el("thead", {}, el("tr", {}, el("th", { text: "Evento" }), el("th", { text: "Dimensões" }), el("th", { text: "Duração" }),
-        el("th", { class: "n", text: "Total" }), el("th", { class: "n", text: "Máquinas" }))),
+      el("thead", {}, el("tr", {}, el("th", { text: "Evento" }), el("th", { text: "Detalhe" }), el("th", { text: "Duração" }),
+        el("th", { class: "n", text: "Vezes" }), el("th", { class: "n", text: "Máquinas" }))),
       el("tbody", {}, ...rows)))));
 }
 

@@ -174,6 +174,17 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
+    // Total de cada evento por dia: as minilinhas dos cartões e os gráficos de uso por dia.
+    // Com as dimensões: a falha por dia inclui a linha que diz erro (ferramenta com erro, passo que falhou).
+    let trend: Vec<(String, String, Json<serde_json::Value>, i64)> = sqlx::query_as(concat!(
+        "SELECT to_char(b.day, 'YYYY-MM-DD'), c.event, c.dims, sum(c.count)::bigint
+         FROM counters c JOIN batches b ON b.batch_id = c.batch_id
+         WHERE ", in_period!("b.day"), "
+         GROUP BY b.day, c.event, c.dims ORDER BY b.day"
+    ))
+    .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
     tx.commit().await?;
     use serde_json::json;
     Ok(json!({
@@ -191,6 +202,7 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
             "level": level, "target": target, "message": message, "count": count, "machines": machines,
             "first_day": first, "last_day": last, "versions": versions,
         })).collect::<Vec<_>>(),
+        "trend": trend.into_iter().map(|(day, event, dims, count)| json!({"day": day, "event": event, "dims": dims.0, "count": count})).collect::<Vec<_>>(),
         "counters": counters.into_iter().map(|(event, dims, bucket, count, machines)|
             json!({"event": event, "dims": dims.0, "bucket": bucket, "count": count, "machines": machines})).collect::<Vec<_>>(),
     }))

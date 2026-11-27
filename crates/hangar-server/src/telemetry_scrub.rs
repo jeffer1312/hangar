@@ -32,6 +32,9 @@ static UNIX_PATH: LazyLock<Regex> = LazyLock::new(|| re(r#"(^|[\s"'(=\[,:])/[^\s
 static EMAIL: LazyLock<Regex> = LazyLock::new(|| re(r"[A-Za-z0-9._%+*-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"));
 // Pid, porta alta e id mudam a cada vez e partiriam a mesma linha em várias.
 static NUMBER: LazyLock<Regex> = LazyLock::new(|| re(r"[0-9]{6,}"));
+// Chave de sessão, id de conversa e UUID: identificam uma coisa da pessoa e também partiriam a linha.
+static ID: LazyLock<Regex> =
+    LazyLock::new(|| re(r"(?i)\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,})\b"));
 
 /// A mensagem pronta para `Telemetry::log`, cortada em `MAX_LOG_CHARS`.
 pub(crate) fn clean(scrubber: &Scrubber, text: &str, names: &Names) -> String {
@@ -49,6 +52,7 @@ pub(crate) fn clean(scrubber: &Scrubber, text: &str, names: &Names) -> String {
     for (name, mark) in words {
         out = replace_word(&out, name, mark);
     }
+    let out = ID.replace_all(&out, "<id>");
     NUMBER.replace_all(&out, "<n>").chars().take(MAX_LOG_CHARS).collect()
 }
 
@@ -113,6 +117,10 @@ mod tests {
         assert_eq!(cleaned("GET https://casa.exemplo.hangar.dev.br/api/x?y=1 deu 502"), "GET <url> deu 502");
         assert_eq!(cleaned("pid 1234567 na porta 45678 saiu"), "pid <n> na porta 45678 saiu");
         assert_eq!(cleaned("comando /clear recusado"), "comando /clear recusado", "um segmento só é comando");
+        assert_eq!(cleaned("lista não lida dac3cb3913be3aafadbd3e77e32cb1ff"), "lista não lida ***", "o Scrubber já tira hex longo");
+        assert_eq!(cleaned("chave a1b2c3d4e5f60718 sumiu"), "chave <id> sumiu");
+        assert_eq!(cleaned("conversa 6f1c2a9e-1b2c-4d5e-8f90-123456789abc sumiu"), "conversa <id> sumiu");
+        assert_eq!(cleaned("código deadbeef ficou"), "código deadbeef ficou", "hex curto é palavra comum");
     }
 
     #[test]
