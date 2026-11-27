@@ -2,10 +2,10 @@ import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
-import { recarregarSessao, type ChatEvent } from '@hangar/core';
+import { cancelSessionAutoContinue, recarregarSessao, type ChatEvent } from '@hangar/core';
 import { haptic } from '../ui/haptics';
 import { useSessions } from '../stores/sessions';
-import { isApiError, isFixNote, noticeAction, noticeCount, noticeDetail, noticeKey, noticeTitle, plainNotice, type FixState } from '../features/notices/notices';
+import { autoContinueCancellable, autoContinueText, isApiError, isAutoContinue, isFixNote, noticeAction, noticeCount, noticeDetail, noticeKey, noticeTitle, plainNotice, type FixState } from '../features/notices/notices';
 import { fixPreview, putNoticeIgnore, reinstallPlugin, serverOf, startFix, type FixPreview, type FixRequest } from '../features/notices/api';
 import { ApiErrorBox, IgnoredLine, NoticeBody, NoticeBusy, NoticeLineView, NoticeMark, NoticePill } from './NoticeParts';
 import { NoticeFixSheet } from './NoticeFixSheet';
@@ -48,6 +48,7 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId, sessio
     if ((localRef.current === true && !has) || (localRef.current === false && has)) setLocal(null);
   }, [ignoredKeys, key]);
 
+  if (isAutoContinue(event)) return <AutoContinueLine event={event} serverId={serverId} sessionName={sessionName} />;
   if (isApiError(event)) return <ApiErrorBox text={plainNotice(event).trim()} />;
   if (isFixNote(event)) {
     const child = event.notice_meta?.child ?? '';
@@ -168,6 +169,35 @@ export const ClaudeNotice = memo(function ClaudeNotice({ event, serverId, sessio
     </View>
   );
 });
+
+type Cancel = 'idle' | 'cancelling' | { failed: string };
+
+/** Nota do continuar sozinho: linha neutra entre fios, com o Cancelar enquanto espera a rede. */
+function AutoContinueLine({ event, serverId, sessionName }: { event: ChatEvent; serverId?: string; sessionName?: string }) {
+  const [cancel, setCancel] = useState<Cancel>('idle');
+  // Cancelou: o giro fica até a nota trocada pelo desfecho chegar, e o botão sai com ela.
+  const state = event.notice_meta?.state;
+  useEffect(() => setCancel('idle'), [state]);
+  const cancellable = autoContinueCancellable(event) && !!serverId && !!sessionName;
+  const doCancel = () => {
+    if (!serverId || !sessionName) return;
+    setCancel('cancelling');
+    Promise.resolve().then(() => cancelSessionAutoContinue(sessionName, serverOf(serverId))).then((cancelled) => {
+      // Nada esperando (o desfecho já saiu): a nota chega trocada sozinha.
+      if (!cancelled) setCancel('idle');
+    }, (error: unknown) => { haptic.error(); setCancel({ failed: why(error) }); });
+  };
+  const action = !cancellable ? null : cancel === 'cancelling'
+    ? <NoticeBusy label={m.auto_continue_cancel()} />
+    : <NoticePill label={m.auto_continue_cancel()} onPress={doCancel} />;
+  return (
+    <View>
+      {/* Nota neutra: sem o triângulo de aviso. */}
+      <NoticeLineView icon={false} title={autoContinueText(event)} count={null} open={null} action={action} />
+      {typeof cancel === 'object' ? <Text style={styles.failed}>{m.auto_continue_cancel_failed({ why: cancel.failed })}</Text> : null}
+    </View>
+  );
+}
 
 const styles = StyleSheet.create((theme) => ({
   failed: { ...theme.type.caption, color: theme.tokens.status.warning, textAlign: 'center' },

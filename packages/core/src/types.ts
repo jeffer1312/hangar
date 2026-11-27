@@ -270,6 +270,8 @@ export interface ChatEvent {
     action?: string; plugin?: string;
     /** Nota de conserto de hook: de qual aviso, de qual tentativa, em que estado e em qual sessão. */
     fix_of?: string; attempt?: number; state?: string; child?: string;
+    /** Nota do continuar sozinho (`kind: "auto_continue"`): horários em segundos, `code` do desfecho, `cause` do reboot. */
+    kind?: string; stopped_at?: number; continued_at?: number; code?: string; cause?: string;
   } | null;
   /** Só em notice `skill_loaded`: a skill que o harness injetou como fala do usuário. */
   skill?: { name: string; path?: string | null; body: string } | null;

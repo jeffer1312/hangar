@@ -2209,6 +2209,23 @@ export async function reopenFallenSession(
   );
 }
 
+const autoContinuePath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/auto-continue`;
+
+// Interruptor do continuar sozinho da sessão; a linha muda quando a lista seguinte trouxer o `auto_continue_off` novo.
+export async function setSessionAutoContinue(name: string, enabled: boolean, server?: Server | null): Promise<void> {
+  await sessionFetch<unknown>(server, autoContinuePath(name), {
+    method: 'PUT', body: JSON.stringify({ enabled }), signal: AbortSignal.timeout(15_000),
+  });
+}
+
+// Cancelar da nota que espera a rede. `false`: nada esperava (o desfecho já saiu e a nota chega trocada).
+export async function cancelSessionAutoContinue(name: string, server?: Server | null): Promise<boolean> {
+  const reply = await sessionFetch<{ cancelled?: boolean }>(server, autoContinuePath(name), {
+    method: 'DELETE', signal: AbortSignal.timeout(15_000),
+  });
+  return reply?.cancelled === true;
+}
+
 // Tira a caída da lista; recusa (404) se o nome já voltou vivo, em vez de fechar a sessão reaberta.
 export async function dismissFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
   return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/dismiss`, { method: 'POST' });
