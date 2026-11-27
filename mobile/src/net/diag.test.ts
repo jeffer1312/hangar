@@ -7,66 +7,89 @@ const estado = vi.hoisted(() => ({
   servidores: [{ id: 'a', label: 'fixture-a', baseUrl: 'https://a.test', token: 'token-a' },
     { id: 'b', label: 'fixture-b', baseUrl: 'https://b.test', token: 'token-b' }] as Server[],
   appState: vi.fn(),
+  changed: undefined as (() => void) | undefined,
 }));
 vi.mock('react-native', () => ({ Platform: { OS: 'android' }, AppState: { addEventListener: estado.appState } }));
 vi.mock('expo-updates', () => ({ updateId: 'update-fixture' }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { version: '0.1.0' } } }));
 vi.mock('../stores/prefs', () => ({ prefs: { getString: () => undefined } }));
 vi.mock('../stores/servers', () => ({ useServers: {
-  getState: () => ({ servers: estado.servidores, active: () => ({ baseUrl: estado.base }) }),
-  subscribe: vi.fn(),
+  getState: () => ({ servers: estado.servidores, active: () => estado.servidores.find((s) => s.baseUrl === estado.base) }),
+  subscribe: (fn: () => void) => { estado.changed = fn; },
 } }));
-import { iniciarDiag, withMachineRequestDiagnostics } from './diag';
+import { iniciarDiag, onTelemetrySaved, withMachineRequestDiagnostics } from './diag';
 
 // O servidor ativo é estado do módulo: um teste que o troca não pode valer para o seguinte.
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); estado.base = 'https://a.test'; });
 
-it('instala sink uma vez, grava plataforma e eventos no destino capturado', async () => {
+it('separa retrato do diário, repete após 503 e descarta leitura de máquina recadastrada', async () => {
   vi.useFakeTimers();
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"gravadas":2}'));
-  iniciarDiag(() => ({ valores: { theme: 'dark' }, aparelho: 'dev-1' })); iniciarDiag();
+  vi.setSystemTime(new Date('2026-11-27T23:45:00Z'));
+  configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized: () => {}, origin: null, createEventSource: vi.fn() });
+  const [first, second] = estado.servidores;
+  const updated = { ...second, id: 'new-b', token: 'new-token-b' };
+  const accepted = { consent: true, consent_scope: 2, enabled: true, disabled_by: null, snapshot_period: 'a'.repeat(32) } as const;
+  const newConsent = { ...accepted, snapshot_period: 'b'.repeat(32) };
+  let legacy = true;
+  let failOnce = true;
+  let oldB!: (response: Response) => void;
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/api/telemetry')) {
+      if (init?.method === 'POST') {
+        if (failOnce) { failOnce = false; return new Response('{}', { status: 503 }); }
+        return new Response(JSON.stringify({ snapshot_period: JSON.parse(init.body as string).snapshot_period }));
+      }
+      const auth = new Headers(init?.headers).get('Authorization');
+      if (auth === `Bearer ${second.token}`) return new Promise((resolve) => { oldB = resolve; });
+      if (auth === `Bearer ${updated.token}`) return new Response(JSON.stringify(newConsent));
+      return new Response(JSON.stringify(legacy ? { consent: true, disabled_by: null } : accepted));
+    }
+    return new Response(JSON.stringify({ gravadas: JSON.parse(init!.body as string).eventos.length }));
+  });
+  const settings = vi.fn(() => ({ valores: { theme: 'dark' }, aparelho: 'dev-1' }));
+  const posts = (base: string, path: string) => fetchMock.mock.calls.filter(([url, init]) =>
+    url === `${base}/api/${path}` && init?.method === 'POST');
+  const snapshots = (base: string) => posts(base, 'telemetry').map(([, init]) => JSON.parse(init!.body as string));
+
+  iniciarDiag(settings); iniciarDiag();
   expect(estado.appState).toHaveBeenCalledTimes(1);
   const req = novoReqDiag();
-  expect(req).not.toBe('');
   registrarDiag({ evento: 'acao', req });
-  estado.base = 'https://b.test';
+  estado.base = second.baseUrl;
   await vi.advanceTimersByTimeAsync(4000);
-  expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/diag');
-  const eventos = JSON.parse(fetchMock.mock.calls[0][1]!.body as string).eventos;
-  expect(eventos).toEqual([
+  const common = JSON.parse(posts(first.baseUrl, 'diag')[0][1]!.body as string).eventos;
+  expect(common).toEqual([
     expect.objectContaining({ evento: 'app.abriu', so: 'android', versao: '0.1.0' }),
     expect.objectContaining({ evento: 'acao', req, cliente: 'android' }),
   ]);
-  expect(JSON.stringify(eventos)).not.toMatch(/token-a|https:/);
+  expect(JSON.stringify(common)).not.toMatch(/token-a|https:/);
 
-  // A cada passada em primeiro plano, o tempo na tela vai ao servidor ativo.
-  estado.base = 'https://a.test';
-  fetchMock.mockClear();
-  fetchMock.mockImplementation(async (_url, init) =>
-    new Response(JSON.stringify({ gravadas: JSON.parse(init!.body as string).eventos.length })));
-  await vi.advanceTimersByTimeAsync(300_000 - 4000);
-  const visibleTime = fetchMock.mock.calls.flatMap(([url, init]) => JSON.parse(init!.body as string).eventos
-    .filter((e: { evento: string }) => e.evento === 'app.visible_time').map((e: object) => [url, e]));
-  expect(visibleTime).toEqual([['https://a.test/api/diag', expect.objectContaining({ ms: 300_000, cliente: 'android' })]]);
+  estado.base = first.baseUrl;
+  await vi.advanceTimersByTimeAsync(296_000);
+  expect(settings).not.toHaveBeenCalled();
+  legacy = false;
+  onTelemetrySaved(first, accepted);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(snapshots(first.baseUrl)).toEqual([expect.objectContaining({ snapshot_period: accepted.snapshot_period,
+    valores: { theme: 'dark' }, aparelho: 'dev-1', ts: '2026-11-27T23:50:00.000Z' })]);
+  await vi.advanceTimersByTimeAsync(599_000);
+  expect(snapshots(first.baseUrl).map((body) => body.ts)).toEqual(['2026-11-27T23:50:00.000Z', '2026-11-27T23:55:00.000Z']);
+  expect(JSON.stringify(posts(first.baseUrl, 'diag'))).not.toMatch(/settings\.snapshot|snapshot_period|dev-1/);
 
-  // O retrato das preferências sai uma vez por dia, ao servidor ativo.
-  const snapshots = () => fetchMock.mock.calls.flatMap(([, init]) => JSON.parse(init!.body as string).eventos
-    .filter((e: { evento: string }) => e.evento === 'settings.snapshot'));
-  expect(snapshots()).toEqual([expect.objectContaining({ valores: { theme: 'dark' }, aparelho: 'dev-1', cliente: 'android' })]);
-  fetchMock.mockClear();
-  await vi.advanceTimersByTimeAsync(300_000);
-  expect(snapshots()).toEqual([]);
-
-  // Cada máquina conta os aparelhos dela: trocar de servidor ativo manda o retrato a ele no mesmo dia.
-  estado.base = 'https://b.test';
-  await vi.advanceTimersByTimeAsync(300_000);
-  const sentTo = (base: string) => fetchMock.mock.calls.filter(([url]) => url === `${base}/api/diag`)
-    .flatMap(([, init]) => JSON.parse(init!.body as string).eventos).filter((e: { evento: string }) => e.evento === 'settings.snapshot');
-  expect(sentTo('https://b.test')).toEqual([expect.objectContaining({ aparelho: 'dev-1' })]);
-  fetchMock.mockClear();
-  estado.base = 'https://a.test';
-  await vi.advanceTimersByTimeAsync(300_000);
-  expect(snapshots()).toEqual([]);
+  const original = estado.servidores;
+  try {
+    estado.base = second.baseUrl;
+    estado.changed?.();
+    expect(oldB).toBeDefined();
+    estado.servidores = [first, updated];
+    estado.changed?.();
+    oldB?.(new Response(JSON.stringify(accepted)));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(snapshots(second.baseUrl)).toEqual([expect.objectContaining({ snapshot_period: newConsent.snapshot_period,
+      ts: '2026-11-27T23:59:59.000Z' })]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(snapshots(second.baseUrl).map((body) => body.ts)).toEqual(['2026-11-27T23:59:59.000Z', '2026-11-28T00:00:00.000Z']);
+  } finally { estado.servidores = original; }
 });
 
 it.each(['401', 'timeout', 'network', 'cancelled'] as const)('registra falha %s do pedido sem token, corpo ou query', async (kind) => {
@@ -125,6 +148,7 @@ it('preserva qual peer falhou ao obter a credencial, sem copiar a credencial', a
 it('diagnóstico usa a rota LAN já confirmada', async () => {
   configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized: () => {}, origin: null, createEventSource: vi.fn() });
   const original = estado.servidores;
+  estado.base = 'https://no-active.test';
   const source = { ...original[0], lan: { id: 'home', url: 'http://192.168.0.5:8765' } };
   let resolve!: (response: Response) => void;
   const principal = new Promise<Response>((done) => { resolve = done; });
@@ -143,7 +167,7 @@ it('diagnóstico usa a rota LAN já confirmada', async () => {
     configureDiag({ registrar: record, novoReq: () => '' });
     const request = withMachineRequestDiagnostics(vi.fn(async () => new Response('{}', { status: 503 })));
     await request(`${source.lan.url}/api/peers/app-list`);
-    expect(record).toHaveBeenCalledWith(expect.objectContaining({ codigo: '503' }), source.lan.url);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ codigo: '503' }), source.baseUrl);
   } finally {
     resolve(new Response('{}'));
     estado.servidores = original;

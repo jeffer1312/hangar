@@ -1,13 +1,24 @@
 import { AppState, Platform } from 'react-native';
 import { updateId } from 'expo-updates';
 import Constants from 'expo-constants';
-import { baseOf, configureDiag, criarTransporteDiag, isOwnMachine, isServerParked, registrarDiag, type EventoDiag } from '@hangar/core';
+import { baseOf, configureDiag, criarTransporteDiag, getTelemetry, isOwnMachine, isServerParked, registrarDiag,
+  SETTINGS_CONSENT_SCOPE, subscribeRoutes, UNCONFIRMED_BASE, type EventoDiag, type Server, type TelemetrySetting } from '@hangar/core';
 import { useServers } from '../stores/servers';
 import { fatalTelemetryEvent, replayFatalError } from './fatalErrors';
 
 let iniciado = false;
 // O tempo na tela sai neste compasso; o servidor recusa mais que isso num evento.
 const VISIBLE_EVERY_MS = 5 * 60 * 1000;
+const trimBase = (base: string) => base.replace(/\/+$/, '');
+const destination = (server: Server) => trimBase(server.baseUrl);
+type SettingsSnapshot = Pick<EventoDiag, 'valores' | 'aparelho'> & {
+  cliente: 'ios' | 'android'; ts: string; snapshot_period: string;
+};
+let telemetrySaved: ((server: Server, state: TelemetrySetting) => void) | undefined;
+
+export function onTelemetrySaved(server: Server, state: TelemetrySetting): void {
+  telemetrySaved?.(server, state);
+}
 
 export function withMachineRequestDiagnostics(fetcher: typeof fetch): typeof fetch {
   return async (input, init) => {
@@ -17,12 +28,13 @@ export function withMachineRequestDiagnostics(fetcher: typeof fetch): typeof fet
     if (!/^\/api\/(peers(?:\/.*)?|sessions)$/.test(url.pathname)) return fetcher(input, init);
     const started = Date.now();
     const own = useServers.getState().servers.filter(isOwnMachine);
-    const server = own.find((s) => url.href.startsWith(`${baseOf(s)}/api/`)) ?? own[0];
+    const server = own.find((s) => url.href.startsWith(`${trimBase(baseOf(s))}/api/`)
+      || url.href.startsWith(`${destination(s)}/api/`)) ?? own[0];
     const report = (code: string) => server && registrarDiag({
       evento: 'machines.request_failed', nivel: 'aviso', codigo: code, ms: Date.now() - started,
       operacao: url.host,
       detalhe: `${init?.method ?? 'GET'} ${url.pathname}`,
-    }, baseOf(server));
+    }, destination(server));
     try {
       const response = await fetcher(input, init);
       if (!response.ok) report(String(response.status));
@@ -49,15 +61,28 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'valores' | 'apare
   let seq = 0;
   const destinos = new Set<string>();
   const transporte = criarTransporteDiag((destino) => {
-    const server = useServers.getState().servers
-      .find((s) => s.baseUrl.replace(/\/+$/, '') === destino || baseOf(s) === destino);
-    return server && !isServerParked(server.id) ? server.token : null;
+    const server = useServers.getState().servers.find((s) => destination(s) === destino && isOwnMachine(s));
+    if (!server || isServerParked(server.id)) return null;
+    const baseUrl = trimBase(baseOf(server));
+    return baseUrl === UNCONFIRMED_BASE ? null : { baseUrl, token: server.token };
   });
-  // O diário fica nas máquinas desta pessoa, nunca na entrada do par de outra pessoa.
-  const ativaPropria = () => { const a = useServers.getState().active(); return a && !a.invite ? a.baseUrl : undefined; };
-  const registrar = (evento: EventoDiag, destino = ativaPropria()) => {
-    if (!destino) return;
-    const base = destino.replace(/\/+$/, '');
+  // A chave fica na máquina original, mesmo quando a rede local passa a responder.
+  const ownActive = () => { const server = useServers.getState().active(); return server && isOwnMachine(server) ? server : undefined; };
+  const registrar = (evento: EventoDiag, target?: string) => {
+    const active = ownActive();
+    let base: string;
+    if (target === undefined) {
+      if (!active) return;
+      base = destination(active);
+    } else {
+      const route = trimBase(target);
+      // Eventos do SSE trazem a rota usada; traduza para a identidade antes de enfileirar.
+      const own = useServers.getState().servers.filter(isOwnMachine);
+      const server = own.find((s) => destination(s) === route)
+        ?? own.find((s) => trimBase(baseOf(s)) === route && route !== UNCONFIRMED_BASE);
+      if (!server) return;
+      base = destination(server);
+    }
     if (!destinos.has(base)) {
       destinos.add(base);
       transporte.registrar(base, { evento: 'app.abriu', cli, seq: ++seq,
@@ -69,8 +94,10 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'valores' | 'apare
   configureDiag({ registrar, novoReq: () => `${cli}-${(++seq).toString(36)}` });
   const replay = () => {
     void replayFatalError(async (report) => {
-      const server = useServers.getState().active();
-      if (!server || server.invite || !server.token) return false;
+      const server = ownActive();
+      if (!server || !server.token) return false;
+      const base = trimBase(baseOf(server));
+      if (base === UNCONFIRMED_BASE) return false;
       const event = {
         evento: 'js.fatal', nivel: 'erro', ts: report.timestamp, cli, seq: ++seq,
         codigo: report.name, tela: report.route, detalhe: report.message.slice(0, 300),
@@ -78,7 +105,7 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'valores' | 'apare
         operacao: [report.metadata.runtime, report.metadata.updateId].filter(Boolean).join(' · '),
       };
       const eventos = [event, { ...fatalTelemetryEvent(report), cliente: client, cli, seq: ++seq }];
-      const response = await fetch(`${baseOf(server).replace(/\/+$/, '')}/api/diag`, {
+      const response = await fetch(`${base}/api/diag`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${server.token}` },
         body: JSON.stringify({ eventos }), signal: AbortSignal.timeout(8000),
       });
@@ -101,18 +128,67 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'valores' | 'apare
     visibleRest -= ms;
     if (ms > 0) registrar({ evento: 'app.visible_time', ms });
   };
-  // A fila do transporte reenvia até o servidor gravar: o dia fica marcado quando o retrato entra nela.
-  // Um dia por máquina: cada servidor conta os aparelhos dele, e trocar a ativa manda o retrato a ela.
+  // A confirmação deste POST não se confunde com a baixa das entradas do diário.
   const settingsDay = new Map<string, string>();
-  const settingsSnapshot = () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const destino = ativaPropria()?.replace(/\/+$/, '');
-    if (!settings || !destino || settingsDay.get(destino) === today) return;
-    settingsDay.set(destino, today);
-    registrar({ evento: 'settings.snapshot', ...settings() }, destino);
+  const inFlight = new Map<string, { server: Server }>();
+  const snapshotTarget = () => {
+    const server = ownActive();
+    return server?.token && !isServerParked(server.id) && baseOf(server) !== UNCONFIRMED_BASE ? server : undefined;
   };
+  const sameServer = (a: Server, b: Server | undefined) => !!b && a.id === b.id && a.token === b.token && destination(a) === destination(b);
+  const settingsSnapshot = async (saved?: TelemetrySetting) => {
+    const server = snapshotTarget();
+    if (!settings || !server) return;
+    const key = destination(server);
+    const existing = inFlight.get(key);
+    if (existing && sameServer(server, existing.server)) return;
+    const flight = { server };
+    inFlight.set(key, flight);
+    const current = () => inFlight.get(key) === flight && sameServer(server, snapshotTarget());
+    try {
+      const state = saved ?? await getTelemetry(server);
+      const period = state?.snapshot_period;
+      if (!current() || !period || state?.consent_scope !== SETTINGS_CONSENT_SCOPE || state.disabled_by) return;
+      const ts = new Date().toISOString();
+      const mark = `${server.id}:${ts.slice(0, 10)}:${period}`;
+      if (settingsDay.get(key) === mark) return;
+      const body: SettingsSnapshot = { ...settings(), cliente: client, ts, snapshot_period: period };
+      const active = snapshotTarget();
+      if (!active || !current()) return;
+      const response = await fetch(`${trimBase(baseOf(active))}/api/telemetry`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${active.token}` },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(8000),
+      });
+      if (!response.ok) {
+        if (current() && response.status >= 500) console.warn('telemetry_settings_snapshot_failed');
+        return;
+      }
+      const ack: unknown = await response.json();
+      if (current() && ack && typeof ack === 'object' && 'snapshot_period' in ack && ack.snapshot_period === period) {
+        settingsDay.set(key, mark);
+      }
+    } catch {
+      // O próximo ciclo confere o aceite de novo, sem conservar os valores de uma captura recusada.
+      if (current()) console.warn('telemetry_settings_snapshot_failed');
+    } finally {
+      if (inFlight.get(key) === flight) inFlight.delete(key);
+    }
+  };
+  telemetrySaved = (server, state) => {
+    if (!sameServer(server, ownActive())) return;
+    inFlight.delete(destination(server));
+    if (state.snapshot_period) void settingsSnapshot(state);
+  };
+  let lastRoute = '';
+  const checkActiveRoute = () => {
+    const s = snapshotTarget();
+    const route = s ? JSON.stringify([s.id, destination(s), baseOf(s), s.token]) : '';
+    if (route !== lastRoute) { lastRoute = route; settingsSnapshot(); }
+  };
+  checkActiveRoute();
   setInterval(() => { visibleTime(); settingsSnapshot(); void transporte.enviar(); }, VISIBLE_EVERY_MS);
-  useServers.subscribe(() => { settingsSnapshot(); void transporte.enviar(); replay(); });
+  useServers.subscribe(() => { checkActiveRoute(); void transporte.enviar(); replay(); });
+  subscribeRoutes(() => { checkActiveRoute(); void transporte.enviar(); });
   AppState.addEventListener('change', (estado) => {
     if (estado === 'active') { if (visibleSince === null) visibleSince = Date.now(); }
     else { visibleTime(); visibleSince = null; }

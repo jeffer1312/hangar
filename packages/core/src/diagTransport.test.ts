@@ -31,6 +31,46 @@ it('retém sem token, após offline e HTTP falho; entrega só ao destino origina
   expect(JSON.parse(ultimo.body as string)).toEqual({ eventos: [{ evento: 'login.falhou' }] });
 });
 
+it('trocar a rota confirmada mantém a fila e a espera da máquina original', async () => {
+  const a = 'https://a.test', b = 'https://b.test', lan = 'http://192.0.2.10:8765';
+  let route = a;
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('fixture-offline')).mockImplementation(aceitar);
+  const diario = criarTransporteDiag((destino) => destino === a ? { baseUrl: route, token: 'fixture-a' } : { baseUrl: b, token: 'fixture-b' });
+  diario.registrar(a, { evento: 'first-a' });
+  await diario.enviar();
+  route = lan;
+  diario.registrar(a, { evento: 'second-a' });
+  diario.registrar(b, { evento: 'first-b' });
+  await diario.enviar();
+  await vi.advanceTimersByTimeAsync(9999);
+  expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([`${a}/api/diag`, `${b}/api/diag`]);
+  await vi.advanceTimersByTimeAsync(1);
+  const [url, init] = fetchMock.mock.calls.at(-1)!;
+  expect(url).toBe(`${lan}/api/diag`);
+  expect(init?.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer fixture-a' }));
+  expect(JSON.parse(init!.body as string)).toEqual({ eventos: [{ evento: 'first-a' }, { evento: 'second-a' }] });
+});
+
+it('relê prova e credencial antes do segundo POST de uma fila 50+1', async () => {
+  const key = 'https://fixture.test';
+  let address: { baseUrl: string; token: string } | null = { baseUrl: 'http://192.0.2.10:8765', token: 'old-token' };
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementationOnce((url, init) => {
+    address = null;
+    return aceitar(url, init);
+  }).mockImplementation(aceitar);
+  const diario = criarTransporteDiag(() => address);
+  for (let seq = 0; seq < 51; seq++) diario.registrar(key, { evento: 'fixture', seq });
+  await diario.enviar();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string).eventos).toHaveLength(50);
+  address = { baseUrl: key, token: 'new-token' };
+  await diario.enviar();
+  const [url, init] = fetchMock.mock.calls[1];
+  expect(url).toBe(`${key}/api/diag`);
+  expect(init?.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer new-token' }));
+  expect(JSON.parse(init!.body as string)).toEqual({ eventos: [{ evento: 'fixture', seq: 50 }] });
+});
+
 it('envio em voo não duplica nem apaga eventos que chegaram depois', async () => {
   let concluir!: (r: Response) => void;
   const fetchMock = vi.spyOn(globalThis, 'fetch')

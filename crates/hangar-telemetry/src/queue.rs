@@ -1,4 +1,4 @@
-//! A fila em disco: um arquivo por dia (UTC) em `~/.hangar/telemetry/queue/<dia>.json`, e as marcas
+//! A fila em disco: um arquivo por dia (UTC) em `~/.hangar/telemetry-scope-2/queue/<dia>.json`, e as marcas
 //! de `once`.
 use std::io;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ pub(crate) struct DayFile {
     pub(crate) logs: Vec<LogLine>,
 }
 
-fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry") }
+fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry-scope-2") }
 
 fn queue_dir(home: &Path) -> PathBuf { root(home).join("queue") }
 
@@ -81,8 +81,9 @@ pub(crate) fn cap(home: &Path) -> io::Result<usize> {
 }
 
 pub(crate) fn wipe(home: &Path) -> io::Result<()> {
-    match std::fs::remove_dir_all(queue_dir(home)) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+    let root = root(home);
+    match std::fs::remove_dir_all(&root) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound && !root.try_exists()? => Ok(()),
         outcome => outcome,
     }
 }

@@ -58,7 +58,7 @@ async fn reply(st: &AppState, peer: SocketAddr, req: Request) -> Response {
     let base = diary_base(st);
     if req.method() == Method::POST {
         let telemetry = screen_telemetry(st, &req, guest);
-        return record_screen_events(base, req, telemetry, st.diag.clone()).await;
+        return record_screen_events(base, req, telemetry).await;
     }
     // O pedido não atravessa a espera: `&Request` tiraria o `Send` do handler.
     let (headers, query) = (req.headers().clone(), req.uri().query().map(str::to_owned));
@@ -80,11 +80,13 @@ fn diary_base(st: &AppState) -> Option<PathBuf> {
 }
 
 /// Só o lote do dono conta: o convidado vai ao diário, mas não aceitou a telemetria.
-fn screen_telemetry(st: &AppState, req: &Request, guest: bool) -> Option<Arc<Telemetry>> {
-    st.telemetry.clone().filter(|t| t.enabled() && !guest && !crate::telemetry_routes::guest(req))
+fn screen_telemetry(st: &AppState, req: &Request, guest: bool) -> Option<(Arc<Telemetry>, u64)> {
+    let telemetry = st.telemetry.clone()?;
+    let epoch = telemetry.consent_epoch();
+    (telemetry.enabled() && !guest && !crate::telemetry_routes::guest(req)).then_some((telemetry, epoch))
 }
 
-async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Option<Arc<Telemetry>>, diag: DiagClient) -> Response {
+async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Option<(Arc<Telemetry>, u64)>) -> Response {
     let body = match hangar_core::http_body_limit::read(req.into_body()).await {
         Ok(body) => body,
         Err(error) if hangar_core::http_body_limit::is_limit(&error) => return hangar_core::http_body_limit::rejected(),
@@ -97,9 +99,9 @@ async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Op
             Some(base) => hangar_usage_diary::record_screen(&base, &body, now),
             None => Ok(0),
         };
-        // Só o que o diário gravou: o lote recusado a tela reenvia, e contaria duas vezes.
-        if let (Ok(accepted), Some(telemetry)) = (&written, &telemetry) {
-            crate::telemetry_routes::count_screen(telemetry, &diag, &body, *accepted);
+        // O retrato não é linha do diário, mas conserva sua posição entre os itens confirmados.
+        if let (Ok(accepted), Some((telemetry, epoch))) = (&written, &telemetry) {
+            crate::telemetry_routes::count_screen(telemetry, *epoch, &body, *accepted);
         }
         written
     }).await;
@@ -532,7 +534,7 @@ mod telemetry_tests {
         let req = post(true);
         let counted = screen_telemetry(&st, &req, false);
         assert!(counted.is_none());
-        assert_eq!(record_screen_events(Some(diary.path().to_owned()), req, counted, DiagClient::new()).await.status(), StatusCode::OK);
+        assert_eq!(record_screen_events(Some(diary.path().to_owned()), req, counted).await.status(), StatusCode::OK);
         assert_eq!(test_support::rows(diary.path()).iter().filter(|row| row["evento"] == "app.visible_time").count(), 1);
         assert!(telemetry.counters().is_empty());
         // Convidado que o porteiro já decidiu (`Caller::Guest`) também não conta.
@@ -540,8 +542,49 @@ mod telemetry_tests {
 
         let req = post(false);
         let counted = screen_telemetry(&st, &req, false);
-        record_screen_events(Some(diary.path().to_owned()), req, counted, DiagClient::new()).await;
+        record_screen_events(Some(diary.path().to_owned()), req, counted).await;
         assert_eq!(telemetry.counters(), vec![Counter::new(Event::AppVisibleMinutes, Dims::new().with("client", ClientKind::Ios), None, 5)]);
+    }
+
+    #[tokio::test]
+    async fn screen_snapshot_in_generic_post_is_acknowledged_but_never_written_or_counted() {
+        let (home, diary) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ts = "2026-11-27T12:00:00Z";
+        let now = chrono::DateTime::parse_from_rfc3339(ts).unwrap().to_utc();
+        let telemetry = Arc::new(Telemetry::for_test(home.path(), Arc::new(move || now)));
+        let mut st = crate::telemetry_hooks::test_state(home.path(), false);
+        Arc::get_mut(&mut st).unwrap().telemetry = Some(telemetry.clone());
+        let marks = home.path().join(".hangar/telemetry-scope-2/once.json");
+        let send = |guest: bool, theme: &str| {
+            let body = json!({"eventos": [
+                {"evento": "settings.snapshot", "cliente": "ios", "ts": ts, "aparelho": "hidden-device",
+                    "valores": {"theme": theme}, "detalhe": "hidden-detail"},
+                {"evento": "app.visible_time", "ms": 60000, "cliente": "ios"},
+            ]});
+            let req = axum::http::Request::post("/api/diag").header("content-type", "application/json");
+            let req = if guest { req.header("x-hangar-guest", "1") } else { req };
+            let req = req.body(Body::from(body.to_string())).unwrap();
+            let counted = screen_telemetry(&st, &req, guest);
+            record_screen_events(Some(diary.path().to_owned()), req, counted)
+        };
+        let ack = |response: Response| async move {
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), json!({"gravadas": 2}));
+        };
+        ack(send(false, "light").await).await;
+        assert!(!marks.exists());
+        assert!(telemetry.counters().is_empty());
+        telemetry.set_consent(true).unwrap();
+        ack(send(true, "light").await).await;
+        assert!(!marks.exists());
+        ack(send(false, "dark").await).await;
+        assert!(!marks.exists());
+        assert_eq!(telemetry.counters(), vec![Counter::new(Event::AppVisibleMinutes, Dims::new().with("client", ClientKind::Ios), None, 1)]);
+        let rows = test_support::rows(diary.path());
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|row| row["evento"] == "app.visible_time"));
+        assert!(!json!(rows).to_string().contains("hidden-"));
     }
 
     #[test]

@@ -1262,6 +1262,8 @@ pub(super) struct ClientTelemetry {
     visible_since: Option<Instant>,
     /// A conversa aberta esperando aparecer: quando o clique veio e a máquina dela.
     chat_open: Option<(Instant, Api)>,
+    settings_probe: u64,
+    settings_day: HashMap<String, (String, String)>,
     unsent: Arc<Unsent>,
 }
 
@@ -1276,8 +1278,6 @@ struct Unsent {
     failing: AtomicBool,
     /// Lotes seguidos que o servidor respondeu sem gravar.
     rejected: AtomicU8,
-    /// Máquina e dia (UTC) do último retrato de preferências mandado; o envio que falha o apaga.
-    settings_day: std::sync::Mutex<String>,
 }
 
 /// Repetir sem fim só reenviaria o mesmo lote a cada passada.
@@ -1306,7 +1306,7 @@ impl ClientTelemetry {
     /// Do pânico só fica o "houve": o texto leva caminho e mensagem.
     pub(super) fn new(crash: Option<&str>) -> Self {
         let unsent = Unsent { crashed: AtomicBool::new(crash.is_some()), ..Unsent::default() };
-        Self { visible: Duration::ZERO, visible_since: None, chat_open: None, unsent: Arc::new(unsent) }
+        Self { visible: Duration::ZERO, visible_since: None, chat_open: None, settings_probe: 0, settings_day: HashMap::new(), unsent: Arc::new(unsent) }
     }
     pub(super) fn hidden(&mut self, now: Instant) {
         if let Some(since) = self.visible_since.take() { self.visible += now.saturating_duration_since(since); }
@@ -1328,12 +1328,21 @@ impl ClientTelemetry {
     }
     /// O tempo à vista que um envio que falhou devolveu.
     fn returned_visible(&self) -> Duration { Duration::from_millis(self.unsent.ms.swap(0, Ordering::SeqCst)) }
-    /// `true` uma vez por dia: o dia fica marcado já, e o envio que falha o desmarca para a passada seguinte.
-    fn take_settings_day(&self, today: &str) -> bool {
-        let mut day = self.unsent.settings_day.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *day == today { return false; }
-        *day = today.to_owned();
-        true
+    /// Captura só em período ativo; a marca fica para a confirmação do servidor.
+    fn capture_settings(&self, key: &str, now: chrono::DateTime<chrono::Utc>, consent: &Value,
+        read: impl FnOnce() -> Value, device: impl FnOnce() -> Option<String>) -> Option<((String, String), Value)> {
+        let period = super::machines::settings_snapshot_period(consent)?;
+        let mark = (now.format("%Y-%m-%d").to_string(), period.to_owned());
+        if self.settings_day.get(key) == Some(&mark) { return None; }
+        let mut body = serde_json::json!({"cliente": "native", "valores": read(), "snapshot_period": period,
+            "ts": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)});
+        if let Some(device) = device() { body["aparelho"] = Value::from(device); }
+        Some((mark, body))
+    }
+    fn confirm_settings(&mut self, key: String, mark: (String, String), reply: &Value) {
+        if reply["snapshot_period"].as_str() == Some(mark.1.as_str()) {
+            self.settings_day.insert(key, mark);
+        }
     }
     /// Uma vez por queda.
     fn take_crash(&mut self) -> Option<Value> {
@@ -1401,7 +1410,7 @@ impl Hangar {
         self.client_telemetry.shown(Instant::now());
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(VISIBLE_EVERY).await;
-            if this.update(cx, |this, _| { this.send_visible_time(); this.send_settings_snapshot(); }).is_err() { break; }
+            if this.update(cx, |this, cx| { this.send_visible_time(); this.send_settings_snapshot(cx); }).is_err() { break; }
         }).detach();
     }
 
@@ -1416,16 +1425,39 @@ impl Hangar {
     }
 
     /// O retrato das preferências, uma vez por dia (UTC), à máquina ativa e nunca a convite, como o tempo à vista.
-    fn send_settings_snapshot(&mut self) {
+    pub(super) fn send_settings_snapshot(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
-        // Por máquina: trocar a ativa no mesmo dia manda o retrato à nova; o servidor descarta o repetido.
-        let key = format!("{}|{}", self.active_key(), chrono::Utc::now().format("%Y-%m-%d"));
-        if !self.client_telemetry.take_settings_day(&key) { return; }
-        let mut event = serde_json::json!({"evento": "settings.snapshot", "valores": settings_values(&appearance::get(), &self.tour.seen)});
-        // O servidor conta um retrato por aparelho e dia; o id fica na máquina dele, fora do pacote.
-        if let Some(device) = crate::update::confirm::device_id() { event["aparelho"] = Value::from(device); }
-        send_telemetry(&self.runtime, api, telemetry_batch(event), self.client_telemetry.unsent.clone(),
-            |u| u.settings_day.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear());
+        let key = self.active_key();
+        self.client_telemetry.settings_probe += 1;
+        let (probe, connection) = (self.client_telemetry.settings_probe, self.connection);
+        let runtime = self.runtime.clone();
+        let read = runtime.spawn({
+            let api = api.clone();
+            async move { api.server_read(&["telemetry"], &[], 8).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let consent = match read.await {
+                Ok(Ok(consent)) => consent,
+                Ok(Err(error)) if error.status == Some(404) || error.code.as_deref() == Some("telemetry_unavailable") => return,
+                _ => { crate::log_line("telemetria: estado do aceite do retrato não lido"); return; }
+            };
+            let captured = this.update(cx, |this, _| {
+                if this.connection != connection || this.client_telemetry.settings_probe != probe { return None; }
+                this.client_telemetry.capture_settings(&key, chrono::Utc::now(), &consent,
+                    || settings_values(&appearance::get(), &this.tour.seen), crate::update::confirm::device_id)
+            });
+            let Ok(Some((mark, body))) = captured else { return };
+            let sent = runtime.spawn(async move { api.server_send(reqwest::Method::POST, &["telemetry"], Some(body), 10).await }).await;
+            let Ok(Ok(reply)) = sent else {
+                crate::log_line("telemetria: retrato não confirmado pelo servidor");
+                return;
+            };
+            let _ = this.update(cx, |this, _| {
+                if this.connection == connection && this.client_telemetry.settings_probe == probe {
+                    this.client_telemetry.confirm_settings(key, mark, &reply);
+                }
+            });
+        }).detach();
     }
 
     pub(super) fn send_crash_telemetry(&mut self) {
@@ -1478,13 +1510,28 @@ mod telemetry_tests {
     }
 
     #[test]
-    fn telemetry_settings_snapshot_leaves_once_a_day_and_again_after_a_failed_send() {
-        let telemetry = ClientTelemetry::new(None);
-        assert!(telemetry.take_settings_day("2026-11-27"));
-        assert!(!telemetry.take_settings_day("2026-11-27"));
-        telemetry.unsent.settings_day.lock().unwrap().clear();
-        assert!(telemetry.take_settings_day("2026-11-27"), "o envio que falhou volta na passada seguinte");
-        assert!(telemetry.take_settings_day("2026-11-28"));
+    fn telemetry_settings_snapshot_checks_consent_before_capture_or_marking_the_day() {
+        use serde_json::json;
+        let mut telemetry = ClientTelemetry::new(None);
+        let stamp = chrono::DateTime::parse_from_rfc3339("2026-11-28T01:59:59.125+02:00").unwrap().to_utc();
+        for state in [json!({"consent": true}), json!({"consent": null, "consent_scope": 2, "enabled": false}),
+            json!({"consent": true, "consent_scope": 2, "enabled": true}), json!({"consent": true, "consent_scope": 3, "enabled": true})] {
+            assert!(telemetry.capture_settings("a", stamp, &state, || panic!("leu antes do aceite"), || panic!("leu o id")).is_none());
+        }
+        let period = "a".repeat(32);
+        let state = json!({"consent": true, "consent_scope": 2, "enabled": true, "disabled_by": null, "snapshot_period": period});
+        let capture = |telemetry: &ClientTelemetry, key: &str, now| telemetry.capture_settings(key, now, &state,
+            || json!({"theme": "dark"}), || Some("fixture-device".into()));
+        let (mark, body) = capture(&telemetry, "a", stamp).unwrap();
+        assert_eq!(mark.0, "2026-11-27");
+        assert_eq!(body, json!({"snapshot_period": period, "valores": {"theme": "dark"},
+            "ts": "2026-11-27T23:59:59.125Z", "aparelho": "fixture-device", "cliente": "native"}));
+        telemetry.confirm_settings("a".into(), mark.clone(), &json!({"snapshot_period": "b".repeat(32)}));
+        assert!(capture(&telemetry, "a", stamp).is_some(), "confirmação de outro período não marca o dia");
+        telemetry.confirm_settings("a".into(), mark, &json!({"snapshot_period": period}));
+        assert!(capture(&telemetry, "b", stamp).is_some());
+        assert!(capture(&telemetry, "a", stamp).is_none(), "voltar à máquina A não envia de novo");
+        assert!(capture(&telemetry, "a", stamp + chrono::TimeDelta::seconds(1)).is_some());
     }
 
     #[test]

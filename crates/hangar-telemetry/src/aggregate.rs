@@ -13,7 +13,7 @@ use crate::buckets::Bucket;
 use crate::events::{Dims, Event, LogLevel};
 use crate::queue::{self, DayFile};
 use crate::send::Failure;
-use crate::state::{self, State};
+use crate::state::{self, SETTINGS_CONSENT_SCOPE, State};
 use crate::switch::{self, Disabled};
 use crate::wire::{Counter, Env, LogLine, MAX_COUNT, MAX_LOG_CHARS, MAX_LOG_LINES, is_id, is_invisible, is_name};
 
@@ -123,10 +123,11 @@ struct Live {
     on_disk: bool,
     /// Dias que viraram com mudança e ainda não foram gravados.
     closed: Vec<Day>,
+    snapshot_period: Option<String>,
 }
 
 impl Live {
-    fn new(current: Day, on_disk: bool) -> Live { Live { current, dirty: false, on_disk, closed: Vec::new() } }
+    fn new(current: Day, on_disk: bool) -> Live { Live { current, dirty: false, on_disk, closed: Vec::new(), snapshot_period: None } }
 
     /// Só para a frente: relógio que volta não abre de novo um dia que pode já estar na fila.
     fn roll(&mut self, today: String) {
@@ -137,6 +138,13 @@ impl Live {
                 self.closed.push(old);
             }
         }
+    }
+
+    fn add_snapshot(&mut self, day: String, counters: Vec<Counter>) {
+        if counters.is_empty() { return; }
+        self.roll(day);
+        for counter in counters { self.current.add(counter); }
+        self.dirty = true;
     }
 
     /// A gravação de `file` falhou: a mudança volta a valer para a próxima passada. O dia que virou
@@ -208,6 +216,42 @@ impl Telemetry {
         }
     }
 
+    /// Conta um retrato só no dia e no período de aceite em que ele começou. Nunca reabre dia fechado.
+    pub fn count_for_day(&self, day: &str, epoch: u64, counters: Vec<Counter>) {
+        let Ok(mut live) = self.live.lock() else { return };
+        if !self.enabled() || self.consent_epoch() != epoch || self.today() != day || live.current.day.as_str() > day {
+            return;
+        }
+        live.add_snapshot(day.to_owned(), counters);
+    }
+
+    /// Identifica o período de coleta ativo sem enviar o identificador ao receptor.
+    pub fn snapshot_period(&self) -> Option<String> {
+        let live = self.live.lock().ok()?;
+        if self.enabled() { live.snapshot_period.clone() } else { None }
+    }
+
+    /// Confirma o retrato inteiro ou nada. Entrega repetida no mesmo período também é confirmada.
+    ///
+    /// # Errors
+    /// Falha de trava ou de leitura/gravação da marca.
+    pub fn record_snapshot(&self, period: &str, captured: DateTime<Utc>, key: &str, counters: Vec<Counter>) -> io::Result<bool> {
+        let _io = lock(&self.io)?;
+        let mut live = lock(&self.live)?;
+        let now = (self.clock)();
+        let day = day_of(now);
+        // Um minuto admite pequena diferença de relógio sem admitir capturas de outro dia.
+        if !self.enabled() || live.snapshot_period.as_deref() != Some(period) || live.current.day > day
+            || captured.date_naive() != now.date_naive() || captured - now > chrono::TimeDelta::minutes(1)
+        {
+            return Ok(false);
+        }
+        if self.mark_once(&format!("{key}:{day}"), now.date_naive())? {
+            live.add_snapshot(day, counters);
+        }
+        Ok(true)
+    }
+
     pub fn duration(&self, event: Event, dims: Dims, took: Duration) {
         if self.enabled() {
             self.add(Counter::new(event, dims, Some(Bucket::of(took)), 1));
@@ -255,16 +299,32 @@ impl Telemetry {
     /// `Ok(false)`. Marca que não se lê nem se grava volta `Err`: quem chama não conta nem dá o
     /// feito por feito. Arquivo ilegível recomeça vazio e vai ao diário. Lê e grava disco.
     pub fn once(&self, key: &str) -> io::Result<bool> {
-        // ponytail: a poda é pelo dia no fim da chave; o teto só segura chave sem dia que cresça sem fim.
-        const CAP: usize = 4096;
         if !self.enabled() {
             return Ok(false);
         }
         let _io = lock(&self.io)?;
-        // `refresh` desliga sob a mesma trava: a marca não sai depois da revogação.
         if !self.enabled() {
             return Ok(false);
         }
+        self.mark_once(key, (self.clock)().date_naive())
+    }
+
+    /// A marca do retrato usa o mesmo dia UTC e o mesmo aceite da contagem.
+    ///
+    /// # Errors
+    /// Propaga falhas de leitura ou gravação das marcas.
+    pub fn once_for_day(&self, day: &str, epoch: u64, key: &str) -> io::Result<bool> {
+        let _io = lock(&self.io)?;
+        let now = (self.clock)();
+        if !self.enabled() || self.consent_epoch() != epoch || day_of(now) != day {
+            return Ok(false);
+        }
+        self.mark_once(&format!("{key}:{day}"), now.date_naive())
+    }
+
+    fn mark_once(&self, key: &str, day: chrono::NaiveDate) -> io::Result<bool> {
+        // ponytail: a poda é pelo dia no fim da chave; o teto só segura chave sem dia que cresça sem fim.
+        const CAP: usize = 4096;
         let mut keys = match queue::read_once(&self.home) {
             Ok(keys) => keys,
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
@@ -277,7 +337,7 @@ impl Telemetry {
             return Ok(false);
         }
         // Ontem fica: o dia é UTC, e a marca de quem mandou perto da meia-noite ainda vale.
-        let yesterday = (self.clock)().date_naive().pred_opt();
+        let yesterday = day.pred_opt();
         keys.retain(|known| {
             let day = known.get(known.len().saturating_sub(10)..).and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
             day.zip(yesterday).is_none_or(|(day, yesterday)| day >= yesterday)
@@ -298,7 +358,7 @@ impl Telemetry {
     pub fn consent_epoch(&self) -> u64 { self.consent_epoch.load(Ordering::SeqCst) }
 
     /// `None` = ainda sem resposta.
-    pub fn consent(&self) -> Option<bool> { lock(&self.settings).ok().and_then(|s| s.state.consent) }
+    pub fn consent(&self) -> Option<bool> { lock(&self.settings).ok().and_then(|s| s.state.effective_consent()) }
 
     /// O que desliga apesar do consentimento, na última leitura (subida, consentimento ou tarefa de fundo).
     pub fn disabled_by(&self) -> Option<Disabled> { lock(&self.settings).ok().and_then(|s| s.disabled) }
@@ -307,15 +367,22 @@ impl Telemetry {
     /// vale: a falha ao aplicá-la (ler o dia, apagar a fila) volta em `Ok(Some)` para o diário, e a
     /// passada seguinte tenta de novo. Bloqueante.
     pub fn set_consent(&self, consent: bool) -> io::Result<Option<io::Error>> {
+        let _io = lock(&self.io)?;
         {
-            let _io = lock(&self.io)?;
             let mut settings = lock(&self.settings)?;
             let mut next = settings.state.clone();
-            next.consent = Some(consent);
+            if consent && next.effective_consent() != Some(true) {
+                queue::wipe(&self.home)?;
+            }
+            next.consent = (!consent).then_some(false);
+            next.consent_scope = consent.then_some(SETTINGS_CONSENT_SCOPE);
             state::store(&self.home, &next)?;
             settings.state = next;
+            if !consent {
+                self.enabled.store(false, Ordering::SeqCst);
+            }
         }
-        Ok(self.refresh().err())
+        Ok(self.refresh_held().err())
     }
 
     /// O dono desta máquina e quando ele nasceu (segundos Unix), para a convergência com os peers.
@@ -411,6 +478,11 @@ impl Telemetry {
     /// Aplica consentimento e desligamentos. Ligar relê o dia corrente da fila; desligar ou `false`
     /// apaga a fila.
     fn refresh(&self) -> io::Result<()> {
+        let _io = lock(&self.io)?;
+        self.refresh_held()
+    }
+
+    fn refresh_held(&self) -> io::Result<()> {
         let dotenv = hangar_core::user_data::read_env_raw(&self.home, self.backend.as_deref());
         // `.env` que não se lê não confirma a escolha da pessoa: desliga, sem dizer que ela pediu. O
         // desligamento pelo ambiente do processo vale mesmo assim.
@@ -419,7 +491,6 @@ impl Telemetry {
             Err(e) => (switch::disabled_by(&*self.lookup, None), Some(io::Error::other(format!("telemetria: .env não lido: {e}")))),
         };
         let env_unreadable = unreadable.is_some();
-        let _io = lock(&self.io)?;
         let consent = {
             let mut settings = lock(&self.settings)?;
             settings.disabled = disabled;
@@ -427,7 +498,7 @@ impl Telemetry {
             if let Some(error) = unreadable.filter(|_| !was_unreadable) {
                 self.note(Failure::Disk(error));
             }
-            settings.state.consent
+            settings.state.effective_consent()
         };
         let on = consent == Some(true) && disabled.is_none() && !env_unreadable;
         let today = day_of((self.clock)());
@@ -449,6 +520,7 @@ impl Telemetry {
             }
             // A época sobe antes de ligar: quem vê ligada já vê a época nova.
             if !self.enabled() {
+                lock(&self.live)?.snapshot_period = Some(hangar_core::ids::random_hex(16));
                 self.consent_epoch.fetch_add(1, Ordering::SeqCst);
             }
             self.enabled.store(true, Ordering::SeqCst);
@@ -514,7 +586,7 @@ pub(crate) mod tests {
 
         pub(crate) fn next_day(&self) { *self.now.lock().unwrap() += chrono::TimeDelta::days(1); }
 
-        pub(crate) fn queue(&self) -> PathBuf { self.home.path().join(".hangar/telemetry/queue") }
+        pub(crate) fn queue(&self) -> PathBuf { self.home.path().join(".hangar/telemetry-scope-2/queue") }
     }
 
     pub(crate) fn message() -> Dims { Dims::new().with("provider", Provider::Claude).with("surface", Surface::Terminal) }
@@ -563,6 +635,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn legacy_yes_does_not_enable_settings_and_legacy_no_survives() {
+        let fx = Fixture::new();
+        let path = fx.home.path().join(".hangar/telemetry.json");
+        let mut stored = serde_json::json!({"consent": true, "machine_id": "1".repeat(32),
+            "owner_id": "2".repeat(32), "owner_created": 123});
+        queue::write_day(fx.home.path(), &DayFile { day: "2026-11-26".into(), batch_id: None,
+            counters: vec![Counter::new(Event::MessageSent, message(), None, 7)], logs: vec![] }).unwrap();
+        let legacy = fx.home.path().join(".hangar/telemetry/queue/2026-11-26.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::copy(fx.queue().join("2026-11-26.json"), &legacy).unwrap();
+        std::fs::write(&path, stored.to_string()).unwrap();
+        let telemetry = fx.start_as_is();
+        assert_eq!(telemetry.consent(), None);
+        assert_eq!(telemetry.owner().unwrap(), ("2".repeat(32), 123));
+        assert!(!telemetry.enabled());
+        telemetry.set_consent(true).unwrap();
+        assert!(telemetry.counters().is_empty(), "a fila antiga não foi reaproveitada");
+        assert!(legacy.is_file(), "a nova versão não mexe na fila do binário legado");
+        let current: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(current["consent"], serde_json::Value::Null, "servidor revertido não enxerga um sim");
+        assert_eq!(current["consent_scope"], 2);
+        drop(telemetry);
+        assert!(fx.start_as_is().enabled());
+
+        stored["consent"] = serde_json::json!(false);
+        std::fs::write(path, stored.to_string()).unwrap();
+        let telemetry = fx.start_as_is();
+        assert_eq!(telemetry.consent(), Some(false));
+        assert!(!telemetry.enabled());
+    }
+
+    #[test]
     fn consent_epoch_rises_each_time_counting_turns_on() {
         let fx = Fixture::new();
         let telemetry = fx.start_as_is();
@@ -573,6 +677,29 @@ pub(crate) mod tests {
         telemetry.set_consent(false).unwrap();
         telemetry.set_consent(true).unwrap();
         assert_eq!(telemetry.consent_epoch(), 2);
+    }
+
+    #[test]
+    fn a_whole_snapshot_uses_one_clock_read_under_the_mark_lock() {
+        use std::sync::atomic::AtomicUsize;
+        let fx = Fixture::new();
+        let before = Utc.with_ymd_and_hms(2026, 11, 27, 23, 59, 59).unwrap();
+        let after = before + chrono::TimeDelta::seconds(1);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let inspecting = Arc::new(AtomicBool::new(false));
+        let clock = {
+            let (reads, inspecting) = (reads.clone(), inspecting.clone());
+            Arc::new(move || if inspecting.load(Ordering::SeqCst) && reads.fetch_add(1, Ordering::SeqCst) > 0 { after } else { before })
+        };
+        let telemetry = Telemetry::for_test(fx.home.path(), clock);
+        telemetry.set_consent(true).unwrap();
+        let period = telemetry.snapshot_period().unwrap();
+        inspecting.store(true, Ordering::SeqCst);
+        let counters = vec![Counter::new(Event::Peers, Dims::new(), None, 3), Counter::new(Event::MessageSent, message(), None, 4)];
+        assert!(telemetry.record_snapshot(&period, before, "fixture", counters).unwrap());
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert_eq!(telemetry.counters().len(), 2);
+        assert_eq!(queue::read_once(fx.home.path()).unwrap(), ["fixture:2026-11-27"]);
     }
 
     #[test]
@@ -708,9 +835,9 @@ pub(crate) mod tests {
         let fx = Fixture::new();
         let telemetry = fx.start();
         // Uma pasta no lugar do arquivo: a leitura falha em todo sistema, sem ser arquivo ilegível.
-        std::fs::create_dir_all(fx.home.path().join(".hangar/telemetry/once.json")).unwrap();
+        std::fs::create_dir_all(fx.home.path().join(".hangar/telemetry-scope-2/once.json")).unwrap();
         assert!(telemetry.once("x").is_err());
-        std::fs::remove_dir(fx.home.path().join(".hangar/telemetry/once.json")).unwrap();
+        std::fs::remove_dir(fx.home.path().join(".hangar/telemetry-scope-2/once.json")).unwrap();
         assert!(telemetry.once("x").unwrap(), "a marca não ficou dada por feita");
     }
 
@@ -734,19 +861,31 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn consent_is_kept_when_applying_it_fails() {
+    fn new_consent_waits_for_cleanup_but_repeated_yes_does_not_erase() {
         let fx = Fixture::new();
+        let telemetry = fx.start();
+        let root = fx.home.path().join(".hangar/telemetry-scope-2");
+        std::fs::write(&root, "blocked").unwrap();
+        assert!(telemetry.set_consent(false).unwrap().is_some(), "revogação vale mesmo se não conseguiu limpar");
+        assert!(telemetry.snapshot_period().is_none());
+        assert!(telemetry.set_consent(true).is_err());
+        assert_eq!(telemetry.consent(), Some(false));
+        drop(telemetry);
+        std::fs::write(fx.home.path().join(".hangar/telemetry.json"), "{").unwrap();
         let telemetry = fx.start_as_is();
-        let today = fx.queue().join("2026-11-26.json");
-        std::fs::create_dir_all(&today).unwrap();
-        assert!(telemetry.set_consent(true).unwrap().is_some());
-        assert_eq!(telemetry.consent(), Some(true));
-        let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(fx.home.path().join(".hangar/telemetry.json")).unwrap()).unwrap();
-        assert_eq!(stored["consent"], true, "a escolha foi gravada");
+        assert!(telemetry.set_consent(true).is_err(), "estado ilegível também exige limpar antes de aceitar");
+        assert_eq!(telemetry.consent(), None);
         assert!(!telemetry.enabled());
-        std::fs::remove_dir(&today).unwrap();
-        telemetry.tick().unwrap();
-        assert!(telemetry.enabled(), "a passada seguinte aplica");
+        std::fs::remove_file(root).unwrap();
+        telemetry.set_consent(true).unwrap();
+        let active = telemetry.snapshot_period().unwrap();
+        telemetry.count(Event::MessageSent, message(), 2);
+        telemetry.save().unwrap();
+        assert!(telemetry.once("fixture").unwrap());
+        telemetry.set_consent(true).unwrap();
+        assert_eq!(telemetry.snapshot_period().as_deref(), Some(active.as_str()));
+        assert_eq!(queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap().counters[0].count, 2);
+        assert!(!telemetry.once("fixture").unwrap());
     }
 
     #[test]
@@ -909,8 +1048,8 @@ pub(crate) mod tests {
     fn unreadable_once_file_counts_as_empty() {
         let fx = Fixture::new();
         let telemetry = fx.start();
-        std::fs::create_dir_all(fx.home.path().join(".hangar/telemetry")).unwrap();
-        std::fs::write(fx.home.path().join(".hangar/telemetry/once.json"), "{").unwrap();
+        std::fs::create_dir_all(fx.home.path().join(".hangar/telemetry-scope-2")).unwrap();
+        std::fs::write(fx.home.path().join(".hangar/telemetry-scope-2/once.json"), "{").unwrap();
         assert!(telemetry.once("x").unwrap());
         assert!(matches!(telemetry.take_notes().as_slice(), [Failure::Disk(e)] if e.kind() == io::ErrorKind::InvalidData));
         assert!(!telemetry.once("x").unwrap());
