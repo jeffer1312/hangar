@@ -85,6 +85,9 @@ fn is_codex_agent_followup(name: Option<&str>) -> bool {
     matches!(name, Some("followup_task" | "collaboration.followup_task" | "multi_agent.followup_task" | "functions.followup_task"))
 }
 
+/// Chamada feita de dentro de um script do Code Mode: `repl_` nas versões antigas do Claude Code, `toolu_cc_` nas de hoje.
+pub(crate) fn is_script_call(id: &str) -> bool { id.starts_with("repl_") || id.starts_with("toolu_cc_") }
+
 pub(crate) fn is_agent_call(name: Option<&str>) -> bool { matches!(name, Some("Agent" | "AgentSwarm")) || is_codex_agent_spawn(name) }
 
 /// Página publicada pelo agente: servidor `hangar`, tool `html_render`, separados por `__`, `.` ou `/`, com o
@@ -544,7 +547,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                         let mut run = agent_run(event, i, id);
                         // Lançado de dentro de um script: a linha tem a hora do fim do script, e o começo de verdade é
                         // o do script.
-                        if id.starts_with("repl_") && script_start.is_some() { run.started_at = script_start; }
+                        if is_script_call(id) && script_start.is_some() { run.started_at = script_start; }
                         agents.push(run);
                     }
                     Some("Bash") if input.and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) => {
@@ -780,6 +783,17 @@ pub fn clip(source: &str, max: usize) -> (&str, bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_agent_with_the_current_script_call_id_counts_from_the_script_start() {
+        let call = |id: &str, name: &str, ts: f64| ChatEvent { kind: "tool_use".into(), id: format!("e-{id}"), tool_use_id: Some(id.into()),
+            tool_name: Some(name.into()), tool_input: json!({"description": "busca"}).as_object().cloned(), ts: Some(ts), ..Default::default() };
+        let events = vec![call("toolu_01script", "REPL", 100.0), call("toolu_cc_f2d6", "Agent", 160.0),
+            ChatEvent { kind: "tool_result".into(), id: "r1".into(), tool_use_id: Some("toolu_cc_f2d6".into()), result: Some("feito".into()),
+                ts: Some(160.0), ..Default::default() }];
+        let agent = fold_activity(&events).agents.into_iter().find(|a| a.id == "toolu_cc_f2d6").unwrap();
+        assert_eq!((agent.started_at, agent.finished_at), (Some(100.0), Some(160.0)));
+    }
+
     #[test]
     fn an_agent_launched_inside_a_script_counts_from_the_script_start() {
         let call = |id: &str, name: &str, ts: f64| ChatEvent { kind: "tool_use".into(), id: format!("e-{id}"), tool_use_id: Some(id.into()),
