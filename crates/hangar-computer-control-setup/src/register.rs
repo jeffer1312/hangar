@@ -231,11 +231,11 @@ mod tests {
         assert!(crate::targets::target_files(&home.paths).is_empty());
     }
 
-    /// D4.1: sem alvo e sem Hyprland, nada.
+    /// D4.1: sem alvo e sem Hyprland, nada. No Windows o alvo local nasce sozinho (`windows_*` abaixo).
     #[test]
     fn without_target_nothing_is_registered() {
         let home = Home::new();
-        assert_eq!(home.run(false).unwrap(), Registered::Skipped);
+        assert_eq!(register_on(&home.paths, true, false, || false, || Ok(jev())).unwrap(), Registered::Skipped);
         assert!(!home.paths.main_file().exists());
     }
 
@@ -434,7 +434,7 @@ mod tests {
         std::fs::create_dir_all(run.join("hypr/morta_1")).unwrap();
         let vars = vec![("HYPRLAND_INSTANCE_SIGNATURE".to_owned(), "morta_1".to_owned()),
             ("XDG_RUNTIME_DIR".to_owned(), run.to_string_lossy().into_owned())];
-        assert_eq!(register(&home.paths, || hyprland_running(&vars), || Ok(jev()), None).unwrap(), Registered::Skipped);
+        assert_eq!(register_on(&home.paths, true, false, || hyprland_running(&vars), || Ok(jev())).unwrap(), Registered::Skipped);
         assert!(!home.paths.main_file().exists());
     }
 

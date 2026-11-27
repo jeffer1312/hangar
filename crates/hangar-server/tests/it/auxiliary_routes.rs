@@ -613,9 +613,19 @@ async fn webhook_is_public_by_signature_and_preview_keeps_port_coercion_without_
         response.json::<Value>().await.unwrap()["status"],
         "accepted"
     );
+    // Uma página de verdade: a máquina pode ter outra coisa na 3000, e a prévia recusa o que não é página.
+    let page = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = page.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut tcp, _)) = page.accept().await {
+            // Lê o pedido antes: no Windows, fechar com dado não lido manda RST e o outro lado perde a resposta.
+            let _ = tokio::io::AsyncReadExt::read(&mut tcp, &mut [0u8; 512]).await;
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut tcp, b"HTTP/1.0 200 OK\r\n\r\n").await;
+        }
+    });
     for (input, expected) in [
-        (json!("3000"), 3000),
-        (json!(3000.0), 3000),
+        (json!(port.to_string()), port),
+        (json!(f64::from(port)), port),
         (json!(true), 1),
     ] {
         let response = client

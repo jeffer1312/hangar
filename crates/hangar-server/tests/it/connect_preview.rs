@@ -499,11 +499,13 @@ async fn preview_never_reaches_hangar_ports() {
 #[tokio::test]
 async fn preview_site_is_born_on_first_use_and_stays() {
     let s = server().await;
-    let (status, _) = replied(client().post(format!("http://{}/api/connect/preview", s.main)).body(r#"{"port":3000}"#)).await;
+    // Portas que ninguém escuta: a máquina pode ter outra coisa na 3000, e a prévia recusa o que não é página.
+    let (page, other) = (free_port().port(), free_port().port());
+    let (status, _) = replied(client().post(format!("http://{}/api/connect/preview", s.main)).body(format!(r#"{{"port":{page}}}"#))).await;
     assert_eq!(status, 401);
     assert!(!state::read(&s.dir).unwrap().unwrap().preview_published);
 
-    let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
+    let (status, body) = replied(open_request(s.main, OWNER, page)).await;
     assert_eq!(status, 200, "{body}");
     let url = body["url"].as_str().unwrap();
     assert!(url.starts_with(&format!("https://{HOST}/?{LINK_PARAM}=")), "{url}");
@@ -517,12 +519,12 @@ async fn preview_site_is_born_on_first_use_and_stays() {
     let state = || client().get(format!("http://{}/api/connect/preview", s.main)).bearer_auth(OWNER);
     let (status, body) = replied(state()).await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["preview"]["port"], 3000);
+    assert_eq!(body["preview"]["port"], page);
     assert_eq!(body["preview"]["entered"], false);
 
     // Trocar a porta do projeto não toca nos filhos: o site aponta sempre para a 8769.
     let (frpc_pid, caddy_pid) = (pid_of(&s.dir, "frpc"), pid_of(&s.dir, "caddy"));
-    let (status, body) = replied(open_request(s.connect, &s.device, 3001)).await;
+    let (status, body) = replied(open_request(s.connect, &s.device, other)).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!((pid_of(&s.dir, "frpc"), pid_of(&s.dir, "caddy")), (frpc_pid, caddy_pid));
 
@@ -533,7 +535,7 @@ async fn preview_site_is_born_on_first_use_and_stays() {
 
     // Publicado, com os filhos parados: o pedido do dono religa e espera o Connect ficar de pé.
     s.supervisor.stop().await;
-    let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
+    let (status, body) = replied(open_request(s.main, OWNER, page)).await;
     assert_eq!(status, 200, "{body}");
     assert!(s.supervisor.status().enabled);
     s.supervisor.stop().await;
@@ -542,20 +544,21 @@ async fn preview_site_is_born_on_first_use_and_stays() {
 #[tokio::test]
 async fn preview_link_waits_for_the_first_site_to_open_from_outside() {
     let s = server_with(false).await;
-    let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
+    let page = free_port().port();
+    let (status, body) = replied(open_request(s.main, OWNER, page)).await;
     assert_eq!(status, 409, "{body}");
     assert_eq!(body["detail"]["code"], "connect_preview_reach_failed");
     assert!(state::read(&s.dir).unwrap().unwrap().preview_published, "o site fica: refazer gastaria outro certificado");
 
     // Publicado não quer dizer alcançável: a segunda tentativa confere de novo.
     until("Connect de pé", || s.supervisor.status().enabled).await;
-    let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
+    let (status, body) = replied(open_request(s.main, OWNER, page)).await;
     assert_eq!(status, 409, "{body}");
     assert_eq!(body["detail"]["code"], "connect_preview_reach_failed");
 
     // O DNS segue sem o nome: depois de responder uma vez, nada confere de novo.
     s.supervisor.preview_answered();
-    let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
+    let (status, body) = replied(open_request(s.main, OWNER, page)).await;
     assert_eq!(status, 200, "só espera até a primeira resposta: {body}");
     s.supervisor.stop().await;
 }

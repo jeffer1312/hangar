@@ -1342,13 +1342,15 @@ mod tests {
         assert!(!path_matches_project("/tmp/proj", ""), "projeto vazio é fail-closed");
         assert!(!path_matches_project("/tmp/proj", "."), "ponto relativo não casa caminho absoluto");
 
-        let slug = hangar_projects::slug("/tmp/proj");
-        assert!(path_matches_project("/tmp/proj", &slug));
-        assert!(path_matches_project("/tmp/proj/", &slug));
-        assert!(path_matches_project("/tmp/proj/sub", &slug));
-        assert!(!path_matches_project("/tmp/proj2", &slug));
-        assert!(!path_matches_project("/tmp/proj2/sub", &slug));
-        assert!(!path_matches_project("/tmp/proj", &hangar_projects::slug("/")));
+        // O slug guarda o hash do cwd como o sistema o escreve: no Windows, com barra invertida.
+        let (root, sep, top) = if cfg!(windows) { (r"C:\tmp\proj", '\\', r"C:\") } else { ("/tmp/proj", '/', "/") };
+        let slug = hangar_projects::slug(root);
+        assert!(path_matches_project(root, &slug));
+        assert!(path_matches_project(&format!("{root}{sep}"), &slug));
+        assert!(path_matches_project(&format!("{root}{sep}sub"), &slug));
+        assert!(!path_matches_project(&format!("{root}2"), &slug));
+        assert!(!path_matches_project(&format!("{root}2{sep}sub"), &slug));
+        assert!(!path_matches_project(root, &hangar_projects::slug(top)));
     }
 
     #[test]
