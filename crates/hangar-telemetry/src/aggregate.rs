@@ -145,13 +145,6 @@ impl Live {
         }
     }
 
-    fn add_snapshot(&mut self, day: String, counters: Vec<Counter>) {
-        if counters.is_empty() { return; }
-        self.roll(day);
-        for counter in counters { self.current.add(counter); }
-        self.dirty = true;
-    }
-
     /// A gravação de `file` falhou: a mudança volta a valer para a próxima passada. O dia que virou
     /// durante a gravação volta para `closed`, salvo se o giro já o pôs lá com contagem mais nova.
     fn unsaved(&mut self, file: DayFile) {
@@ -221,13 +214,17 @@ impl Telemetry {
         }
     }
 
-    /// Conta um retrato só no dia e no período de aceite em que ele começou. Nunca reabre dia fechado.
-    pub fn count_for_day(&self, day: &str, epoch: u64, counters: Vec<Counter>) {
-        let Ok(mut live) = self.live.lock() else { return };
-        if !self.enabled() || self.consent_epoch() != epoch || self.today() != day || live.current.day.as_str() > day {
-            return;
-        }
-        live.add_snapshot(day.to_owned(), counters);
+    /// `true` quando o dia UTC `day` já tem a marca `key`, gravada junto com os contadores dela.
+    pub fn recorded(&self, day: &str, key: &str) -> bool {
+        self.live.lock().is_ok_and(|live| live.current.day == day && live.current.snapshot_keys.contains(key))
+    }
+
+    /// O retrato do servidor: marca e contadores só no dia e no aceite em que ele começou.
+    ///
+    /// # Errors
+    /// Falha de trava ou de gravação do arquivo do dia.
+    pub fn record_day(&self, day: &str, epoch: u64, key: &str, counters: Vec<Counter>) -> io::Result<bool> {
+        self.record_once(key, counters, |_, now| self.consent_epoch() == epoch && day_of(now) == day)
     }
 
     /// Identifica o período de coleta ativo sem enviar o identificador ao receptor.
@@ -241,15 +238,19 @@ impl Telemetry {
     /// # Errors
     /// Falha de trava ou de gravação do arquivo do dia.
     pub fn record_snapshot(&self, period: &str, captured: DateTime<Utc>, key: &str, counters: Vec<Counter>) -> io::Result<bool> {
+        // Um minuto admite pequena diferença de relógio sem admitir capturas de outro dia.
+        self.record_once(key, counters, |live, now| live.snapshot_period.as_deref() == Some(period)
+            && captured.date_naive() == now.date_naive() && captured - now <= chrono::TimeDelta::minutes(1))
+    }
+
+    /// Marca e contadores entram juntos no arquivo do dia corrente, ou nada; dia fechado nunca reabre.
+    fn record_once(&self, key: &str, counters: Vec<Counter>, accept: impl FnOnce(&Live, DateTime<Utc>) -> bool) -> io::Result<bool> {
         let _io = lock(&self.io)?;
         {
             let mut live = lock(&self.live)?;
             let now = (self.clock)();
             let day = day_of(now);
-            // Um minuto admite pequena diferença de relógio sem admitir capturas de outro dia.
-            if !self.enabled() || live.snapshot_period.as_deref() != Some(period) || live.current.day > day
-                || captured.date_naive() != now.date_naive() || captured - now > chrono::TimeDelta::minutes(1)
-            {
+            if !self.enabled() || live.current.day > day || !accept(&live, now) {
                 return Ok(false);
             }
             live.roll(day);
@@ -310,32 +311,16 @@ impl Telemetry {
     /// `Ok(false)`. Marca que não se lê nem se grava volta `Err`: quem chama não conta nem dá o
     /// feito por feito. Arquivo ilegível recomeça vazio e vai ao diário. Lê e grava disco.
     pub fn once(&self, key: &str) -> io::Result<bool> {
-        if !self.enabled() {
-            return Ok(false);
-        }
-        let _io = lock(&self.io)?;
-        if !self.enabled() {
-            return Ok(false);
-        }
-        self.mark_once(key, (self.clock)().date_naive())
-    }
-
-    /// A marca do retrato usa o mesmo dia UTC e o mesmo aceite da contagem.
-    ///
-    /// # Errors
-    /// Propaga falhas de leitura ou gravação das marcas.
-    pub fn once_for_day(&self, day: &str, epoch: u64, key: &str) -> io::Result<bool> {
-        let _io = lock(&self.io)?;
-        let now = (self.clock)();
-        if !self.enabled() || self.consent_epoch() != epoch || day_of(now) != day {
-            return Ok(false);
-        }
-        self.mark_once(&format!("{key}:{day}"), now.date_naive())
-    }
-
-    fn mark_once(&self, key: &str, day: chrono::NaiveDate) -> io::Result<bool> {
         // ponytail: a poda é pelo dia no fim da chave; o teto só segura chave sem dia que cresça sem fim.
         const CAP: usize = 4096;
+        if !self.enabled() {
+            return Ok(false);
+        }
+        let _io = lock(&self.io)?;
+        // `refresh` desliga sob a mesma trava: a marca não sai depois da revogação.
+        if !self.enabled() {
+            return Ok(false);
+        }
         let mut keys = match queue::read_once(&self.home) {
             Ok(keys) => keys,
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
@@ -348,7 +333,7 @@ impl Telemetry {
             return Ok(false);
         }
         // Ontem fica: o dia é UTC, e a marca de quem mandou perto da meia-noite ainda vale.
-        let yesterday = day.pred_opt();
+        let yesterday = (self.clock)().date_naive().pred_opt();
         keys.retain(|known| {
             let day = known.get(known.len().saturating_sub(10)..).and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
             day.zip(yesterday).is_none_or(|(day, yesterday)| day >= yesterday)

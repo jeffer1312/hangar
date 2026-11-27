@@ -19,7 +19,7 @@ pub(crate) struct DayFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) batch_id: Option<String>,
     pub(crate) counters: Vec<Counter>,
-    /// Confirmações do app, gravadas com os contadores e nunca copiadas ao pacote.
+    /// Marcas dos retratos do dia (servidor e apps), gravadas com os contadores e nunca copiadas ao pacote.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) snapshot_keys: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

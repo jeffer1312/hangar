@@ -182,9 +182,13 @@ pub(crate) fn record_lines(telemetry: &Telemetry, scrubber: &Scrubber, words: &W
     }
 }
 
+/// Marcas dos retratos do servidor no arquivo do dia, separadas das `settings:<cliente>:<aparelho>` dos apps.
+const PEERS_MARK: &str = "peers";
+const SERVER_SETTINGS_MARK: &str = "settings:server";
+
 /// Quantas máquinas do `peers.json` há de cada tipo, uma vez por dia (UTC). `Ok(true)` quando o dia já
-/// está contado; desligada, `Ok(false)`; marca que não se lê nem se grava, `Err`. Nos dois últimos a
-/// próxima hora tenta de novo. Bloqueante.
+/// está contado; desligada ou fora do dia e do aceite, `Ok(false)`; dia que não se grava, `Err`. Nos dois
+/// últimos a próxima hora tenta de novo. Bloqueante.
 fn peers_snapshot(telemetry: &Telemetry, peers: &PeerClient, day: &str, epoch: u64) -> std::io::Result<bool> {
     if !telemetry.enabled() { return Ok(false); }
     let enabled: HashSet<String> = peers.enabled_ids().into_iter().collect();
@@ -195,15 +199,13 @@ fn peers_snapshot(telemetry: &Telemetry, peers: &PeerClient, day: &str, epoch: u
         let kind = if enabled.contains(&id) { classify(&base_url) } else { Some(PeerKind::Disabled) };
         if let Some(kind) = kind { *kinds.entry(kind).or_default() += 1; }
     }
-    if telemetry.once_for_day(day, epoch, "peers")? {
-        let counters = kinds.into_iter().map(|(kind, n)| Counter::new(Event::Peers, Dims::new().with("kind", kind), None, n)).collect();
-        telemetry.count_for_day(day, epoch, counters);
-    }
-    Ok(true)
+    let counters = kinds.into_iter().map(|(kind, n)| Counter::new(Event::Peers, Dims::new().with("kind", kind), None, n)).collect();
+    telemetry.record_day(day, epoch, PEERS_MARK, counters)
 }
 
 /// O retrato do dia: máquinas e, se o do servidor ainda não saiu hoje, as preferências dele. `discover` roda as
-/// CLIs, por isso só depois da marca do dia gravada: marca que não se grava não descobre nada. `Ok(Ok(true))` = dia feito.
+/// CLIs, por isso só depois de o dia das máquinas gravar e só enquanto o dia não tem a marca das preferências,
+/// gravada junto com elas. `Ok(Ok(true))` = dia feito.
 /// Descoberta que passa de `DISCOVER_TIMEOUT` sai sem provedor, com o código no diário.
 async fn daily_snapshot<Fut: std::future::Future<Output = Option<String>>>(
     telemetry: Arc<Telemetry>,
@@ -217,7 +219,7 @@ async fn daily_snapshot<Fut: std::future::Future<Output = Option<String>>>(
     let (marks, mark_day) = (telemetry.clone(), day.clone());
     let step = tokio::task::spawn_blocking(move || -> std::io::Result<(bool, bool)> {
         let done = peers_snapshot(&marks, &peers, &mark_day, epoch)?;
-        Ok((done, done && marks.once_for_day(&mark_day, epoch, &format!("settings:{SETTINGS_CONSENT_SCOPE}:server"))?))
+        Ok((done, done && !marks.recorded(&mark_day, SERVER_SETTINGS_MARK)))
     }).await?;
     let (done, due) = match step { Ok(step) => step, Err(e) => return Ok(Err(e)) };
     if due {
@@ -225,13 +227,14 @@ async fn daily_snapshot<Fut: std::future::Future<Output = Option<String>>>(
             diag.report("telemetry.settings", "", "telemetry_settings_provider_timeout", "telemetria: descoberta do provedor padrão passou do prazo");
             None
         });
-        tokio::task::spawn_blocking(move || {
-            if telemetry.today() != day || !telemetry.enabled() || telemetry.consent_epoch() != epoch { return; }
+        let recorded = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            if telemetry.today() != day || !telemetry.enabled() || telemetry.consent_epoch() != epoch { return Ok(()); }
             let values = read(provider);
             let (counters, dropped) = settings_counters(ClientKind::Server, values.iter().map(|(name, value)| (*name, Some(value.as_str()))));
-            telemetry.count_for_day(&day, epoch, counters);
-            report_dropped(&diag, dropped);
+            if telemetry.record_day(&day, epoch, SERVER_SETTINGS_MARK, counters)? { report_dropped(&diag, dropped); }
+            Ok(())
         }).await?;
+        if let Err(e) = recorded { return Ok(Err(e)); }
     }
     Ok(Ok(done))
 }
@@ -825,7 +828,7 @@ mod tests {
         let telemetry = test_telemetry(home.path(), true);
         let values = server_settings(home.path(), Some(&runtime), Some("codex"), &diag);
         let (counters, _) = settings_counters(ClientKind::Server, values.iter().map(|(name, value)| (*name, Some(value.as_str()))));
-        telemetry.count_for_day(&telemetry.today(), telemetry.consent_epoch(), counters);
+        assert!(telemetry.record_day(&telemetry.today(), telemetry.consent_epoch(), SERVER_SETTINGS_MARK, counters).unwrap());
         assert_eq!(telemetry.counters().len(), values.len(), "nenhum valor sai other");
         assert!(telemetry.counters().iter().any(|c| c.dims["setting"] == "dictation_provider" && c.dims["value"] == "groq"));
         assert!(telemetry.counters().iter().all(|c| c.dims.get("client").map(String::as_str) == Some("server")));
@@ -949,25 +952,31 @@ mod tests {
     async fn provider_is_discovered_only_after_the_day_mark() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let home = tempfile::tempdir().unwrap();
-        let telemetry = test_telemetry(home.path(), true);
+        let ts = chrono::DateTime::parse_from_rfc3339("2026-11-27T12:00:00Z").unwrap().to_utc();
+        let start = || { let t = Arc::new(Telemetry::for_test(home.path(), Arc::new(move || ts))); t.set_consent(true).unwrap(); t };
+        let mut telemetry = start();
         let peers = Arc::new(PeerClient::new(PeerBook::new(None)));
         let calls = Arc::new(AtomicUsize::new(0));
-        let round = || {
+        let round = |telemetry: &Arc<Telemetry>| {
             let calls = calls.clone();
             let discover = move || { calls.fetch_add(1, Ordering::SeqCst); async { Some("codex".to_owned()) } };
             daily_snapshot(telemetry.clone(), peers.clone(), crate::diag::DiagClient::new(), telemetry.today(),
                 discover, |p: Option<String>| vec![("default_provider", p.unwrap_or_default())])
         };
-        let marks = home.path().join(".hangar/telemetry-scope-2/once.json");
-        std::fs::create_dir_all(&marks).unwrap();
-        assert!(round().await.unwrap().is_err());
-        assert!(round().await.unwrap().is_err());
-        assert_eq!(calls.load(Ordering::SeqCst), 0, "marca que não se grava não roda as CLIs");
-        std::fs::remove_dir(&marks).unwrap();
-        assert!(round().await.unwrap().unwrap());
-        assert!(round().await.unwrap().unwrap());
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "o dia já contado não redescobre");
-        assert!(telemetry.counters().iter().any(|c| c.dims["setting"] == "default_provider" && c.dims["value"] == "codex"));
+        let day = home.path().join(".hangar/telemetry-scope-2/queue/2026-11-27.json");
+        std::fs::create_dir_all(&day).unwrap();
+        assert!(round(&telemetry).await.unwrap().is_err());
+        assert!(round(&telemetry).await.unwrap().is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "dia que não se grava não roda as CLIs");
+        std::fs::remove_dir(&day).unwrap();
+        assert!(round(&telemetry).await.unwrap().unwrap());
+        let saved = std::fs::read_to_string(&day).unwrap();
+        assert!(saved.contains(SERVER_SETTINGS_MARK) && saved.contains("codex"), "marca e contagem gravadas juntas: {saved}");
+        drop(telemetry);
+        telemetry = start();
+        assert!(round(&telemetry).await.unwrap().unwrap());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "o dia já contado não redescobre, nem depois de reiniciar");
+        assert_eq!(telemetry.counters().iter().filter(|c| c.dims["setting"] == "default_provider" && c.dims["value"] == "codex").map(|c| c.count).sum::<u64>(), 1);
     }
 
     #[tokio::test(start_paused = true)]
@@ -992,7 +1001,8 @@ mod tests {
         assert!(daily_snapshot(telemetry.clone(), peers.clone(), diag.clone(), "2026-11-27".into(), cross_midnight, read).await.unwrap().unwrap());
         assert!(telemetry.counters().is_empty(), "o retrato antigo não entrou no dia novo");
         telemetry.save().unwrap();
-        assert!(!home.path().join(".hangar/telemetry-scope-2/queue/2026-11-27.json").exists(), "dia fechado não foi reaberto");
+        let closed = std::fs::read_to_string(home.path().join(".hangar/telemetry-scope-2/queue/2026-11-27.json")).unwrap_or_default();
+        assert!(!closed.contains("default_provider") && !closed.contains(SERVER_SETTINGS_MARK), "dia fechado não foi reaberto: {closed}");
 
         let calls = AtomicUsize::new(0);
         for _ in 0..2 {
@@ -1011,13 +1021,15 @@ mod tests {
         std::fs::write(&file, json!({"a": {"base_url": "http://192.168.0.10:8765", "token": "t"}}).to_string()).unwrap();
         let peers = PeerClient::new(PeerBook::new(Some(file)));
         let collect = || peers_snapshot(&telemetry, &peers, &telemetry.today(), telemetry.consent_epoch());
-        let marks = home.path().join(".hangar/telemetry-scope-2/once.json");
-        std::fs::create_dir_all(&marks).unwrap();
+        let day = home.path().join(format!(".hangar/telemetry-scope-2/queue/{}.json", telemetry.today()));
+        std::fs::create_dir_all(&day).unwrap();
         assert!(collect().is_err());
-        assert!(telemetry.counters().is_empty());
-        std::fs::remove_dir(&marks).unwrap();
+        assert!(collect().is_err(), "a falha continua até gravar");
+        std::fs::remove_dir(&day).unwrap();
         assert!(collect().unwrap());
-        assert_eq!(telemetry.counters().len(), 1);
+        assert!(collect().unwrap());
+        assert_eq!(telemetry.counters(), vec![Counter::new(Event::Peers, Dims::new().with("kind", PeerKind::Lan), None, 1)], "contado uma vez só");
+        assert!(day.is_file());
     }
 
     #[test]

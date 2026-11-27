@@ -205,11 +205,11 @@ Fim de turno, erros, quedas e troca por limite contam para todas as sessões da 
 ## Ver o que está guardado
 
 - `~/.hangar/telemetry-scope-2/queue/<dia>.json`: um arquivo por dia ainda não enviado, com os contadores
-  e as marcas privadas dos retratos dos apps. Só os contadores e as linhas limpas saem no pacote.
+  e as marcas privadas dos retratos do dia (máquinas e preferências do servidor e de cada app), gravadas
+  junto com as contagens deles. Só os contadores e as linhas limpas saem no pacote.
 - `~/.hangar/telemetry.json`: sua resposta e os dois números aleatórios. O aceite do aviso de
   preferências fica em `consent_scope: 2`; a recusa continua em `consent: false`.
-- `~/.hangar/telemetry-scope-2/once.json`: marcas do retrato das máquinas e das preferências do servidor,
-  e de cada atualização. As marcas com dia somem depois de ontem.
+- `~/.hangar/telemetry-scope-2/once.json`: marcas do que só conta uma vez, como cada atualização.
 
 No Windows, `~` é a pasta do seu usuário.
 
