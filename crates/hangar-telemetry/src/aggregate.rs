@@ -3,19 +3,19 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
 use crate::buckets::Bucket;
-use crate::events::{Dims, Event};
+use crate::events::{Dims, Event, LogLevel};
 use crate::queue::{self, DayFile};
 use crate::send::Failure;
 use crate::state::{self, State};
 use crate::switch::{self, Disabled};
-use crate::wire::{Counter, Env, is_id};
+use crate::wire::{Counter, Env, LogLine, MAX_COUNT, MAX_LOG_CHARS, MAX_LOG_LINES, is_id, is_invisible, is_name};
 
 /// Relógio de parede; os testes injetam o deles.
 pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
@@ -40,6 +40,8 @@ pub struct Telemetry {
     pub(crate) lookup: EnvLookup,
     pub(crate) clock: Clock,
     enabled: AtomicBool,
+    /// Quantas vezes a contagem ligou: o que foi capturado antes da ligação atual não conta.
+    consent_epoch: AtomicU64,
     pub(crate) settings: Mutex<Settings>,
     live: Mutex<Live>,
     /// Ordena quem toca o disco: gravação, envio, consentimento. Ordem das travas: `io`, `settings`, `live`.
@@ -59,23 +61,48 @@ pub(crate) struct Settings {
 }
 
 type Key = (String, BTreeMap<String, String>, Option<String>);
+/// Nível, alvo e mensagem.
+type LogKey = (String, String, String);
 
 struct Day {
     day: String,
     counters: BTreeMap<Key, u64>,
+    logs: BTreeMap<LogKey, u64>,
 }
 
 impl Day {
-    fn new(day: String) -> Day { Day { day, counters: BTreeMap::new() } }
+    fn new(day: String) -> Day { Day { day, counters: BTreeMap::new(), logs: BTreeMap::new() } }
+
+    /// `false` quando a linha é nova e o dia já tem `MAX_LOG_LINES` distintas: o pacote não passa do teto.
+    fn add_log(&mut self, line: LogLine) -> bool {
+        let key = (line.level, line.target, line.message);
+        if let Some(slot) = self.logs.get_mut(&key) {
+            *slot = slot.saturating_add(line.count).min(MAX_COUNT);
+            return true;
+        }
+        if self.logs.len() >= MAX_LOG_LINES {
+            return false;
+        }
+        self.logs.insert(key, line.count.min(MAX_COUNT));
+        true
+    }
+
+    fn to_logs(&self) -> Vec<LogLine> {
+        self.logs.iter()
+            .map(|((level, target, message), count)| LogLine { level: level.clone(), target: target.clone(), message: message.clone(), count: *count })
+            .collect()
+    }
 
     fn add(&mut self, counter: Counter) {
         let slot = self.counters.entry((counter.event, counter.dims, counter.bucket)).or_default();
-        *slot = slot.saturating_add(counter.count);
+        // Acima do teto o pacote seria recusado e o dia inteiro, apagado.
+        *slot = slot.saturating_add(counter.count).min(MAX_COUNT);
     }
 
     fn from_file(file: DayFile) -> Day {
         let mut day = Day::new(file.day);
         file.counters.into_iter().for_each(|counter| day.add(counter));
+        file.logs.into_iter().for_each(|line| { day.add_log(line); });
         day
     }
 
@@ -85,7 +112,7 @@ impl Day {
             .collect()
     }
 
-    fn file(&self) -> DayFile { DayFile { day: self.day.clone(), batch_id: None, counters: self.to_counters() } }
+    fn file(&self) -> DayFile { DayFile { day: self.day.clone(), batch_id: None, counters: self.to_counters(), logs: self.to_logs() } }
 }
 
 struct Live {
@@ -150,6 +177,7 @@ impl Telemetry {
             backend: config.backend,
             lookup,
             enabled: AtomicBool::new(false),
+            consent_epoch: AtomicU64::new(0),
             settings: Mutex::new(Settings { state, disabled: None, env_unreadable: false }),
             live: Mutex::new(Live::new(Day::new(day_of(now)), false)),
             io: Mutex::new(()),
@@ -186,9 +214,38 @@ impl Telemetry {
         }
     }
 
+    /// Uma linha de aviso ou erro do log, já limpa por quem chama; o mesmo portão do `count`. Alvo fora
+    /// do formato sai `other`; caractere de controle vira espaço e a mensagem é cortada em `MAX_LOG_CHARS`.
+    pub fn log(&self, level: LogLevel, target: &str, message: &str) {
+        if !self.enabled() {
+            return;
+        }
+        let message: String = message.chars().map(|c| if is_invisible(c) { ' ' } else { c }).take(MAX_LOG_CHARS).collect();
+        let message = message.trim();
+        if message.is_empty() {
+            return;
+        }
+        let target = if is_name(target) { target } else { "other" };
+        let line = LogLine { level: level.as_str().to_owned(), target: target.to_owned(), message: message.to_owned(), count: 1 };
+        let today = day_of((self.clock)());
+        let Ok(mut live) = self.live.lock() else { return };
+        // A revogação desliga antes de limpar a memória sob esta trava: conferida aqui, não grava depois dela.
+        if !self.enabled() {
+            return;
+        }
+        live.roll(today);
+        if !live.current.add_log(line) {
+            live.current.add(Counter::new(Event::LogDropped, Dims::new(), None, 1));
+        }
+        live.dirty = true;
+    }
+
     fn add(&self, counter: Counter) {
         let today = day_of((self.clock)());
         let Ok(mut live) = self.live.lock() else { return };
+        if !self.enabled() {
+            return;
+        }
         live.roll(today);
         live.current.add(counter);
         live.dirty = true;
@@ -226,6 +283,9 @@ impl Telemetry {
     }
 
     pub fn enabled(&self) -> bool { self.enabled.load(Ordering::SeqCst) }
+
+    /// Sobe a cada vez que a contagem liga (consentimento dado, `.env` de volta).
+    pub fn consent_epoch(&self) -> u64 { self.consent_epoch.load(Ordering::SeqCst) }
 
     /// `None` = ainda sem resposta.
     pub fn consent(&self) -> Option<bool> { lock(&self.settings).ok().and_then(|s| s.state.consent) }
@@ -274,6 +334,9 @@ impl Telemetry {
 
     /// Os contadores do dia corrente em memória.
     pub fn counters(&self) -> Vec<Counter> { lock(&self.live).map(|live| live.current.to_counters()).unwrap_or_default() }
+
+    /// As linhas de log do dia corrente em memória.
+    pub fn logs(&self) -> Vec<LogLine> { lock(&self.live).map(|live| live.current.to_logs()).unwrap_or_default() }
 
     /// Grava na fila os dias que viraram e o corrente, se mudaram; o desligamento do servidor
     /// chama. Bloqueante.
@@ -374,6 +437,10 @@ impl Telemetry {
                 };
                 *lock(&self.live)? = live;
             }
+            // A época sobe antes de ligar: quem vê ligada já vê a época nova.
+            if !self.enabled() {
+                self.consent_epoch.fetch_add(1, Ordering::SeqCst);
+            }
             self.enabled.store(true, Ordering::SeqCst);
             return Ok(());
         }
@@ -441,6 +508,110 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn message() -> Dims { Dims::new().with("provider", Provider::Claude).with("surface", Surface::Terminal) }
+
+    #[test]
+    fn log_lines_stop_at_the_cap_and_count_what_was_dropped() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        for n in 0..MAX_LOG_LINES {
+            telemetry.log(LogLevel::Warn, "hangar_server::list", &format!("aviso {n}"));
+        }
+        telemetry.log(LogLevel::Warn, "hangar_server::list", "aviso 0");
+        telemetry.log(LogLevel::Error, "hangar_server::list", "nova depois do teto");
+        telemetry.log(LogLevel::Error, "hangar_server::list", "outra nova");
+        let logs = telemetry.logs();
+        assert_eq!(logs.len(), MAX_LOG_LINES);
+        assert_eq!(logs.iter().find(|l| l.message == "aviso 0").map(|l| l.count), Some(2), "a linha já vista ainda soma");
+        assert!(!logs.iter().any(|l| l.message.contains("nova")));
+        assert_eq!(telemetry.counters(), vec![Counter::new(Event::LogDropped, Dims::new(), None, 2)]);
+    }
+
+    #[test]
+    fn log_message_is_cut_and_has_no_control_character() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.log(LogLevel::Error, "Fora Do Formato", &format!("primeira\nsegunda {}", "é".repeat(400)));
+        telemetry.log(LogLevel::Error, "hangar_server::x", " \n ");
+        let logs = telemetry.logs();
+        assert_eq!(logs.len(), 1, "mensagem vazia não entra");
+        assert_eq!(logs[0].target, "other");
+        assert!(logs[0].message.starts_with("primeira segunda é"));
+        assert_eq!(logs[0].message.chars().count(), MAX_LOG_CHARS);
+    }
+
+    #[test]
+    fn log_waiting_for_the_live_lock_is_not_written_after_revocation() {
+        let fx = Fixture::new();
+        let telemetry = Arc::new(fx.start());
+        let held = telemetry.live.lock().unwrap();
+        let writer = { let telemetry = telemetry.clone(); std::thread::spawn(move || telemetry.log(LogLevel::Error, "hangar_server::x", "falhou")) };
+        // Com a trava presa aqui, a escrita só a pega depois de desligada, como na revogação.
+        telemetry.enabled.store(false, Ordering::SeqCst);
+        drop(held);
+        writer.join().unwrap();
+        assert!(telemetry.logs().is_empty());
+    }
+
+    #[test]
+    fn consent_epoch_rises_each_time_counting_turns_on() {
+        let fx = Fixture::new();
+        let telemetry = fx.start_as_is();
+        assert_eq!(telemetry.consent_epoch(), 0);
+        telemetry.set_consent(true).unwrap();
+        telemetry.set_consent(true).unwrap();
+        assert_eq!(telemetry.consent_epoch(), 1, "já ligada não sobe");
+        telemetry.set_consent(false).unwrap();
+        telemetry.set_consent(true).unwrap();
+        assert_eq!(telemetry.consent_epoch(), 2);
+    }
+
+    #[test]
+    fn counts_stop_at_the_wire_ceiling() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.count(Event::MessageSent, message(), MAX_COUNT);
+        telemetry.count(Event::MessageSent, message(), 5);
+        assert_eq!(telemetry.counters()[0].count, MAX_COUNT);
+    }
+
+    #[test]
+    fn invisible_characters_become_spaces() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.log(LogLevel::Error, "hangar_server::x", "a\u{2028}b\u{2029}c\u{202E}d\u{200B}e\u{FEFF}f");
+        assert_eq!(telemetry.logs()[0].message, "a b c d e f");
+    }
+
+    #[test]
+    fn log_without_consent_records_nothing() {
+        let fx = Fixture::new();
+        let telemetry = fx.start_as_is();
+        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
+        telemetry.save().unwrap();
+        assert!(telemetry.logs().is_empty());
+        telemetry.set_consent(false).unwrap();
+        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
+        telemetry.save().unwrap();
+        assert!(telemetry.logs().is_empty() && telemetry.counters().is_empty());
+        assert!(!fx.queue().exists());
+    }
+
+    #[test]
+    fn log_lines_go_through_the_queue_and_back() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
+        telemetry.log(LogLevel::Warn, "hangar_server::list", "devagar");
+        telemetry.save().unwrap();
+        drop(telemetry);
+        let file = queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap();
+        assert_eq!(file.logs.len(), 2);
+        let telemetry = fx.start();
+        telemetry.log(LogLevel::Error, "hangar_server::list", "falhou");
+        let logs = telemetry.logs();
+        assert_eq!(logs.iter().find(|l| l.message == "falhou").map(|l| (l.level.as_str(), l.count)), Some(("error", 2)));
+        assert_eq!(logs.len(), 2);
+    }
 
     #[test]
     fn unanswered_consent_counts_and_writes_nothing() {
@@ -723,7 +894,7 @@ pub(crate) mod tests {
         telemetry.save().unwrap();
         assert!(!fx.queue().exists(), "sem contagem nada é gravado");
         for n in 12..=25 {
-            queue::write_day(fx.home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new() }).unwrap();
+            queue::write_day(fx.home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), logs: Vec::new() }).unwrap();
         }
         telemetry.count(Event::MessageSent, message(), 1);
         telemetry.save().unwrap();

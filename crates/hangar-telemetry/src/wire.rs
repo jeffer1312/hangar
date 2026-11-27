@@ -10,6 +10,14 @@ use crate::events::{Code, DimValue, Dims, Event};
 pub const SCHEMA: u32 = 1;
 /// `env.commit` de pacote que não é de release.
 pub const DEV_COMMIT: &str = "dev";
+/// Teto de linhas de log distintas num pacote: acima dele a linha nova só soma `log_dropped`.
+pub const MAX_LOG_LINES: usize = 100;
+/// Teto da mensagem de uma linha de log, em caracteres.
+pub const MAX_LOG_CHARS: usize = 300;
+pub const LOG_LEVELS: &[&str] = &["warn", "error"];
+/// Teto de `count` de um contador ou linha. Um dia de uma máquina não chega perto disso; o teto impede
+/// que a soma do receptor (`bigint`) estoure com pacote forjado.
+pub const MAX_COUNT: u64 = 10_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Batch {
@@ -21,6 +29,18 @@ pub struct Batch {
     pub day: String,
     pub env: Env,
     pub counters: Vec<Counter>,
+    /// Linhas de aviso e erro do log do servidor, já limpas na máquina; campo opcional do `schema: 1`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logs: Vec<LogLine>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogLine {
+    /// `warn` ou `error`.
+    pub level: String,
+    pub target: String,
+    pub message: String,
+    pub count: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,9 +99,28 @@ impl Batch {
             if !is_name(&counter.event) { return Err("event"); }
             if !counter.dims.iter().all(|(key, value)| is_name(key) && is_name(value)) { return Err("dims"); }
             if counter.bucket.as_deref().is_some_and(|b| !is_name(b)) { return Err("bucket"); }
+            if counter.count > MAX_COUNT { return Err("count"); }
+        }
+        if self.logs.len() > MAX_LOG_LINES { return Err("logs"); }
+        for line in &self.logs {
+            if !LOG_LEVELS.contains(&line.level.as_str()) { return Err("log_level"); }
+            if !is_name(&line.target) { return Err("log_target"); }
+            let chars = line.message.chars().count();
+            if !(1..=MAX_LOG_CHARS).contains(&chars) || line.message.chars().any(is_invisible) { return Err("log_message"); }
+            if line.count == 0 || line.count > MAX_COUNT { return Err("log_count"); }
         }
         Ok(())
     }
+}
+
+/// Caractere que não aparece ou mexe no que vem depois: controle (Cc), formato (Cf, como U+200B,
+/// U+202E e U+FEFF) e separador de linha ou parágrafo (U+2028, U+2029).
+pub fn is_invisible(c: char) -> bool {
+    // ponytail: faixas Cf do Unicode 15.1 escritas à mão; categoria nova só entra aqui.
+    c.is_control() || matches!(c as u32,
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2 | 0x180E
+        | 0x200B..=0x200F | 0x2028..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB
+        | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
 }
 
 /// Formato de nome que o receptor aceita (evento, chave e valor): o mesmo `code_ok` do relatório.
@@ -146,7 +185,12 @@ mod tests {
                     5,
                 ),
             ],
+            logs: Vec::new(),
         }
+    }
+
+    fn log(message: &str) -> LogLine {
+        LogLine { level: "error".into(), target: "hangar_server::list".into(), message: message.into(), count: 3 }
     }
 
     #[test]
@@ -225,6 +269,32 @@ mod tests {
         let mut body = serde_json::to_value(sample()).unwrap();
         body.as_object_mut().unwrap().remove("machine_id");
         assert!(serde_json::from_value::<Batch>(body).is_err());
+    }
+
+    #[test]
+    fn validate_checks_the_log_lines() {
+        let with = |line: LogLine| Batch { logs: vec![line], ..sample() };
+        assert_eq!(with(log("lista não lida: <caminho>")).validate(), Ok(()));
+        assert_eq!(with(log(&"é".repeat(MAX_LOG_CHARS))).validate(), Ok(()), "o teto conta caractere, não byte");
+        assert_eq!(with(log(&"a".repeat(MAX_LOG_CHARS + 1))).validate(), Err("log_message"));
+        assert_eq!(with(log("")).validate(), Err("log_message"));
+        assert_eq!(with(log("duas\nlinhas")).validate(), Err("log_message"));
+        for hidden in ['\u{2028}', '\u{2029}', '\u{202E}', '\u{200B}', '\u{FEFF}', '\u{AD}'] {
+            assert_eq!(with(log(&format!("a{hidden}b"))).validate(), Err("log_message"), "U+{:04X}", hidden as u32);
+        }
+        assert_eq!(with(log("acentuação, ç e — ficam")).validate(), Ok(()));
+        assert_eq!(with(LogLine { level: "info".into(), ..log("x") }).validate(), Err("log_level"));
+        assert_eq!(with(LogLine { target: "Hangar Server".into(), ..log("x") }).validate(), Err("log_target"));
+        assert_eq!(with(LogLine { count: 0, ..log("x") }).validate(), Err("log_count"));
+        assert_eq!(with(LogLine { count: MAX_COUNT, ..log("x") }).validate(), Ok(()));
+        assert_eq!(with(LogLine { count: MAX_COUNT + 1, ..log("x") }).validate(), Err("log_count"));
+        let mut big = sample();
+        big.counters[0].count = MAX_COUNT + 1;
+        assert_eq!(big.validate(), Err("count"));
+        let full = Batch { logs: (0..=MAX_LOG_LINES).map(|n| log(&n.to_string())).collect(), ..sample() };
+        assert_eq!(full.validate(), Err("logs"));
+        let body = serde_json::to_value(with(log("x"))).unwrap();
+        assert_eq!(body["logs"], json!([{"level": "error", "target": "hangar_server::list", "message": "x", "count": 3}]));
     }
 
     #[test]
