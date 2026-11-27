@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="/panel/assets/panel.css">
 </head>
 <body>
+<div class="bar" id="bar">
 <header class="top">
   <div class="top-in">
     <div class="brand-line"><svg class="logo" width="30" height="30" viewBox="0 0 200 200" aria-hidden="true"><rect width="200" height="200" rx="44" fill="#1b1d1f"/><g fill="none" stroke="#f5f5f0" stroke-linecap="round" stroke-width="17" transform="translate(0 16)"><path d="M 33.49 132.44 A 74 74 0 1 1 166.51 132.44"/><path d="M 56.96 109.15 A 44 44 0 1 1 143.04 109.15"/></g></svg><div><h1>Telemetria do Hangar</h1><div class="sub" id="sub">dados anônimos, um pacote por máquina por dia</div></div></div>
@@ -27,6 +28,7 @@
   </div>
 </header>
 <nav class="chips" aria-label="Seções"><div class="chips-in" id="chips"></div></nav>
+</div>
 <main class="wrap">
   <div class="notice" id="notice" hidden><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><span id="notice-text"></span><button class="btn ghost" id="notice-clear" type="button">Limpar busca</button></div>
   <div id="content"><div class="skel-grid"><div class="kp"><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div></div><div class="skeleton" style="height:300px"></div></div></div>
@@ -223,15 +225,15 @@ function dimsLabel(dims) {
 }
 
 // Série diária completa do período (dia sem pacote = 0), em UTC como os pacotes.
-let seriesEnd = null;
+let skipToday = false;
 function series(days, valueOf) {
-  const end = new Date(seriesEnd || Date.now() - 86400000); end.setUTCHours(0, 0, 0, 0);
+  const end = new Date(); end.setUTCHours(0, 0, 0, 0);
   const out = [];
   for (let i = days - 1; i >= 0; i--) {
     const day = new Date(end.getTime() - i * 86400000).toISOString().slice(0, 10);
     out.push({ day, value: valueOf(day) });
   }
-  return out;
+  return skipToday ? out.slice(0, -1) : out;
 }
 
 
@@ -268,14 +270,14 @@ function icon(name) {
 }
 // Cada seção tem cor e ícone próprios: o chip, o título e as barras dela usam a mesma cor.
 const SECTIONS = [
-  ["geral", "Visão geral", "#8b93f0", "overview", "Quantas máquinas e pessoas usam o Hangar, e o que mais falhou."],
-  ["problemas", "Problemas", "#f2766b", "problems", "O que deu errado para quem usa: ação que falhou, sessão que caiu, app que fechou."],
+  ["overview", "Visão geral", "#8b93f0", "overview", "Quantas máquinas e pessoas usam o Hangar, e o que mais falhou."],
+  ["problems", "Problemas", "#f2766b", "problems", "O que deu errado para quem usa: ação que falhou, sessão que caiu, app que fechou."],
   ["log", "Log de erros", "#f2a36b", "log", "Linhas de aviso e erro do servidor, limpas na máquina antes de sair."],
-  ["uso", "Como usam", "#45c2a8", "usage", "O que as pessoas fazem com o Hangar, dia a dia."],
-  ["velocidade", "Velocidade", "#5aaee8", "speed", "Quanto cada coisa demora. Cada barra é uma faixa de tempo; quanto maior, mais vezes caiu ali."],
-  ["maquinas", "Máquinas", "#b48cf0", "machines", "Versão, sistema e canal de cada máquina, e a saúde do servidor."],
-  ["config", "Como configuram", "#e88ab8", "config", "Quantas máquinas escolheram cada opção. Cada app manda o retrato uma vez por dia."],
-  ["dados", "Dados brutos", "#a9a0a4", "table", "Cada contador como chegou, para conferir um número."],
+  ["usage", "Como usam", "#45c2a8", "usage", "O que as pessoas fazem com o Hangar, dia a dia."],
+  ["speed", "Velocidade", "#5aaee8", "speed", "Quanto cada coisa demora. Cada barra é uma faixa de tempo; quanto maior, mais vezes caiu ali."],
+  ["machines", "Máquinas", "#b48cf0", "machines", "Versão, sistema e canal de cada máquina, e a saúde do servidor."],
+  ["settings", "Como configuram", "#e88ab8", "config", "Quantas máquinas escolheram cada opção. Cada app manda o retrato uma vez por dia."],
+  ["raw", "Dados brutos", "#a9a0a4", "table", "Cada contador como chegou, para conferir um número."],
 ];
 const HUE = Object.fromEntries(SECTIONS.map(s => [s[0], s[2]]));
 const animate = !matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -349,7 +351,7 @@ function lineChart(slot) {
       const anchor = i === 0 ? "start" : i === rows.length - 1 ? "end" : "middle";
       const t = svgEl("text", { x: pts[i][0], y: H - 4, "text-anchor": anchor }); t.textContent = dayMonth(s.day); svg.append(t);
     }
-    const hit = svgEl("rect", { class: "hit", x: pts[i][0] - band / 2, y: T, width: Math.max(band, 4), height: H - B - T, tabindex: "0" });
+    const hit = svgEl("rect", { class: "hit", x: pts[i][0] - band / 2, y: T, width: Math.max(band, 4), height: H - B - T });
     const show = (x, y) => {
       cross.setAttribute("x1", pts[i][0]); cross.setAttribute("x2", pts[i][0]); cross.style.opacity = 1;
       dot.setAttribute("cx", pts[i][0]); dot.setAttribute("cy", pts[i][1]);
@@ -358,8 +360,6 @@ function lineChart(slot) {
     const hide = () => { cross.style.opacity = 0; dot.setAttribute("cx", pts.at(-1)[0]); dot.setAttribute("cy", pts.at(-1)[1]); hideTip(); };
     hit.addEventListener("pointermove", e => show(e.clientX, e.clientY));
     hit.addEventListener("pointerleave", hide);
-    hit.addEventListener("focus", () => { const r = hit.getBoundingClientRect(); show(r.left, r.top); });
-    hit.addEventListener("blur", hide);
     svg.append(hit);
   });
   slot.replaceChildren(svg);
@@ -426,6 +426,7 @@ function settingsCards(rows) {
   const bySetting = new Map();
   for (const c of rows) {
     const d = c.dims || {};
+    if (typeof d.setting !== "string" || typeof d.value !== "string") continue;
     if (!bySetting.has(d.setting)) bySetting.set(d.setting, []);
     bySetting.get(d.setting).push({ value: d.value, client: d.client, machines: c.machines });
   }
@@ -456,10 +457,9 @@ function render(data) {
   for (const c of data.by_dims) entry(c.event).dims.push({ label: dimsLabel(c.dims), value: c.count, machines: c.machines });
   for (const c of data.by_bucket) entry(c.event).buckets.set(c.bucket, { value: c.count, machines: c.machines });
   const total = event => (byEvent.get(event)?.dims || []).reduce((s, d) => s + d.value, 0);
-  // O dia só chega depois de fechar em UTC: o gráfico termina no último dia com pacote, não num hoje sempre zerado.
-  const lastDay = data.daily.reduce((m, d) => d.day > m ? d.day : m, "");
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  seriesEnd = (lastDay > yesterday ? lastDay : yesterday) + "T00:00:00Z";
+  // O dia só chega depois de fechar em UTC: sem pacote de hoje, o gráfico para em ontem em vez de cair num zero falso.
+  const today = new Date().toISOString().slice(0, 10);
+  skipToday = !data.daily.some(d => d.day === today);
 
   // Falha é o evento de falha inteiro, ou a linha que diz que deu errado (ferramenta com erro, passo que não deu certo).
   // Uma atualização que falha conta uma vez, pelo código (update_failed_code); a etapa e o fim dela ficam em Saúde do servidor.
@@ -493,9 +493,9 @@ function render(data) {
       barList(order.map(b => ({ label: Object.hasOwn(BUCKET_LABEL, b) ? BUCKET_LABEL[b] : b, ...e.buckets.get(b) })))));
   }
 
-  const counts = { problemas: failTotal, log: logs.length, uso: total("message_sent"), velocidade: times.length,
-    maquinas: a.machines_30d, config: settings.count, dados: data.counters.length };
-  drawChips(counts, { problemas: failTotal > 0, log: logs.some(l => l.level === "error") });
+  const counts = { problems: failTotal, log: logs.length, usage: total("message_sent"), speed: times.length,
+    machines: a.machines_30d, settings: settings.count, raw: data.counters.length };
+  drawChips(counts, { problems: failTotal > 0, log: logs.some(l => l.level === "error") });
 
   const nodes = [];
   const kpi = (sec, ic, label, key, value, note, bad) => {
@@ -506,7 +506,7 @@ function render(data) {
   };
 
   if (!data.period.batches) {
-    nodes.push(sectionBlock("geral", null, null, el("div", { class: "card empty big" }, icon("calendar"),
+    nodes.push(sectionBlock("overview", null, null, el("div", { class: "card empty big" }, icon("calendar"),
       "Nenhum pacote chegou neste período.", el("span", { class: "minor", text: "Cada máquina manda o dia depois que ele fecha em UTC (21h em Brasília)." }))));
     root.replaceChildren(...nodes);
     applyFilter();
@@ -516,21 +516,21 @@ function render(data) {
 
   const topFailures = failures.length
     ? card("Falhas mais comuns", "O que mais deu errado no período.", barList(failures.slice(0, 5)),
-        el("a", { class: "more", href: "#s-problemas" }, "Ver as " + fmt.format(failTotal) + " falhas", icon("chevron")))
+        el("a", { class: "more", href: "#s-problems" }, "Ver as " + fmt.format(failTotal) + " falhas", icon("chevron")))
     : el("div", { class: "card empty" }, icon("check"), "Nenhuma falha no período.");
-  topFailures.style.setProperty("--hue", HUE.problemas);
-  topFailures.style.setProperty("--hue-soft", "color-mix(in srgb, " + HUE.problemas + " 15%, transparent)");
-  nodes.push(sectionBlock("geral", null, null,
+  topFailures.style.setProperty("--hue", HUE.problems);
+  topFailures.style.setProperty("--hue-soft", "color-mix(in srgb, " + HUE.problems + " 15%, transparent)");
+  nodes.push(sectionBlock("overview", null, null,
     el("div", { class: "kpis" },
-      kpi("maquinas", "machines", "Máquinas ativas", "m", a.machines_30d, a.machines_7d + " nos últimos 7 dias"),
-      kpi("geral", "users", "Pessoas", "p", a.owners_30d, "cada pessoa conta uma vez"),
-      kpi("uso", "usage", "Mensagens enviadas", "msg", total("message_sent"), fmt.format(total("turn_finished")) + " respostas do agente"),
-      kpi("problemas", "problems", "Falhas", "f", failTotal, failTotal ? failures.length + " tipo" + (failures.length === 1 ? "" : "s") + " de falha" : "nenhuma no período", failTotal > 0)),
+      kpi("machines", "machines", "Máquinas ativas", "m", a.machines_30d, a.machines_7d + " nos últimos 7 dias"),
+      kpi("overview", "users", "Pessoas", "p", a.owners_30d, "cada pessoa conta uma vez"),
+      kpi("usage", "usage", "Mensagens enviadas", "msg", total("message_sent"), fmt.format(total("turn_finished")) + " respostas do agente"),
+      kpi("problems", "problems", "Falhas", "f", failTotal, failTotal ? failures.length + " tipo" + (failures.length === 1 ? "" : "s") + " de falha" : "nenhuma no período", failTotal > 0)),
     el("div", { class: "split" },
       chartCard("Máquinas ativas por dia", "Quantas máquinas mandaram pacote em cada dia (UTC).", machinesDaily, ["máquina", "máquinas"], 240),
       topFailures)));
 
-  nodes.push(sectionBlock("problemas", fmt.format(failTotal), "falhas no período",
+  nodes.push(sectionBlock("problems", fmt.format(failTotal), "falhas no período",
     failures.length
       ? el("div", { class: "split" },
           card("Todas as falhas", "Cada linha é uma falha com o motivo; a barra compara com a maior.", barList(failures.slice(0, 15)),
@@ -549,13 +549,13 @@ function render(data) {
     usage.push(card(title, explain, barList(items.slice(0, 8)),
       items.length > 8 ? el("div", { class: "minor", text: "+ " + (items.length - 8) + " em Dados brutos" }) : null));
   }
-  nodes.push(sectionBlock("uso", compactInt(total("message_sent")), "mensagens enviadas",
+  nodes.push(sectionBlock("usage", compactInt(total("message_sent")), "mensagens enviadas",
     el("div", { class: "grid two" },
       chartCard("Mensagens enviadas por dia", EVENTS.message_sent[2], daily("message_sent"), ["mensagem", "mensagens"], 180),
       chartCard("Respostas do agente por dia", EVENTS.turn_finished[2], daily("turn_finished"), ["resposta", "respostas"], 180)),
     usage.length ? groupTitle("Em detalhe") : null, usage.length ? el("div", { class: "grid" }, ...usage) : null));
 
-  if (times.length) nodes.push(sectionBlock("velocidade", null, null, el("div", { class: "grid" }, ...times)));
+  if (times.length) nodes.push(sectionBlock("speed", null, null, el("div", { class: "grid" }, ...times)));
 
   const envCards = [];
   for (const [key, title, explain] of [["version", "Versão do Hangar", "Versão instalada em cada máquina, pelo último pacote dela."],
@@ -573,17 +573,17 @@ function render(data) {
     health.push(card(EVENTS[event][0], EVENTS[event][2], barList(items.slice(0, 8)),
       items.length > 8 ? el("div", { class: "minor", text: "+ " + (items.length - 8) + " em Dados brutos" }) : null));
   }
-  nodes.push(sectionBlock("maquinas", fmt.format(a.machines_30d), "ativas em 30 dias",
+  nodes.push(sectionBlock("machines", fmt.format(a.machines_30d), "ativas em 30 dias",
     el("div", { class: "grid" }, ...envCards),
     health.length ? groupTitle("Saúde do servidor", "heart") : null, health.length ? el("div", { class: "grid" }, ...health) : null));
 
-  nodes.push(sectionBlock("config", null, null, ...(settings.nodes.length ? settings.nodes
+  nodes.push(sectionBlock("settings", null, null, ...(settings.nodes.length ? settings.nodes
     : [el("div", { class: "card empty" }, icon("config"), "Nenhuma máquina mandou as preferências ainda: elas chegam a partir da versão que coleta esse retrato.")])));
 
   const rows = data.counters.map(c => el("tr", { "data-q": (c.event + " " + dimsLabel(c.dims)).toLowerCase() },
     el("td", {}, el("code", { text: c.event })), el("td", { text: dimsLabel(c.dims) }), el("td", { text: c.bucket ? (Object.hasOwn(BUCKET_LABEL, c.bucket) ? BUCKET_LABEL[c.bucket] : c.bucket) : "" }),
     el("td", { class: "n", text: fmt.format(c.count) }), el("td", { class: "n", text: String(c.machines) })));
-  nodes.push(sectionBlock("dados", null, null, el("details", { class: "card table", "data-title": "dados brutos" },
+  nodes.push(sectionBlock("raw", null, null, el("details", { class: "card table", "data-title": "dados brutos" },
     el("summary", {}, icon("chevron"), data.counters.length + " linhas, como chegaram"),
     el("div", { class: "table-wrap" }, el("table", {},
       el("thead", {}, el("tr", {}, el("th", { text: "Evento" }), el("th", { text: "Detalhe" }), el("th", { text: "Duração" }),
@@ -645,7 +645,7 @@ function applyFilter() {
   qClear.hidden = !text; qKey.hidden = !!text;
   let hits = 0;
   for (const sec of document.querySelectorAll(".sec")) {
-    if (sec.id === "s-geral") { sec.hidden = !!text; continue; }
+    if (sec.id === "s-overview") { sec.hidden = !!text; continue; }
     let secHits = 0;
     for (const c of sec.querySelectorAll(".card")) {
       const titleHit = !text || (c.dataset.title || "").includes(text);
@@ -699,9 +699,12 @@ async function load(days) {
     if (mine !== request) return;
     last = data;
     render(data);
-    document.getElementById("sub").textContent = data.active.machines_30d + " máquinas · " + data.active.owners_30d + " pessoas · dados anônimos";
+    const m = data.active.machines_30d, p = data.active.owners_30d;
+    document.getElementById("sub").textContent = m + (m === 1 ? " máquina · " : " máquinas · ") + p + (p === 1 ? " pessoa" : " pessoas") + " · dados anônimos";
   } catch (err) {
     if (mine !== request) return;
+    document.getElementById("chips").replaceChildren();
+    document.getElementById("notice").hidden = true;
     const retry = el("button", { class: "btn", type: "button", text: "Tentar de novo" });
     retry.addEventListener("click", () => load(current));
     document.getElementById("content").replaceChildren(el("div", { class: "error-box" }, icon("alertCircle"),
@@ -710,6 +713,8 @@ async function load(days) {
 }
 document.querySelectorAll("#period button").forEach(b => b.addEventListener("click", () => load(Number(b.dataset.days))));
 
+// A barra quebra em linhas no celular: a altura real dela diz onde a seção para ao rolar.
+new ResizeObserver(([e]) => document.documentElement.style.setProperty("--bar-h", Math.ceil(e.borderBoxSize[0].blockSize) + "px")).observe(document.getElementById("bar"));
 const menu = document.getElementById("menu");
 document.addEventListener("click", e => { if (menu.open && !menu.contains(e.target)) menu.open = false; });
 fetch("/panel/api/me").then(r => r.ok ? r.json() : null).then(me => {
