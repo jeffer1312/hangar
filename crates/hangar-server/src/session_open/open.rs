@@ -1070,6 +1070,7 @@ mod telemetry_tests {
             permission_mode: Some(PermissionMode::BypassPermissions), subagent_model: None, customizations: None, jev: false, code_mode: false,
             read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
             name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
+            auto_continue_off: false,
         }
     }
 

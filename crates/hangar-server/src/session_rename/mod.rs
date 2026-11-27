@@ -294,12 +294,14 @@ impl Ctx {
     }
 
     async fn group(&self, old: &str, new: &str) -> Result<(), String> {
-        let Some(groups) = self.st.groups.clone() else { return Ok(()) };
+        let Some(groups) = self.st.groups.clone() else { crate::auto_continue::renamed(&self.st, old, new); return Ok(()) };
         match crate::groups::fed_exit::rename(&self.st, &groups, old, new).await {
             Some(done) => done,
             None => groups.rename(old, new).await,
         }.map_err(|e| match e { crate::groups::service::GroupError::Store(_) => "groups_store_failed".to_owned(), other => other.to_string() })?;
         crate::groups::link_return::renamed(&self.st, old, new).await;
+        // Renomear não pode servir de saída dos tetos da continuação.
+        crate::auto_continue::renamed(&self.st, old, new);
         Ok(())
     }
 

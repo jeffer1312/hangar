@@ -417,7 +417,7 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     const key = reopenKey(name, serverId);
     if (reopening.has(key)) return '';
     reopening.add(key);
-    try { await reopenFallenSession(name, sessionServerFor(serverId)(), lifecycleId); return ''; }
+    try { await reopenFallenSession(name, sessionServerFor(serverId)(), { lifecycleId }); return ''; }
     catch (e) { return errMsg(e); }
     finally { reopening.delete(key); }
   }

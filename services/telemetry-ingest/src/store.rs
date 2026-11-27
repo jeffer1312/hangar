@@ -20,7 +20,7 @@ pub enum Insert {
 /// Folga para relógio torto na máquina que manda.
 const FUTURE_SLACK_DAYS: i32 = 2;
 
-/// Grava o pacote já conferido por `Batch::validate`; `count` acima de `i64::MAX` é recusado antes.
+/// Grava o pacote já conferido por `Batch::validate`, que limita cada `count` a `MAX_COUNT`.
 pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let env = &batch.env;
@@ -68,6 +68,25 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
     .bind(counts)
     .execute(&mut *tx)
     .await?;
+    if !batch.logs.is_empty() {
+        let logs = &batch.logs;
+        let levels: Vec<&str> = logs.iter().map(|l| l.level.as_str()).collect();
+        let targets: Vec<&str> = logs.iter().map(|l| l.target.as_str()).collect();
+        let messages: Vec<&str> = logs.iter().map(|l| l.message.as_str()).collect();
+        let counts: Vec<i64> = logs.iter().map(|l| l.count as i64).collect();
+        sqlx::query(
+            "INSERT INTO logs (batch_id, level, target, message, count)
+             SELECT $1, level, target, message, count
+             FROM UNNEST($2::text[], $3::text[], $4::text[], $5::bigint[]) AS l(level, target, message, count)",
+        )
+        .bind(&batch.batch_id)
+        .bind(levels)
+        .bind(targets)
+        .bind(messages)
+        .bind(counts)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(Insert::Accepted)
 }
@@ -85,7 +104,8 @@ macro_rules! in_period {
     };
 }
 
-/// Resumo do painel dos últimos `days` dias (UTC), tudo calculado no banco.
+/// Resumo do painel dos últimos `days` dias (UTC), tudo calculado no banco. Cada soma para no maior
+/// `bigint`: o `validate` limita cada pacote, mas pacote antigo no banco não pode derrubar o resumo.
 pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx::Error> {
     // Uma foto só do banco: um pacote que chega no meio não descasa os números entre si.
     let mut tx = pool.begin().await?;
@@ -118,7 +138,7 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     let per_owner: Vec<(i64, i64)> =
         sqlx::query_as("SELECT machines, count(*) FROM v_machines_per_owner GROUP BY machines ORDER BY machines").fetch_all(&mut *pool).await?;
     let counters: Vec<(String, Json<serde_json::Value>, Option<String>, i64, i64)> = sqlx::query_as(concat!(
-        "SELECT c.event, c.dims, c.bucket, sum(c.count)::bigint, count(DISTINCT b.machine_id)
+        "SELECT c.event, c.dims, c.bucket, LEAST(sum(c.count), 9223372036854775807)::bigint, count(DISTINCT b.machine_id)
          FROM counters c JOIN batches b ON b.batch_id = c.batch_id
          WHERE ", in_period!("b.day"), "
          GROUP BY c.event, c.dims, c.bucket ORDER BY c.event, 4 DESC"
@@ -128,7 +148,7 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .await?;
     // Máquinas distintas por combinação e por faixa: somar as linhas contaria a mesma máquina de novo.
     let by_dims: Vec<(String, Json<serde_json::Value>, i64, i64)> = sqlx::query_as(concat!(
-        "SELECT c.event, c.dims, sum(c.count)::bigint, count(DISTINCT b.machine_id)
+        "SELECT c.event, c.dims, LEAST(sum(c.count), 9223372036854775807)::bigint, count(DISTINCT b.machine_id)
          FROM counters c JOIN batches b ON b.batch_id = c.batch_id
          WHERE ", in_period!("b.day"), "
          GROUP BY c.event, c.dims ORDER BY c.event, 3 DESC"
@@ -137,10 +157,31 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .fetch_all(&mut *pool)
     .await?;
     let by_bucket: Vec<(String, String, i64, i64)> = sqlx::query_as(concat!(
-        "SELECT c.event, c.bucket, sum(c.count)::bigint, count(DISTINCT b.machine_id)
+        "SELECT c.event, c.bucket, LEAST(sum(c.count), 9223372036854775807)::bigint, count(DISTINCT b.machine_id)
          FROM counters c JOIN batches b ON b.batch_id = c.batch_id
          WHERE ", in_period!("b.day"), " AND c.bucket IS NOT NULL
          GROUP BY c.event, c.bucket ORDER BY c.event"
+    ))
+    .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
+    let logs: Vec<(String, String, String, i64, i64, String, String, Vec<String>)> = sqlx::query_as(concat!(
+        "SELECT l.level, l.target, l.message, LEAST(sum(l.count), 9223372036854775807)::bigint, count(DISTINCT b.machine_id),
+                to_char(min(b.day), 'YYYY-MM-DD'), to_char(max(b.day), 'YYYY-MM-DD'), array_agg(DISTINCT b.version ORDER BY b.version)
+         FROM logs l JOIN batches b ON b.batch_id = l.batch_id
+         WHERE ", in_period!("b.day"), "
+         GROUP BY l.level, l.target, l.message ORDER BY 5 DESC, 4 DESC LIMIT 300"
+    ))
+    .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
+    // Total de cada evento por dia: as minilinhas dos cartões e os gráficos de uso por dia.
+    // Com as dimensões: a falha por dia inclui a linha que diz erro (ferramenta com erro, passo que falhou).
+    let trend: Vec<(String, String, Json<serde_json::Value>, i64)> = sqlx::query_as(concat!(
+        "SELECT to_char(b.day, 'YYYY-MM-DD'), c.event, c.dims, LEAST(sum(c.count), 9223372036854775807)::bigint
+         FROM counters c JOIN batches b ON b.batch_id = c.batch_id
+         WHERE ", in_period!("b.day"), "
+         GROUP BY b.day, c.event, c.dims ORDER BY b.day"
     ))
     .bind(days)
     .fetch_all(&mut *pool)
@@ -158,6 +199,11 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
             json!({"event": event, "dims": dims.0, "count": count, "machines": machines})).collect::<Vec<_>>(),
         "by_bucket": by_bucket.into_iter().map(|(event, bucket, count, machines)|
             json!({"event": event, "bucket": bucket, "count": count, "machines": machines})).collect::<Vec<_>>(),
+        "logs": logs.into_iter().map(|(level, target, message, count, machines, first, last, versions)| json!({
+            "level": level, "target": target, "message": message, "count": count, "machines": machines,
+            "first_day": first, "last_day": last, "versions": versions,
+        })).collect::<Vec<_>>(),
+        "trend": trend.into_iter().map(|(day, event, dims, count)| json!({"day": day, "event": event, "dims": dims.0, "count": count})).collect::<Vec<_>>(),
         "counters": counters.into_iter().map(|(event, dims, bucket, count, machines)|
             json!({"event": event, "dims": dims.0, "bucket": bucket, "count": count, "machines": machines})).collect::<Vec<_>>(),
     }))

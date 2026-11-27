@@ -1343,6 +1343,16 @@ fn build_http_client(redirect_policy: reqwest::redirect::Policy) -> reqwest::Cli
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
+fn loopback_host(preset: Option<&str>) -> &'static str {
+    // Slack permite HTTP no redirecionamento apenas em `localhost` (recusa IP literal `127.0.0.1`).
+    if preset == Some("slack") { "localhost" } else { "127.0.0.1" }
+}
+
+/// Endereço de retorno do OAuth no próprio computador servidor, na porta `port`.
+pub fn loopback_redirect_uri(preset: Option<&str>, port: u16) -> String {
+    format!("http://{}:{port}{OAUTH_CALLBACK_PATH}", loopback_host(preset))
+}
+
 fn resolve_redirect(
     config: &IntegrationConfig,
     input: &OAuthStartInput,
@@ -1352,13 +1362,8 @@ fn resolve_redirect(
             "porta local inválida para callback OAuth".into(),
         ));
     }
-    let loopback_host = if config.preset.as_deref() == Some("slack") {
-        // Slack permite HTTP no redirecionamento apenas em `localhost` (recusa IP literal `127.0.0.1`).
-        "localhost"
-    } else {
-        "127.0.0.1"
-    };
-    let loopback_uri = format!("http://{loopback_host}:{}{OAUTH_CALLBACK_PATH}", input.local_port);
+    let loopback_host = loopback_host(config.preset.as_deref());
+    let loopback_uri = loopback_redirect_uri(config.preset.as_deref(), input.local_port);
 
     let requires_loopback = config
         .preset

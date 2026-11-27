@@ -86,6 +86,14 @@ fn csp(html: &str) -> String {
 
 static CSP: LazyLock<[String; 3]> = LazyLock::new(|| [csp(DASHBOARD), csp(LOGIN), csp(JOIN)]);
 
+/// O CSS vai dentro da página: um arquivo à parte ficava no cache do navegador e a página nova
+/// aparecia com o estilo da versão anterior.
+static PAGES: LazyLock<[String; 3]> = LazyLock::new(|| [inline_style(DASHBOARD), inline_style(LOGIN), inline_style(JOIN)]);
+
+fn inline_style(html: &str) -> String {
+    html.replace(r#"<link rel="stylesheet" href="/panel/assets/panel.css">"#, &format!("<style>{STYLE}</style>"))
+}
+
 #[derive(Deserialize)]
 struct Period {
     days: Option<i32>,
@@ -109,8 +117,7 @@ pub fn router(pool: PgPool) -> Router {
     let state = Panel { pool, limiter: Arc::new(Limiter::new()) };
     Router::new()
         .route("/panel", get(home))
-        .route("/panel/join", get(|| async { page(JOIN, 2) }))
-        .route("/panel/assets/panel.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLE) }))
+        .route("/panel/join", get(|| async { page(2) }))
         .route("/panel/data", get(data))
         .route("/panel/api/me", get(me))
         .route("/panel/api/login", post(login))
@@ -120,11 +127,11 @@ pub fn router(pool: PgPool) -> Router {
         .with_state(state)
 }
 
-fn page(html: &'static str, csp: usize) -> Response {
+fn page(which: usize) -> Response {
     // A página não roda dentro de outro site (clickjacking) e não manda o caminho a links de fora.
-    let mut response = Html(html).into_response();
+    let mut response = Html(PAGES[which].as_str()).into_response();
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&CSP[csp]).expect("CSP em ASCII"));
+    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&CSP[which]).expect("CSP em ASCII"));
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -172,8 +179,8 @@ fn unavailable(what: &str, cause: &sqlx::Error) -> Response {
 
 async fn home(State(panel): State<Panel>, headers: HeaderMap) -> Response {
     match user(&panel.pool, &headers).await {
-        Ok(Some(_)) => page(DASHBOARD, 0),
-        Ok(None) => page(LOGIN, 1),
+        Ok(Some(_)) => page(0),
+        Ok(None) => page(1),
         Err(response) => response,
     }
 }
@@ -336,6 +343,13 @@ mod tests {
         limiter.failed("c@x.com", 5);
         limiter.succeeded("c@x.com");
         assert!(limiter.failures.lock().unwrap().get("c@x.com").is_none(), "acerto zera a conta");
+    }
+
+    #[test]
+    fn pages_carry_their_style_inline() {
+        for page in PAGES.iter() {
+            assert!(page.contains("<style>") && !page.contains("/panel/assets/panel.css"), "o estilo vai dentro da página");
+        }
     }
 
     #[test]

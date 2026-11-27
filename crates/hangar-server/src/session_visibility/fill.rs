@@ -35,11 +35,11 @@ const ABSENT_RETRY: Duration = Duration::from_secs(60);
 static PANE_KEYS: LazyLock<Mutex<HashMap<(String, String), (Option<String>, Instant)>>> = LazyLock::new(Mutex::default);
 
 /// Depois de a rota gravar: uma ausência guardada não pode deixar a marca sem efeito por 60 s.
-pub(super) fn forget(name: &str) {
+pub(crate) fn forget(name: &str) {
     PANE_KEYS.lock().unwrap_or_else(PoisonError::into_inner).retain(|(n, _), _| n != name);
 }
 
-async fn pane_key(mux: &Mux, row: &SessionRow) -> Option<String> {
+pub(crate) async fn pane_key(mux: &Mux, row: &SessionRow) -> Option<String> {
     // Sem vida conhecida ainda se pergunta: a rota (`key_of`) pergunta ao multiplexador do mesmo jeito.
     let id = (row.name.clone(), row.lifecycle_id.clone().unwrap_or_default());
     if let Some((key, at)) = PANE_KEYS.lock().unwrap_or_else(PoisonError::into_inner).get(&id)

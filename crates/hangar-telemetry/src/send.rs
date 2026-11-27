@@ -188,6 +188,7 @@ impl Telemetry {
             day: day.to_owned(),
             env: self.batch_env.clone(),
             counters: file.counters,
+            logs: file.logs,
         };
         // Fora da forma o receptor recusaria sempre: vale como arquivo ilegível.
         if let Err(field) = batch.validate() {
@@ -297,6 +298,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closed_day_carries_its_log_lines() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.log(crate::events::LogLevel::Error, "hangar_server::list", "falhou");
+        fx.next_day();
+        telemetry.save().unwrap();
+        let (up, seen) = receiver(Some(200));
+        assert!(telemetry.send_closed(&up).await.is_empty());
+        let sent = seen.lock().unwrap().clone();
+        assert_eq!(sent[0].logs, vec![crate::wire::LogLine {
+            level: "error".into(), target: "hangar_server::list".into(), message: "falhou".into(), count: 1,
+        }]);
+        assert!(sent[0].validate().is_ok());
+    }
+
+    #[tokio::test]
     async fn refused_batch_is_dropped_and_reported() {
         let fx = Fixture::new();
         let telemetry = fx.start();
@@ -319,6 +336,7 @@ mod tests {
             day: "2026-11-25".into(),
             batch_id: None,
             counters: vec![crate::wire::Counter { event: "Bad".into(), dims: Default::default(), bucket: None, count: 1 }],
+            logs: Vec::new(),
         };
         queue::write_day(fx.home.path(), &bad).unwrap();
 

@@ -82,6 +82,7 @@ pub fn list_sig<'a>(rows: impl IntoIterator<Item = &'a SessionRow>) -> String {
             if let (Value::Array(items), true) = (&mut sig, i.hidden_from_list) { items.push(json!({"hidden_from_list": true})); }
             if let (Value::Array(items), true) = (&mut sig, i.asleep) { items.push(json!({"asleep": true, "wake": i.wake_surface})); }
             if let (Value::Array(items), Some(handoff)) = (&mut sig, i.handoff.as_ref()) { items.push(json!({"handoff": handoff})); }
+            if let (Value::Array(items), true) = (&mut sig, i.auto_continue_off) { items.push(json!({"auto_continue_off": true})); }
             if let (Value::Array(items), false) = (&mut sig, i.ports.is_empty()) { items.push(json!({"ports": i.ports})); }
             sig
         })
@@ -159,6 +160,18 @@ mod tests {
         assert!(serde_json::to_value(&row).unwrap()["handoff"]["state"] == "running");
         row.handoff = None;
         assert!(serde_json::to_value(&row).unwrap().get("handoff").is_none(), "sem troca, o campo não vai ao JSON");
+    }
+
+    #[test]
+    fn the_signature_changes_when_auto_continue_off_changes() {
+        let mut row: SessionRow = serde_json::from_value(json!({"name": "s"})).unwrap();
+        let on = list_sig(&[row.clone()]);
+        row.auto_continue_off = true;
+        assert_ne!(on, list_sig(&[row.clone()]));
+        assert_eq!(serde_json::to_value(&row).unwrap()["auto_continue_off"], json!(true));
+        row.auto_continue_off = false;
+        assert_eq!(on, list_sig(&[row.clone()]), "religado, a assinatura volta à de antes");
+        assert!(serde_json::to_value(&row).unwrap().get("auto_continue_off").is_none(), "ligado, o campo não vai ao JSON");
     }
 
     #[test]

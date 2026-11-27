@@ -532,7 +532,7 @@ describe('sessão caída: reabrir e dispensar', () => {
     vi.mocked(reopenFallenSession).mockResolvedValue({ ok: true });
     const d = createSessionListModel(opts('desktop'));
     expect(await d.reopen('s', 'srv-b', 'o:123:456')).toBe('');
-    expect(vi.mocked(reopenFallenSession).mock.calls[0]).toEqual(['s', expect.objectContaining({ id: 'srv-b' }), 'o:123:456']);
+    expect(vi.mocked(reopenFallenSession).mock.calls[0]).toEqual(['s', expect.objectContaining({ id: 'srv-b' }), { lifecycleId: 'o:123:456' }]);
     expect(selectServer).not.toHaveBeenCalled();
     expect(d.isReopening('s', 'srv-b')).toBe(false);
   });

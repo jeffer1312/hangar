@@ -837,6 +837,8 @@ fn guest_rows<'a>(rows: impl IntoIterator<Item = &'a SessionRow>, guest: &Guest)
         (r.pair_external, r.pair_externals, r.then_target) = (None, None, None);
         // Renomear pela sugestão é do dono.
         (r.rename_suggestion, r.rename_weak) = (None, false);
+        // O interruptor do continuar sozinho também.
+        r.auto_continue_off = false;
         // Ocultar é organização da lista do dono.
         r.hidden_from_list = false;
         // As portas são da máquina do dono: o túnel não atende convidado.

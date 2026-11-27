@@ -2256,10 +2256,10 @@ impl Hangar {
         let dirty = s.dirty();
         let blocked = s.provider_missing_key();
         if !is_server_page(page) || s.load.loading || s.fields.is_empty() || !(dirty || s.saving || s.saved.is_some()) { return None; }
-        // O botão fica na mesma coluna de 720px do conteúdo, não na borda da janela.
+        // O botão fica na coluna da página (`page_column`), alinhado ao conteúdo, não na borda da janela.
         // O erro do Salvar mora aqui, junto do botão, e não no fim da página: no Avançado ele ficava abaixo do `.env`, fora
         // da vista de quem clicou Salvar no topo. O web o põe no fim da coluna, que lá é curta.
-        let column = div().w(px(720.)).max_w_full().px_4().flex().items_center().justify_end().gap(px(12.))
+        let column = super::settings::page_column(div()).flex().items_center().justify_end().gap(px(12.))
             .when_some(s.save_error.clone(), |el, error| el.child(div().id("server-config-error").flex_1().min_w_0().truncate().text_right()
                 .text_size(px(12.5)).text_color(theme::danger()).child(error.clone())
                 .tooltip(move |window, cx| Tooltip::new(error.clone()).build(window, cx))))

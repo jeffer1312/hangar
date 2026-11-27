@@ -9,7 +9,7 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use common::{Answer, FakeHost, FakeServer, Home, Reply, Route, plain_host};
+use common::{Answer, FakeHost, FakeServer, Home, Reply, Route, peer_host, plain_host};
 
 /// Servidor que responde 301 para outro endereço a toda conexão.
 fn redirecting(to: u16) -> u16 {
@@ -27,16 +27,6 @@ fn redirecting(to: u16) -> u16 {
     port
 }
 
-fn peer_host(id: &str, base: &str) -> FakeHost {
-    let answer = |stdout: String| Answer { stdout, ..Answer::default() };
-    let server = BTreeMap::from([
-        (format!("peers config {id}"), answer(format!("{base}\ttok-{id}\n"))),
-        ("peers path".to_owned(), answer("/nao/existe/peers.json\n".into())),
-    ]);
-    let tmux = BTreeMap::from([("*".to_owned(), Answer { rc: 1, ..Answer::default() })]);
-    FakeHost::new(Some(server), tmux)
-}
-
 /// O curl não seguia redirecionamento: o 301 da outra máquina é a resposta, e o token não vai a outro lugar.
 #[test]
 fn redirect_from_a_peer_is_reported_not_followed() {
@@ -49,16 +39,17 @@ fn redirect_from_a_peer_is_reported_not_followed() {
     assert!(elsewhere.requests().is_empty(), "o redirecionamento foi seguido");
 }
 
-/// `API_TIMEOUT` encurta o prazo de cada pedido; sem resposta no prazo é o "inacessível" com 2.
+/// `API_TIMEOUT` encurta o prazo de cada pedido; sem resposta no prazo nem conversa legível, o
+/// recado fica incerto (4), e a conferência cabe na janela curta.
 #[test]
 fn api_timeout_from_the_environment_cuts_the_request() {
     let slow = Route { method: "*".into(), prefix: String::new(), replies: vec![Reply { status: 200, body: "{}".into(), delay: 3.0 }] };
     let server = FakeServer::start(vec![slow]);
     let home = Home::new(server.port, "");
     let started = Instant::now();
-    let done = home.run(&["alvo", "oi"], &[("API_TIMEOUT", "0.3")], &plain_host());
+    let done = home.run(&["alvo", "oi"], &[("API_TIMEOUT", "0.3"), ("HANGAR_SEND_CHECK_SECONDS", "0.5")], &plain_host());
     assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
-    assert_eq!(done.code, 2);
+    assert_eq!(done.code, 4);
     assert_eq!(
         done.stderr,
         format!("erro: sem resposta de http://127.0.0.1:{} no prazo — o recado pode ter chegado; confira com hangar-send --list antes de reenviar\n", server.port)

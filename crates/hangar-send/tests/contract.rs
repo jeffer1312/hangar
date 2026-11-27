@@ -120,6 +120,8 @@ fn overrides() -> BTreeMap<&'static str, Override> {
         ("msg__response-not-json", why("R3-D05").code(1).stdout("").stderr(&unreadable_send("alvo"))),
         ("msg__response-empty", why("R3-D05").code(1).stdout("").stderr(&unreadable_send("alvo"))),
         ("msg__ext-pair-send-not-json", why("R3-D05").code(1).stdout("").stderr(&unreadable_send("ana::s1"))),
+        // Servidor daqui fora antes de consultar os pares externos: nada saiu (2), não é recusa (1).
+        ("msg__remote-local-down", why("D14.3").code(2)),
         // `a::b::c` recusado antes de qualquer pedido.
         ("msg__remote-three-parts", why("D14.3").code(2).stdout("")
             .stderr("erro: nome inválido 'a::b::c': use servidor::sessao (um '::' só)\n").no_http()),

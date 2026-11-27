@@ -15,11 +15,12 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use hangar_api::session::SessionRow;
+use hangar_auto_continue::{Ledger, Source, StopKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::AgentProvider;
-use super::restore::Entry;
+use super::restore::{Entry, LiveResume, Resume};
 use crate::routes::{AppState, cors};
 use crate::session_write::{detail_body, json_response, session_name};
 
@@ -59,7 +60,8 @@ impl Fallen {
     /// A entrada da fotografia com que o restore a reabre.
     pub fn entry(&self, name: &str) -> Entry {
         Entry { name: name.to_owned(), provider: self.provider, conversation: self.conversation.clone(),
-            transcript: self.orphan_transcript.clone(), permission_mode: self.permission_mode.clone(), missing_since: None, unit: None }
+            transcript: self.orphan_transcript.clone(), permission_mode: self.permission_mode.clone(), missing_since: None, unit: None,
+            turn_open: false, last_line: None }
     }
 }
 
@@ -182,9 +184,11 @@ fn answer(headers: &HeaderMap, status: StatusCode, body: Value) -> Response {
 }
 
 /// `POST /api/sessions/{name}/reopen`: a caída volta pelo spec, na conversa em que estava (o mesmo
-/// caminho do restore depois do reboot). O registro só sai quando a sessão abriu.
+/// caminho do restore depois do reboot). O registro só sai quando a sessão abriu. `?continue=1` é o
+/// "Reabrir e continuar": com o agente de pé, o texto do reboot vai à sessão pelo registro de continuação.
 pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
+    let continue_turn = crate::auth::query_param(req.uri().query(), "continue").is_some_and(|v| v == "1");
     let owner = match crate::routes::gate(&st, peer, &req).await { Ok((_, owner)) => owner, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return answer(&headers, StatusCode::FORBIDDEN, detail_body("erro_so_dono", "só o dono reabre a sessão", json!({}))); }
     let (Some(name), Some(dirs)) = (session_name(req.uri().path()), st.list.env().dirs.clone()) else {
@@ -214,10 +218,21 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
         let _reopening = reopening;
         let host = super::server::ServerHost::new(st.clone()).await;
         let orphan = (fallen.cause == super::orphans::CAUSE).then_some(&fallen);
-        super::restore::restore_one(&host, &st, &program, &fallen.key, &entry, orphan).await
+        if let Err(code) = super::restore::restore_one(&host, &st, &program, &fallen.key, &entry, orphan).await { return Err(code); }
+        if !continue_turn { return Ok(None); }
+        let continued = match st.auto_continue.get() {
+            Some(auto) => continue_after_reopen(&LiveResume(st.as_ref()), &auto.ledger, &entry.name, &fallen).await,
+            None => Err("auto_continue_unavailable".to_owned()),
+        };
+        Ok(Some(continued))
     });
     match task.await {
-        Ok(Ok(())) => answer(&headers, StatusCode::OK, json!({"ok": true})),
+        Ok(Ok(None)) => answer(&headers, StatusCode::OK, json!({"ok": true})),
+        // A sessão voltou mesmo sem o continue: o código diz por que ele não saiu.
+        Ok(Ok(Some(continued))) => answer(&headers, StatusCode::OK, match continued {
+            Ok(()) => json!({"ok": true, "continued": true}),
+            Err(code) => json!({"ok": true, "continued": false, "code": code}),
+        }),
         Ok(Err(code)) if code == "erro_nome_em_uso" =>
             answer(&headers, StatusCode::CONFLICT, detail_body(&code, "já existe uma sessão com esse nome", json!({}))),
         Ok(Err(code)) if code.starts_with("psmux_orphan_") =>
@@ -226,6 +241,30 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
         Err(error) => {
             tracing::error!(code = "restore_open_failed", %error, session = %name, "a reabertura da sessão caída parou no meio");
             answer(&headers, StatusCode::INTERNAL_SERVER_ERROR, detail_body("restore_open_failed", "a sessão não reabriu", json!({})))
+        }
+    }
+}
+
+/// O continue do "Reabrir e continuar": só pelo clique, com o texto do reboot (o turno pode ter sido cortado no
+/// meio de um comando). Os tetos do registro valem; a chave é a queda, então a mesma queda continua uma vez.
+pub(crate) async fn continue_after_reopen(resume: &dyn Resume, ledger: &std::sync::Mutex<Ledger>, name: &str, fallen: &Fallen) -> Result<(), String> {
+    let key = format!("fallen:{}:{}", fallen.key, fallen.died_at);
+    let lock = || ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let allowed = lock().allow(name, Source::OomButton, &key, StopKind::Other, resume.now());
+    if let Err(cap) = allowed {
+        let code = format!("auto_continue_capped:{}", cap.code());
+        resume.diary(name, &code, "reabrir e continuar: um teto do registro barrou");
+        return Err(code);
+    }
+    match resume.send(name, hangar_auto_continue::text::REBOOT).await {
+        Ok(()) => {
+            lock().record(name, Source::OomButton, &key, StopKind::Other, resume.now());
+            resume.diary(name, "auto_continue_sent", "reabrir e continuar: o turno cortado seguiu");
+            Ok(())
+        }
+        Err(code) => {
+            resume.diary(name, &format!("auto_continue_failed:{code}"), "reabrir e continuar: o envio do continue foi recusado");
+            Err(code)
         }
     }
 }
@@ -449,6 +488,51 @@ mod tests {
         drop(first);
         assert!(!Reopening::active("reabre-um"));
         assert!(Reopening::begin("reabre-um").is_some());
+    }
+
+    #[derive(Default)]
+    struct FakeResume { sent: std::sync::Mutex<Vec<(String, String)>>, diary: std::sync::Mutex<Vec<String>>, refuse: bool }
+
+    impl Resume for FakeResume {
+        fn send<'a>(&'a self, name: &'a str, text: &'a str) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
+            self.sent.lock().unwrap().push((name.to_owned(), text.to_owned()));
+            let refuse = self.refuse;
+            Box::pin(async move { if refuse { Err("erro_envio_falhou".to_owned()) } else { Ok(()) } })
+        }
+        fn note<'a>(&'a self, _name: &'a str, _id: &'a str, _call: &'a str, _text: String, _meta: Value) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn diary(&self, _name: &str, code: &str, _reason: &'static str) { self.diary.lock().unwrap().push(code.to_owned()); }
+        fn now(&self) -> f64 { 2_000_000.0 }
+        fn hhmm(&self, _at: f64) -> String { String::new() }
+    }
+
+    /// "Reabrir e continuar": a mesma queda continua uma vez, também depois de reiniciar o servidor; outra queda
+    /// (inclusive a que não foi falta de memória) continua; o envio recusado não gasta a vez.
+    #[tokio::test]
+    async fn reopen_with_continue_sends_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = std::sync::Mutex::new(Ledger::load(hangar_auto_continue::ledger::path(dir.path())));
+        let fake = FakeResume::default();
+        let fall = oom("k1");
+        assert_eq!(continue_after_reopen(&fake, &ledger, "s1", &fall).await, Ok(()));
+        assert_eq!(continue_after_reopen(&fake, &ledger, "s1", &fall).await, Err("auto_continue_capped:once".to_owned()), "o mesmo clique de novo");
+        let reloaded = std::sync::Mutex::new(Ledger::load(hangar_auto_continue::ledger::path(dir.path())));
+        assert_eq!(continue_after_reopen(&fake, &reloaded, "s1", &fall).await, Err("auto_continue_capped:once".to_owned()),
+            "o registro em disco vale depois de reiniciar");
+        let other = Fallen { died_at: 20.0, cause: "signal".into(), ..oom("k1") };
+        assert_eq!(other.problem(), OTHER);
+        assert_eq!(continue_after_reopen(&fake, &reloaded, "s1", &other).await, Ok(()), "outra queda; terminal_died também aceita");
+        assert_eq!(*fake.sent.lock().unwrap(), [("s1".to_owned(), hangar_auto_continue::text::REBOOT.to_owned()),
+            ("s1".to_owned(), hangar_auto_continue::text::REBOOT.to_owned())]);
+        assert_eq!(*fake.diary.lock().unwrap(), ["auto_continue_sent", "auto_continue_capped:once", "auto_continue_capped:once", "auto_continue_sent"]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = std::sync::Mutex::new(Ledger::load(hangar_auto_continue::ledger::path(dir.path())));
+        let refused = FakeResume { refuse: true, ..FakeResume::default() };
+        assert_eq!(continue_after_reopen(&refused, &ledger, "s1", &fall).await, Err("erro_envio_falhou".to_owned()));
+        assert_eq!(*refused.diary.lock().unwrap(), ["auto_continue_failed:erro_envio_falhou"]);
+        assert_eq!(continue_after_reopen(&fake, &ledger, "s1", &fall).await, Ok(()), "o envio recusado não gastou a vez");
     }
 
     #[test]

@@ -36,7 +36,8 @@ async fn a_real_psmux_orphan_can_be_recovered_and_dismissed() {
         std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
         std::fs::write(&transcript, "{}\n").unwrap();
         let entry = restore::Entry { name: name.into(), provider: AgentProvider::Claude, conversation: Some(conversation.into()),
-            transcript: Some(transcript.to_string_lossy().into_owned()), permission_mode: Some("acceptEdits".into()), missing_since: None, unit: None };
+            transcript: Some(transcript.to_string_lossy().into_owned()), permission_mode: Some("acceptEdits".into()), missing_since: None, unit: None,
+            turn_open: false, last_line: None };
         let snapshot = restore::Snapshot { mux_started: None, sessions: [(key.into(), entry)].into() };
         let key_env = format!("CP_SESSION_KEY={key}");
         let launch = [

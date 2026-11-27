@@ -430,6 +430,25 @@ Decisão de desenho de 2026-07-30, vale
   Tailscale no servidor). O interruptor nunca muda sozinho: `checked` é o dado, o `onchange` repõe
   o dado e chama a ação, e a ação confirmada é quem muda a lista.
 
+## Configurações do nativo ocupam a largura do painel (27/11/2026)
+
+Decisão do dono: as páginas de configuração do app nativo usam a largura que o painel ao lado da
+navegação tem. Antes, `render_settings` (`desktop-native/src/app/settings.rs`) centralizava uma
+coluna fixa de 720 px (1040 em Servidores, 960 no artigo do Manual, largura toda só em Status,
+Agentes e Contas), e a mesma largura se repetia na faixa de abas e no rodapé do Salvar
+(`server_config.rs`). Numa janela de 1920 px sobravam cerca de 400 px vazios de cada lado.
+
+- A coluna de toda página sai de `page_column` (largura toda, recuo de 20 px, o mesmo que
+  Status e Contas já usavam). Página nova não define largura: nasce assim.
+- Texto corrido mantém largura de leitura: `READING_WIDTH` (720 px) limita a explicação de
+  `page_top`, o subtítulo de `section_head` e a descrição de `setting_row`. Caixas, listas,
+  tabelas e controles não têm teto.
+- O artigo do Manual é texto do começo ao fim: fica em `READING_WIDTH` (960 com o
+  "Nesta página" ao lado).
+- Fica de fora, sem teto de leitura: cabeçalhos montados à mão em cada página (título + linha
+  de explicação próprios) e textos vindos de fora, como a descrição dos plugins. As quebras de
+  Contas e Servidores continuam lendo a largura da janela, não a do painel.
+
 ## Bloco rolável dentro da conversa é `position: relative`, ou o `.sr-only` dele vaza pra lista
 
 
@@ -1394,3 +1413,68 @@ textura de trás.
   que os TTFs.
 - Trocar a Geist pela Inter não mudaria a legibilidade: a 14 px as duas quase não se distinguem.
   A Inter é opção de Aparência, não a fonte padrão.
+
+## Envio que não saiu e envio incerto (27/11/2026)
+
+O `/input` que falha cai em dois baldes: **recusa** (o texto volta ao campo, reenviar é seguro) e
+**incerto** (pode ter chegado; o aviso pede conferir antes de reenviar). Antes, conexão que nem
+abriu e 503 com código do servidor caíam no incerto, e o aviso ficava na tela mesmo depois de a
+mensagem aparecer na conversa.
+
+Medição nesta máquina: 7 dias de diário de uso, 0 envios incertos em 1.695 mensagens recebidas;
+60 dias de transcripts, 0 mensagens duplicadas por falha de envio. O conserto é de correção da
+regra, não de volume: por isso a chave de envio (idempotência) ficou de fora.
+
+- **Recusa só com prova de que nada foi gravado.** Conexão que não abriu (nativo:
+  `reqwest::Error::is_connect() || is_builder()`, em `input_not_sent`), 4xx exceto 408 (prazo
+  vencido no meio do caminho) e 503 com um código da lista abaixo. Todo o resto continua incerto:
+  corte depois de conectar, 5xx sem código, 502/504 de proxy, 200 ilegível, 503 com código fora
+  da lista. A regra tem duas cópias que mudam juntas: `input_not_sent` + `settle_input_refusal`
+  (`desktop-native/src/api/mod.rs`) e `isInputRefusal` (`packages/core/src/api.ts`), cada uma com
+  a lista `INPUT_REFUSED_BEFORE_WRITE`.
+- **Os 503 conferidos em `crates/hangar-server/src/session_write/`**, todos devolvidos antes de
+  qualquer escrita na fila ou no agente:
+
+  | Código | De onde sai |
+  |---|---|
+  | `server_starting` | `startup::guard` (`{"detail":"server_starting"}`, texto no `detail`) |
+  | `runtime_unhealthy` | `route_write` com a entrada doente (`mod.rs`) |
+  | `runtime_unavailable` | `no_runtime`, servidor sem o registro de sessões (`mod.rs`) |
+  | `runtime_watcher` | fila da sessão que abre ou adormecida sem registro (`input.rs`), `bridge.rs` |
+  | `orq_runs_unavailable` | `orchestration_guard` sem conseguir ler as execuções (`mod.rs`) |
+  | `codex_terminal_unadopted` | Codex com terminal adotado que fechou em seguida (`route_write`) |
+  | `codex_sidecar_invalid`, `claude_sidecar_invalid`, `antigravity_sidecar_invalid` | arquivo de sessão sem dono no Rust (`unowned.rs`) |
+  | `erro_lista_indisponivel`, `erro_mux_indisponivel` | lista ou multiplexador fora ao procurar a sessão (`unowned.rs`) |
+
+- **Exceção: `runtime_reply_lost` fica incerto.** As filas da sessão adormecida ou que ainda abre
+  (`queue_while_asleep`, `queue_opening` em `input.rs`) devolvem 503 com o código do ator, e esse
+  código (`runtime/protocol.rs`) pode vir depois de a linha ter sido gravada. Pelo mesmo motivo a
+  lista é fechada: código novo de ator (`other_terminal_life_changed`, `queue_io`) nunca vira
+  recusa sem ser conferido aqui.
+- **O incerto some sozinho quando a conversa mostra a mensagem.** Vale uma `user_msg` com id fora
+  do que estava na tela no Enter, que não começa com `queued-` (a linha da fila não prova entrega),
+  com o mesmo texto (`matches_real` no nativo, `sameMessage` no Expo) e `ts >= Enter − 30 s` (folga
+  para relógio adiantado). Sem `ts` (fala comum do Claude), só vale quando o histórico já estava
+  carregado no Enter e não havia outra mensagem igual a caminho nem no painel "Na fila" (salvo no
+  reenvio do próprio incerto). Igual mandado de outro aparelho e ainda sem eco não aparece em nenhum
+  dos dois: o primeiro eco sem `ts` dele também prova. Cada prova sem `ts` deixa uma linha no
+  `native.log` (sem texto nem nome), para separar esse caso depois. No nativo (`desktop-native/src/delivery.rs`) o texto que voltou ao campo sai
+  dele só se ninguém o mexeu, como no Expo (`mobile/src/stores/chat.ts`).
+- **Expo: queda de rede continua incerta.** O `fetch` do React Native não separa conexão recusada
+  de corte no meio; só o 503 com código passou a ser recusa, e só no `/input`: o 503 do `/steer`
+  continua incerto. `sendInputForServer` e o `request` de `mobile/src/chat/queueDelivery.ts` põem
+  `code` no erro (`failureWithCode`).
+- **`hangar-send` cortado confere na conversa do destino, nunca reenvia.** Lê
+  `/history?limit=40` no mesmo servidor e token do envio, por `HANGAR_SEND_CHECK_SECONDS` (padrão
+  6 s): prova é a fala do mesmo remetente (com ou sem o `servidor::` de quem recebe) e mesmo texto
+  com hora `>= início − 30 s`, a `ts` da fala ou, na linha `queued-…`, a `queued_ts` da entrada
+  na fila; o mesmo texto de outro remetente é outro recado, e fala igual sem hora não prova e deixa
+  incerto (4). Servidor daqui fora antes de consultar os pares externos sai 2, como os outros
+  "nada saiu". Saída 0 "chegou" e 4 em todo o resto (não apareceu na janela, fala igual sem `ts`,
+  conversa ilegível, par externo). Não há saída "não chegou": o corte vem depois de o pedido sair, e
+  o servidor ocupado (ator, fila que abre, trava da sessão) pode gravar o recado depois da janela.
+
+Fora do conserto, notado: sem terminal, `Disposition::Unknown` ou `runtime_reply_lost` no
+`session_write/input.rs` volta 400 `erro_envio_falhou`, que os clientes tratam como recusa (0 casos
+nos 7 dias); e o `SEND_TIMEOUT_S = 30` do `skills/orquestrar/scripts/orq.py` mata o `hangar-send`
+antes da conferência.

@@ -398,6 +398,9 @@ fn problem_banner(state: &SessionState, panel_stalled: bool) -> Option<String> {
     // O painel "Na fila" já mostra a entrega parada, com o Reabrir.
     if panel_stalled && state.problema.as_deref() == Some(STALLED) { return None; }
     let code = state.problema.as_deref().filter(|code| !code.trim().is_empty());
+    if code == Some("limit_switch_failed") && let Some(text) = state.problema_detalhe.as_deref().and_then(auto_continue_capped_text) {
+        return Some(text);
+    }
     match code.and_then(problem_text) {
         Some(text) => Some(match state.problema_detalhe.as_deref().and_then(|d| d.lines().next()).filter(|d| !d.trim().is_empty()) {
             Some(detail) => format!("{text} — {detail}"),
@@ -409,6 +412,13 @@ fn problem_banner(state: &SessionState, panel_stalled: bool) -> Option<String> {
 
 /// A frase do web para o código de problema, se houver.
 fn problem_text(code: &str) -> Option<String> { crate::i18n::tr_web(&format!("problema_{code}"), &HashMap::new()) }
+
+/// Um teto do continuar sozinho barrou (`auto_continue_capped`, ou com `:<teto>`): a frase do teto, nunca o código cru.
+/// Teto sem frase própria fica com a geral.
+fn auto_continue_capped_text(detail: &str) -> Option<String> {
+    let cap = detail.trim().strip_prefix("auto_continue_capped").filter(|cap| cap.is_empty() || cap.starts_with(':'))?;
+    problem_text(&format!("auto_continue_capped{}", cap.replace(':', "_"))).or_else(|| problem_text("auto_continue_capped"))
+}
 
 /// O `list_error` da lista sobre o erro mostrado: aviso só sem linha nenhuma na tela. Com a lista anterior de pé,
 /// uma rodada que falhou é diagnóstico (a próxima costuma voltar) e vai ao log (o `native.log`: lançado pelo
@@ -2525,7 +2535,9 @@ impl Hangar {
                         self.etag = history.etag;
                         if let Some(events) = history.events {
                             self.has_older = limit > 0 && events.len() >= limit;
-                            if let Some(key) = self.selected_key() { self.delivery.confirm_history(&key, &events); }
+                            if let Some(key) = self.selected_key() && let Some(arrived) = self.delivery.confirm_history(&key, &events) {
+                                self.uncertain_arrived(&key, arrived, window, cx);
+                            }
                             self.chat.merge_history(events);
                             api::open_trace(|| "history merged".into());
                             if self.chat.preview.text.is_empty() {
@@ -2750,6 +2762,7 @@ impl Hangar {
             self.send_settled(&key, &text, delivered, cx);
         }
         if !self.delivery.complete(&key, &text, outcome) { return; }
+        self.log_untimed_proofs();
         if let Some(note) = result.as_ref().ok().and_then(|d| d.timing_note.as_deref()) {
             let (message, warning) = match note {
                 "direct" => ("queue_jev_direct", false),
@@ -2791,26 +2804,8 @@ impl Hangar {
         let current = self.selected_key().as_ref() == Some(&key);
         let confirmed = self.delivery.outcome(&key).is_none();
         if result.is_ok() || confirmed {
-            if let Some(field) = history { self.input_history.entry(key.clone()).or_default().record(&field); }
             // O que saiu do campo no Enter já não está nele: o que estiver lá agora é texto novo, mesmo que igual.
-            if typed.is_none() {
-                if self.drafts.get(&key).is_some_and(|saved| saved == &draft) { self.drafts.remove(&key); }
-                if current && !draft.is_empty() && self.composer.read(cx).value().as_ref() == draft {
-                    self.composer.update(cx, |input, cx| input.set_value("", window, cx));
-                }
-            }
-            // Só os anexos que subiram nesta mensagem saem; um anexado depois continua no campo.
-            if let Some(list) = self.attachments.get_mut(&key) {
-                let mut gone = Vec::new();
-                list.retain(|a| {
-                    let keep = !matches!(&a.state, AttachState::Uploaded(up) if text.contains(&up.path));
-                    if !keep { gone.extend(a.image.clone()); }
-                    keep
-                });
-                if list.is_empty() { self.attachments.remove(&key); }
-                for image in gone { release_image(image, window, cx); }
-            }
-            self.sent_context_refs(&key, &text);
+            self.clear_sent(&key, history, typed.is_none().then_some(&draft), &text, window, cx);
             // Quem esperava este envio sai agora, na ordem em que foi mandado.
             if let Some((next, field, steer, group)) = self.delivery.next_held(&key) {
                 let known = if current { self.known_event_ids() } else { HashSet::new() };
@@ -3068,7 +3063,7 @@ impl Hangar {
             return (true, Changed::Nothing);
         }
         if self.in_tab_preview {
-            self.apply_preview_update(update,cx);
+            self.apply_preview_update(update,window,cx);
             return (true,Changed::Rows);
         }
         // Estado não mexe nos eventos: redesenha (chip, "em execução") sem refazer a conversa.
@@ -3092,7 +3087,7 @@ impl Hangar {
                 if self.chat.events.iter().any(|known| known.id == event.id) { self.chat.apply(event); }
             }
             ChatUpdate::Message(event) => {
-                self.confirm_chat_message(&event);
+                self.confirm_chat_message(&event, window, cx);
                 // O primeiro pedido feito com a conversa aberta também vale para a sugestão de nome.
                 let asked = event.kind == "user_msg" && !event.queued();
                 self.chat.apply(event);
@@ -3415,9 +3410,53 @@ impl Hangar {
         self.chat.events.iter().map(|event| event.id.clone()).collect()
     }
 
-    fn confirm_chat_message(&mut self, event: &ChatEvent) {
-        if event.kind == "user_msg" && let (Some(key), Some(text)) = (self.selected_key(), event.text.as_deref()) {
-            self.delivery.confirm_real(&key, &event.id, text);
+    fn confirm_chat_message(&mut self, event: &ChatEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.kind == "user_msg" && let (Some(key), Some(text)) = (self.selected_key(), event.text.as_deref())
+            && let Some(arrived) = self.delivery.confirm_real(&key, &event.id, event.ts, text) {
+            self.uncertain_arrived(&key, arrived, window, cx);
+        }
+    }
+
+    /// O envio saiu: o histórico ganha o texto, e o rascunho, o campo, as citações e os anexos que ainda o guardam
+    /// (iguais) saem.
+    fn clear_sent(&mut self, key: &SessionKey, history: Option<String>, draft: Option<&String>, text: &str, window: &mut Window,
+        cx: &mut Context<Self>) {
+        if let Some(field) = history { self.input_history.entry(key.clone()).or_default().record(&field); }
+        if let Some(draft) = draft {
+            if self.drafts.get(key).is_some_and(|saved| saved == draft) { self.drafts.remove(key); }
+            let current = self.selected_key().as_ref() == Some(key);
+            if current && !draft.is_empty() && self.composer.read(cx).value().as_ref() == draft {
+                self.composer.update(cx, |input, cx| input.set_value("", window, cx));
+            }
+        }
+        self.sent_context_refs(key, text);
+        // Só os anexos que subiram nesta mensagem saem; um anexado depois continua no campo.
+        if let Some(list) = self.attachments.get_mut(key) {
+            let mut gone = Vec::new();
+            list.retain(|a| {
+                let keep = !matches!(&a.state, AttachState::Uploaded(up) if text.contains(&up.path));
+                if !keep { gone.extend(a.image.clone()); }
+                keep
+            });
+            if list.is_empty() { self.attachments.remove(key); }
+            for image in gone { release_image(image, window, cx); }
+        }
+    }
+
+    /// O envio incerto apareceu na conversa: o aviso já saiu do registro, e o texto que voltou ao campo sai se
+    /// ninguém o mexeu.
+    fn uncertain_arrived(&mut self, key: &SessionKey, arrived: crate::delivery::Arrived, window: &mut Window, cx: &mut Context<Self>) {
+        self.log_untimed_proofs();
+        self.clear_sent(key, arrived.history, Some(&arrived.field), &arrived.text, window, cx);
+        self.sync_working_row(cx);
+        self.redraw(panes::Area::Bottom, cx);
+        cx.notify();
+    }
+
+    /// Sem texto nem nome: só o rastro de que a prova foi uma linha sem horário, que outro aparelho também daria.
+    fn log_untimed_proofs(&mut self) {
+        for _ in 0..self.delivery.take_untimed_proofs() {
+            crate::log_line("envio: incerto dado por chegado por uma linha sem horário na conversa");
         }
     }
 
@@ -3624,9 +3663,11 @@ impl Hangar {
             cx.notify();
             return false;
         };
-        if !self.delivery.begin(key.clone(), text.clone(), known) { cx.notify(); return false; }
-        // O `/steer` do Claude com terminal ignora o texto; `/input` orienta somente a entrada deste envio.
         let selected = self.selected_key().as_ref() == Some(&key);
+        // Só a conversa aberta tem o painel "Na fila" à vista; a de fora vai sem histórico conhecido.
+        let queued: Vec<String> = if selected { self.chat.queue_panel().entries.iter().map(|e| e.text.clone()).collect() } else { Vec::new() };
+        if !self.delivery.begin_beside(key.clone(), text.clone(), known, &queued) { cx.notify(); return false; }
+        // O `/steer` do Claude com terminal ignora o texto; `/input` orienta somente a entrada deste envio.
         let kind = self.sessions_of(&key.server).iter().find(|s| s.name == key.name).map(|s| (s.provider == "claude", s.headless))
             .or_else(|| selected.then(|| { let (provider, headless) = self.provider(); (provider == "claude", headless) }));
         let terminal_claude = steer == SendTiming::Direct && kind == Some((true, false));
@@ -8407,13 +8448,17 @@ impl Hangar {
             if sidebar::fallen(selected) {
                 // Sem transcript não há stream nem faixa de problema: a frase vem da linha da lista, com o Reabrir.
                 let target = sidebar::Target::new(&self.open_server(), &selected.name);
-                let lifecycle = selected.lifecycle_id.clone();
                 let busy = self.sidebar.reopening.contains(&target);
-                let label = if busy { format!("{}…", tr("session_reopen")) } else { tr("session_reopen") };
+                let buttons: Vec<Button> = sidebar::reopen_choices(selected).iter().map(|choice| {
+                    let (target, continue_turn, life) = (target.clone(), choice.continues(), selected.lifecycle_id.clone());
+                    let label = if busy { format!("{}…", choice.label()) } else { choice.label() };
+                    Button::new(if continue_turn { "fallen-reopen-continue" } else { "fallen-reopen" }).small().when(continue_turn, |b| b.outline())
+                        .label(label).disabled(busy)
+                        .on_click(cx.listener(move |this, _, _, cx| this.reopen_with(target.clone(), continue_turn, life.clone(), cx)))
+                }).collect();
                 content = content.child(div().flex_1().p_6().flex().flex_col().items_start().gap_3().text_sm().text_color(theme::warning())
                     .child(selected.problema.as_deref().and_then(problem_text).unwrap_or_default())
-                    .child(Button::new("fallen-reopen").small().label(label).disabled(busy)
-                        .on_click(cx.listener(move |this, _, _, cx| this.reopen_target(target.clone(), lifecycle.clone(), cx)))));
+                    .child(div().flex().items_center().gap_2().children(buttons)));
             } else if let Some(card) = prethread {
                 content = content.child(card);
             } else if selected.waiting_for_first_input() {
@@ -10031,6 +10076,21 @@ mod tests {
         assert_eq!(problem_banner(&state, false).unwrap(), "codigo_sem_frase");
         state.problema = None;
         assert!(problem_banner(&state, false).is_none());
+    }
+
+    #[test]
+    fn problem_banner_auto_continue_capped_uses_the_text_of_the_cap() {
+        use super::{problem_banner, SessionState};
+        crate::i18n::english_in_this_thread(false);
+        let capped = |detail: &str| SessionState { problema: Some("limit_switch_failed".into()), problema_detalhe: Some(detail.into()), ..Default::default() };
+        assert_eq!(problem_banner(&capped("auto_continue_capped"), false).unwrap(),
+            "Continuei sozinho 2 vezes seguidas sem resposta e parei para não virar laço. Mande uma mensagem para seguir.");
+        assert_eq!(problem_banner(&capped("auto_continue_capped:hourly"), false).unwrap(),
+            "Já continuei sozinho 3 vezes na última hora e parei para não virar laço. Mande uma mensagem para seguir.");
+        assert_eq!(problem_banner(&capped("auto_continue_capped:server_5xx"), false), problem_banner(&capped("auto_continue_capped"), false),
+            "teto sem frase própria fica com a geral");
+        let other = problem_banner(&capped("reopen_failed"), false).unwrap();
+        assert!(other.ends_with(" — reopen_failed"), "outra falha da troca segue com o detalhe: {other}");
     }
 
     #[test]

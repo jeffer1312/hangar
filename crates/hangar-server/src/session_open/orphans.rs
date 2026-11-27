@@ -211,6 +211,7 @@ mod tests {
         let snapshot = super::super::restore::Snapshot { mux_started: None, sessions: [(key.into(), super::super::restore::Entry {
             name: "hangar".into(), provider: AgentProvider::Claude, conversation: Some(conversation.into()),
             transcript: Some(transcript.to_string_lossy().into_owned()), permission_mode: Some("acceptEdits".into()), missing_since: None, unit: None,
+            turn_open: false, last_line: None,
         })].into() };
         let orphan = Orphan { name: "hangar".into(), pid: 9032 };
         let diary = home.path().join("diary");
