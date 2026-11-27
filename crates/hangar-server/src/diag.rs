@@ -9,6 +9,8 @@ use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::response::Response;
+use hangar_telemetry::Telemetry;
+use hangar_telemetry::events::{Dims, Event};
 use serde_json::{Value, json};
 
 pub use hangar_core::diag::*;
@@ -55,7 +57,8 @@ async fn reply(st: &AppState, peer: SocketAddr, req: Request) -> Response {
     }
     let base = diary_base(st);
     if req.method() == Method::POST {
-        return record_screen_events(base, req).await;
+        let telemetry = screen_telemetry(st, &req, guest);
+        return record_screen_events(base, req, telemetry).await;
     }
     // O pedido não atravessa a espera: `&Request` tiraria o `Send` do handler.
     let (headers, query) = (req.headers().clone(), req.uri().query().map(str::to_owned));
@@ -76,7 +79,12 @@ fn diary_base(st: &AppState) -> Option<PathBuf> {
     Some(base.join("diario"))
 }
 
-async fn record_screen_events(base: Option<PathBuf>, req: Request) -> Response {
+/// Só o lote do dono conta: o convidado vai ao diário, mas não aceitou a telemetria.
+fn screen_telemetry(st: &AppState, req: &Request, guest: bool) -> Option<Arc<Telemetry>> {
+    st.telemetry.clone().filter(|t| t.enabled() && !guest && !crate::telemetry_routes::guest(req))
+}
+
+async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Option<Arc<Telemetry>>) -> Response {
     let body = match hangar_core::http_body_limit::read(req.into_body()).await {
         Ok(body) => body,
         Err(error) if hangar_core::http_body_limit::is_limit(&error) => return hangar_core::http_body_limit::rejected(),
@@ -84,9 +92,16 @@ async fn record_screen_events(base: Option<PathBuf>, req: Request) -> Response {
         Err(_) => return hangar_core::http_cors::json_guarded(StatusCode::OK, json!({"gravadas": 0})),
     };
     let now = chrono::Local::now().fixed_offset();
-    let written = tokio::task::spawn_blocking(move || match base {
-        Some(base) => hangar_usage_diary::record_screen(&base, &body, now),
-        None => Ok(0),
+    let written = tokio::task::spawn_blocking(move || {
+        let written = match base {
+            Some(base) => hangar_usage_diary::record_screen(&base, &body, now),
+            None => Ok(0),
+        };
+        // Só o que o diário gravou: o lote recusado a tela reenvia, e contaria duas vezes.
+        if let (Ok(accepted), Some(telemetry)) = (&written, &telemetry) {
+            crate::telemetry_routes::count_screen(telemetry, &body, *accepted);
+        }
+        written
     }).await;
     match written {
         Ok(Ok(count)) => hangar_core::http_cors::json_guarded(StatusCode::OK, json!({"gravadas": count})),
@@ -405,11 +420,14 @@ fn life_alive(pid: u32, birth: f64) -> bool {
 }
 
 /// Pronto para atender: a marca de pé desta vida. Sem ela gravada, a queda desta vida não é contada.
-pub fn record_running(hangar_dir: &std::path::Path, health: std::net::SocketAddr) {
+pub fn record_running(hangar_dir: &std::path::Path, health: std::net::SocketAddr, telemetry: Option<&Telemetry>) {
     let pid = std::process::id();
     let birth = crate::terminal_facts::agent_birth(pid);
     let line = match hangar_boot::life::mark_running(hangar_dir, pid, birth, Some(health), &iso(chrono::Local::now()), life_alive) {
-        Ok(hangar_boot::life::Mark::Marked) => return,
+        Ok(hangar_boot::life::Mark::Marked) => {
+            count_startup(telemetry, birth, hangar_core::clock::wall_now());
+            return;
+        }
         Ok(hangar_boot::life::Mark::Held(holder)) => {
             tracing::warn!(code = "server_life_held", holder, "outro hangar-server de pé neste HOME segura a marca de pé; a queda desta vida não será contada");
             json!({"evento": "hangar_server.vida_ocupada", "nivel": "aviso", "codigo": "server_life_held", "pid_de_pe": holder})
@@ -418,6 +436,14 @@ pub fn record_running(hangar_dir: &std::path::Path, health: std::net::SocketAddr
             "codigo": "server_life_unwritable", "tipo": format!("{:?}", error.kind())}),
     };
     record_blocking(diary_dir().as_deref(), &[line], "subida");
+}
+
+/// Do nascimento do processo até a marca de pé, em faixa.
+fn count_startup(telemetry: Option<&Telemetry>, birth: Option<f64>, now: f64) {
+    let (Some(telemetry), Some(birth)) = (telemetry, birth) else { return };
+    if let Ok(took) = Duration::try_from_secs_f64(now - birth) {
+        telemetry.duration(Event::ServerStartup, Dims::new(), took);
+    }
 }
 
 /// Saída deliberada (sinal, falha do servidor): a marca de pé desta vida sai com a causa, e a
@@ -480,6 +506,54 @@ fn memory() -> Result<(u64, u64), &'static str> {
     let mut system = sysinfo::System::new();
     system.refresh_memory();
     Ok((system.total_memory() / (1024 * 1024), system.available_memory() / (1024 * 1024)))
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+    use hangar_telemetry::buckets::Bucket;
+    use hangar_telemetry::events::ClientKind;
+    use hangar_telemetry::wire::Counter;
+
+    const BATCH: &str = r#"{"eventos": [{"evento": "app.tempo", "ms": 900000, "cliente": "ios"}]}"#;
+
+    fn post(guest: bool) -> Request {
+        let mut req = axum::http::Request::builder().method(Method::POST).uri("/api/diag").header("content-type", "application/json");
+        if guest { req = req.header("x-hangar-guest", "1"); }
+        req.body(Body::from(BATCH)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn guest_batch_goes_to_the_diary_and_is_not_counted() {
+        let (home, diary) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let st = crate::telemetry_hooks::test_state(home.path(), true);
+        let telemetry = st.telemetry.clone().unwrap();
+
+        let req = post(true);
+        let counted = screen_telemetry(&st, &req, false);
+        assert!(counted.is_none());
+        assert_eq!(record_screen_events(Some(diary.path().to_owned()), req, counted).await.status(), StatusCode::OK);
+        assert_eq!(test_support::rows(diary.path()).iter().filter(|row| row["evento"] == "app.tempo").count(), 1);
+        assert!(telemetry.counters().is_empty());
+        // Convidado que o porteiro já decidiu (`Caller::Guest`) também não conta.
+        assert!(screen_telemetry(&st, &post(false), true).is_none());
+
+        let req = post(false);
+        let counted = screen_telemetry(&st, &req, false);
+        record_screen_events(Some(diary.path().to_owned()), req, counted).await;
+        assert_eq!(telemetry.counters(), vec![Counter::new(Event::AppVisibleMinutes, Dims::new().with("client", ClientKind::Ios), None, 5)]);
+    }
+
+    #[test]
+    fn startup_telemetry_counts_from_the_process_birth() {
+        let home = tempfile::tempdir().unwrap();
+        let telemetry = crate::telemetry_hooks::test_telemetry(home.path(), true);
+        let counted = Some(&*telemetry);
+        count_startup(counted, Some(1_000.0), 1_002.5);
+        count_startup(counted, Some(1_060.0), 1_002.5);
+        count_startup(counted, None, 1_002.5);
+        assert_eq!(telemetry.counters(), vec![Counter::new(Event::ServerStartup, Dims::new(), Some(Bucket::Lt3s), 1)]);
+    }
 }
 
 #[cfg(test)]
@@ -564,17 +638,21 @@ pub(crate) mod test_support {
         watcher
             .watch(dir, notify::RecursiveMode::NonRecursive)
             .unwrap();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            let found = rows(dir);
-            if found.iter().any(&predicate) {
-                return found;
+        // Teto generoso: só estoura se o diário travar; a espera é pelo aviso do sistema de arquivos.
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let found = rows(dir);
+                if found.iter().any(&predicate) {
+                    return found;
+                }
+                changes
+                    .recv()
+                    .await
+                    .expect("a observação encerrou")
+                    .expect("a observação falhou");
             }
-            tokio::time::timeout_at(deadline, changes.recv())
-                .await
-                .expect("o evento não chegou ao diário local")
-                .expect("a observação encerrou")
-                .expect("a observação falhou");
-        }
+        })
+        .await
+        .expect("o evento não chegou ao diário local")
     }
 }

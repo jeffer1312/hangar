@@ -70,6 +70,8 @@ pub trait OpenHost: Send + Sync {
     fn wake(&self, name: &str);
     /// As reservas pré-aquecidas deste servidor; `None` onde não há (comando de terminal, harness).
     fn prewarm(&self) -> Option<&crate::prewarm::Store>;
+    /// A telemetria do servidor, só quando conta; `None` no comando de terminal e no harness.
+    fn telemetry(&self) -> Option<&hangar_telemetry::Telemetry>;
 }
 
 /// Leitura presa (FIFO, montagem travada) ou trava que não solta recusa a abertura em vez de segurá-la
@@ -408,7 +410,16 @@ async fn claim_name(host: &dyn OpenHost, name: &str) -> Result<NameClaim, OpenEr
 
 /// `open_session` com a reserva pré-aquecida tirada para este pedido: o Claude sem terminal a adota se
 /// ela ainda cabe; senão ela sai e a abertura segue como sempre. Quem chama fecha com `Adopting::finish`.
-pub async fn open_adopting(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCaller, mut adopting: Option<&mut super::adopt::Adopting>)
+pub async fn open_adopting(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCaller, adopting: Option<&mut super::adopt::Adopting>)
+    -> Result<Opened, OpenError> {
+    // Toda recusa daqui em diante, antes ou dentro do `launch`, conta aqui; de qualquer quem chama.
+    let provider = resolved.spec.provider.name();
+    let opened = open_resolved(host, resolved, caller, adopting).await;
+    if let Err(error) = &opened { count_open_failed(host, provider, error.code); }
+    opened
+}
+
+async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCaller, mut adopting: Option<&mut super::adopt::Adopting>)
     -> Result<Opened, OpenError> {
     let Resolved { mut spec, mut warnings, provider_source, initial_prompt, remember_provider, previous_non_plan, resume, restore } = resolved;
     let _claim = match adopting.as_deref_mut().and_then(|a| a.claim_for(&spec.name)) {
@@ -456,9 +467,11 @@ pub async fn open_adopting(host: &dyn OpenHost, resolved: Resolved, caller: &Ope
             }
         }
     }
+    let (started, prewarm) = (Instant::now(), adopting.is_some());
     match launch(host, &mut spec, read_only, warnings, initial_prompt.as_deref(), remember_provider, previous_non_plan, &runtime, codex_home.as_deref(),
                  resume.as_deref(), restore, adopting).await {
         Ok((jsonl, warnings, route)) => {
+            count_opened(host.telemetry(), caller, &spec, restore, prewarm, started.elapsed());
             // O Codex sem terminal já subiu dentro da abertura (`warm_codex`).
             if spec.surface == Surface::Headless && matches!(spec.provider, AgentProvider::Claude | AgentProvider::Antigravity) { host.wake(&spec.name); }
             Ok(Opened { body: created_body(&spec, jsonl.as_deref(), warnings, route.as_ref(), codex_home.as_deref(), provider_source), undo, key: spec.key.clone() })
@@ -469,6 +482,43 @@ pub async fn open_adopting(host: &dyn OpenHost, resolved: Resolved, caller: &Ope
             Err(error)
         }
     }
+}
+
+const EFFORTS: &[&str] = &["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"];
+fn permission_name(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::AcceptEdits => "accept_edits", PermissionMode::Auto => "auto",
+        PermissionMode::BypassPermissions => "bypass_permissions", PermissionMode::Manual => "manual",
+        PermissionMode::DontAsk => "dont_ask", PermissionMode::Plan => "plan", PermissionMode::AskForApproval => "ask_for_approval",
+        PermissionMode::ApproveForMe => "approve_for_me", PermissionMode::FullAccess => "full_access",
+    }
+}
+
+fn wire_provider(provider: &str) -> hangar_telemetry::events::Provider {
+    hangar_telemetry::events::Provider::parse(provider).unwrap_or(hangar_telemetry::events::Provider::Other)
+}
+
+/// `session_opened` do spec resolvido, só do dono: só valores das listas, e motor sai `engine`, nunca o nome dele.
+fn count_opened(telemetry: Option<&hangar_telemetry::Telemetry>, caller: &OpenCaller, spec: &SessionSpec, restore: bool, prewarm: bool, took: Duration) {
+    use hangar_telemetry::events::{Code, Dims, Event, Surface as WireSurface, model};
+    let Some(telemetry) = telemetry.filter(|_| matches!(caller, OpenCaller::Owner)) else { return };
+    let provider = wire_provider(spec.provider.name());
+    let engine = matches!(spec.account, Account::Engine { .. });
+    let surface = match spec.surface { Surface::Terminal => WireSurface::Terminal, Surface::Headless => WireSurface::Headless };
+    let dims = Dims::new().with("provider", provider).with("surface", surface)
+        .with("model", model(provider, spec.model.as_deref().unwrap_or("default"), engine))
+        .with("effort", Code::known(spec.effort.as_deref().unwrap_or("default"), EFFORTS))
+        .with("permission", Code::fixed(spec.permission_mode.map_or("default", permission_name)))
+        .with("restore", restore).with("jev", spec.jev).with("prewarm", prewarm).with("worktree", spec.worktree.is_some());
+    telemetry.duration(Event::SessionOpened, dims, took);
+}
+
+/// `session_open_failed` da abertura e da recusa da resolução (`refusal_diary`).
+pub(crate) fn count_open_failed(host: &dyn OpenHost, provider: &str, code: Option<&'static str>) {
+    use hangar_telemetry::events::{Code, Dims, Event};
+    let Some(telemetry) = host.telemetry() else { return };
+    let dims = Dims::new().with("provider", wire_provider(provider)).with("code", Code::fixed(code.unwrap_or("none")));
+    telemetry.count(Event::SessionOpenFailed, dims, 1);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -991,4 +1041,37 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         first_message: first_message.is_some() };
     warnings.extend(announce(host, spec, diary, &born, "terminal_criado").await);
     Ok((jsonl, warnings, route))
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+
+    fn spec() -> SessionSpec {
+        SessionSpec {
+            version: super::super::SPEC_VERSION, key: "k".into(), name: "minha-sessao".into(), cwd: "/x".into(), provider: AgentProvider::Claude,
+            surface: Surface::Terminal, account: Account::Engine { name: "meu-motor".into(), account: None, config_dir: None, context_window: None,
+                binding: None, context_window_unknown: false },
+            account_source: super::super::AccountSource::Default, model: Some("opus".into()), effort: Some("high".into()), service_tier: None,
+            permission_mode: Some(PermissionMode::BypassPermissions), subagent_model: None, customizations: None, jev: false, code_mode: false,
+            read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
+            name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
+        }
+    }
+
+    #[test]
+    fn telemetry_session_opened_counts_the_owner_only() {
+        use hangar_telemetry::events::Event;
+        let home = tempfile::tempdir().unwrap();
+        let telemetry = crate::telemetry_hooks::test_telemetry(home.path(), true);
+        let guest = OpenCaller::Guest { root: "/x".into() };
+        count_opened(Some(&*telemetry), &guest, &spec(), false, false, Duration::from_millis(50));
+        assert!(telemetry.counters().is_empty(), "abertura de convidado não conta");
+        count_opened(Some(&*telemetry), &OpenCaller::Owner, &spec(), false, false, Duration::from_millis(50));
+        let counters = telemetry.counters();
+        assert_eq!(counters.len(), 1);
+        assert_eq!(counters[0].event, Event::SessionOpened.as_str());
+        assert_eq!((counters[0].dims["model"].as_str(), counters[0].dims["permission"].as_str()), ("engine", "bypass_permissions"));
+        assert!(counters[0].dims.values().all(|v| !v.contains("motor") && !v.contains("minha-sessao")));
+    }
 }

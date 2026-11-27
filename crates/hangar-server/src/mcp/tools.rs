@@ -460,7 +460,13 @@ impl Tools {
             },
             _ => Err(format!("Unknown tool: {name}")),
         };
-        outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]))
+        let result = outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]));
+        if let Some(telemetry) = self.st.counting() {
+            use hangar_telemetry::events::{Code, Dims, Event};
+            let dims = Dims::new().with("tool", Code::known(name, &super::TOOL_NAMES)).with("error", result.is_error == Some(true));
+            telemetry.count(Event::McpTool, dims, 1);
+        }
+        result
     }
 
     fn home(&self) -> PathBuf {

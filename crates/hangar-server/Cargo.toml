@@ -76,6 +76,8 @@ hangar-omp-sync.workspace = true
 hangar-plugins.workspace = true
 hangar-connectors.workspace = true
 hangar-mission.workspace = true
+# Telemetria anônima de uso (`telemetry_routes`).
+hangar-telemetry.workspace = true
 hangar-ticket-actions.workspace = true
 hangar-work-review.workspace = true
 hangar-workflows.workspace = true
@@ -125,7 +127,8 @@ ring.workspace = true
 qrcode = { version = "=0.14.1", default-features = false }
 serde = { workspace = true, features = ["alloc"] }
 serde-saphyr.workspace = true
-axum = { workspace = true }
+# `matched-path`: a contagem de recurso usado conta pelo modelo da rota, nunca pelo caminho com nome.
+axum = { workspace = true, features = ["matched-path"] }
 bytes = { workspace = true }
 flate2 = { workspace = true }
 # Tela web baixada da release (`ui::fetch`); a mesma versão do `hangar-package`, sem xattr.
@@ -189,6 +192,8 @@ zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 hangar-core = { workspace = true, features = ["test-support"] }
+# `Telemetry::for_test`: o motor dos testes, sem o ambiente da máquina.
+hangar-telemetry = { workspace = true, features = ["test-util"] }
 # Pacote .zip do frp que o teste do supervisor monta (`tests/it/connect_supervisor.rs`).
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 rqrr = { version = "=0.11.0", default-features = false }

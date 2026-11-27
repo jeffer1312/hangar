@@ -2946,6 +2946,41 @@ export async function putAutoReportEm(s: Server, value: boolean, fetcher?: typeo
   return res?.auto_report === true;
 }
 
+/** Telemetria anônima da máquina: `consent` `null` = não respondido; `disabled_by` = desligada pelo ambiente. */
+export interface TelemetrySetting { consent: boolean | null; disabled_by: 'env' | 'ci' | null }
+
+function telemetryView(res: { consent?: unknown; disabled_by?: unknown } | null | undefined): TelemetrySetting | undefined {
+  const raw = res?.consent;
+  const consent = typeof raw === 'boolean' ? raw : raw === null ? null : undefined;
+  if (consent === undefined) return undefined;
+  const by = res?.disabled_by;
+  return { consent, disabled_by: by === 'env' || by === 'ci' ? by : null };
+}
+
+// 404 = servidor sem telemetria; 503 `telemetry_unavailable` = esta vida dele sem ela. Nos dois, a tela some.
+const telemetryMissing = (error: unknown) => {
+  const e = error as { status?: unknown; code?: unknown } | null;
+  return e?.status === 404 || (e?.status === 503 && e?.code === 'telemetry_unavailable');
+};
+
+/** `undefined` = servidor sem telemetria. */
+export async function getTelemetry(s: Server, fetcher?: typeof fetch): Promise<TelemetrySetting | undefined> {
+  try {
+    return telemetryView(await apiFetchForServer<{ consent?: unknown; disabled_by?: unknown }>(s, '/api/telemetry', undefined, 8000, false, fetcher));
+  } catch (error) {
+    if (telemetryMissing(error)) return undefined;
+    throw error;
+  }
+}
+
+export async function putTelemetry(s: Server, consent: boolean, fetcher?: typeof fetch): Promise<TelemetrySetting> {
+  const res = await apiFetchForServer<{ consent?: unknown; disabled_by?: unknown }>(s, '/api/telemetry',
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ consent }) }, 8000, false, fetcher);
+  const view = telemetryView(res);
+  if (!view) throw new Error(m.atualizar_resposta_invalida());
+  return view;
+}
+
 export function getIdentificadorEm(s: Server, fetcher?: typeof fetch, timeoutMs = 8000): Promise<{ identificador: string; lan_url?: string }> {
   return apiFetchForServer(s, '/api/peers/identificador', undefined, timeoutMs, true, fetcher);
 }

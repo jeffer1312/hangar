@@ -179,6 +179,64 @@ async fn send_failure(st: &AppState, waits: &[u64]) {
     }
 }
 
+// ---------- telemetria da atualização ----------
+
+/// Conta o desfecho de uma atualização de pacote, uma vez por rodada. Bloqueante (`once` grava disco).
+fn count_outcome(telemetry: &hangar_telemetry::Telemetry, estado: &Map<String, Value>, channel: &str, now: chrono::DateTime<chrono::Utc>) {
+    use hangar_telemetry::events::{Code, DimValue, Dims, Event, UpdateOrigin, UpdateStepName};
+    if text(estado, "fase") != "pronto" { return; }
+    let Some(ok) = estado.get("ok").and_then(Value::as_bool) else { return };
+    // O executor antigo não grava `origem`: vale a rodada que já sabia a versão nova. `origem` nula é
+    // reinício ou modo desenvolvedor.
+    let origin = match estado.get("origem") {
+        Some(Value::String(origin)) => UpdateOrigin::parse(origin).unwrap_or(UpdateOrigin::Other),
+        None if estado.get("versao_para").is_some_and(Value::is_string) => UpdateOrigin::Other,
+        _ => return,
+    };
+    let Ok(at) = chrono::DateTime::parse_from_rfc3339(text(estado, "ts")) else { return };
+    // Rodada antiga (consentimento dado depois) não entra no dia de hoje.
+    if now.signed_duration_since(at) > FRESH { return; }
+    let (from, to) = (text(estado, "versao_de"), text(estado, "versao_para"));
+    if !telemetry.once(&format!("update:{from}->{to}:{}", text(estado, "ts"))) { return; }
+    let manual = estado.get("reiniciar_manual").and_then(Value::as_bool) == Some(true);
+    let result = match (ok, to.is_empty(), manual) {
+        (false, _, _) => "failed",
+        (true, true, _) => "up_to_date",
+        (true, false, true) => "updated_manual",
+        (true, false, false) => "updated",
+    };
+    telemetry.count(Event::UpdateFinished, Dims::new().with("result", Code::fixed(result))
+        .with("from", DimValue::version(from)).with("to", DimValue::version(to))
+        .with("channel", Code::known(channel, hangar_telemetry::wire::CHANNELS)).with("origin", origin), 1);
+    let failed_at = (!ok).then(|| text(estado, "etapa"));
+    if let Some(Value::Object(took)) = estado.get("duracoes") {
+        for (stage, ms) in took {
+            let Some(ms) = ms.as_u64() else { continue };
+            let dims = Dims::new().with("step", UpdateStepName::from_stage(stage)).with("ok", failed_at != Some(stage.as_str()));
+            telemetry.duration(Event::UpdateStep, dims, std::time::Duration::from_millis(ms));
+        }
+    }
+    if !ok {
+        let code = Code::known(text(estado, "codigo"), crate::update::FAILURE_CODES);
+        telemetry.count(Event::UpdateFailedCode, Dims::new().with("code", code), 1);
+    }
+}
+
+/// Quem conta é o servidor de pé, que lê o `estado.json`: o executor é outro processo.
+async fn count_update(st: &AppState) {
+    let Some(telemetry) = st.telemetry.clone().filter(|t| t.enabled()) else { return };
+    let home = st.accounts.env.home.clone();
+    let state_dir = crate::update::state_dir(&st.accounts.env.claude_base);
+    let counted = tokio::task::spawn_blocking(move || {
+        let estado = crate::update::StateFile::new(&state_dir).read();
+        // Rodada que não terminou não conta: o canal só é lido para a que terminou.
+        if text(&estado, "fase") != "pronto" { return; }
+        let channel = crate::update::channel(&crate::update::Layout::new(&home));
+        count_outcome(&telemetry, &estado, &channel, chrono::Utc::now());
+    }).await;
+    if let Err(e) = counted { tracing::warn!(code = "telemetry_update_uncounted", "telemetria: desfecho da atualização não contado: {e}"); }
+}
+
 /// Avisa a cada gravação do `estado.json`. O executor é outro processo: depois do reinício, quem está
 /// de pé não o lançou e só vê o arquivo.
 fn watch_state(state_dir: &Path, changed: Arc<tokio::sync::Notify>) -> notify::Result<notify::RecommendedWatcher> {
@@ -194,7 +252,10 @@ fn watch_state(state_dir: &Path, changed: Arc<tokio::sync::Notify>) -> notify::R
 }
 
 /// Confere na subida e a cada gravação do estado.
-pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> { watch(st, None) }
+
+/// `ready` avisa quando o vigia já observa o `estado.json` e a conferência da subida terminou.
+fn watch(st: Arc<AppState>, ready: Option<tokio::sync::oneshot::Sender<()>>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let changed = Arc::new(tokio::sync::Notify::new());
         let state_dir = crate::update::state_dir(&st.accounts.env.claude_base);
@@ -202,9 +263,12 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
             tracing::warn!(code = "auto_report_watch_unavailable", "relatório automático: estado sem vigia: {e}");
             st.diag.report("rust.diag_report_auto", "", "auto_report_watch_unavailable", "falha de atualização só é conferida na subida");
         });
+        count_update(&st).await;
         check_failure(&st).await;
+        if let Some(ready) = ready { let _ = ready.send(()); }
         loop {
             changed.notified().await;
+            count_update(&st).await;
             check_failure(&st).await;
         }
     })
@@ -232,10 +296,11 @@ mod tests {
     use crate::config::Config;
 
     /// O worker falso: conta os relatórios e responde com `status`.
-    struct Worker { status: u16, reports: std::sync::Mutex<Vec<String>> }
+    struct Worker { status: u16, reports: std::sync::Mutex<Vec<String>>, arrived: tokio::sync::Notify }
 
     async fn reply(axum::extract::State(w): axum::extract::State<Arc<Worker>>, body: String) -> (StatusCode, String) {
         w.reports.lock().unwrap().push(body);
+        w.arrived.notify_one();
         let reply = if w.status == 201 { json!({"id": "diag/abcd2345", "code": "abcd2345"}) } else { json!({"erro": "x"}) };
         (StatusCode::from_u16(w.status).unwrap(), reply.to_string())
     }
@@ -247,7 +312,7 @@ mod tests {
     impl Machine {
         async fn start(status: u16) -> Machine {
             let home = tempfile::tempdir().unwrap();
-            let worker = Arc::new(Worker { status, reports: std::sync::Mutex::default() });
+            let worker = Arc::new(Worker { status, reports: std::sync::Mutex::default(), arrived: tokio::sync::Notify::new() });
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             let router = axum::Router::new().route("/api/relatorio", axum::routing::post(reply)).with_state(worker.clone());
@@ -312,14 +377,13 @@ mod tests {
         let m = Machine::start(201).await;
         std::fs::create_dir_all(m.home.path().join(".hangar")).unwrap();
         std::fs::write(consent_path(m.home.path()), json!({"auto_report": true}).to_string()).unwrap();
-        let task = spawn(m.st.clone());
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let (ready, watching) = tokio::sync::oneshot::channel();
+        let task = watch(m.st.clone(), Some(ready));
+        watching.await.unwrap();
         m.fail(None);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        while m.worker.reports.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(20), m.worker.arrived.notified()).await;
         task.abort();
+        assert!(arrived.is_ok(), "o relatório não chegou");
         assert_eq!(m.worker.reports.lock().unwrap().len(), 1);
     }
 
@@ -331,6 +395,93 @@ mod tests {
         check_failure(&m.st).await;
         assert_eq!(m.worker.reports.lock().unwrap().len(), 1);
         assert_eq!(m.screen()["relatorio_erro"], "diag_report_refused");
+    }
+
+    fn at() -> chrono::DateTime<chrono::Utc> { chrono::DateTime::parse_from_rfc3339("2026-11-26T10:00:00Z").unwrap().with_timezone(&chrono::Utc) }
+
+    /// O relógio parado em `at()`: o `ts` do estado é de uma hora antes.
+    fn telemetry(home: &Path) -> hangar_telemetry::Telemetry {
+        let telemetry = hangar_telemetry::Telemetry::for_test(home, Arc::new(at));
+        telemetry.set_consent(true).unwrap();
+        telemetry
+    }
+
+    /// O estado gravado no fim, `ts` uma hora antes de `at()`.
+    fn estado(fields: Value) -> Map<String, Value> {
+        let Value::Object(mut map) = fields else { panic!("objeto") };
+        map.insert("ts".into(), "2026-11-26T09:00:00+00:00".into());
+        map
+    }
+
+    fn counter<'a>(counters: &'a [hangar_telemetry::wire::Counter], event: &str) -> &'a hangar_telemetry::wire::Counter {
+        counters.iter().find(|c| c.event == event).unwrap_or_else(|| panic!("sem {event}: {counters:?}"))
+    }
+
+    #[test]
+    fn update_failed_download_counts_once() {
+        let home = tempfile::tempdir().unwrap();
+        let t = telemetry(home.path());
+        let failed = estado(json!({"fase": "pronto", "ok": false, "origem": "manual", "versao_de": "0.1.0.8600", "versao_para": "0.1.0.8700",
+            "etapa": "baixar", "codigo": "update_download_failed", "duracoes": {"baixar": 2500}, "erro": "o download do pacote falhou: /home/x"}));
+        count_outcome(&t, &failed, "latest", at());
+        let counters = t.counters();
+        let finished = counter(&counters, "update_finished");
+        assert_eq!((finished.dims["result"].as_str(), finished.dims["origin"].as_str(), finished.count), ("failed", "manual", 1));
+        assert_eq!((finished.dims["from"].as_str(), finished.dims["to"].as_str(), finished.dims["channel"].as_str()), ("0.1.0.8600", "0.1.0.8700", "latest"));
+        let code = counter(&counters, "update_failed_code");
+        assert_eq!((code.dims["code"].as_str(), code.count), ("update_download_failed", 1));
+        let step = counter(&counters, "update_step");
+        assert_eq!((step.dims["step"].as_str(), step.dims["ok"].as_str(), step.bucket.as_deref()), ("download", "false", Some("lt3s")));
+        assert_eq!(counters.len(), 3);
+        assert!(counters.iter().all(|c| c.dims.values().all(|v| !v.contains('/'))), "o erro em texto nunca sai");
+
+        count_outcome(&t, &failed, "latest", at());
+        assert_eq!(t.counters(), counters, "reler o mesmo estado não conta de novo");
+    }
+
+    #[test]
+    fn update_without_origin_is_other_and_non_package_rounds_do_not_count() {
+        let home = tempfile::tempdir().unwrap();
+        let t = telemetry(home.path());
+        // Executor antigo: sem `origem` nem `codigo`.
+        count_outcome(&t, &estado(json!({"fase": "pronto", "ok": true, "versao_de": "0.1.0.8600", "versao_para": "0.1.0.8700",
+            "etapa": "reiniciar", "texto": "Atualizado"})), "feat/x", at());
+        let counters = t.counters();
+        let finished = counter(&counters, "update_finished");
+        assert_eq!((finished.dims["result"].as_str(), finished.dims["origin"].as_str(), finished.dims["channel"].as_str()), ("updated", "other", "other"));
+        assert_eq!(counters.len(), 1);
+
+        // Reinício pelo servidor novo (`origem` nula), reinício pelo antigo (sem versão nova) e rodada ainda de pé.
+        for other in [json!({"fase": "pronto", "ok": false, "origem": null, "versao_para": "0.1.0.8700", "codigo": "update_io"}),
+                      json!({"fase": "pronto", "ok": true, "versao_de": null, "versao_para": null}),
+                      json!({"fase": "rodando", "ok": null, "origem": "auto", "versao_para": "0.1.0.8800"})] {
+            count_outcome(&t, &estado(other), "latest", at());
+        }
+        // Rodada de mais de um dia atrás: o consentimento veio depois dela.
+        count_outcome(&t, &estado(json!({"fase": "pronto", "ok": true, "origem": "auto", "versao_para": "0.1.0.8900"})),
+            "latest", at() + chrono::TimeDelta::days(2));
+        assert_eq!(t.counters(), counters);
+    }
+
+    #[test]
+    fn update_unknown_code_is_other_and_every_update_error_code_is_known() {
+        let home = tempfile::tempdir().unwrap();
+        let t = telemetry(home.path());
+        count_outcome(&t, &estado(json!({"fase": "pronto", "ok": false, "origem": "auto", "versao_de": "0.1.0.8600",
+            "versao_para": "0.1.0.8700", "codigo": "update_novo_codigo"})), "beta", at());
+        assert_eq!(counter(&t.counters(), "update_failed_code").dims["code"], "other");
+
+        use crate::update::UpdateError;
+        use hangar_package::ExtractError;
+        let errors = [UpdateError::Locked, UpdateError::Io(String::new()), UpdateError::Index(String::new()), UpdateError::NoPlatform(String::new()),
+            UpdateError::Download(String::new()), UpdateError::Sha { expected: String::new(), got: String::new() }, UpdateError::Step(String::new()),
+            UpdateError::Swap(String::new()), UpdateError::Package(ExtractError::ManifestInvalid(String::new())),
+            UpdateError::Package(ExtractError::ShaMismatch(String::new())), UpdateError::Package(ExtractError::UnsafePath(String::new())),
+            UpdateError::Package(ExtractError::ExistingDiffers(String::new())), UpdateError::Package(ExtractError::RenameFailed(io::Error::other("x"))),
+            UpdateError::Package(ExtractError::Io(io::Error::other("x")))];
+        for error in errors {
+            assert!(crate::update::FAILURE_CODES.contains(&error.code()), "{}", error.code());
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

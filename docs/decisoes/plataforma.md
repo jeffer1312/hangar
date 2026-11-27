@@ -5752,3 +5752,43 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   provedor, modelo, esforço, modo e contas; tarefa agendada nova guarda só o que a pessoa escolheu.
   O `hangar-send --new` não escolhe mais o provedor omitido. O `--jev` do `orq` fica: é escolha do
   fluxo para os papéis dele.
+
+## Telemetria anônima: só o dono, lista fechada, envio diário (26/11/2026)
+
+- **Para que.** Saber quantos donos e máquinas usam o Hangar, como as máquinas se ligam, quais
+  recursos são usados, quais erros a pessoa vê e se uma versão ficou mais lenta. Só fatos do próprio
+  Hangar; a lista do que sai, para quem usa, está em [`docs/telemetria.md`](../telemetria.md).
+- **Receptor próprio, não ferramenta pronta.** OpenPanel 2.3, medido em 26/11 já ajustado: ~950 MB
+  de memória parado e ~1,4 GB com 4,3 mil eventos, com tela inicial pensada para site. A versão 3
+  exige Redpanda (2 GB) e publica imagens só para apoiadores. Aptabase não tem id de usuário, e o
+  dono quer ver máquinas por dono. Com volume pequeno e perguntas específicas, ficou um receptor
+  axum + Postgres na VPS (`services/telemetry-ingest`), com workspace próprio para o driver do
+  Postgres não entrar no `Cargo.lock` nem no portão do PR; ele reusa só o módulo `wire` do
+  `hangar-telemetry`. Grafana é provisório.
+- **Opt-out com aviso, e nada antes da resposta.** O padrão é ligado, mas `consent: null` não conta
+  nem grava nada; só "Pode enviar" ou "Não enviar" gravam, e fechar o aviso pergunta de novo na
+  próxima abertura. `false`, `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1` e as variáveis de CI apagam a
+  fila. O `.env` vale porque exportar no shell não chega ao systemd nem à tarefa do Windows.
+- **Convidado nunca conta.** Mensagem, rota, tela e evento de cliente vindos da 8766, de convite,
+  par ou login de convidado ficam fora: ele não aceitou nada, e o `/api/diag` e as rotas dele passam
+  pelos mesmos handlers do dono. Saúde do servidor (fim de turno, queda, erro, troca por limite)
+  conta para todas as sessões da máquina: os ganchos por sessão não sabem quem a abriu.
+- **Dono comum entre as máquinas.** `machine_id` e `owner_id` são aleatórios e próprios; não
+  reaproveitam `device-id`, `install_id` do Connect nem `CP_SERVER_ID`, que já vão a outro serviço
+  ou são nomes da pessoa. Uma vez por dia a máquina pergunta aos peers habilitados do `peers.json`
+  (`GET /api/telemetry/owner`, só do dono) e adota o `owner_id` mais antigo (empate: menor id). Peer
+  fora do ar ou sem a rota não muda nada. O anúncio entre máquinas não serve: só sai na troca de
+  identificador. Limite aceito: registrar a máquina de outra pessoa no `peers.json` junta os dois
+  donos.
+- **Dia em UTC, um envio por dia.** Hora a hora entregaria rotina e fuso. Fila de até 14 dias em
+  `~/.hangar/telemetry/queue/`, espera aleatória de até 1 h depois que o dia fecha.
+- **Revisão da spec.** `problem_shown` conta uma vez por problema, na passagem de esperando para
+  mostrado no portão da lista: o `admit` devolve `Show` a cada tique, e contar ali repetiria o
+  mesmo aviso a cada 1,5 s. `feature_used` sai de uma camada depois do handler, pelo modelo de rota
+  do axum (`MatchedPath`), só com resposta 2xx do dono; o `masked_route` do diário deixava passar
+  pedaço de nome.
+- **Revisão do plano.** `feature_used` casa método + modelo de rota (a mesma rota com `GET` e
+  `PUT` separa leitura de escrita). O canal de atualização é lista fechada (`latest`, `beta`;
+  branch é nome escolhido e sai `other`). O receptor recusa dia mais de 2 dias no futuro: a folga
+  cobre relógio torto, e além dela o dia não existe ainda. O envio roda em laço separado da gravação de 15 min: receptor lento ou
+  fora do ar não atrasa a gravação.

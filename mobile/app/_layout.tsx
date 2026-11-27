@@ -1,7 +1,7 @@
 import 'react-native-url-polyfill/auto';
 import '../src/theme/unistyles';
 import { useEffect, useMemo, useRef } from 'react';
-import { Alert, AppState, Dimensions, Platform, type AppStateStatus } from 'react-native';
+import { AppState, Dimensions, Platform, type AppStateStatus } from 'react-native';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider, useGlobalSearchParams, usePathname, useRouter, useSegments } from 'expo-router';
 import { useUnistyles } from 'react-native-unistyles';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -26,7 +26,9 @@ import { setFatalErrorRoute, takeFatalErrorNotice } from '../src/net/fatalErrors
 import * as m from '../src/paraglide/messages';
 import { installNotificationHandler, pushRegistrationKey, registerExpoPush, retryExpoPushIfDenied, useNotificationNavigation } from '../src/features/push/expoPush';
 import { getLocale } from '../src/paraglide/runtime';
-import { autoReportUnanswered, putAutoReportEm, registrarDiag } from '@hangar/core';
+import { autoReportUnanswered, registrarDiag, telemetryUnanswered } from '@hangar/core';
+import { askAutoReport } from '../src/features/machines/AutoReportSetting';
+import { askTelemetry } from '../src/features/machines/TelemetrySetting';
 import { dropLegacyPendingNews, loadArrivedNews, whatsNewHref } from '../src/features/updates/pending';
 import { configureVideoCache } from '../src/features/attachments/videoCache';
 
@@ -138,25 +140,20 @@ export default function Layout() {
     return () => { alive = false; subscription.remove(); };
   }, [ready, withoutServer]);
 
-  // Relatório automático da atualização: uma pergunta só, na abertura, para as máquinas próprias sem resposta.
+  // Relatório automático da atualização e telemetria: uma pergunta de cada, na abertura, para as
+  // máquinas próprias sem resposta. Uma depois da outra, para não empilhar dois avisos.
   const autoReportAsked = useRef(false);
   useEffect(() => {
     if (!ready || withoutServer || autoReportAsked.current) return;
     autoReportAsked.current = true;
     let alive = true;
-    autoReportUnanswered(servers).then((pending) => {
-      if (!alive || !pending.length) return;
-      const answer = (value: boolean) => {
-        void Promise.allSettled(pending.map((server) => putAutoReportEm(server, value))).then((results) => {
-          const failed = pending.filter((_, i) => results[i].status === 'rejected');
-          if (failed.length) toast.erro(m.auto_report_save_failed({ machines: failed.map((s) => s.label).join(', ') }));
-        });
-      };
-      Alert.alert(m.auto_report_question_title(), m.auto_report_question_body({ machines: pending.map((s) => s.label).join(', ') }), [
-        { text: m.auto_report_no(), style: 'cancel', onPress: () => answer(false) },
-        { text: m.auto_report_yes(), onPress: () => answer(true) },
-      ]);
-    });
+    const telemetryPending = telemetryUnanswered(servers);
+    void (async () => {
+      const report = await autoReportUnanswered(servers);
+      if (alive && report.length) await askAutoReport(report);
+      const telemetry = await telemetryPending;
+      if (alive && telemetry.length) await askTelemetry(telemetry);
+    })();
     return () => { alive = false; };
   }, [ready, withoutServer]);
 

@@ -5,7 +5,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use hangar_core::clock::wall_now;
+use std::time::{Duration, Instant};
 
 use hangar_api::session::SessionRow;
 use serde_json::Value;
@@ -293,8 +294,6 @@ fn joined(e: tokio::task::JoinError, detail: &'static str) -> ListError {
     fail("list_task_failed", detail)
 }
 
-fn wall_now() -> f64 { SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()) }
-
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
 
 impl ListBridge {
@@ -491,6 +490,9 @@ impl ListBridge {
             None => Ok(None),
         }
     }
+
+    /// As linhas da última rodada boa, sem pedir outra; `None` antes da primeira.
+    pub(crate) fn last_rows(&self) -> Option<Arc<Vec<SessionRow>>> { lock(&self.last_good).as_ref().map(|(_, _, rows)| rows.clone()) }
 
     fn recent_row(&self, name: &str) -> Option<SessionRow> {
         let epoch = self.epoch.load(Ordering::SeqCst);
@@ -1116,8 +1118,13 @@ impl ListBridge {
                     serde_json::json!({"via": "lista", "estado": &row.state, "provider": &row.provider, "sem_terminal": if row.headless { 1 } else { 0 }}));
                 row.problema = None;
             }
-            let gate = gates.entry(row.name.clone()).or_default();
-            if matches!(gate.admit(row.problema.as_deref(), now, hold), Gate::Hold(_)) { row.problema = None; }
+            let (gate, first) = gates.entry(row.name.clone()).or_default().admit_noting(row.problema.as_deref(), now, hold);
+            if matches!(gate, Gate::Hold(_)) { row.problema = None; }
+            // Só a passagem de esperando para mostrado: o tique seguinte devolve `Show` de novo.
+            if first && let (Some(telemetry), Some(code)) = (crate::telemetry_hooks::installed(), row.problema.as_deref()) {
+                telemetry.count(hangar_telemetry::events::Event::ProblemShown,
+                    hangar_telemetry::events::Dims::new().with("code", hangar_telemetry::events::Code::known(code, crate::problem_gate::SCREEN)), 1);
+            }
             self.shown.set(&row.name, row.problema.as_deref());
         }
     }
@@ -1495,6 +1502,29 @@ mod tests {
         assert_eq!(round("working", INTERACTION_UNAVAILABLE).1, None, "P1: fora da espera, diário");
         assert_eq!(round("awaiting_input", INTERACTION_UNAVAILABLE).1.as_deref(), Some(INTERACTION_UNAVAILABLE), "P1: esperando a pessoa, tela");
         assert_eq!(round("idle", "headless_processo_caiu").1.as_deref(), Some("headless_processo_caiu"), "de tela segue saindo");
+    }
+
+    /// O problema que segue na tela por várias rodadas conta uma vez; código fora da lista sai `other`.
+    /// O motor é o de `installed()`, dividido com os outros testes: só os códigos daqui são conferidos.
+    #[tokio::test]
+    async fn telemetry_problem_shown_counts_once_per_problem() {
+        let bridge = ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new());
+        bridge.set_problem_hold(std::time::Duration::ZERO);
+        let telemetry = crate::telemetry_hooks::installed_for_test();
+        let shown = |code: &str| crate::telemetry_hooks::counted(telemetry, hangar_telemetry::events::Event::ProblemShown, "code")
+            .into_iter().filter(|(counted, _)| counted == code).map(|(_, n)| n).sum::<u64>();
+        let (before, other_before) = (shown("codex_turno_cortado"), shown("other"));
+        let round = |name: &str, problema: &str| {
+            let mut rows = vec![serde_json::from_value::<SessionRow>(json!({"name":name,"provider":"claude","state":"idle","problema":problema})).unwrap()];
+            bridge.gate_problems(&mut rows, true);
+            rows[0].problema.clone()
+        };
+        for _ in 0..10 { assert_eq!(round("telemetry-a", "codex_turno_cortado").as_deref(), Some("codex_turno_cortado")); }
+        assert_eq!(shown("codex_turno_cortado"), before + 1);
+        for _ in 0..3 { round("telemetry-b", "telemetry_codigo_sem_lista"); }
+        assert!(shown("other") > other_before);
+        assert!(telemetry.counters().iter().all(|c| c.dims.values().all(|v| v != "telemetry_codigo_sem_lista")));
     }
 
     /// Mensagem presa e fatos do plugin indisponíveis juntos: a linha leva a mensagem presa, que o portão mostra;

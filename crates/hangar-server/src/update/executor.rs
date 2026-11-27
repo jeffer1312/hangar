@@ -4,7 +4,7 @@
 //! do lançador (`CREATE_BREAKAWAY_FROM_JOB`), em grupo próprio e sem janela. O binário é o do
 //! servidor que o lançou, pelo caminho real da versão: a troca do `current` não o tira de baixo.
 //!
-//!   hangar-server update --run [--channel <canal>] [--listen <ip:porta>]
+//!   hangar-server update --run [--origin manual|auto] [--channel <canal>] [--listen <ip:porta>]
 //!   hangar-server update --restart --request-id <id> [--listen <ip:porta>]
 //!   hangar-server update --dev [--listen <ip:porta>]
 //!   hangar-server update --dev-mode-on <checkout> | --dev-mode-off [--listen <ip:porta>]
@@ -22,10 +22,29 @@ use hangar_api::status::ExitKind;
 use super::{HealthProbe, Layout, Outcome, Reading, Release, Restarter, Settings, StateFile, UpdateLock};
 use crate::accounts::environment::AccountEnvironment;
 
+/// Quem pediu a atualização: a pessoa (rota da tela, linha de comando) ou a verificação periódica.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin { Manual, Auto }
+
+impl Origin {
+    /// O nome que o `estado.json` grava em `origem` e o `--origin` leva.
+    pub fn as_str(self) -> &'static str {
+        match self { Origin::Manual => "manual", Origin::Auto => "auto" }
+    }
+
+    fn parse(value: &str) -> Result<Origin, String> {
+        match value {
+            "manual" => Ok(Origin::Manual),
+            "auto" => Ok(Origin::Auto),
+            other => Err(format!("--origin inválido: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Task {
     /// Pacote: índice, download, passos, troca, reinício e prova.
-    Update { channel: Option<String> },
+    Update { channel: Option<String>, origin: Origin },
     /// Só reinicia; `request_id` liga o desfecho ao pedido da tela.
     Restart { request_id: String },
     /// Modo desenvolvedor: `git pull --ff-only` no checkout e reinício.
@@ -49,7 +68,7 @@ impl Args {
     /// `args` sem o nome do programa nem o `update`.
     pub fn parse(args: &[String]) -> Result<Args, String> {
         let (mut task, mut channel, mut request_id, mut listen) = (None, None, None, DEFAULT_LISTEN.parse().expect("endereço padrão"));
-        let mut checkout = None;
+        let (mut checkout, mut origin) = (None, Origin::Manual);
         let mut it = args.iter();
         while let Some(arg) = it.next() {
             let mut value = |name: &str| it.next().cloned().ok_or_else(|| format!("{name} sem valor"));
@@ -58,13 +77,14 @@ impl Args {
                 "--checkout" => checkout = Some(value("--checkout")?),
                 "--dev-mode-on" if task.is_none() => { task = Some(arg.clone()); checkout = Some(value("--dev-mode-on")?); }
                 "--channel" => channel = Some(value("--channel")?),
+                "--origin" => origin = Origin::parse(&value("--origin")?)?,
                 "--request-id" => request_id = Some(value("--request-id")?),
                 "--listen" => listen = value("--listen")?.parse().map_err(|e| format!("--listen inválido: {e}"))?,
                 other => return Err(format!("argumento inesperado: {other}")),
             }
         }
         let task = match task.as_deref() {
-            Some("--run") => Task::Update { channel },
+            Some("--run") => Task::Update { channel, origin },
             Some("--restart") => Task::Restart { request_id: request_id.ok_or("--restart pede --request-id")? },
             Some("--dev") => Task::Dev,
             Some("--dev-mode-on") => Task::DevMode(DevRequest::On(checkout.unwrap_or_default().into())),
@@ -79,8 +99,8 @@ impl Args {
     pub fn argv(&self) -> Vec<String> {
         let mut argv = vec!["update".to_owned()];
         match &self.task {
-            Task::Update { channel } => {
-                argv.push("--run".into());
+            Task::Update { channel, origin } => {
+                argv.extend(["--run".into(), "--origin".into(), origin.as_str().into()]);
                 if let Some(channel) = channel { argv.extend(["--channel".into(), channel.clone()]); }
             }
             Task::Restart { request_id } => argv.extend(["--restart".into(), "--request-id".into(), request_id.clone()]),
@@ -131,7 +151,7 @@ impl Parts {
     pub fn new(env: &AccountEnvironment, args: &Args, release_base: &str) -> Parts {
         let layout = Layout::new(&env.home);
         let channel = match &args.task {
-            Task::Update { channel: Some(channel) } => channel.clone(),
+            Task::Update { channel: Some(channel), .. } => channel.clone(),
             _ => super::channel(&layout),
         };
         let host = if args.listen.ip().is_unspecified() { std::net::Ipv4Addr::LOCALHOST.into() } else { args.listen.ip() };
@@ -316,6 +336,10 @@ pub fn start(home: &Path, claude_base: &Path, args: &Args, spawner: &dyn Spawner
     let state = StateFile::new(&state_dir);
     let mut fresh = json!({"fase": "rodando", "ok": null, "erro": null, "pid": null, "passo": 0, "total": super::state::STEPS.len(),
         "texto": "Começando", "voltou": null, "no_ar": null, "reiniciar_manual": false, "avisos": [], "log": []});
+    // Rodada que não é de pacote zera a `origem` da anterior: o servidor conta só a atualização de pacote.
+    fresh["origem"] = match &args.task { Task::Update { origin, .. } => origin.as_str().into(), _ => serde_json::Value::Null };
+    fresh["codigo"] = serde_json::Value::Null;
+    fresh["duracoes"] = serde_json::Value::Null;
     let request_id = match &args.task {
         Task::Restart { request_id } => {
             fresh["texto"] = "Começando o reinício".into();
@@ -565,7 +589,7 @@ pub fn cli(args: &[String]) -> ExitCode {
     let args = match Args::parse(args) {
         Ok(args) => args,
         Err(e) => {
-            eprintln!("hangar-server update: {e}\nuso: hangar-server update --run [--channel C] | --restart --request-id ID | --dev \
+            eprintln!("hangar-server update: {e}\nuso: hangar-server update --run [--origin manual|auto] [--channel C] | --restart --request-id ID | --dev \
                 | --dev-mode-on PASTA | --dev-mode-off | --migrate [--checkout PASTA]  [--listen IP:PORTA]");
             return ExitCode::from(2);
         }
@@ -601,14 +625,15 @@ async fn execute(env: &AccountEnvironment, args: &Args) -> bool {
         },
         Task::DevMode(request) => dev_mode(&parts, request, super::migrate::in_service_group(), &restarter, &health, &settings, fetch_runner).await,
         Task::Migrate { checkout } => migrate(&parts, checkout.clone()).await,
-        Task::Update { .. } => {
+        Task::Update { origin, .. } => {
             let client = match crate::http_client().build() {
                 Ok(client) => client,
                 Err(e) => { tracing::warn!("update: cliente http: {e}"); return false; }
             };
             let platform = super::platform();
             let job = super::Job { client: &client, release: &parts.release, platform: &platform, layout: &parts.layout, home: &parts.home,
-                state_dir: &parts.state_dir, diary_dir: parts.diary_dir.clone(), ui: Some(&super::ReleaseUi), notes: parts.notes.clone(), settings, startup_output: Some(parts.port) };
+                state_dir: &parts.state_dir, diary_dir: parts.diary_dir.clone(), ui: Some(&super::ReleaseUi), notes: parts.notes.clone(), settings, startup_output: Some(parts.port),
+                origin: Some(*origin) };
             let outcome = super::run(&job, runner, &restarter, &health, Arc::new(super::ProcInUse)).await;
             tracing::info!(?outcome, "update: fim");
             matches!(outcome, Outcome::Updated { .. } | Outcome::UpdatedManual { .. } | Outcome::UpToDate)
@@ -629,8 +654,12 @@ mod tests {
     #[test]
     fn update_executor_args_parse_and_round_trip() {
         let run = Args::parse(&strings(&["--run", "--channel", "beta", "--listen", "0.0.0.0:9000"])).unwrap();
-        assert_eq!(run, Args { task: Task::Update { channel: Some("beta".into()) }, listen: "0.0.0.0:9000".parse().unwrap() });
+        assert_eq!(run, Args { task: Task::Update { channel: Some("beta".into()), origin: Origin::Manual }, listen: "0.0.0.0:9000".parse().unwrap() },
+            "sem --origin, quem chamou foi uma pessoa");
         assert_eq!(Args::parse(&run.argv()[1..]).unwrap(), run, "o que o servidor lança é o que o executor lê");
+        let auto = Args::parse(&strings(&["--run", "--origin", "auto"])).unwrap();
+        assert_eq!(auto.task, Task::Update { channel: None, origin: Origin::Auto });
+        assert_eq!(Args::parse(&auto.argv()[1..]).unwrap(), auto);
         assert_eq!(run.argv()[0], "update");
         let restart = Args::parse(&strings(&["--restart", "--request-id", "abc"])).unwrap();
         assert_eq!(restart, Args { task: Task::Restart { request_id: "abc".into() }, listen: DEFAULT_LISTEN.parse().unwrap() });
@@ -640,7 +669,7 @@ mod tests {
             let args = Args { task, listen: DEFAULT_LISTEN.parse().unwrap() };
             assert_eq!(Args::parse(&args.argv()[1..]).unwrap(), args);
         }
-        for bad in [&[][..], &["--restart"], &["--run", "--listen"], &["--run", "--dev"], &["--run", "--x"], &["--run", "--listen", "nada"],
+        for bad in [&[][..], &["--restart"], &["--run", "--listen"], &["--run", "--origin"], &["--run", "--origin", "cron"], &["--run", "--dev"], &["--run", "--x"], &["--run", "--listen", "nada"],
                     &["--dev-mode-on"], &["--dev-mode-off", "--dev"]] {
             assert!(Args::parse(&strings(bad)).is_err(), "{bad:?}");
         }
@@ -697,10 +726,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (home, claude) = (dir.path(), dir.path().join(".claude"));
         let spawner = FakeSpawner::default();
-        let args = Args { task: Task::Update { channel: None }, listen: DEFAULT_LISTEN.parse().unwrap() };
+        let args = Args { task: Task::Update { channel: None, origin: Origin::Auto }, listen: DEFAULT_LISTEN.parse().unwrap() };
         assert_eq!(start(home, &claude, &args, &spawner), Ok(Started { pid: 4242, request_id: None }));
         let state = StateFile::new(&super::super::state_dir(&claude)).read();
         assert_eq!((state["fase"].clone(), state["pid"].clone(), state["texto"].clone()), (json!("rodando"), json!(null), json!("Começando")));
+        assert_eq!(state["origem"], "auto");
         assert_eq!(spawner.spawned.lock().unwrap().as_slice(), [args.argv()]);
         assert_eq!(start(home, &claude, &args, &spawner), Err(StartError::Busy), "o executor ainda sobe");
         assert_eq!(spawner.spawned.lock().unwrap().len(), 1);
@@ -708,7 +738,9 @@ mod tests {
         StateFile::new(&super::super::state_dir(&claude)).write(json!({"fase": "pronto", "ok": true}));
         let restart = Args { task: Task::Restart { request_id: "pedido-1".into() }, listen: DEFAULT_LISTEN.parse().unwrap() };
         assert_eq!(start(home, &claude, &restart, &spawner), Ok(Started { pid: 4242, request_id: Some("pedido-1".into()) }));
-        assert_eq!(StateFile::new(&super::super::state_dir(&claude)).read()["request_id"], "pedido-1");
+        let state = StateFile::new(&super::super::state_dir(&claude)).read();
+        assert_eq!(state["request_id"], "pedido-1");
+        assert_eq!(state["origem"], json!(null), "o reinício não é lido como a atualização de antes");
 
         // A trava de um executor de pé recusa também.
         StateFile::new(&super::super::state_dir(&claude)).write(json!({"fase": "pronto", "ok": true}));
@@ -720,7 +752,7 @@ mod tests {
     fn update_start_that_cannot_launch_says_why_in_the_state() {
         let dir = tempfile::tempdir().unwrap();
         let claude = dir.path().join(".claude");
-        let args = Args { task: Task::Update { channel: None }, listen: DEFAULT_LISTEN.parse().unwrap() };
+        let args = Args { task: Task::Update { channel: None, origin: Origin::Manual }, listen: DEFAULT_LISTEN.parse().unwrap() };
         let Err(StartError::Launch(why)) = start(dir.path(), &claude, &args, &FakeSpawner { fail: true, ..FakeSpawner::default() }) else { panic!() };
         assert!(why.contains("sem permissão"));
         let state = StateFile::new(&super::super::state_dir(&claude)).read();

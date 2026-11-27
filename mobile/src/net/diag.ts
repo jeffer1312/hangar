@@ -1,10 +1,13 @@
 import { AppState, Platform } from 'react-native';
 import { updateId } from 'expo-updates';
+import Constants from 'expo-constants';
 import { baseOf, configureDiag, criarTransporteDiag, isOwnMachine, isServerParked, registrarDiag, type EventoDiag } from '@hangar/core';
 import { useServers } from '../stores/servers';
-import { replayFatalError } from './fatalErrors';
+import { fatalTelemetryEvent, replayFatalError } from './fatalErrors';
 
 let iniciado = false;
+// O tempo na tela sai a cada 5 min; o servidor recusa mais que isso num evento.
+const VISIBLE_EVERY_MS = 5 * 60 * 1000;
 
 export function withMachineRequestDiagnostics(fetcher: typeof fetch): typeof fetch {
   return async (input, init) => {
@@ -40,6 +43,8 @@ export function iniciarDiag(): void {
   // O core resume a falha no resultado; registra aqui antes de perder o motivo do cancelamento.
   globalThis.fetch = withMachineRequestDiagnostics(globalThis.fetch.bind(globalThis));
   const cli = Math.random().toString(36).slice(2, 8);
+  // A telemetria do servidor separa o tempo de tela e as rotas por cliente; o diário descarta o campo.
+  const cliente = Platform.OS === 'ios' ? 'ios' : 'android';
   let seq = 0;
   const destinos = new Set<string>();
   const transporte = criarTransporteDiag((destino) => {
@@ -56,9 +61,9 @@ export function iniciarDiag(): void {
       destinos.add(base);
       transporte.registrar(base, { evento: 'app.abriu', cli, seq: ++seq,
         ts: new Date().toISOString(), so: Platform.OS, navegador: 'Expo', vista: 'celular',
-        detalhe: updateId ?? 'embutido' });
+        versao: Constants.expoConfig?.version, detalhe: updateId ?? 'embutido' });
     }
-    transporte.registrar(base, { ...evento, cli, seq: ++seq, ts: new Date().toISOString() });
+    transporte.registrar(base, { ...evento, cliente, cli, seq: ++seq, ts: new Date().toISOString() });
   };
   configureDiag({ registrar, novoReq: () => `${cli}-${(++seq).toString(36)}` });
   const replay = () => {
@@ -71,18 +76,35 @@ export function iniciarDiag(): void {
         pilha: (report.stack || report.componentStack).slice(0, 300),
         operacao: [report.metadata.runtime, report.metadata.updateId].filter(Boolean).join(' · '),
       };
+      const eventos = [event, { ...fatalTelemetryEvent(report), cliente, cli, seq: ++seq }];
       const response = await fetch(`${baseOf(server).replace(/\/+$/, '')}/api/diag`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${server.token}` },
-        body: JSON.stringify({ eventos: [event] }), signal: AbortSignal.timeout(8000),
+        body: JSON.stringify({ eventos }), signal: AbortSignal.timeout(8000),
       });
       if (!response.ok) return false;
       const ack: unknown = await response.json();
-      return !!ack && typeof ack === 'object' && 'gravadas' in ack && ack.gravadas === 1;
+      return !!ack && typeof ack === 'object' && 'gravadas' in ack && ack.gravadas === eventos.length;
     }).catch(() => { console.warn('fatal_error_diary_replay_failed'); });
   };
   replay();
+  // Só ao servidor ativo (o `registrar` sem destino); fora da tela não conta.
+  let visibleSince: number | null = (AppState.currentState ?? 'active') === 'active' ? Date.now() : null;
+  // Só minutos inteiros saem: o servidor arredonda cada evento, e idas curtas ao fundo somariam zero.
+  let visibleRest = 0;
+  const visibleTime = () => {
+    if (visibleSince === null) return;
+    const now = Date.now();
+    visibleRest = Math.min(visibleRest + now - visibleSince, VISIBLE_EVERY_MS);
+    visibleSince = now;
+    const ms = visibleRest - (visibleRest % 60_000);
+    visibleRest -= ms;
+    if (ms > 0) registrar({ evento: 'app.tempo', ms });
+  };
+  setInterval(() => { visibleTime(); void transporte.enviar(); }, VISIBLE_EVERY_MS);
   useServers.subscribe(() => { void transporte.enviar(); replay(); });
   AppState.addEventListener('change', (estado) => {
+    if (estado === 'active') { if (visibleSince === null) visibleSince = Date.now(); }
+    else { visibleTime(); visibleSince = null; }
     registrar({ evento: estado === 'active' ? 'app.visivel' : 'app.oculto' });
     void transporte.enviar();
     if (estado === 'active') replay();

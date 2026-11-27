@@ -9,6 +9,7 @@ const estado = vi.hoisted(() => ({
 }));
 vi.mock('react-native', () => ({ Platform: { OS: 'android' }, AppState: { addEventListener: estado.appState } }));
 vi.mock('expo-updates', () => ({ updateId: 'update-fixture' }));
+vi.mock('expo-constants', () => ({ default: { expoConfig: { version: '0.1.0' } } }));
 vi.mock('../stores/prefs', () => ({ prefs: { getString: () => undefined } }));
 vi.mock('../stores/servers', () => ({ useServers: {
   getState: () => ({ servers: estado.servidores, active: () => ({ baseUrl: estado.base }) }),
@@ -16,7 +17,8 @@ vi.mock('../stores/servers', () => ({ useServers: {
 } }));
 import { iniciarDiag, withMachineRequestDiagnostics } from './diag';
 
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
+// O servidor ativo é estado do módulo: um teste que o troca não pode valer para o seguinte.
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); estado.base = 'https://a.test'; });
 
 it('instala sink uma vez, grava plataforma e eventos no destino capturado', async () => {
   vi.useFakeTimers();
@@ -31,10 +33,20 @@ it('instala sink uma vez, grava plataforma e eventos no destino capturado', asyn
   expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/diag');
   const eventos = JSON.parse(fetchMock.mock.calls[0][1]!.body as string).eventos;
   expect(eventos).toEqual([
-    expect.objectContaining({ evento: 'app.abriu', so: 'android' }),
-    expect.objectContaining({ evento: 'acao', req }),
+    expect.objectContaining({ evento: 'app.abriu', so: 'android', versao: '0.1.0' }),
+    expect.objectContaining({ evento: 'acao', req, cliente: 'android' }),
   ]);
   expect(JSON.stringify(eventos)).not.toMatch(/token-a|https:/);
+
+  // A cada 5 min em primeiro plano, o tempo na tela vai ao servidor ativo.
+  estado.base = 'https://a.test';
+  fetchMock.mockClear();
+  fetchMock.mockImplementation(async (_url, init) =>
+    new Response(JSON.stringify({ gravadas: JSON.parse(init!.body as string).eventos.length })));
+  await vi.advanceTimersByTimeAsync(300_000 - 4000);
+  const tempo = fetchMock.mock.calls.flatMap(([url, init]) => JSON.parse(init!.body as string).eventos
+    .filter((e: { evento: string }) => e.evento === 'app.tempo').map((e: object) => [url, e]));
+  expect(tempo).toEqual([['https://a.test/api/diag', expect.objectContaining({ ms: 300_000, cliente: 'android' })]]);
 });
 
 it.each(['401', 'timeout', 'network', 'cancelled'] as const)('registra falha %s do pedido sem token, corpo ou query', async (kind) => {

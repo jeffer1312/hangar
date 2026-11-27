@@ -1,4 +1,4 @@
-import { acceptUpdateWarningsEm, getAtualizacaoEm, getAutoReportEm, getIdentificadorEm, getUpdateNotesEm, iniciarAtualizacaoEm, type UpdateAcceptResult } from './api';
+import { acceptUpdateWarningsEm, getAtualizacaoEm, getAutoReportEm, getIdentificadorEm, getTelemetry, getUpdateNotesEm, iniciarAtualizacaoEm, type UpdateAcceptResult } from './api';
 import { isOwnMachine } from './machineImport';
 import { registrar as registerDiagnostic } from './diag';
 import type { Server } from './servers';
@@ -77,15 +77,26 @@ export function ownUpdatableServers(list: readonly Server[]): Server[] {
   return list.filter((server) => isOwnMachine(server) && !server.disabled);
 }
 
-/** As máquinas próprias que ainda não responderam ao relatório automático: uma pergunta só cobre todas.
- *  Servidor sem o recurso fica de fora; falha de leitura vai ao diário e a pergunta fica para a próxima abertura. */
-export async function autoReportUnanswered(list: readonly Server[], fetcher?: typeof fetch): Promise<Server[]> {
+/** As máquinas próprias em que `isPending` vale para a leitura: uma pergunta só cobre todas.
+ *  Falha de leitura vai ao diário com `failure` e a pergunta fica para a próxima abertura. */
+async function unanswered<T>(list: readonly Server[], read: (server: Server) => Promise<T>, isPending: (answer: T) => boolean,
+  failure: string): Promise<Server[]> {
   const own = ownUpdatableServers(list);
-  const answers = await Promise.all(own.map((server) => getAutoReportEm(server, fetcher).catch((error: unknown) => {
-    registerDiagnostic({ evento: 'auto_report.read_failed', nivel: 'aviso', codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
-    return undefined;
+  const pending = await Promise.all(own.map((server) => read(server).then(isPending, (error: unknown) => {
+    registerDiagnostic({ evento: failure, nivel: 'aviso', codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
+    return false;
   })));
-  return own.filter((_, index) => answers[index] === null);
+  return own.filter((_, index) => pending[index]);
+}
+
+/** Relatório automático sem resposta; servidor sem o recurso fica de fora. */
+export function autoReportUnanswered(list: readonly Server[], fetcher?: typeof fetch): Promise<Server[]> {
+  return unanswered(list, (server) => getAutoReportEm(server, fetcher), (answer) => answer === null, 'auto_report.read_failed');
+}
+
+/** Telemetria sem resposta; máquina sem telemetria ou desligada pelo ambiente não pergunta. */
+export function telemetryUnanswered(list: readonly Server[], fetcher?: typeof fetch): Promise<Server[]> {
+  return unanswered(list, (server) => getTelemetry(server, fetcher), (answer) => answer?.consent === null && !answer?.disabled_by, 'telemetry.read_failed');
 }
 
 /** O que a pessoa aceitou na folha para uma máquina: os ids lidos e, com o aviso da migração, o modo. */

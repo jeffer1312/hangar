@@ -3728,6 +3728,7 @@ dependencies = [
  "str0m",
  "symphonia",
  "sysinfo 0.39.6",
+ "tempfile",
  "tokio",
  "tree-sitter",
  "tree-sitter-c-sharp",

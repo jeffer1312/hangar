@@ -705,6 +705,15 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   da máquina (`~/.hangar/auto-report.json`, perguntado uma vez pelos clientes; sem resposta, nada
   sai); o resultado mora em `.hangar-update/relatorio.json`, fora do `estado.json`. Contrato em
   [plataforma.md](docs/decisoes/plataforma.md#relatório-automático-quando-a-atualização-falha-30102026).
+- **Telemetria anônima é do Rust: crate `hangar-telemetry`, ligado pelo servidor em
+  `telemetry_routes.rs` e `telemetry_hooks.rs`.** Conta só ação do dono (convidado, 8766 e login de
+  convidado nunca) e a saúde do servidor; nunca texto livre: toda dimensão é enum, bool, versão ou
+  código de lista fechada, e o que está fora vira `other`. Nada é contado nem gravado sem
+  `consent: true` em `~/.hangar/telemetry.json`; `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1` e CI vencem
+  e apagam a fila. Um pacote por dia UTC; o receptor (`services/telemetry-ingest`) grava evento e
+  valor que não conhece, desde que no formato do `wire`, em vez de recusá-los. Evento ou valor novo entra em `events.rs` e em
+  [`docs/telemetria.md`](docs/telemetria.md) no mesmo commit. Motivo em
+  [plataforma.md](docs/decisoes/plataforma.md#telemetria-anônima-só-o-dono-lista-fechada-envio-diário-26112026).
 - **Aviso na tela só para ação que falhou ou bloqueio real.** Falha de acompanhamento, dado velho
   ou condição que some sozinha vai ao diário de uso e ao log, nunca a faixa, anel ou linha. A
   classificação é uma só, `problem_gate::diagnostic`; os dois portões de saída (`gate_problem` da

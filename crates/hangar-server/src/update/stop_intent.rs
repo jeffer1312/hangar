@@ -362,10 +362,37 @@ pub(crate) fn mark_this_process_running(hangar_dir: &Path, now: &str) -> u32 {
 pub fn record_previous(hangar_dir: &Path, update_state: &Path, previous: Option<&Previous>, pid: Option<u32>,
     errors: impl FnOnce() -> String) -> Vec<Value> {
     let now = now_secs();
-    previous_exit(hangar_dir, previous, pid, errors, &SystemdJournal, now, || match crate::update::running_package() {
+    let lines = previous_exit(hangar_dir, previous, pid, errors, &SystemdJournal, now, || match crate::update::running_package() {
         Some(package) => update_run(update_state, &package.version, now),
         None => Ok(None),
-    })
+    });
+    remember_exits(&lines);
+    lines
+}
+
+const EXIT_KINDS: &[&str] = &["crash", "update", "requested"];
+/// Causas que as marcas, a parada e o journal (`journal_cause`) gravam; outra sai `other`.
+const EXIT_CAUSES: &[&str] = &["none", "package", "rollback", "checkout", "migrate", "restart_only", "dev_mode", "sigterm", "sigint",
+    "serve_failed", "out_of_memory", "timeout", "signal", "exit_code", "core_dump", "watchdog", "resources", "start_limit_hit"];
+
+/// A saída da vida anterior espera a telemetria, que só abre depois da subida.
+static PREVIOUS_EXITS: std::sync::Mutex<Vec<(hangar_telemetry::events::Code, hangar_telemetry::events::Code)>> = std::sync::Mutex::new(Vec::new());
+
+fn remember_exits(lines: &[Value]) {
+    use hangar_telemetry::events::Code;
+    let exits = lines.iter().filter(|line| line["evento"] == "hangar_server.saida").map(|line| {
+        (Code::known(line["tipo"].as_str().unwrap_or_default(), EXIT_KINDS), Code::known(line["causa"].as_str().unwrap_or("none"), EXIT_CAUSES))
+    });
+    PREVIOUS_EXITS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(exits);
+}
+
+/// `server_exit` da vida anterior, uma vez: a lista se esvazia ao contar.
+pub fn count_previous_exits(telemetry: &hangar_telemetry::Telemetry) {
+    use hangar_telemetry::events::{Dims, Event};
+    let exits = std::mem::take(&mut *PREVIOUS_EXITS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    for (kind, cause) in exits {
+        telemetry.count(Event::ServerExit, Dims::new().with("kind", kind).with("cause", cause), 1);
+    }
 }
 
 /// Uma atualização no passo de reiniciar, indo para a versão que acaba de subir.

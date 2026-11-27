@@ -84,6 +84,8 @@ pub mod state;
 pub mod speech;
 pub mod stats;
 pub mod status;
+pub mod telemetry_routes;
+pub mod telemetry_hooks;
 pub mod usage_cli;
 pub mod send_cli;
 pub mod subagents;

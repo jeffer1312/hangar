@@ -110,11 +110,18 @@ fn insert(home: &Path, name: &str, fallen: Fallen) {
 /// Grava só se o nome não foi fechado de propósito desde `since`. Conferido sob a trava do mapa: o `forget`
 /// marca antes de remover, então ou ele vê o registro e o tira, ou a gravação vê a marca e desiste.
 pub fn insert_unless_forgotten(home: &Path, name: &str, since: std::time::Instant, fallen: Fallen) -> bool {
-    with(home, |map| {
-        if forgotten_since(name, since) { return (false, false); }
+    let cause = fallen.problem();
+    let (inserted, new) = with(home, |map| {
+        if forgotten_since(name, since) { return ((false, false), false); }
         let changed = map.insert(name.to_owned(), fallen.clone()).as_ref() != Some(&fallen);
-        (true, changed)
-    })
+        ((true, changed), changed)
+    });
+    // Só a queda nova: a mesma relida não conta de novo.
+    if new && let Some(telemetry) = crate::telemetry_hooks::installed() {
+        use hangar_telemetry::events::{Code, Dims, Event};
+        telemetry.count(Event::SessionFallen, Dims::new().with("cause", Code::fixed(cause)), 1);
+    }
+    inserted
 }
 
 pub(crate) fn remember_provider_switch(home: &Path, name: &str, fallen: Fallen) -> bool {

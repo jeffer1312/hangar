@@ -65,9 +65,12 @@ pub(crate) fn organized(code: Option<&str>) {
 /// Roda o pedido e grava uma linha no diário do servidor (`~/.hangar/logs/diario/servidor-rust`).
 /// Funções simples, não `async fn`: cada camada `async` guardaria outra cópia do futuro do pedido, que em debug já
 /// estoura a pilha da thread de teste.
-pub(crate) fn measure(st: &AppState, route: &'static str, work: impl Future<Output = Response>) -> impl Future<Output = Response> {
+pub(crate) fn measure(st: &AppState, route: &'static str, guest: bool, work: impl Future<Output = Response>) -> impl Future<Output = Response> {
     let dir = crate::diag::diary_dir_in(&st.accounts.env);
+    // Ditado do convidado não conta.
+    let telemetry = st.telemetry.clone().filter(|t| !guest && t.enabled());
     measure_into(route, work, move |line| {
+        if let Some(telemetry) = &telemetry { count(telemetry, route, &line); }
         // O descarte pode vir no desligamento do runtime, onde `spawn_blocking` entraria em pânico.
         if tokio::runtime::Handle::try_current().is_ok() { crate::diag::record(dir, vec![line], "ditado"); }
     })
@@ -81,6 +84,19 @@ fn measure_into(route: &'static str, work: impl Future<Output = Response>, recor
         line.write(Some(response.status().as_u16()));
         response
     })
+}
+
+/// `dictation`: rota, desfecho e a faixa do total da linha do diário (sem texto nem código livre).
+fn count(telemetry: &hangar_telemetry::Telemetry, route: &'static str, line: &serde_json::Value) {
+    use hangar_telemetry::events::{Code, Dims, Event};
+    let outcome = match (line["status"].is_null(), line["nivel"].as_str()) {
+        (true, _) => "cancelled",
+        (false, Some("ok")) => "ok",
+        (false, Some("aviso")) => "warning",
+        _ => "error",
+    };
+    let dims = Dims::new().with("route", Code::fixed(route)).with("status", Code::fixed(outcome));
+    telemetry.duration(Event::Dictation, dims, std::time::Duration::from_millis(line["total_ms"].as_u64().unwrap_or(0)));
 }
 
 /// A linha do pedido. Sem status (conexão que caiu e descartou o pedido), sai no `Drop` como `cancelled`.

@@ -40,6 +40,9 @@ static CATALOG: LazyLock<Vec<Tool>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("catalog.json")).expect("catalog.json é o catálogo do MCP")
 });
 
+/// Os nomes do catálogo, para o `mcp_tool`: nome fora dele sai `other`.
+static TOOL_NAMES: LazyLock<Vec<&'static str>> = LazyLock::new(|| CATALOG.iter().map(|tool| &*tool.name).collect());
+
 /// O cliente pode adiar o schema e mostrar só o nome da tool; as instruções sempre chegam, então
 /// levam os campos obrigatórios para o modelo não chutar `to`/`message`.
 static FULL_INSTRUCTIONS: LazyLock<String> = LazyLock::new(|| {

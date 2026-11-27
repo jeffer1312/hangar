@@ -1250,6 +1250,116 @@ impl Hangar {
     }
 }
 
+/// `app.tempo` sai neste compasso; o servidor soma em minutos e corta cada evento em 5 min.
+const VISIBLE_EVERY: Duration = Duration::from_secs(5 * 60);
+
+/// Os eventos de telemetria do app, mandados ao servidor por `POST /api/diag`; quem decide contar é o servidor, pela
+/// escolha do dono. Fica fora do `Device`, que nasce de novo a cada conexão.
+pub(super) struct ClientTelemetry {
+    /// Tempo à vista ainda não mandado, e desde quando a janela está fora da bandeja (`shown` na abertura).
+    visible: Duration,
+    visible_since: Option<Instant>,
+    /// A conversa aberta esperando aparecer: quando o clique veio e a máquina dela.
+    chat_open: Option<(Instant, Api)>,
+    /// A execução anterior caiu: sai um `app.queda` na primeira conexão.
+    crashed: bool,
+}
+
+impl ClientTelemetry {
+    /// Do pânico só fica o "houve": o texto leva caminho e mensagem.
+    pub(super) fn new(crash: Option<&str>) -> Self {
+        Self { visible: Duration::ZERO, visible_since: None, chat_open: None, crashed: crash.is_some() }
+    }
+    pub(super) fn hidden(&mut self, now: Instant) {
+        if let Some(since) = self.visible_since.take() { self.visible += now.saturating_duration_since(since); }
+    }
+    pub(super) fn shown(&mut self, now: Instant) { if self.visible_since.is_none() { self.visible_since = Some(now); } }
+    fn take_visible(&mut self, now: Instant) -> Duration {
+        if let Some(since) = self.visible_since.as_mut() {
+            self.visible += now.saturating_duration_since(*since);
+            *since = now;
+        }
+        std::mem::take(&mut self.visible)
+    }
+    /// Uma vez por queda.
+    fn take_crash(&mut self) -> Option<Value> {
+        std::mem::take(&mut self.crashed).then(|| telemetry_batch(serde_json::json!({"evento": "app.queda", "codigo": "panic"})))
+    }
+}
+
+/// Um evento no lote do diário, com o tipo do cliente.
+fn telemetry_batch(mut event: Value) -> Value {
+    event["cliente"] = Value::from("native");
+    serde_json::json!({"eventos": [event]})
+}
+
+/// Inteiro: o servidor descarta `ms` fracionário.
+fn millis(took: Duration) -> u64 { u64::try_from(took.as_millis()).unwrap_or(u64::MAX) }
+
+/// Sem retorno na tela: servidor sem telemetria (404) ou fora do ar só perde a contagem.
+fn send_telemetry(runtime: &tokio::runtime::Runtime, api: Api, body: Value) {
+    drop(runtime.spawn(async move { let _ = api.server_send(reqwest::Method::POST, &["diag"], Some(body), 10).await; }));
+}
+
+impl Hangar {
+    pub(super) fn start_client_telemetry(&mut self, cx: &mut Context<Self>) {
+        self.client_telemetry.shown(Instant::now());
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(VISIBLE_EVERY).await;
+            if this.update(cx, |this, _| this.send_visible_time()).is_err() { break; }
+        }).detach();
+    }
+
+    /// Só à máquina ativa: o tempo é do app, e mandado a todas contaria várias vezes.
+    fn send_visible_time(&mut self) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let ms = millis(self.client_telemetry.take_visible(Instant::now()));
+        if ms > 0 { send_telemetry(&self.runtime, api, telemetry_batch(serde_json::json!({"evento": "app.tempo", "ms": ms}))); }
+    }
+
+    pub(super) fn send_crash_telemetry(&mut self) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        if let Some(body) = self.client_telemetry.take_crash() { send_telemetry(&self.runtime, api, body); }
+    }
+
+    /// Começa a medir a abertura da conversa, na máquina dela; convite fica de fora.
+    pub(super) fn chat_open_started(&mut self, opens_chat: bool) {
+        let invite = self.server_entry(&self.open_server()).is_some_and(|s| s.invite);
+        self.client_telemetry.chat_open = self.session_api().filter(|_| opens_chat && !invite).map(|api| (Instant::now(), api));
+    }
+
+    /// Histórico na tela: o tempo sai no quadro seguinte, o primeiro com a conversa desenhada. Abertura que deu erro não conta.
+    pub(super) fn chat_open_rendered(&mut self, window: &mut Window) {
+        if self.loading { return; }
+        let Some((started, api)) = self.client_telemetry.chat_open.take() else { return };
+        if self.error.is_some() || self.selected.is_none() { return; }
+        let runtime = self.runtime.clone();
+        window.on_next_frame(move |_, _| {
+            send_telemetry(&runtime, api, telemetry_batch(serde_json::json!({"evento": "chat.aberto", "ms": millis(started.elapsed())})));
+        });
+    }
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::{ClientTelemetry, millis};
+    use std::time::Duration;
+
+    #[test]
+    fn telemetry_crash_event_never_carries_the_panic_text() {
+        let panic = "[2026-11-26 10:00:00] pânico na thread main (v1.2.3): called `Option::unwrap()` on a `None` value at src/app.rs:42";
+        let mut telemetry = ClientTelemetry::new(Some(panic));
+        assert_eq!(telemetry.take_crash(), Some(serde_json::json!({"eventos": [{"evento": "app.queda", "codigo": "panic", "cliente": "native"}]})));
+        assert_eq!(telemetry.take_crash(), None, "um por queda");
+        assert_eq!(ClientTelemetry::new(None).take_crash(), None);
+    }
+
+    #[test]
+    fn telemetry_ms_is_a_whole_number() {
+        assert_eq!(millis(Duration::from_micros(1_500_700)), 1_500);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Currency, Level, diary_line, legible, money, pending};
@@ -1367,28 +1477,25 @@ mod tests {
 
     #[test]
     fn update_channel_404_is_recorded_for_get_and_put() {
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("hangar-channel-log-{}-{stamp}", std::process::id()));
-        let path = dir.join("native.log");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native.log");
         super::record_channel_404(&path, false).unwrap();
         super::record_channel_404(&path, true).unwrap();
         let log = std::fs::read_to_string(&path).unwrap();
         assert!(log.contains("method=GET status=404"));
         assert!(log.contains("method=PUT status=404"));
         assert_eq!(log.lines().count(), 2);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn update_channel_log_failure_reaches_feedback_channel() {
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let blocker = std::env::temp_dir().join(format!("hangar-log-blocker-{}-{stamp}", std::process::id()));
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
         std::fs::write(&blocker, "blocked").unwrap();
         let mut failures = 0;
         super::record_channel_404_or_report(&blocker.join("native.log"), false, |_| failures += 1);
         super::record_channel_404_or_report(&blocker.join("native.log"), true, |_| failures += 1);
         assert_eq!(failures, 2);
-        std::fs::remove_file(blocker).unwrap();
     }
 
     #[test]
