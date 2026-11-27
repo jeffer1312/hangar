@@ -369,6 +369,7 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
     state.preview = hangar_server::config::preview_listen(state.cfg.listen);
     state.telemetry = opening.await.unwrap_or_else(|_| {
         tracing::warn!(code = "telemetry_unavailable", "telemetria desligada nesta vida: a abertura não terminou");
+        state.diag.report("telemetry.unavailable", "", "telemetry_open_failed", "telemetria desligada nesta vida: a abertura não terminou");
         None
     });
     let telemetry = state.telemetry.clone();

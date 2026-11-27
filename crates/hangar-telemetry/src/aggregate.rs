@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use crate::buckets::Bucket;
 use crate::events::{Dims, Event};
 use crate::queue::{self, DayFile};
+use crate::send::Failure;
 use crate::state::{self, State};
 use crate::switch::{self, Disabled};
 use crate::wire::{Counter, Env, is_id};
@@ -37,14 +38,17 @@ pub struct Telemetry {
     backend: Option<PathBuf>,
     pub(crate) batch_env: Env,
     pub(crate) lookup: EnvLookup,
-    clock: Clock,
+    pub(crate) clock: Clock,
     enabled: AtomicBool,
     pub(crate) settings: Mutex<Settings>,
     live: Mutex<Live>,
     /// Ordena quem toca o disco: gravação, envio, consentimento. Ordem das travas: `io`, `settings`, `live`.
     pub(crate) io: Mutex<()>,
-    /// Arquivos ilegíveis que foram recomeçados; a tarefa de fundo os entrega ao diário.
-    recovered: Mutex<Vec<io::Error>>,
+    /// O que não fez a operação falhar mas o diário precisa saber (arquivo ilegível recomeçado, dias
+    /// apagados pelo teto); a tarefa de fundo entrega.
+    notes: Mutex<Vec<Failure>>,
+    /// O dia (UTC) do último receptor fora do ar já avisado: um aviso por dia.
+    pub(crate) unreachable_day: Mutex<Option<String>>,
 }
 
 pub(crate) struct Settings {
@@ -138,7 +142,8 @@ impl Telemetry {
             settings: Mutex::new(Settings { state, disabled: None, env_unreadable: false }),
             live: Mutex::new(Live::new(Day::new(day_of(now)), false)),
             io: Mutex::new(()),
-            recovered: Mutex::new(recovered.into_iter().collect()),
+            notes: Mutex::new(recovered.into_iter().map(Failure::Disk).collect()),
+            unreachable_day: Mutex::new(None),
             clock,
         };
         telemetry.refresh()?;
@@ -178,26 +183,31 @@ impl Telemetry {
         live.dirty = true;
     }
 
-    /// `true` só na primeira vez que `key` passa por aqui, também entre reinícios; desligada ou sem
-    /// conseguir gravar a marca, `false` (não contar é melhor que contar duas vezes). Lê e grava disco.
-    pub fn once(&self, key: &str) -> bool {
+    /// `Ok(true)` só na primeira vez que `key` passa por aqui, também entre reinícios; desligada,
+    /// `Ok(false)`. Marca que não se lê nem se grava volta `Err`: quem chama não conta nem dá o
+    /// feito por feito. Arquivo ilegível recomeça vazio e vai ao diário. Lê e grava disco.
+    pub fn once(&self, key: &str) -> io::Result<bool> {
         const KEEP: usize = 64;
         if !self.enabled() {
-            return false;
+            return Ok(false);
         }
-        let Ok(_io) = lock(&self.io) else { return false };
+        let _io = lock(&self.io)?;
         let mut keys = match queue::read_once(&self.home) {
             Ok(keys) => keys,
-            Err(e) if e.kind() == io::ErrorKind::InvalidData => Vec::new(),
-            Err(_) => return false,
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                self.note(Failure::Disk(e));
+                Vec::new()
+            }
+            Err(e) => return Err(e),
         };
         if keys.iter().any(|known| known == key) {
-            return false;
+            return Ok(false);
         }
         keys.push(key.to_owned());
         let excess = keys.len().saturating_sub(KEEP);
         keys.drain(..excess);
-        queue::write_once(&self.home, &keys).is_ok()
+        queue::write_once(&self.home, &keys)?;
+        Ok(true)
     }
 
     pub fn enabled(&self) -> bool { self.enabled.load(Ordering::SeqCst) }
@@ -208,8 +218,10 @@ impl Telemetry {
     /// O que desliga apesar do consentimento, na última leitura (subida, consentimento ou tarefa de fundo).
     pub fn disabled_by(&self) -> Option<Disabled> { lock(&self.settings).ok().and_then(|s| s.disabled) }
 
-    /// Grava a escolha; `false` apaga a fila. Bloqueante.
-    pub fn set_consent(&self, consent: bool) -> io::Result<()> {
+    /// Grava a escolha; `false` apaga a fila. `Err` só quando a escolha não foi gravada. Gravada, ela
+    /// vale: a falha ao aplicá-la (ler o dia, apagar a fila) volta em `Ok(Some)` para o diário, e a
+    /// passada seguinte tenta de novo. Bloqueante.
+    pub fn set_consent(&self, consent: bool) -> io::Result<Option<io::Error>> {
         {
             let _io = lock(&self.io)?;
             let mut settings = lock(&self.settings)?;
@@ -218,7 +230,7 @@ impl Telemetry {
             state::store(&self.home, &next)?;
             settings.state = next;
         }
-        self.refresh()
+        Ok(self.refresh().err())
     }
 
     /// O dono desta máquina e quando ele nasceu (segundos Unix), para a convergência com os peers.
@@ -255,6 +267,11 @@ impl Telemetry {
         if !self.enabled() {
             return Ok(());
         }
+        self.save_held()
+    }
+
+    /// `save` com a trava `io` já segura.
+    fn save_held(&self) -> io::Result<()> {
         let (closed, current, new_file) = {
             let mut live = lock(&self.live)?;
             live.roll(day_of((self.clock)()));
@@ -276,21 +293,24 @@ impl Telemetry {
             live.on_disk |= same_day;
         }
         if new_file {
-            queue::cap(&self.home)?;
+            let pruned = queue::cap(&self.home)?;
+            if pruned > 0 {
+                self.note(Failure::Pruned(pruned));
+            }
         }
         Ok(())
     }
 
     pub(crate) fn pending_days(&self) -> io::Result<(String, Vec<String>)> { lock(&self.live).map(|live| live.pending()) }
 
-    fn note(&self, error: io::Error) {
-        if let Ok(mut recovered) = self.recovered.lock() {
-            recovered.push(error);
+    fn note(&self, failure: Failure) {
+        if let Ok(mut notes) = self.notes.lock() {
+            notes.push(failure);
         }
     }
 
-    pub(crate) fn take_recovered(&self) -> Vec<io::Error> {
-        self.recovered.lock().map(|mut recovered| std::mem::take(&mut *recovered)).unwrap_or_default()
+    pub(crate) fn take_notes(&self) -> Vec<Failure> {
+        self.notes.lock().map(|mut notes| std::mem::take(&mut *notes)).unwrap_or_default()
     }
 
     /// Relê os desligamentos e grava: a passada de 15 min da tarefa de fundo.
@@ -315,7 +335,7 @@ impl Telemetry {
             settings.disabled = disabled;
             let was_unreadable = std::mem::replace(&mut settings.env_unreadable, env_unreadable);
             if let Some(error) = unreadable.filter(|_| !was_unreadable) {
-                self.note(error);
+                self.note(Failure::Disk(error));
             }
             settings.state.consent
         };
@@ -328,7 +348,7 @@ impl Telemetry {
                     Ok(None) => Live::new(Day::new(today), false),
                     Err(e) if e.kind() == io::ErrorKind::InvalidData => {
                         queue::remove_day(&self.home, &today)?;
-                        self.note(e);
+                        self.note(Failure::Disk(e));
                         Live::new(Day::new(today), false)
                     }
                     Err(e) => return Err(e),
@@ -337,6 +357,10 @@ impl Telemetry {
                 self.enabled.store(true, Ordering::SeqCst);
             }
             return Ok(());
+        }
+        // `.env` que não se lê não é a pessoa pedindo para parar: o que só está na memória vai à fila antes.
+        if env_unreadable && self.enabled() {
+            self.save_held()?;
         }
         self.enabled.store(false, Ordering::SeqCst);
         *lock(&self.live)? = Live::new(Day::new(today), false);
@@ -464,14 +488,60 @@ pub(crate) mod tests {
     fn once_is_true_only_the_first_time() {
         let fx = Fixture::new();
         let telemetry = fx.start_as_is();
-        assert!(!telemetry.once("x"), "sem consentimento nada é marcado");
+        assert!(!telemetry.once("x").unwrap(), "sem consentimento nada é marcado");
         telemetry.set_consent(true).unwrap();
-        assert!(telemetry.once("x"));
-        assert!(!telemetry.once("x"));
+        assert!(telemetry.once("x").unwrap());
+        assert!(!telemetry.once("x").unwrap());
         drop(telemetry);
         let telemetry = fx.start();
-        assert!(!telemetry.once("x"));
-        assert!(telemetry.once("y"));
+        assert!(!telemetry.once("x").unwrap());
+        assert!(telemetry.once("y").unwrap());
+    }
+
+    #[test]
+    fn once_that_cannot_read_its_marks_is_an_error() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        // Uma pasta no lugar do arquivo: a leitura falha em todo sistema, sem ser arquivo ilegível.
+        std::fs::create_dir_all(fx.home.path().join(".hangar/telemetry/once.json")).unwrap();
+        assert!(telemetry.once("x").is_err());
+        std::fs::remove_dir(fx.home.path().join(".hangar/telemetry/once.json")).unwrap();
+        assert!(telemetry.once("x").unwrap(), "a marca não ficou dada por feita");
+    }
+
+    #[test]
+    fn consent_is_kept_when_applying_it_fails() {
+        let fx = Fixture::new();
+        let telemetry = fx.start_as_is();
+        let today = fx.queue().join("2026-11-26.json");
+        std::fs::create_dir_all(&today).unwrap();
+        assert!(telemetry.set_consent(true).unwrap().is_some());
+        assert_eq!(telemetry.consent(), Some(true));
+        let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(fx.home.path().join(".hangar/telemetry.json")).unwrap()).unwrap();
+        assert_eq!(stored["consent"], true, "a escolha foi gravada");
+        assert!(!telemetry.enabled());
+        std::fs::remove_dir(&today).unwrap();
+        telemetry.tick().unwrap();
+        assert!(telemetry.enabled(), "a passada seguinte aplica");
+    }
+
+    #[test]
+    fn unreadable_dotenv_saves_what_was_only_in_memory() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.count(Event::MessageSent, message(), 1);
+        fx.next_day();
+        telemetry.count(Event::MessageSent, message(), 2);
+        let dotenv = fx.home.path().join(".hangar/config/.env");
+        std::fs::create_dir_all(&dotenv).unwrap();
+        telemetry.tick().unwrap();
+        assert!(!telemetry.enabled());
+        assert_eq!(queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap().counters[0].count, 1);
+        assert_eq!(queue::read_day(fx.home.path(), "2026-11-27").unwrap().unwrap().counters[0].count, 2);
+        std::fs::remove_dir(&dotenv).unwrap();
+        telemetry.tick().unwrap();
+        assert!(telemetry.enabled());
+        assert_eq!(telemetry.counters()[0].count, 2, "o dia volta da fila");
     }
 
     #[test]
@@ -497,7 +567,7 @@ pub(crate) mod tests {
         std::fs::write(fx.queue().join("2026-11-26.json"), "{").unwrap();
         let telemetry = fx.start();
         assert!(telemetry.enabled());
-        assert_eq!(telemetry.take_recovered().len(), 1);
+        assert_eq!(telemetry.take_notes().len(), 1);
         assert!(!fx.queue().join("2026-11-26.json").exists());
         telemetry.count(Event::MessageSent, message(), 2);
         telemetry.save().unwrap();
@@ -512,7 +582,7 @@ pub(crate) mod tests {
         let telemetry = fx.start_as_is();
         assert_eq!(telemetry.consent(), None);
         assert!(!telemetry.enabled());
-        assert_eq!(telemetry.take_recovered().len(), 1);
+        assert_eq!(telemetry.take_notes().len(), 1);
         assert_ne!(telemetry.owner().unwrap().0, owner);
         assert_eq!(fx.start_as_is().owner().unwrap(), telemetry.owner().unwrap(), "o estado novo foi gravado");
     }
@@ -529,7 +599,7 @@ pub(crate) mod tests {
         let telemetry = fx.start();
         assert!(!telemetry.enabled());
         assert_eq!(telemetry.disabled_by(), None);
-        assert_eq!(telemetry.take_recovered().len(), 1);
+        assert_eq!(telemetry.take_notes().len(), 1);
         assert!(fx.queue().join("2026-11-26.json").exists());
     }
 
@@ -539,8 +609,9 @@ pub(crate) mod tests {
         let telemetry = fx.start();
         std::fs::create_dir_all(fx.home.path().join(".hangar/telemetry")).unwrap();
         std::fs::write(fx.home.path().join(".hangar/telemetry/once.json"), "{").unwrap();
-        assert!(telemetry.once("x"));
-        assert!(!telemetry.once("x"));
+        assert!(telemetry.once("x").unwrap());
+        assert!(matches!(telemetry.take_notes().as_slice(), [Failure::Disk(e)] if e.kind() == io::ErrorKind::InvalidData));
+        assert!(!telemetry.once("x").unwrap());
     }
 
     #[test]
@@ -558,5 +629,6 @@ pub(crate) mod tests {
         assert_eq!(days.len(), queue::MAX_DAYS);
         assert_eq!(days.first().map(String::as_str), Some("2026-11-13"));
         assert_eq!(days.last().map(String::as_str), Some("2026-11-26"));
+        assert!(matches!(telemetry.take_notes().as_slice(), [Failure::Pruned(1)]), "o dia apagado vai ao diário");
     }
 }

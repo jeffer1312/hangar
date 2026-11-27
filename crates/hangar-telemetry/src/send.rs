@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use hangar_core::ids::random_hex;
 
-use crate::aggregate::{Telemetry, lock};
+use crate::aggregate::{Telemetry, day_of, lock};
 use crate::queue;
 use crate::wire::{Batch, SCHEMA};
 
@@ -28,6 +28,11 @@ pub type Post = Arc<dyn Fn(Vec<u8>) -> PostFuture + Send + Sync>;
 pub enum Failure {
     /// 400 ou 413: o pacote foi apagado.
     Refused(u16),
+    /// Nenhuma tentativa deu 2xx (rede, DNS, TLS, redirecionamento, 401/403/404/410, 5xx): o dia fica na
+    /// fila. `status` é o da última tentativa, `None` sem resposta. No máximo um por dia (UTC).
+    Unreachable { status: Option<u16> },
+    /// Dias que saíram da fila pelo teto, sem ter sido enviados.
+    Pruned(usize),
     Disk(io::Error),
 }
 
@@ -63,8 +68,8 @@ impl Telemetry {
                 if let Err(e) = self.tick() {
                     tell(Failure::Disk(e));
                 }
-                for e in self.take_recovered() {
-                    tell(Failure::Disk(e));
+                for failure in self.take_notes() {
+                    tell(failure);
                 }
                 tokio::time::sleep(SAVE_EVERY).await;
             }
@@ -112,7 +117,12 @@ impl Telemetry {
                 break;
             }
             match self.send_day(&day, post).await {
-                Ok(Some(status)) => failures.push(Failure::Refused(status)),
+                Ok(Some(Failure::Unreachable { status })) => {
+                    if self.first_unreachable_today() {
+                        failures.push(Failure::Unreachable { status });
+                    }
+                }
+                Ok(Some(failure)) => failures.push(failure),
                 Ok(None) => {}
                 Err(e) => failures.push(Failure::Disk(e)),
             }
@@ -120,10 +130,22 @@ impl Telemetry {
         failures
     }
 
-    /// `Ok(Some(status))` só quando o receptor recusou o pacote e ele foi apagado. Sem resposta, 429,
-    /// 5xx ou outro status, o dia fica na fila para a próxima rodada.
-    async fn send_day(&self, day: &str, post: &Post) -> io::Result<Option<u16>> {
+    /// Receptor fora do ar falha em toda rodada: o diário recebe um aviso por dia (UTC).
+    fn first_unreachable_today(&self) -> bool {
+        let today = day_of((self.clock)());
+        let Ok(mut last) = self.unreachable_day.lock() else { return false };
+        if last.as_deref() == Some(today.as_str()) {
+            return false;
+        }
+        *last = Some(today);
+        true
+    }
+
+    /// `Refused` quando o receptor recusou o pacote e ele foi apagado; `Unreachable` quando nenhuma
+    /// tentativa deu 2xx (sem resposta, 429, 5xx ou outro status), e o dia fica na fila para a próxima rodada.
+    async fn send_day(&self, day: &str, post: &Post) -> io::Result<Option<Failure>> {
         let Some(body) = self.prepare(day)? else { return Ok(None) };
+        let mut last = None;
         for wait in RETRY_WAITS {
             tokio::time::sleep(Duration::from_secs(wait)).await;
             if !self.enabled() {
@@ -131,11 +153,11 @@ impl Telemetry {
             }
             match post(body.clone()).await {
                 Some(200..=299) => return self.drop_day(day).map(|()| None),
-                Some(status @ (400 | 413)) => return self.drop_day(day).map(|()| Some(status)),
-                _ => {}
+                Some(status @ (400 | 413)) => return self.drop_day(day).map(|()| Some(Failure::Refused(status))),
+                status => last = status,
             }
         }
-        Ok(None)
+        Ok(Some(Failure::Unreachable { status: last }))
     }
 
     /// O corpo do pacote do dia; o `batch_id` é gravado antes do primeiro envio.
@@ -215,7 +237,7 @@ mod tests {
         telemetry.save().unwrap();
 
         let (down, tried) = receiver(Some(503));
-        assert!(telemetry.send_closed(&down).await.is_empty());
+        assert!(matches!(telemetry.send_closed(&down).await.as_slice(), [Failure::Unreachable { status: Some(503) }]));
         let tried = tried.lock().unwrap().clone();
         assert_eq!(tried.len(), RETRY_WAITS.len());
         assert!(tried.iter().all(|batch| batch.batch_id == tried[0].batch_id && batch.day == "2026-11-26"));
@@ -234,6 +256,25 @@ mod tests {
         let (again, resent) = receiver(Some(200));
         assert!(telemetry.send_closed(&again).await.is_empty());
         assert!(resent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unreachable_receiver_is_reported_once_a_day() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.count(Event::MessageSent, message(), 1);
+        fx.next_day();
+        telemetry.save().unwrap();
+
+        let (silent, tried) = receiver(None);
+        assert!(matches!(telemetry.send_closed(&silent).await.as_slice(), [Failure::Unreachable { status: None }]));
+        assert!(telemetry.send_closed(&silent).await.is_empty(), "o mesmo dia não avisa de novo");
+        assert_eq!(tried.lock().unwrap().len(), 2 * RETRY_WAITS.len());
+        assert!(fx.queue().join("2026-11-26.json").exists(), "o dia fica na fila");
+
+        fx.next_day();
+        let (moved, _) = receiver(Some(301));
+        assert!(matches!(telemetry.send_closed(&moved).await.as_slice(), [Failure::Unreachable { status: Some(301) }]));
     }
 
     #[tokio::test]

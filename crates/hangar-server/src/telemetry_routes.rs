@@ -62,22 +62,28 @@ pub fn open(home: &Path, diag: &crate::diag::DiagClient) -> Option<Arc<Telemetry
 /// O envio diário e a convergência do dono; nada sem telemetria nesta vida.
 pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
     let Some(telemetry) = st.telemetry.clone() else { return Vec::new() };
+    let diag = st.diag.clone();
     let mut tasks = Vec::new();
     match telemetry.http_post() {
         Ok(post) => {
-            let diag = st.diag.clone();
+            let diag = diag.clone();
             tasks.push(tokio::spawn(telemetry.clone().run(post, move |failure| report(&diag, failure))));
         }
         Err(_) => st.diag.report("telemetry.unavailable", "", "telemetry_client_failed", "telemetria sem cliente HTTP: nada é enviado"),
     }
-    let (snapshot, book) = (telemetry.clone(), st.peers.clone());
+    let (snapshot, book, snapshot_diag) = (telemetry.clone(), st.peers.clone(), diag.clone());
     tasks.push(tokio::spawn(async move {
         let mut done: Option<String> = None;
         loop {
             let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
             if done.as_deref() != Some(today.as_str()) {
                 let (telemetry, book) = (snapshot.clone(), book.clone());
-                if let Ok(true) = tokio::task::spawn_blocking(move || peers_snapshot(&telemetry, &book)).await { done = Some(today); }
+                match tokio::task::spawn_blocking(move || peers_snapshot(&telemetry, &book)).await {
+                    Ok(Ok(true)) => done = Some(today),
+                    Ok(Ok(false)) => {}
+                    Ok(Err(e)) => report(&snapshot_diag, Failure::Disk(e)),
+                    Err(_) => task_failed(&snapshot_diag),
+                }
             }
             tokio::time::sleep(SNAPSHOT_EVERY).await;
         }
@@ -85,17 +91,18 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
     let peers = st.peers.clone();
     tasks.push(tokio::spawn(async move {
         loop {
-            converge(&telemetry, &peers).await;
+            converge(&telemetry, &peers, &diag).await;
             tokio::time::sleep(CONVERGE_EVERY).await;
         }
     }));
     tasks
 }
 
-/// Quantas máquinas do `peers.json` há de cada tipo, uma vez por dia (UTC). `true` quando o dia já está
-/// contado; desligada, `false`, e a próxima hora tenta de novo. Bloqueante.
-pub(crate) fn peers_snapshot(telemetry: &Telemetry, peers: &PeerClient) -> bool {
-    if !telemetry.enabled() { return false; }
+/// Quantas máquinas do `peers.json` há de cada tipo, uma vez por dia (UTC). `Ok(true)` quando o dia já
+/// está contado; desligada, `Ok(false)`; marca que não se lê nem se grava, `Err`. Nos dois últimos a
+/// próxima hora tenta de novo. Bloqueante.
+pub(crate) fn peers_snapshot(telemetry: &Telemetry, peers: &PeerClient) -> std::io::Result<bool> {
+    if !telemetry.enabled() { return Ok(false); }
     let enabled: HashSet<String> = peers.enabled_ids().into_iter().collect();
     let mut kinds: BTreeMap<PeerKind, u64> = BTreeMap::new();
     for id in peers.ids() {
@@ -104,10 +111,10 @@ pub(crate) fn peers_snapshot(telemetry: &Telemetry, peers: &PeerClient) -> bool 
         let kind = if enabled.contains(&id) { classify(&base_url) } else { Some(PeerKind::Disabled) };
         if let Some(kind) = kind { *kinds.entry(kind).or_default() += 1; }
     }
-    if telemetry.once(&format!("peers:{}", chrono::Utc::now().format("%Y-%m-%d"))) {
+    if telemetry.once(&format!("peers:{}", chrono::Utc::now().format("%Y-%m-%d")))? {
         for (kind, n) in kinds { telemetry.count(Event::Peers, Dims::new().with("kind", kind), n); }
     }
-    true
+    Ok(true)
 }
 
 /// O tipo de ligação de um endereço; o endereço em si nunca sai daqui. `None` quando não é URL.
@@ -182,9 +189,16 @@ fn screen_event(telemetry: &Telemetry, item: &Value) {
     }
 }
 
-fn report(diag: &crate::diag::DiagClient, failure: Failure) {
+/// O endereço do receptor nunca vai ao diário: só o status.
+pub(crate) fn report(diag: &crate::diag::DiagClient, failure: Failure) {
     match failure {
         Failure::Refused(status) => diag.report("telemetry.rejected", "", &format!("http_{status}"), "pacote de telemetria recusado"),
+        Failure::Unreachable { status } => {
+            let code = status.map_or_else(|| "telemetry_unreachable".to_owned(), |status| format!("telemetry_unreachable_http_{status}"));
+            diag.report("telemetry.unreachable", "", &code, "receptor da telemetria sem resposta 2xx; o dia fica na fila");
+        }
+        Failure::Pruned(days) => diag.report_with("telemetry.pruned", "", "telemetry_pruned",
+            "fila da telemetria acima do teto: dias mais antigos apagados sem envio", json!({"days": days})),
         Failure::Disk(e) => {
             tracing::warn!(code = "telemetry_disk_failed", kind = ?e.kind(), "telemetria: fila não lida ou não gravada");
             diag.report("telemetry.disk", "", "telemetry_disk_failed", "fila da telemetria não lida ou não gravada");
@@ -192,10 +206,17 @@ fn report(diag: &crate::diag::DiagClient, failure: Failure) {
     }
 }
 
+/// Tarefa bloqueante da telemetria que entrou em pânico ou foi cancelada.
+pub fn task_failed(diag: &crate::diag::DiagClient) {
+    tracing::warn!(code = "telemetry_task_failed", "telemetria: tarefa bloqueante interrompida");
+    diag.report("telemetry.task", "", "telemetry_task_failed", "tarefa da telemetria interrompida");
+}
+
 /// Uma passada: cada máquina habilitada do `peers.json` diz o dono dela, juntas, e o mais antigo é
 /// adotado (empate: menor id). Máquina fora do ar, sem a rota (versão antiga) ou que recusa não muda nada.
-pub(crate) async fn converge(telemetry: &Arc<Telemetry>, peers: &Arc<PeerClient>) {
-    let ids = { let peers = peers.clone(); tokio::task::spawn_blocking(move || peers.enabled_ids()).await.unwrap_or_default() };
+pub(crate) async fn converge(telemetry: &Arc<Telemetry>, peers: &Arc<PeerClient>, diag: &crate::diag::DiagClient) {
+    let ids = { let peers = peers.clone(); tokio::task::spawn_blocking(move || peers.enabled_ids()).await };
+    let Ok(ids) = ids else { return task_failed(diag) };
     let answers = futures_util::future::join_all(ids.iter().map(|id| peers.call(id, reqwest::Method::GET, OWNER_PATH, None))).await;
     let oldest = answers.into_iter().filter_map(|answer| {
         let answer = answer.ok()??;
@@ -203,8 +224,13 @@ pub(crate) async fn converge(telemetry: &Arc<Telemetry>, peers: &Arc<PeerClient>
     }).min();
     let Some((created, owner_id)) = oldest else { return };
     let telemetry = telemetry.clone();
-    if let Ok(Err(e)) = tokio::task::spawn_blocking(move || telemetry.adopt_owner(&owner_id, created)).await {
-        tracing::warn!(code = "telemetry_owner_unsaved", kind = ?e.kind(), "telemetria: dono comum não gravado");
+    match tokio::task::spawn_blocking(move || telemetry.adopt_owner(&owner_id, created)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            tracing::warn!(code = "telemetry_owner_unsaved", kind = ?e.kind(), "telemetria: dono comum não gravado");
+            diag.report("telemetry.owner", "", "telemetry_owner_unsaved", "dono comum da telemetria não gravado");
+        }
+        Err(_) => task_failed(diag),
     }
 }
 
@@ -250,8 +276,10 @@ pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     } else {
         None
     };
+    let diag = st.diag.clone();
     let done = tokio::task::spawn_blocking(move || {
-        if let Some(consent) = choice { telemetry.set_consent(consent)?; }
+        // Gravada, a escolha vale; o que não se aplicou agora vai ao diário e a passada seguinte refaz.
+        if let Some(consent) = choice && let Some(e) = telemetry.set_consent(consent)? { report(&diag, Failure::Disk(e)); }
         Ok::<Value, std::io::Error>(view(&telemetry))
     }).await;
     match done {
@@ -260,7 +288,10 @@ pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
             tracing::warn!(code = "telemetry_unavailable", kind = ?e.kind(), "telemetria: escolha não guardada");
             unavailable()
         }
-        Err(_) => unavailable(),
+        Err(_) => {
+            task_failed(&st.diag);
+            unavailable()
+        }
     }
 }
 
@@ -332,7 +363,7 @@ mod tests {
         let telemetry = test_telemetry(home.path(), false);
         let older = "0".repeat(32);
         let (peers, task) = peer(home.path(), StatusCode::OK, json!({"owner_id": older, "owner_created": 1})).await;
-        converge(&telemetry, &peers).await;
+        converge(&telemetry, &peers, &crate::diag::DiagClient::new()).await;
         task.abort();
         assert_eq!(telemetry.owner().unwrap(), (older, 1));
     }
@@ -343,7 +374,7 @@ mod tests {
         let telemetry = test_telemetry(home.path(), false);
         let before = telemetry.owner().unwrap();
         let (peers, task) = peer(home.path(), StatusCode::NOT_FOUND, json!({"detail": "Not Found"})).await;
-        converge(&telemetry, &peers).await;
+        converge(&telemetry, &peers, &crate::diag::DiagClient::new()).await;
         task.abort();
         assert_eq!(telemetry.owner().unwrap(), before);
     }
@@ -382,6 +413,22 @@ mod tests {
     }
 
     #[test]
+    fn peers_snapshot_whose_mark_cannot_be_written_is_not_done() {
+        let home = tempfile::tempdir().unwrap();
+        let telemetry = test_telemetry(home.path(), true);
+        let file = home.path().join("peers.json");
+        std::fs::write(&file, json!({"a": {"base_url": "http://192.168.0.10:8765", "token": "t"}}).to_string()).unwrap();
+        let peers = PeerClient::new(PeerBook::new(Some(file)));
+        let marks = home.path().join(".hangar/telemetry/once.json");
+        std::fs::create_dir_all(&marks).unwrap();
+        assert!(peers_snapshot(&telemetry, &peers).is_err());
+        assert!(telemetry.counters().is_empty());
+        std::fs::remove_dir(&marks).unwrap();
+        assert!(peers_snapshot(&telemetry, &peers).unwrap());
+        assert_eq!(telemetry.counters().len(), 1);
+    }
+
+    #[test]
     fn tailscale_address_is_counted_by_kind_only() {
         assert_eq!(classify("https://x.tail1.ts.net:8765"), Some(PeerKind::Tailscale));
         assert_eq!(classify("http://100.64.0.2:8765"), Some(PeerKind::Tailscale));
@@ -406,8 +453,8 @@ mod tests {
             "h": {"base_url": "https://y.ts.net", "token": ""},
         }).to_string()).unwrap();
         let peers = PeerClient::new(PeerBook::new(Some(file)));
-        assert!(peers_snapshot(&telemetry, &peers));
-        assert!(peers_snapshot(&telemetry, &peers), "o dia já contado também é feito");
+        assert!(peers_snapshot(&telemetry, &peers).unwrap());
+        assert!(peers_snapshot(&telemetry, &peers).unwrap(), "o dia já contado também é feito");
         let kind = |kind: PeerKind, n: u64| has(&telemetry, Event::Peers, Dims::new().with("kind", kind), None, n);
         assert!(kind(PeerKind::Tailscale, 2), "um retrato por dia");
         assert!(kind(PeerKind::Connect, 1) && kind(PeerKind::Lan, 1) && kind(PeerKind::Public, 1) && kind(PeerKind::Disabled, 1));

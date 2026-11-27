@@ -181,23 +181,24 @@ async fn send_failure(st: &AppState, waits: &[u64]) {
 
 // ---------- telemetria da atualização ----------
 
-/// Conta o desfecho de uma atualização de pacote, uma vez por rodada. Bloqueante (`once` grava disco).
-fn count_outcome(telemetry: &hangar_telemetry::Telemetry, estado: &Map<String, Value>, channel: &str, now: chrono::DateTime<chrono::Utc>) {
+/// Conta o desfecho de uma atualização de pacote, uma vez por rodada. Marca que não se lê nem se grava
+/// volta `Err`, sem contar nem dar a rodada por contada. Bloqueante (`once` grava disco).
+fn count_outcome(telemetry: &hangar_telemetry::Telemetry, estado: &Map<String, Value>, channel: &str, now: chrono::DateTime<chrono::Utc>) -> io::Result<()> {
     use hangar_telemetry::events::{Code, DimValue, Dims, Event, UpdateOrigin, UpdateStepName};
-    if text(estado, "fase") != "pronto" { return; }
-    let Some(ok) = estado.get("ok").and_then(Value::as_bool) else { return };
+    if text(estado, "fase") != "pronto" { return Ok(()); }
+    let Some(ok) = estado.get("ok").and_then(Value::as_bool) else { return Ok(()) };
     // O executor antigo não grava `origem`: vale a rodada que já sabia a versão nova. `origem` nula é
     // reinício ou modo desenvolvedor.
     let origin = match estado.get("origem") {
         Some(Value::String(origin)) => UpdateOrigin::parse(origin).unwrap_or(UpdateOrigin::Other),
         None if estado.get("versao_para").is_some_and(Value::is_string) => UpdateOrigin::Other,
-        _ => return,
+        _ => return Ok(()),
     };
-    let Ok(at) = chrono::DateTime::parse_from_rfc3339(text(estado, "ts")) else { return };
+    let Ok(at) = chrono::DateTime::parse_from_rfc3339(text(estado, "ts")) else { return Ok(()) };
     // Rodada antiga (consentimento dado depois) não entra no dia de hoje.
-    if now.signed_duration_since(at) > FRESH { return; }
+    if now.signed_duration_since(at) > FRESH { return Ok(()); }
     let (from, to) = (text(estado, "versao_de"), text(estado, "versao_para"));
-    if !telemetry.once(&format!("update:{from}->{to}:{}", text(estado, "ts"))) { return; }
+    if !telemetry.once(&format!("update:{from}->{to}:{}", text(estado, "ts")))? { return Ok(()); }
     let manual = estado.get("reiniciar_manual").and_then(Value::as_bool) == Some(true);
     let result = match (ok, to.is_empty(), manual) {
         (false, _, _) => "failed",
@@ -220,6 +221,7 @@ fn count_outcome(telemetry: &hangar_telemetry::Telemetry, estado: &Map<String, V
         let code = Code::known(text(estado, "codigo"), crate::update::FAILURE_CODES);
         telemetry.count(Event::UpdateFailedCode, Dims::new().with("code", code), 1);
     }
+    Ok(())
 }
 
 /// Quem conta é o servidor de pé, que lê o `estado.json`: o executor é outro processo.
@@ -230,11 +232,15 @@ async fn count_update(st: &AppState) {
     let counted = tokio::task::spawn_blocking(move || {
         let estado = crate::update::StateFile::new(&state_dir).read();
         // Rodada que não terminou não conta: o canal só é lido para a que terminou.
-        if text(&estado, "fase") != "pronto" { return; }
+        if text(&estado, "fase") != "pronto" { return Ok(()); }
         let channel = crate::update::channel(&crate::update::Layout::new(&home));
-        count_outcome(&telemetry, &estado, &channel, chrono::Utc::now());
+        count_outcome(&telemetry, &estado, &channel, chrono::Utc::now())
     }).await;
-    if let Err(e) = counted { tracing::warn!(code = "telemetry_update_uncounted", "telemetria: desfecho da atualização não contado: {e}"); }
+    match counted {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => crate::telemetry_routes::report(&st.diag, hangar_telemetry::Failure::Disk(e)),
+        Err(_) => crate::telemetry_routes::task_failed(&st.diag),
+    }
 }
 
 /// Avisa a cada gravação do `estado.json`. O executor é outro processo: depois do reinício, quem está
@@ -423,7 +429,7 @@ mod tests {
         let t = telemetry(home.path());
         let failed = estado(json!({"fase": "pronto", "ok": false, "origem": "manual", "versao_de": "0.1.0.8600", "versao_para": "0.1.0.8700",
             "etapa": "baixar", "codigo": "update_download_failed", "duracoes": {"baixar": 2500}, "erro": "o download do pacote falhou: /home/x"}));
-        count_outcome(&t, &failed, "latest", at());
+        count_outcome(&t, &failed, "latest", at()).unwrap();
         let counters = t.counters();
         let finished = counter(&counters, "update_finished");
         assert_eq!((finished.dims["result"].as_str(), finished.dims["origin"].as_str(), finished.count), ("failed", "manual", 1));
@@ -435,8 +441,23 @@ mod tests {
         assert_eq!(counters.len(), 3);
         assert!(counters.iter().all(|c| c.dims.values().all(|v| !v.contains('/'))), "o erro em texto nunca sai");
 
-        count_outcome(&t, &failed, "latest", at());
+        count_outcome(&t, &failed, "latest", at()).unwrap();
         assert_eq!(t.counters(), counters, "reler o mesmo estado não conta de novo");
+    }
+
+    #[test]
+    fn update_whose_mark_cannot_be_written_is_not_counted_nor_marked() {
+        let home = tempfile::tempdir().unwrap();
+        let t = telemetry(home.path());
+        let done = estado(json!({"fase": "pronto", "ok": true, "origem": "auto", "versao_de": "0.1.0.8600", "versao_para": "0.1.0.8700"}));
+        // Uma pasta no lugar do arquivo das marcas: a leitura falha em todo sistema.
+        let marks = home.path().join(".hangar/telemetry/once.json");
+        std::fs::create_dir_all(&marks).unwrap();
+        assert!(count_outcome(&t, &done, "latest", at()).is_err());
+        assert!(t.counters().is_empty());
+        std::fs::remove_dir(&marks).unwrap();
+        count_outcome(&t, &done, "latest", at()).unwrap();
+        assert_eq!(counter(&t.counters(), "update_finished").count, 1, "a rodada não ficou dada por contada");
     }
 
     #[test]
@@ -445,7 +466,7 @@ mod tests {
         let t = telemetry(home.path());
         // Executor antigo: sem `origem` nem `codigo`.
         count_outcome(&t, &estado(json!({"fase": "pronto", "ok": true, "versao_de": "0.1.0.8600", "versao_para": "0.1.0.8700",
-            "etapa": "reiniciar", "texto": "Atualizado"})), "feat/x", at());
+            "etapa": "reiniciar", "texto": "Atualizado"})), "feat/x", at()).unwrap();
         let counters = t.counters();
         let finished = counter(&counters, "update_finished");
         assert_eq!((finished.dims["result"].as_str(), finished.dims["origin"].as_str(), finished.dims["channel"].as_str()), ("updated", "other", "other"));
@@ -455,11 +476,11 @@ mod tests {
         for other in [json!({"fase": "pronto", "ok": false, "origem": null, "versao_para": "0.1.0.8700", "codigo": "update_io"}),
                       json!({"fase": "pronto", "ok": true, "versao_de": null, "versao_para": null}),
                       json!({"fase": "rodando", "ok": null, "origem": "auto", "versao_para": "0.1.0.8800"})] {
-            count_outcome(&t, &estado(other), "latest", at());
+            count_outcome(&t, &estado(other), "latest", at()).unwrap();
         }
         // Rodada de mais de um dia atrás: o consentimento veio depois dela.
         count_outcome(&t, &estado(json!({"fase": "pronto", "ok": true, "origem": "auto", "versao_para": "0.1.0.8900"})),
-            "latest", at() + chrono::TimeDelta::days(2));
+            "latest", at() + chrono::TimeDelta::days(2)).unwrap();
         assert_eq!(t.counters(), counters);
     }
 
@@ -468,7 +489,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let t = telemetry(home.path());
         count_outcome(&t, &estado(json!({"fase": "pronto", "ok": false, "origem": "auto", "versao_de": "0.1.0.8600",
-            "versao_para": "0.1.0.8700", "codigo": "update_novo_codigo"})), "beta", at());
+            "versao_para": "0.1.0.8700", "codigo": "update_novo_codigo"})), "beta", at()).unwrap();
         assert_eq!(counter(&t.counters(), "update_failed_code").dims["code"], "other");
 
         use crate::update::UpdateError;

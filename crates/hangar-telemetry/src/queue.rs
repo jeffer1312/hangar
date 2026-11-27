@@ -68,12 +68,14 @@ pub(crate) fn days(home: &Path) -> io::Result<Vec<String>> {
     Ok(days)
 }
 
-pub(crate) fn cap(home: &Path) -> io::Result<()> {
+/// Quantos dias saíram.
+pub(crate) fn cap(home: &Path) -> io::Result<usize> {
     let days = days(home)?;
-    for day in &days[..days.len().saturating_sub(MAX_DAYS)] {
+    let excess = &days[..days.len().saturating_sub(MAX_DAYS)];
+    for day in excess {
         remove_day(home, day)?;
     }
-    Ok(())
+    Ok(excess.len())
 }
 
 pub(crate) fn wipe(home: &Path) -> io::Result<()> {
@@ -106,7 +108,7 @@ mod tests {
         for n in 1..=15 {
             write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new() }).unwrap();
         }
-        cap(home.path()).unwrap();
+        assert_eq!(cap(home.path()).unwrap(), 1);
         let days = days(home.path()).unwrap();
         assert_eq!(days.len(), MAX_DAYS);
         assert_eq!(days.first().map(String::as_str), Some("2026-11-02"));
