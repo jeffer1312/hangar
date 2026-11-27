@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use crate::diag_report::Scrubber;
 use crate::groups::peers::PeerClient;
-use crate::telemetry_log::Line;
+use crate::telemetry_log::{ConsentGate, Line};
 use crate::telemetry_names::{NameBook, read_local};
 use crate::telemetry_scrub::Words;
 use crate::routes::AppState;
@@ -115,10 +115,13 @@ async fn log_lines(st: Arc<AppState>, telemetry: Arc<Telemetry>, mut lines: toki
     let scrubber = Scrubber::for_env(&st.accounts.env);
     let started = std::time::Instant::now();
     let mut book = NameBook::default();
+    let mut gate = ConsentGate::new(telemetry.consent_epoch());
     let mut batch = Vec::with_capacity(LOG_BATCH);
     while lines.recv_many(&mut batch, LOG_BATCH).await > 0 {
         let mut dropped = crate::telemetry_log::take_dropped();
         if telemetry.enabled() {
+            gate.update(telemetry.consent_epoch(), crate::telemetry_log::next_seq());
+            batch.retain(|line| gate.admits(line));
             refresh_names(&st, &mut book, started.elapsed()).await;
             match book.words() {
                 Some(words) => record_lines(&telemetry, &scrubber, &words, &batch),
@@ -149,10 +152,15 @@ async fn refresh_names(st: &AppState, book: &mut NameBook, now: Duration) {
         book.see(&chrono::Utc::now().format("%Y-%m-%d").to_string(), sessions);
     }
     if due {
-        let (home, peers, server_id) = (st.accounts.env.home.clone(), st.peers.clone(), st.server_id.clone());
+        let (home, peers, server_id) = local_inputs(st);
         let read = tokio::task::spawn_blocking(move || read_local(&home, peers.ids(), &server_id, crate::pages::routes::machine_name())).await;
         book.read(now, read.ok().and_then(Result::ok));
     }
+}
+
+/// O que a releitura usa; o id é o atual, que muda sem reiniciar o servidor.
+fn local_inputs(st: &AppState) -> (std::path::PathBuf, Arc<PeerClient>, String) {
+    (st.accounts.env.home.clone(), st.peers.clone(), st.current_server_id())
 }
 
 pub(crate) fn record_lines(telemetry: &Telemetry, scrubber: &Scrubber, words: &Words, lines: &[Line]) {
@@ -477,19 +485,27 @@ mod tests {
     }
 
     #[test]
+    fn names_use_the_server_id_of_now() {
+        let home = tempfile::tempdir().unwrap();
+        let st = test_state(home.path(), false);
+        *st.machine_identity.write().unwrap() = Some("lab-novo".into());
+        assert_eq!(local_inputs(&st).2, "lab-novo");
+    }
+
+    #[test]
     fn log_lines_are_cleaned_before_counting() {
         let home = tempfile::tempdir().unwrap();
         let telemetry = test_telemetry(home.path(), true);
         let names = crate::telemetry_scrub::Names {
             sessions: vec!["ajuste-login-Coordenadora".into()], accounts: Vec::new(), machines: vec!["estudio-02".into()],
         };
-        let line = |error, message: &str| Line { error, target: "hangar_server::list".into(), message: message.into() };
+        let line = |error, message: &str| Line { seq: 0, error, target: "hangar_server::list".into(), message: message.into() };
         let lines = [
             line(true, "sessão ajuste-login-Coordenadora não abriu em /home/fulano/pessoal/x"),
             line(false, "peer estudio-02 lento"),
             line(true, "sessão ajuste-login-Coordenadora não abriu em /home/fulano/pessoal/y"),
         ];
-        record_lines(&telemetry, &Scrubber::new(Some("/home/fulano".into()), None), &names.words(), &lines);
+        record_lines(&telemetry, &Scrubber::new(Some("/home/fulano".into()), None), &names.words().unwrap(), &lines);
         let logs: Vec<(String, String, u64)> = telemetry.logs().into_iter().map(|l| (l.level, l.message, l.count)).collect();
         assert_eq!(logs, vec![
             ("error".into(), "sessão <sessão> não abriu em <caminho>".into(), 2),

@@ -16,11 +16,13 @@ const CAPACITY: usize = 256;
 /// texto da pessoa (nome de sessão, caminho, resposta de um serviço).
 const SAFE_KEYS: &[&str] = &[
     "code", "codigo", "status", "kind", "cause", "step", "provider", "surface", "error", "ok", "result", "attempt",
-    "tentativa", "ms", "http_status", "method",
+    "ms", "http_status", "method",
 ];
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Line {
+    /// Ordem de captura, para o consumo saber o que veio antes do consentimento.
+    pub(crate) seq: u64,
     pub(crate) error: bool,
     pub(crate) target: String,
     /// A mensagem e os campos seguros `k=v`; a mensagem ainda sem limpeza.
@@ -33,6 +35,33 @@ static CHANNEL: LazyLock<Channel> = LazyLock::new(|| {
     let (tx, rx) = mpsc::channel(CAPACITY);
     (tx, Mutex::new(Some(rx)), Arc::new(AtomicU64::new(0)))
 });
+
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// A próxima ordem de captura: toda linha capturada daqui em diante tem ordem igual ou maior.
+pub(crate) fn next_seq() -> u64 { SEQ.load(Ordering::SeqCst) }
+
+/// O que o consumo deixa passar: só linha capturada depois da ligação atual da contagem. Linha que
+/// esperava no canal quando a pessoa consentiu é de antes do consentimento e não conta.
+pub(crate) struct ConsentGate {
+    epoch: u64,
+    from: u64,
+}
+
+impl ConsentGate {
+    /// A época em que o consumo começa: ligada desde a subida, o consentimento é de antes desta vida.
+    pub(crate) fn new(epoch: u64) -> ConsentGate { ConsentGate { epoch, from: 0 } }
+
+    /// `next_seq` lido depois da época: o que veio entre ligar e esta leitura também fica fora.
+    pub(crate) fn update(&mut self, epoch: u64, next_seq: u64) {
+        if epoch != self.epoch {
+            self.epoch = epoch;
+            self.from = next_seq;
+        }
+    }
+
+    pub(crate) fn admits(&self, line: &Line) -> bool { line.seq >= self.from }
+}
 
 /// Quantas linhas o canal cheio descartou desde a última leitura.
 pub(crate) fn take_dropped() -> u64 { CHANNEL.2.swap(0, Ordering::Relaxed) }
@@ -60,7 +89,8 @@ impl<S: Subscriber> Layer<S> for Capture {
         }
         let mut text = Text::default();
         event.record(&mut text);
-        if self.0.try_send(Line { error, target: target.to_owned(), message: text.0 }).is_err() {
+        let seq = SEQ.fetch_add(1, Ordering::SeqCst);
+        if self.0.try_send(Line { seq, error, target: target.to_owned(), message: text.0 }).is_err() {
             self.1.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -117,9 +147,25 @@ mod tests {
             tracing::error!(target: "hangar_server::list", kind = ?std::io::ErrorKind::NotFound, code = "Fulano Silva", status = 502, "sumiu");
         });
         let target = "hangar_server::list".to_owned();
-        assert_eq!(rx.try_recv().unwrap(), Line { error: false, target: target.clone(), message: "lista não lida: x code=list_failed".into() });
-        assert_eq!(rx.try_recv().unwrap(), Line { error: true, target, message: "sumiu kind=notfound status=502".into() }, "código fora do formato sai inteiro");
+        let (first, second) = (rx.try_recv().unwrap(), rx.try_recv().unwrap());
+        assert!(second.seq > first.seq, "a ordem de captura cresce");
+        assert_eq!((first.error, first.target, first.message), (false, target.clone(), "lista não lida: x code=list_failed".to_owned()));
+        assert_eq!((second.error, second.target, second.message), (true, target, "sumiu kind=notfound status=502".to_owned()), "código fora do formato sai inteiro");
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn lines_captured_before_consent_are_not_admitted() {
+        let line = |seq| Line { seq, error: true, target: "hangar_server::list".into(), message: "falhou".into() };
+        let mut gate = ConsentGate::new(0);
+        assert!(gate.admits(&line(0)), "ligada desde a subida");
+        gate.update(1, 5);
+        assert!(!gate.admits(&line(4)), "esperava no canal quando a pessoa consentiu");
+        assert!(gate.admits(&line(5)));
+        gate.update(1, 9);
+        assert!(gate.admits(&line(6)), "a mesma época não move o corte");
+        gate.update(2, 12);
+        assert!(!gate.admits(&line(11)));
     }
 
     #[test]

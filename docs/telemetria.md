@@ -2,9 +2,11 @@
 
 O Hangar pode mandar, uma vez por dia, contagens de uso e de erros do próprio Hangar ao
 desenvolvedor. Serve para corrigir erro antes de alguém reclamar e saber o que melhorar. Nada é
-contado antes de você responder ao aviso, e nunca sai conversa, texto digitado, nome ou endereço.
-As linhas de aviso e erro do servidor também vão, depois de uma limpeza que tira esses dados delas
-(veja "Linhas de erro do servidor").
+contado antes de você responder ao aviso. As contagens não levam conversa, texto digitado, nome nem
+endereço. As linhas de aviso e erro do log do servidor também vão, limpas por regras (veja "Linhas de
+aviso e erro do servidor"): a limpeza tira caminho, nomes, e-mail, endereço, trecho entre aspas e ids,
+mas um pedaço do texto do erro ainda pode passar. O Hangar não lê conversa nem texto digitado para
+isso e não os escreve no log.
 
 A lista abaixo descreve o que o código faz. A fonte é
 [`crates/hangar-telemetry/src/events.rs`](../crates/hangar-telemetry/src/events.rs) (eventos e valores
@@ -28,7 +30,7 @@ Cada pacote é um dia (UTC) de uma máquina e leva:
 
 Toda dimensão é um valor de uma lista fixa no código, um sim/não ou um número de versão. Valor fora
 da lista sai como `other`. O único texto livre é a mensagem das linhas de `logs`, e só depois da
-limpeza descrita em "Linhas de erro do servidor".
+limpeza descrita em "Linhas de aviso e erro do servidor".
 
 Tempo vai em faixas: `lt100ms`, `lt300ms`, `lt1s`, `lt3s`, `lt10s`, `lt30s`, `ge30s`. Nos
 eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
@@ -79,33 +81,39 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 | `server_startup` (faixa) | — | Tempo de subida do servidor |
 | `chat_open` (faixa) | `client` | Tempo para abrir uma conversa |
 
-### Linhas de erro do servidor
+### Linhas de aviso e erro do servidor
 
 Cada linha de nível aviso (`warn`) ou erro (`error`) que o `hangar-server` escreve no log dele
 vai também ao pacote do dia como `{level, target, message, count}`: `target` é o módulo do código que
 escreveu (como `hangar_server::list`), `message` é o texto da linha, e `count` quantas vezes a mesma
 linha, já limpa, apareceu no dia. As linhas do nível informativo, do celular e do desktop não vão.
 Dos campos da linha só entram `code`, `codigo`, `status`, `kind`, `cause`, `step`, `provider`,
-`surface`, `error`, `ok`, `result`, `attempt`, `tentativa`, `ms`, `http_status` e `method`, e só
+`surface`, `error`, `ok`, `result`, `attempt`, `ms`, `http_status` e `method`, e só
 com valor de código (minúsculas, dígitos e `_ . : -`); os outros ficam fora.
 
 Antes de contar, o servidor limpa o texto na própria máquina:
 
-- todo trecho entre aspas duplas, simples ou crases vira `"…"`: é dado, não a frase do código;
+- todo trecho entre aspas duplas, simples ou crases (também com aspas escapadas, `\"`) vira `"…"`:
+  é dado, não a frase do código;
 - tira credenciais (tokens, `Bearer`, senhas em URL e em JSON, chaves conhecidas), IPs, nomes do
   Tailscale (`*.ts.net`) e trechos longos em hex ou base64, com as mesmas regras do "Reportar
   problema";
 - todo caminho de arquivo (absoluto, com `~/` ou `%LOCALAPPDATA%`, de unidade do Windows ou de rede,
-  também com espaço no meio, como `C:\Program Files\…`) vira `<caminho>`, sem guardar nem o nome do arquivo;
+  também com espaço no meio, como `C:\Program Files\…`, até o último trecho com barra antes de `; , )`
+  ou aspas) vira `<caminho>`, sem guardar nem o nome do arquivo;
 - endereço `http(s)` vira `<url>`, e-mail vira `<email>`, `host:porta` e nome com ponto (`a.rs`,
   `casa.exemplo.com`) viram `<nome>`; número de versão (`0.42.0`) fica;
 - nomes da pessoa viram marcador: sessão (toda sessão vista hoje e ontem, aberta ou não, e as dos
-  registros de abertura) vira `<sessão>`; conta do Claude e do Codex, rótulo de conta e usuário do
+  registros de abertura) vira `<sessão>`, sem diferença de maiúscula, também com acento; conta do Claude e do Codex, rótulo de conta e usuário do
   sistema viram `<conta>`; esta máquina, o nome dela e as do `peers.json` viram `<máquina>`. Esses
   nomes são relidos a cada 30 s; sem uma leitura boa deles a linha não sai;
 - id (UUID, hex de 16 ou mais) vira `<id>` e número com 6 dígitos ou mais (pid, porta alta) vira `<n>`;
 - caractere invisível (controle, formatação como U+200B e U+202E, separador de linha) vira espaço;
 - a mensagem é cortada em 300 caracteres.
+
+A limpeza é por regras, não por entender o texto: o que não casa com nenhuma delas (uma palavra
+solta que a pessoa escreveu e o código repetiu no erro, por exemplo) passa. Linha que esperava para
+ser contada quando a pessoa respondeu "Pode enviar" é de antes da resposta e não vai.
 
 Por pacote vão no máximo 100 linhas diferentes; passando disso, a linha nova só soma `log_dropped`,
 que conta também a linha descartada por excesso no momento ou por falta dos nomes.
@@ -116,7 +124,7 @@ Sem resposta ao aviso, ou com "Não enviar", nenhuma linha é guardada.
 Texto de mensagem e de comando, nome de sessão, pasta, repositório, branch, conta, e-mail, nome da
 máquina, endereço e IP, user-agent, texto de erro do app, nome de skill, nome de motor, tokens e
 custo, modelo do aparelho, horário dentro do dia, multiplexador. O texto de erro do servidor sai só
-nas linhas de `logs`, depois da limpeza acima.
+nas linhas de `logs`, depois da limpeza acima, que é por regras e pode deixar passar um pedaço dele.
 
 O que convidado faz (porta de convidado, convite, par, login de convidado) não conta: mensagem,
 sessão aberta ou que não abriu, tela, ação na API, evento do app dele e tool do MCP na sessão dele ficam fora.

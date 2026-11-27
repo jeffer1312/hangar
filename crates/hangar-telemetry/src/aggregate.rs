@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ use crate::queue::{self, DayFile};
 use crate::send::Failure;
 use crate::state::{self, State};
 use crate::switch::{self, Disabled};
-use crate::wire::{Counter, Env, LogLine, MAX_LOG_CHARS, MAX_LOG_LINES, is_id, is_invisible, is_name};
+use crate::wire::{Counter, Env, LogLine, MAX_COUNT, MAX_LOG_CHARS, MAX_LOG_LINES, is_id, is_invisible, is_name};
 
 /// Relógio de parede; os testes injetam o deles.
 pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
@@ -40,6 +40,8 @@ pub struct Telemetry {
     pub(crate) lookup: EnvLookup,
     pub(crate) clock: Clock,
     enabled: AtomicBool,
+    /// Quantas vezes a contagem ligou: o que foi capturado antes da ligação atual não conta.
+    consent_epoch: AtomicU64,
     pub(crate) settings: Mutex<Settings>,
     live: Mutex<Live>,
     /// Ordena quem toca o disco: gravação, envio, consentimento. Ordem das travas: `io`, `settings`, `live`.
@@ -75,13 +77,13 @@ impl Day {
     fn add_log(&mut self, line: LogLine) -> bool {
         let key = (line.level, line.target, line.message);
         if let Some(slot) = self.logs.get_mut(&key) {
-            *slot = slot.saturating_add(line.count);
+            *slot = slot.saturating_add(line.count).min(MAX_COUNT);
             return true;
         }
         if self.logs.len() >= MAX_LOG_LINES {
             return false;
         }
-        self.logs.insert(key, line.count);
+        self.logs.insert(key, line.count.min(MAX_COUNT));
         true
     }
 
@@ -93,7 +95,8 @@ impl Day {
 
     fn add(&mut self, counter: Counter) {
         let slot = self.counters.entry((counter.event, counter.dims, counter.bucket)).or_default();
-        *slot = slot.saturating_add(counter.count);
+        // Acima do teto o pacote seria recusado e o dia inteiro, apagado.
+        *slot = slot.saturating_add(counter.count).min(MAX_COUNT);
     }
 
     fn from_file(file: DayFile) -> Day {
@@ -174,6 +177,7 @@ impl Telemetry {
             backend: config.backend,
             lookup,
             enabled: AtomicBool::new(false),
+            consent_epoch: AtomicU64::new(0),
             settings: Mutex::new(Settings { state, disabled: None, env_unreadable: false }),
             live: Mutex::new(Live::new(Day::new(day_of(now)), false)),
             io: Mutex::new(()),
@@ -225,6 +229,10 @@ impl Telemetry {
         let line = LogLine { level: level.as_str().to_owned(), target: target.to_owned(), message: message.to_owned(), count: 1 };
         let today = day_of((self.clock)());
         let Ok(mut live) = self.live.lock() else { return };
+        // A revogação desliga antes de limpar a memória sob esta trava: conferida aqui, não grava depois dela.
+        if !self.enabled() {
+            return;
+        }
         live.roll(today);
         if !live.current.add_log(line) {
             live.current.add(Counter::new(Event::LogDropped, Dims::new(), None, 1));
@@ -235,6 +243,9 @@ impl Telemetry {
     fn add(&self, counter: Counter) {
         let today = day_of((self.clock)());
         let Ok(mut live) = self.live.lock() else { return };
+        if !self.enabled() {
+            return;
+        }
         live.roll(today);
         live.current.add(counter);
         live.dirty = true;
@@ -272,6 +283,9 @@ impl Telemetry {
     }
 
     pub fn enabled(&self) -> bool { self.enabled.load(Ordering::SeqCst) }
+
+    /// Sobe a cada vez que a contagem liga (consentimento dado, `.env` de volta).
+    pub fn consent_epoch(&self) -> u64 { self.consent_epoch.load(Ordering::SeqCst) }
 
     /// `None` = ainda sem resposta.
     pub fn consent(&self) -> Option<bool> { lock(&self.settings).ok().and_then(|s| s.state.consent) }
@@ -423,6 +437,10 @@ impl Telemetry {
                 };
                 *lock(&self.live)? = live;
             }
+            // A época sobe antes de ligar: quem vê ligada já vê a época nova.
+            if !self.enabled() {
+                self.consent_epoch.fetch_add(1, Ordering::SeqCst);
+            }
             self.enabled.store(true, Ordering::SeqCst);
             return Ok(());
         }
@@ -519,6 +537,41 @@ pub(crate) mod tests {
         assert_eq!(logs[0].target, "other");
         assert!(logs[0].message.starts_with("primeira segunda é"));
         assert_eq!(logs[0].message.chars().count(), MAX_LOG_CHARS);
+    }
+
+    #[test]
+    fn log_waiting_for_the_live_lock_is_not_written_after_revocation() {
+        let fx = Fixture::new();
+        let telemetry = Arc::new(fx.start());
+        let held = telemetry.live.lock().unwrap();
+        let writer = { let telemetry = telemetry.clone(); std::thread::spawn(move || telemetry.log(LogLevel::Error, "hangar_server::x", "falhou")) };
+        // Com a trava presa aqui, a escrita só a pega depois de desligada, como na revogação.
+        telemetry.enabled.store(false, Ordering::SeqCst);
+        drop(held);
+        writer.join().unwrap();
+        assert!(telemetry.logs().is_empty());
+    }
+
+    #[test]
+    fn consent_epoch_rises_each_time_counting_turns_on() {
+        let fx = Fixture::new();
+        let telemetry = fx.start_as_is();
+        assert_eq!(telemetry.consent_epoch(), 0);
+        telemetry.set_consent(true).unwrap();
+        telemetry.set_consent(true).unwrap();
+        assert_eq!(telemetry.consent_epoch(), 1, "já ligada não sobe");
+        telemetry.set_consent(false).unwrap();
+        telemetry.set_consent(true).unwrap();
+        assert_eq!(telemetry.consent_epoch(), 2);
+    }
+
+    #[test]
+    fn counts_stop_at_the_wire_ceiling() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.count(Event::MessageSent, message(), MAX_COUNT);
+        telemetry.count(Event::MessageSent, message(), 5);
+        assert_eq!(telemetry.counters()[0].count, MAX_COUNT);
     }
 
     #[test]

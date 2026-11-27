@@ -68,20 +68,32 @@ impl NameBook {
         let mut sessions: BTreeSet<String> = self.seen.values().flatten().cloned().collect();
         sessions.extend(local.specs.iter().cloned());
         let names = Names { sessions: sessions.into_iter().collect(), accounts: local.accounts.clone(), machines: local.machines.clone() };
-        self.words = Some(Arc::new(names.words()));
+        // Regex que não se monta mantém o conjunto anterior.
+        if let Some(words) = names.words() {
+            self.words = Some(Arc::new(words));
+        }
     }
 }
 
 /// Specs, contas (pastas `.claude-<nome>` e `.codex-<nome>`, rótulos do `tags.json`), usuário do
-/// sistema e máquinas. Pasta que não se lê é `Err`; spec ou `tags.json` ilegível só fica de fora. Bloqueante.
+/// sistema e máquinas. Arquivo opcional ausente não é erro; pasta, spec ou `tags.json` que não se lê
+/// ou não se entende é `Err`, e quem chama mantém o conjunto anterior em vez de um menor. Bloqueante.
 pub(crate) fn read_local(home: &Path, peers: impl IntoIterator<Item = String>, server_id: &str, host: Option<String>) -> io::Result<Local> {
     let mut specs = Vec::new();
     match std::fs::read_dir(crate::session_open::record::dir(home)) {
         Ok(entries) => for entry in entries {
-            let raw = std::fs::read(entry?.path()).unwrap_or_default();
-            if let Some(name) = serde_json::from_slice::<serde_json::Value>(&raw).ok().and_then(|spec| spec["name"].as_str().map(str::to_owned)) {
-                specs.push(name);
+            let path = entry?.path();
+            if path.extension().is_none_or(|ext| ext != "json") {
+                continue;
             }
+            let raw = match std::fs::read(&path) {
+                Ok(raw) => raw,
+                // Apagado entre a listagem e a leitura: a sessão saiu.
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            let spec: serde_json::Value = serde_json::from_slice(&raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            specs.extend(spec["name"].as_str().map(str::to_owned));
         },
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
@@ -100,7 +112,11 @@ pub(crate) fn read_local(home: &Path, peers: impl IntoIterator<Item = String>, s
     let mut machines: Vec<String> = peers.into_iter().collect();
     machines.push(server_id.to_owned());
     machines.extend(host);
-    let tags = std::fs::read(home.join(".hangar").join("tags.json")).ok().and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok());
+    let tags = match std::fs::read(home.join(".hangar").join("tags.json")) {
+        Ok(raw) => Some(serde_json::from_slice::<serde_json::Value>(&raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
     if let Some(tags) = tags {
         machines.extend(tags["machine"]["name"].as_str().map(str::to_owned));
         if let Some(labels) = tags["accounts"].as_object() {
@@ -157,7 +173,6 @@ mod tests {
         let home = root.path().join("fulano");
         std::fs::create_dir_all(home.join(".hangar/session-specs")).unwrap();
         std::fs::write(home.join(".hangar/session-specs/a.json"), r#"{"key": "a", "name": "sessao-que-nao-abriu"}"#).unwrap();
-        std::fs::write(home.join(".hangar/session-specs/b.json"), "{").unwrap();
         std::fs::create_dir_all(home.join(".claude-claude-200-5")).unwrap();
         std::fs::create_dir_all(home.join(".codex-trabalho")).unwrap();
         std::fs::write(home.join(".claude-x.lock"), "").unwrap();
@@ -170,5 +185,24 @@ mod tests {
         assert!(!local.accounts.iter().any(|a| a.contains("lock")));
         assert_eq!(local.machines, ["estudio-02", "lab", "notebook-fulano", "Casa"]);
         assert!(read_local(&root.path().join("sem-casa"), Vec::new(), "", None).is_err());
+    }
+
+    #[test]
+    fn an_unreadable_spec_or_tags_file_is_an_error_not_a_smaller_set() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("fulano");
+        std::fs::create_dir_all(home.join(".hangar/session-specs")).unwrap();
+        assert!(read_local(&home, Vec::new(), "", None).unwrap().specs.is_empty(), "sem tags.json não é erro");
+        std::fs::write(home.join(".hangar/session-specs/b.json"), "{").unwrap();
+        assert_eq!(read_local(&home, Vec::new(), "", None).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        std::fs::remove_file(home.join(".hangar/session-specs/b.json")).unwrap();
+        std::fs::write(home.join(".hangar/tags.json"), "{").unwrap();
+        assert_eq!(read_local(&home, Vec::new(), "", None).unwrap_err().kind(), io::ErrorKind::InvalidData);
+
+        let mut book = NameBook::default();
+        book.see("2026-11-27", Vec::new());
+        book.read(Duration::ZERO, Some(local(&["estudio-02"])));
+        book.read(REFRESH, read_local(&home, Vec::new(), "", None).ok());
+        assert_eq!(cleaned(&book, "peer estudio-02"), "peer <máquina>", "o conjunto bom anterior fica");
     }
 }

@@ -47,9 +47,6 @@ async fn post_batch(State(pool): State<PgPool>, body: Bytes) -> Response {
     if let Err(field) = batch.validate() {
         return refused(StatusCode::BAD_REQUEST, field);
     }
-    if batch.counters.iter().map(|c| c.count).chain(batch.logs.iter().map(|l| l.count)).any(|n| i64::try_from(n).is_err()) {
-        return refused(StatusCode::BAD_REQUEST, "count");
-    }
     match store::insert(&pool, &batch).await {
         Ok(store::Insert::Accepted) => reply(StatusCode::OK, r#"{"ok":true}"#.to_owned()),
         Ok(store::Insert::DayAhead) => refused(StatusCode::BAD_REQUEST, "day"),
@@ -321,10 +318,41 @@ mod tests {
         body["counters"][0]["count"] = json!(1);
         body["logs"] = json!([{"level": "error", "target": "hangar_server::list", "message": "x", "count": u64::MAX}]);
         let (status, text) = post_json(offline(), &body).await;
+        assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"log_count"}"#));
+        body["logs"][0]["count"] = json!(hangar_telemetry::wire::MAX_COUNT + 1);
+        let (status, text) = post_json(offline(), &body).await;
+        assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"log_count"}"#));
+        body["logs"][0]["count"] = json!(1);
+        body["counters"][0]["count"] = json!(hangar_telemetry::wire::MAX_COUNT + 1);
+        let (status, text) = post_json(offline(), &body).await;
         assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"count"}"#));
+        body["counters"][0]["count"] = json!(1);
         body["logs"][0]["level"] = json!("info");
         let (status, text) = post_json(offline(), &body).await;
         assert_eq!((status, text.as_str()), (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"log_level"}"#));
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn huge_counts_already_stored_do_not_break_the_summary() {
+        let pool = online().await;
+        let today = utc_day(&pool, 0).await;
+        // Gravado direto, sem o `validate`: como um pacote de antes do teto.
+        let (event, message) = (format!("huge_{}", fresh_id()), format!("enorme {}", fresh_id()));
+        for _ in 0..2 {
+            let mut body = batch_body(&fresh_id(), &today);
+            body["counters"] = json!([{"event": event, "bucket": "lt1s", "count": i64::MAX}]);
+            body["logs"] = json!([{"level": "error", "target": "hangar_server::list", "message": message, "count": i64::MAX}]);
+            let batch: Batch = serde_json::from_value(body).unwrap();
+            assert!(matches!(store::insert(&pool, &batch).await.unwrap(), store::Insert::Accepted));
+        }
+        let data = store::summary(&pool, 7).await.unwrap();
+        let find = |key: &str, field: &str, value: &str| data[key].as_array().unwrap().iter().find(|row| row[field] == json!(value)).unwrap()["count"].clone();
+        assert_eq!(find("counters", "event", &event), json!(i64::MAX));
+        assert_eq!(find("by_dims", "event", &event), json!(i64::MAX));
+        assert_eq!(find("by_bucket", "event", &event), json!(i64::MAX));
+        assert_eq!(find("logs", "message", &message), json!(i64::MAX));
+        assert_eq!(find("trend", "event", &event), json!(i64::MAX));
     }
 
     #[tokio::test]

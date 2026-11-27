@@ -143,7 +143,8 @@ function withTip(node, text) {
 function dimsLabel(dims) {
   const parts = [];
   for (const [k, v] of Object.entries(dims || {}).sort()) {
-    if (Object.hasOwn(FLAGS, k)) {
+    // Só "true"/"false" viram a frase da bandeira; outro valor aparece como veio.
+    if (Object.hasOwn(FLAGS, k) && (v === "true" || v === "false")) {
       const said = FLAGS[k][v === "true" ? 0 : 1];
       if (said) parts.push(said);
     } else if (Object.hasOwn(VALUES, k) && Object.hasOwn(VALUES[k], v)) {
@@ -296,8 +297,11 @@ function help(text) {
 
 // Faixas de tempo em frase: a faixa onde fica a metade das vezes e onde ficam 9 em cada 10.
 const UPPER = { lt100ms: "100 ms", lt300ms: "300 ms", lt1s: "1 s", lt3s: "3 s", lt10s: "10 s", lt30s: "30 s", ge30s: "mais de 30 s" };
+// Faixa que este painel ainda não conhece vai para o fim da ordem.
+const bucketRank = b => { const i = BUCKETS.indexOf(b); return i < 0 ? BUCKETS.length : i; };
+const byBucket = (x, y) => bucketRank(x) - bucketRank(y);
 function quantileBucket(buckets, q) {
-  const order = [...buckets.keys()].sort((x, y) => BUCKETS.indexOf(x) - BUCKETS.indexOf(y));
+  const order = [...buckets.keys()].sort(byBucket);
   const total = order.reduce((s, b) => s + buckets.get(b).value, 0);
   let seen = 0;
   for (const b of order) {
@@ -308,7 +312,7 @@ function quantileBucket(buckets, q) {
 }
 function timeSentence(buckets) {
   const total = [...buckets.values()].reduce((s, b) => s + b.value, 0);
-  const say = b => b === "ge30s" ? "leva mais de 30 s" : "fica em até " + UPPER[b];
+  const say = b => b === "ge30s" ? "leva mais de 30 s" : Object.hasOwn(UPPER, b) ? "fica em até " + UPPER[b] : "fica na faixa " + b;
   if (total < 5) return "Poucas medidas ainda (" + total + "): o retrato fica confiável com mais dias.";
   return "Metade das vezes " + say(quantileBucket(buckets, 0.5)) + "; 9 em cada 10 " + say(quantileBucket(buckets, 0.9)) + ".";
 }
@@ -386,7 +390,7 @@ function render(data) {
   for (const [event, e] of [...byEvent].sort()) {
     if (!e.buckets.size) continue;
     const [title, , explain] = Object.hasOwn(EVENTS, event) ? EVENTS[event] : [event, "", ""];
-    const order = [...e.buckets.keys()].sort((x, y) => BUCKETS.indexOf(x) - BUCKETS.indexOf(y));
+    const order = [...e.buckets.keys()].sort(byBucket);
     times.push(el("section", { class: "card" },
       el("h3", { text: title }), el("p", { class: "explain", text: explain }),
       el("p", { class: "headline", text: timeSentence(e.buckets) }),
