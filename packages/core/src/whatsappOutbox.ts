@@ -1,5 +1,5 @@
 // Rascunhos de WhatsApp esperando o dono (evento `whatsapp_outbox` da lista e rotas
-// `/api/whatsapp/outbox/{id}/send|decline`). O modelo só cria o rascunho; quem envia é a pessoa, pelo cartão.
+// `/api/whatsapp/outbox/{id}/send|send-edited|decline`). O modelo só cria o rascunho; quem envia é a pessoa, pelo cartão.
 import { apiFetchForServer } from './api';
 import { intlLocale } from './i18n';
 import type { Server } from './servers';
@@ -9,7 +9,19 @@ export type WhatsAppDraftState = 'pending' | 'sending' | 'sent' | 'declined' | '
 /** `push`: nome que a própria pessoa escolheu (não vem da agenda); vazio quando a origem não é conhecida. */
 export type WhatsAppChatNameSource = 'contact' | 'push' | 'group' | '';
 
-export interface WhatsAppDraftRecent { from_me: boolean; sender: string; at: string; text: string }
+/** Tipo de uma mensagem recente; reação nunca chega ao cartão. */
+export type WhatsAppRecentKind = 'text' | 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'other';
+
+export interface WhatsAppDraftRecent {
+  from_me: boolean;
+  sender: string;
+  at: string;
+  /** Texto ou legenda; de terceiro, como o `file_name`. */
+  text: string;
+  kind: WhatsAppRecentKind;
+  /** Nome do documento (até 120 caracteres); vazio nos outros tipos. */
+  file_name: string;
+}
 
 export interface WhatsAppDraftFile {
   name: string;
@@ -31,6 +43,8 @@ export interface WhatsAppDraft {
   chat_number: string;
   chat_name: string;
   chat_name_source: WhatsAppChatNameSource;
+  /** Foto do contato ou do grupo: base64 de JPEG; `null` sem foto (escondida, inexistente ou ainda não buscada). */
+  chat_avatar: string | null;
   recent: WhatsAppDraftRecent[];
   text: string;
   reply_to: string;
@@ -43,14 +57,19 @@ export interface WhatsAppDraft {
   state: WhatsAppDraftState;
 }
 
-/** Evento `whatsapp_outbox` da lista do dono: só os pendentes. */
-export interface WhatsAppOutboxEvent { drafts: WhatsAppDraft[] }
+/** Evento `whatsapp_outbox` da lista do dono: só os pendentes. `edit`: o serviço aceita texto editado (hangar-server antigo
+ *  não manda, e aí o cartão não oferece a edição). */
+export interface WhatsAppOutboxEvent { drafts: WhatsAppDraft[]; edit: boolean }
 
 export type WhatsAppDraftAnswer = 'send' | 'decline';
 export type WhatsAppDraftVia = 'desktop' | 'mobile';
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const SOURCES: readonly WhatsAppChatNameSource[] = ['contact', 'push', 'group'];
+const KINDS: readonly WhatsAppRecentKind[] = ['text', 'image', 'video', 'audio', 'document', 'sticker', 'other'];
+// Os bytes FF D8 FF do JPEG em base64; o resto não vira imagem e o cartão mostra a inicial.
+const AVATAR = /^\/9j\/[A-Za-z0-9+/]*={0,2}$/;
+const avatarOf = (v: unknown) => (typeof v === 'string' && AVATAR.test(v) ? v : null);
 
 function draftOf(raw: unknown): WhatsAppDraft | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -67,12 +86,15 @@ function draftOf(raw: unknown): WhatsAppDraft | null {
   const recent = Array.isArray(r.recent) ? r.recent.flatMap((x) => {
     if (!x || typeof x !== 'object') return [];
     const e = x as Record<string, unknown>;
-    return typeof e.text === 'string' ? [{ from_me: e.from_me === true, sender: str(e.sender), at: str(e.at), text: e.text }] : [];
+    if (typeof e.text !== 'string' || e.kind === 'reaction') return [];
+    // Sem `kind`, é texto. Tipo que este cliente não conhece mostra só o texto.
+    const kind = e.kind == null ? 'text' : KINDS.find((k) => k === e.kind) ?? 'other';
+    return [{ from_me: e.from_me === true, sender: str(e.sender), at: str(e.at), text: e.text, kind, file_name: str(e.file_name) }];
   }) : [];
   const source = SOURCES.find((s) => s === r.chat_name_source) ?? '';
   return {
     id, origin, chat: str(r.chat), chat_kind: r.chat_kind === 'group' ? 'group' : 'contact',
-    chat_number, chat_name: str(r.chat_name), chat_name_source: source, recent, text,
+    chat_number, chat_name: str(r.chat_name), chat_name_source: source, chat_avatar: avatarOf(r.chat_avatar), recent, text,
     reply_to: str(r.reply_to), quoted_text: str(r.quoted_text), file, created_at: str(r.created_at), expires_at, answer_by: str(r.answer_by), state: 'pending',
   };
 }
@@ -82,9 +104,9 @@ export function parseWhatsAppOutboxEvent(data: string): WhatsAppOutboxEvent | nu
   let raw: unknown;
   try { raw = JSON.parse(data); } catch { return null; }
   if (!raw || typeof raw !== 'object') return null;
-  const drafts = (raw as { drafts?: unknown }).drafts;
+  const { drafts, edit } = raw as { drafts?: unknown; edit?: unknown };
   if (!Array.isArray(drafts)) return null;
-  return { drafts: drafts.flatMap((d) => {
+  return { edit: edit === true, drafts: drafts.flatMap((d) => {
     const draft = draftOf(d);
     // Pendente que não se lê nunca vira cartão: a sessão que pediu fica esperando sem ninguém saber por quê.
     if (!draft && (d as { state?: unknown } | null)?.state === 'pending') console.warn('whatsapp outbox: unreadable pending draft', (d as { id?: unknown }).id);
@@ -92,11 +114,82 @@ export function parseWhatsAppOutboxEvent(data: string): WhatsAppOutboxEvent | nu
   }) };
 }
 
+const postDraft = (s: Server, id: string, action: WhatsAppDraftAnswer | 'send-edited', body?: object): Promise<unknown> =>
+  apiFetchForServer(s, `/api/whatsapp/outbox/${encodeURIComponent(id)}/${action}`,
+    body ? { method: 'POST', body: JSON.stringify(body) } : { method: 'POST' }, 30_000);
+
 /** Responde o rascunho na máquina do WhatsApp; `via` só vai no envio e serve ao registro do serviço. */
 export function answerWhatsAppDraft(s: Server, id: string, answer: WhatsAppDraftAnswer, via: WhatsAppDraftVia): Promise<unknown> {
-  const path = `/api/whatsapp/outbox/${encodeURIComponent(id)}/${answer}`;
-  const init: RequestInit = answer === 'send' ? { method: 'POST', body: JSON.stringify({ via }) } : { method: 'POST' };
-  return apiFetchForServer(s, path, init, 30_000);
+  return postDraft(s, id, answer, answer === 'send' ? { via } : undefined);
+}
+
+/** Quebras de linha como o serviço grava: `\r\n` e `\r` viram `\n`. */
+export const normalizeDraftText = (text: string) => text.replace(/\r\n?/g, '\n');
+
+/** Teto do texto no serviço, em pontos de código. */
+export const DRAFT_TEXT_MAX = 4096;
+
+/** Texto do campo normalizado e contado uma vez: o rótulo, a comparação e as regras leem daqui. */
+export interface DraftField { text: string; count: number }
+export function draftField(raw: string): DraftField {
+  const text = normalizeDraftText(raw);
+  return { text, count: draftCharCount(text) };
+}
+
+// Espaço como o serviço (Go `strings.TrimSpace`) e o nativo (`str::trim`) contam; o `trim()` do JS também corta U+FEFF, e o
+// serviço aceitaria um texto que o cartão recusasse.
+const BLANK = /^[\t\n\v\f\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]*$/;
+
+/** Frase do texto que o serviço recusaria (as regras da criação: até 4096 caracteres, vazio só com anexo); `undefined` quando
+ *  pode sair. */
+export function draftTextError(field: DraftField, hasFile: boolean): string | undefined {
+  if (field.count > DRAFT_TEXT_MAX) return m.whatsapp_draft_err_text_long();
+  if (BLANK.test(field.text) && !hasFile) return m.whatsapp_draft_err_text_empty();
+  return undefined;
+}
+
+/** Envia o texto editado, normalizado. Devolve o corpo do 202 (o rascunho), que quem chama confere com `sentTextMatches`. */
+export function sendEditedWhatsAppDraft(s: Server, id: string, text: string, via: WhatsAppDraftVia): Promise<unknown> {
+  return postDraft(s, id, 'send-edited', { via, text: normalizeDraftText(text) });
+}
+
+/** O serviço confirmou que saiu o texto editado? `sent_text` ausente ou diferente é não: o cartão nunca diz que saiu o editado. */
+export function sentTextMatches(body: unknown, text: string): boolean {
+  const sent = body && typeof body === 'object' ? (body as { sent_text?: unknown }).sent_text : undefined;
+  // Os dois lados normalizados: com texto igual ao do rascunho, o serviço devolve o texto cru dele, que pode ter `\r\n`.
+  return typeof sent === 'string' && normalizeDraftText(sent) === normalizeDraftText(text);
+}
+
+/** Endereço da foto do destino para a imagem do cartão. */
+export const draftAvatarUri = (avatar: string) => `data:image/jpeg;base64,${avatar}`;
+
+/** Letra do círculo sem foto: a primeira visível do nome, maiúscula; sem nome, o primeiro dígito do número. A mesma regra do
+ *  nativo (`initial`). */
+export function draftInitial(draft: Pick<WhatsAppDraft, 'chat_name' | 'chat_number'>): string {
+  const first = Array.from(draft.chat_name).find((ch) => !/\s/u.test(ch) && !isInvisible(ch.codePointAt(0)!));
+  return first ? first.toLocaleUpperCase(intlLocale()) : draft.chat_number.match(/\d/)?.[0] ?? '';
+}
+
+const KIND_WORD: Partial<Record<WhatsAppRecentKind, () => string>> = {
+  image: m.whatsapp_draft_kind_image, video: m.whatsapp_draft_kind_video, audio: m.whatsapp_draft_kind_audio,
+  // Entre aspas: `document` solto é o global do DOM para a trava de boundary.test.ts.
+  sticker: m.whatsapp_draft_kind_sticker, 'document': m.whatsapp_draft_kind_document,
+};
+
+/** Quem falou numa mensagem dele, embaixo do balão; a mesma regra do nativo (`Draft::speaker`). No grupo, só o remetente
+ *  (vazio: o balão fica só com a hora); na conversa individual, o nome da conversa, senão o remetente, senão o número. */
+export function recentSpeaker(draft: Pick<WhatsAppDraft, 'chat_kind' | 'chat_name' | 'chat_number'>, recent: Pick<WhatsAppDraftRecent, 'sender'>): string {
+  if (draft.chat_kind === 'group') return recent.sender;
+  return draft.chat_name || recent.sender || draft.chat_number;
+}
+
+/** Balão de uma mensagem recente: a etiqueta do tipo em maiúsculas (`null` em texto e em `other`) e o texto, que é a
+ *  legenda, o nome do documento quando ela vem vazia ou, sem nenhum dos dois, a palavra do tipo. */
+export function recentBubble(recent: Pick<WhatsAppDraftRecent, 'kind' | 'text' | 'file_name'>): { tag: string | null; text: string } {
+  const word = KIND_WORD[recent.kind]?.();
+  if (!word) return { tag: null, text: recent.text };
+  const file = recent.kind === 'document' ? recent.file_name : '';
+  return { tag: word.toLocaleUpperCase(intlLocale()), text: recent.text.trim() ? recent.text : file.trim() ? file : word };
 }
 
 /** Trecho do texto: o que aparece como veio, ou a marca de um caractere invisível ou de controle (`U+200B`). */
@@ -183,6 +276,8 @@ const REFUSAL: Record<string, () => string> = {
   whatsapp_new_contact: m.whatsapp_draft_err_new_contact,
   // Serviço sem envio (api 1): o remédio é o mesmo.
   whatsapp_send_unsupported: m.whatsapp_draft_err_outdated,
+  // Serviço antes da edição (api < 3): o Hangar recusa sem chamar, e o cartão fica.
+  whatsapp_edit_unsupported: m.whatsapp_draft_err_edit_unsupported,
 };
 
 /** Frase da recusa de `send`/`decline` pelo código `whatsapp_*`. `lockedUntil`: o `reachout_locked_until` do

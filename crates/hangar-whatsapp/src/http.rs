@@ -26,7 +26,10 @@ const CHATS: &[&str] = &["q", "limit"];
 const MESSAGES: &[&str] = &["chat", "since", "until", "before_id", "limit"];
 const SEARCH: &[&str] = &["q", "chat", "limit"];
 const OUTBOX: &[&str] = &["state"];
-const UNSUPPORTED_MSG: &str = "o hangar-whatsapp instalado não envia mensagens; atualize o hangar-whatsapp";
+/// Código e frase da recusa ao binário que não tem a rota de envio, ou a do envio editado.
+const SEND_UNSUPPORTED: (&str, &str) = ("whatsapp_send_unsupported", "o hangar-whatsapp instalado não envia mensagens; atualize o hangar-whatsapp");
+const EDIT_UNSUPPORTED: (&str, &str) = ("whatsapp_edit_unsupported",
+    "o hangar-whatsapp instalado não envia texto editado; atualize o hangar-whatsapp. Nada foi enviado");
 const OUTDATED_MSG: &str = "o WhatsApp recusou a versão do hangar-whatsapp; atualize o hangar-whatsapp";
 
 /// O WhatsApp de uma máquina: instalação, aceite e o cliente do serviço.
@@ -361,7 +364,7 @@ async fn create_draft(wa: &WhatsApp, body: &Value) -> Response {
                 "chat, text e origin são texto; file, reply_to e origin_cwd, texto ou ausentes"),
         }
     }
-    if let Err(response) = send_supported(wa) {
+    if let Err(response) = api_at_least(wa, outbox::SEND_API, SEND_UNSUPPORTED) {
         return response;
     }
     let response = forward(wa, Method::POST, "/v1/outbox", &[], Some(&Value::Object(out))).await;
@@ -371,7 +374,7 @@ async fn create_draft(wa: &WhatsApp, body: &Value) -> Response {
 
 /// `GET /api/whatsapp/outbox`: os pendentes, salvo outro `state` pedido.
 async fn list_drafts(wa: &WhatsApp, query: &str) -> Response {
-    if let Err(response) = send_supported(wa) {
+    if let Err(response) = api_at_least(wa, outbox::SEND_API, SEND_UNSUPPORTED) {
         return response;
     }
     let mut params = pick(query, OUTBOX);
@@ -381,28 +384,49 @@ async fn list_drafts(wa: &WhatsApp, query: &str) -> Response {
     forward(wa, Method::GET, "/v1/outbox", &params, None).await
 }
 
-/// `GET /api/whatsapp/outbox/{id}`, `POST …/{id}/send` (`{"via":"desktop"|"mobile"}`) e `POST …/{id}/decline`.
+/// `GET /api/whatsapp/outbox/{id}`, `POST …/{id}/send` (`{"via":"desktop"|"mobile"}`), `POST …/{id}/send-edited`
+/// (`{"via", "text"}`, o texto que o dono editou no cartão) e `POST …/{id}/decline`.
 async fn draft(wa: &WhatsApp, method: Method, rest: &str, request: Request) -> Response {
     let (id, action) = rest.split_once('/').unwrap_or((rest, ""));
     if !outbox::id_ok(id) {
         return refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "id de rascunho inválido");
     }
-    if let Err(response) = send_supported(wa) {
+    if let Err(response) = api_at_least(wa, outbox::SEND_API, SEND_UNSUPPORTED) {
         return response;
     }
     let path = format!("/v1/outbox/{id}");
     match (method, action) {
         (Method::GET, "") => forward(wa, Method::GET, &path, &[], None).await,
-        (Method::POST, "send") => {
+        (Method::POST, action @ ("send" | "send-edited")) => {
+            let edited = action == "send-edited";
+            if edited && let Err(response) = api_at_least(wa, outbox::EDIT_API, EDIT_UNSUPPORTED) {
+                return response;
+            }
             let body = match body(request).await {
                 Ok(body) => body,
                 Err(response) => return response,
             };
-            let via = match body["via"].as_str() {
-                Some(via @ ("desktop" | "mobile")) => via,
-                _ => return refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "via é \"desktop\" ou \"mobile\""),
+            let via = match parse_via(&body) {
+                Ok(via) => via,
+                Err(response) => return response,
             };
-            let response = forward(wa, Method::POST, &format!("{path}/send"), &[], Some(&json!({"via": via}))).await;
+            let mut out = json!({"via": via});
+            if edited {
+                // Normalizar e validar o texto (tamanho, vazio sem anexo) é do binário, que responde 400 e deixa o rascunho pendente.
+                let Some(text) = body["text"].as_str() else {
+                    return refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "text é obrigatório e é texto");
+                };
+                out["text"] = json!(text);
+            }
+            let response = match wa.client.call(Method::POST, &format!("{path}/{action}"), &[], Some(&out)).await {
+                // O 404 que não é de rascunho é a rota que não existe (binário antigo que se anuncia novo): vira a mesma
+                // recusa do `api` antigo, nunca sucesso.
+                Ok(reply) if edited && reply.status == 404 && c2_code(&reply.body).as_deref() != Some("not_found") => {
+                    refused(StatusCode::CONFLICT, EDIT_UNSUPPORTED.0, EDIT_UNSUPPORTED.1)
+                }
+                Ok(reply) => relay(reply),
+                Err(error) => call_error(&error),
+            };
             wa.outbox.poke();
             response
         }
@@ -415,11 +439,18 @@ async fn draft(wa: &WhatsApp, method: Method, rest: &str, request: Request) -> R
     }
 }
 
-/// Binário que se anuncia sem a rota de envio não tem as rotas de saída. Sem `control.json` segue: o pedido responde
-/// `whatsapp_off`.
-fn send_supported(wa: &WhatsApp) -> Result<(), Response> {
+fn parse_via(body: &Value) -> Result<&str, Response> {
+    match body["via"].as_str() {
+        Some(via @ ("desktop" | "mobile")) => Ok(via),
+        _ => Err(refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "via é \"desktop\" ou \"mobile\"")),
+    }
+}
+
+/// Binário que se anuncia abaixo de `min` não tem a rota: a recusa sai daqui, sem pedido ao serviço. Sem `control.json`
+/// segue: o pedido responde `whatsapp_off`.
+fn api_at_least(wa: &WhatsApp, min: u32, (code, msg): (&str, &str)) -> Result<(), Response> {
     match wa.client.claimed() {
-        Some(control) if control.api < outbox::SEND_API => Err(refused(StatusCode::CONFLICT, "whatsapp_send_unsupported", UNSUPPORTED_MSG)),
+        Some(control) if control.api < min => Err(refused(StatusCode::CONFLICT, code, msg)),
         _ => Ok(()),
     }
 }

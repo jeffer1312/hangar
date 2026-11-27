@@ -138,6 +138,45 @@ test('token novo apaga o cofre do servidor; evento igual ao antigo volta a valer
   release();
 });
 
+test('integrations_approvals: guarda aprovações por servidor, ignora repetido/torto e limpa em token novo ou release', async () => {
+  const card = {
+    id: 'ap1',
+    interaction_id: 'ii1',
+    origin: 'srv1::chat',
+    integration_id: 'github',
+    integration_name: 'GitHub',
+    tool: 'create_issue',
+    arguments_preview: '{"title":"Teste"}',
+    reason: 'Criar issue',
+    expires_at: 9999999,
+  };
+  const event = JSON.stringify({ requests: [card] });
+  const release = useSessions.getState().retain();
+  await settle();
+  created[0].trigger('integrations_approvals', event);
+  const firstRef = useSessions.getState().integrationApprovals.srv1;
+  expect(firstRef?.requests).toEqual([card]);
+
+  // Evento repetido ou torto preserva a mesma referência.
+  created[0].trigger('integrations_approvals', event);
+  expect(useSessions.getState().integrationApprovals.srv1).toBe(firstRef);
+  created[0].trigger('integrations_approvals', '{invalid');
+  expect(useSessions.getState().integrationApprovals.srv1).toBe(firstRef);
+
+  // Token novo apaga aprovações antigas; evento da conexão antiga é ignorado e da nova volta a valer.
+  useServers.setState({ servers: [{ ...useServers.getState().servers[0], token: 'new-token' }] });
+  useSessions.getState().refreshServers();
+  expect(useSessions.getState().integrationApprovals.srv1).toBeUndefined();
+  await settle();
+  created[0].trigger('integrations_approvals', event);
+  expect(useSessions.getState().integrationApprovals.srv1).toBeUndefined();
+  created.at(-1)!.trigger('integrations_approvals', event);
+  expect(useSessions.getState().integrationApprovals.srv1?.requests[0]?.id).toBe('ap1');
+
+  release();
+  expect(useSessions.getState().integrationApprovals).toEqual({});
+});
+
 test('rascunhos de WhatsApp: evento guarda os pendentes, torto mantém o anterior e servidor removido apaga', async () => {
   const draft = { id: 'd1', origin: 'srv1::web', chat_number: '5511999990000', text: 'oi', expires_at: '2026-11-24T14:10:00Z', state: 'pending' };
   const release = useSessions.getState().retain();

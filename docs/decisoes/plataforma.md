@@ -462,6 +462,22 @@ Do lado do Hangar (C6):
 
 Fora: PWA Svelte, áudio, imagem com miniatura, prévia de link, lista de transmissão e canal.
 
+## WhatsApp: foto, conversa e edição no cartão (26/11/2026)
+
+O cartão do rascunho mostra a foto da conversa (ou a inicial), as últimas mensagens como conversa com o tipo da
+mídia, e deixa o dono editar o texto antes de enviar. Contrato C7 em `docs/api.md` do binário (api 3).
+
+- **Edição por rota própria.** `POST /api/whatsapp/outbox/{id}/send-edited` repassa `{"via","text"}`. Binário com
+  `api < 3` recebe 409 `whatsapp_edit_unsupported` sem chamada, e o 404 de rota de um binário antigo vira o mesmo
+  409: versão velha em qualquer ponta nunca manda o texto original no lugar do editado. O evento `whatsapp_outbox`
+  leva `edit` (`api >= 3`); sem ele o cartão não oferece "Editar".
+- **O cliente confere o `sent_text` do 202.** Diferente do editado, avisa e não diz que saiu o editado.
+- **A sessão fica sabendo.** A tool devolve `edited`, `sent_text` e a nota "o dono editou o texto antes de enviar".
+- **A trava de linha de comando do Claude Code (`guard-tmux`) cobre `send-edited`** como `/send` e `/decline`.
+- **Foto e recentes são de terceiro.** Foto só JPEG (os clientes recusam outro formato); nome de documento e
+  legenda passam pela marca de invisíveis e nunca vão à tool.
+
+
 ## CLIProxyAPI instalado e configurado pelo Hangar (19/11/2026)
 
 Montar o proxy à mão (baixar, escrever o `config.yaml`, inventar chave e senha, logar a conta,

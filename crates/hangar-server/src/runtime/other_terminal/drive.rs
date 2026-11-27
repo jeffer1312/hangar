@@ -1831,11 +1831,23 @@ pub async fn control(
                 agy_permission(&mut context, payload, kind == "set_permission_mode").await
             }
             "steer" | "steer_queue" | "steer_entry" => {
-                let before = context.frame(true, false).await;
-                if before
-                    .as_ref()
-                    .is_ok_and(|frame| !frame.text.contains("ctrl-s to steer immediately"))
-                {
+                // O quadro guardado pode ser de antes de a mensagem entrar na fila da TUI: relê antes de concluir.
+                let waiting = |frame: &Result<OtherFrame, RuntimeError>| {
+                    frame.as_ref().is_ok_and(|frame| !frame.text.contains("ctrl-s to steer immediately"))
+                };
+                let mut before = context.frame(true, false).await;
+                for _ in 0..3 {
+                    if !waiting(&before) {
+                        break;
+                    }
+                    context.pause(SETTLE, false).await?;
+                    // Releitura que falha não vira Ctrl+S às cegas: vale o último quadro lido.
+                    match context.frame(false, false).await {
+                        Ok(frame) => before = Ok(frame),
+                        Err(_) => break,
+                    }
+                }
+                if waiting(&before) {
                     return Ok(context.reply(
                         RuntimeDisposition::Accepted,
                         json!({"ok":true,"steered":false,"sem_fila":true}),

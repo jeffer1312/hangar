@@ -80,8 +80,11 @@ def native_crates() -> list[str]:
     return sorted(f"{p.relative_to(ROOT).as_posix()}/" for p in seen if inside not in p.parents and p != inside)
 
 
-# Dependência que o Cargo.toml não declara: os testes do hangar-server executam o binário do hangar-cano.
-RUN_DEPENDENTS = {"hangar-cano": ("hangar-server",)}
+# Dependências que o Cargo.toml não declara para testes: os testes do hangar-server executam os binários desses crates.
+RUN_DEPENDENTS = {
+    "hangar-cano": ("hangar-server",),
+    "hangar-integrations": ("hangar-server",),
+}
 
 
 def rust_members() -> dict[Path, str]:

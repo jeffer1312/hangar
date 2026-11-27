@@ -16,6 +16,12 @@ use std::sync::Arc;
 const RPC_LIMIT:f64 = 30.0;
 /// O `session/cancel` que não fecha o turno neste prazo: o processo sobe de novo (como o T3 Code).
 const CANCEL_LIMIT:f64 = 15.0;
+/// Turno sem nenhuma saída do agy por este tempo, sem ferramenta, pergunta ou abertura pendente, é dado por perdido
+/// (o agy deixa o `session/prompt` aberto enquanto acha que tem subagente vivo): o turno é cancelado, como no T3 Code.
+const INACTIVITY_LIMIT:f64 = 15.0 * 60.0;
+const SETTLE_DEBOUNCE:f64 = 3.0;
+const REPLY_QUIET_LIMIT:f64 = 120.0;
+const COMMAND_HOLD_LIMIT:f64 = 30.0 * 60.0;
 
 #[derive(Clone,Debug,PartialEq)]
 enum Call { Initialize, Authenticate, Open { resumed:bool }, BootMode, BootModel(String), Prompt, SetModel(String), SetMode(PermissionMode) }
@@ -30,6 +36,51 @@ struct Wire { kind:WireKind, request_id:Option<String>, server_request:Option<Re
 fn error(code:&str,message:&str) -> RuntimeError { RuntimeError::new(code,message) }
 fn unsupported() -> RuntimeError { error("antigravity_unsupported","o Antigravity sem terminal não atende esta operação") }
 fn text(value:&Value) -> Option<String> { value.as_str().filter(|s|!s.is_empty()).map(str::to_owned) }
+
+/// Pergunta do agente: vem pelo mesmo pedido da permissão, mas as opções são respostas, não aprovações.
+fn is_question(request:&Value) -> bool { request["params"]["toolCall"]["toolCallId"].as_str().is_some_and(|id|id.starts_with("interaction_")) }
+
+enum Answer { Option(String), Cancel }
+
+const SCHEDULE_TITLES:[&str;2] = ["Run schedule","Running schedule"];
+const LIVE_TOOL_TEXT_LIMIT:usize = 8_000;
+const KNOWN_KINDS:[&str;4] = ["allow_once","allow_always","reject_once","reject_always"];
+
+fn not_found(detail:&str) -> bool { detail.contains("(code 404)") || detail.contains("Error 404,") || detail.contains("HTTP 404") }
+
+/// Comando que não é servidor e agendamento seguem depois do prompt e avisam sozinhos quando acabam.
+fn outlives_prompt(kind:Option<&str>,title:Option<&str>,input:Option<&Value>) -> bool {
+    // Sem a entrada ainda não se sabe se é servidor: não segura o turno por um comando que pode nunca acabar.
+    title.is_some_and(|t|SCHEDULE_TITLES.contains(&t)) || (kind == Some("execute") && input.is_some_and(|i|i["IsDaemon"] != true))
+}
+
+/// O aviso do "permitir sempre" vale só para essa opção.
+fn option_warning(option:&Value) -> Option<String> {
+    let warning = &option["_meta"]["agy.security.warning"];
+    let text = warning.as_str().or_else(||warning["message"].as_str()).or_else(||warning["title"].as_str())?.trim();
+    (!text.is_empty()).then(||text.chars().take(512).collect())
+}
+
+/// O que o cartão mostra, na ordem em que a escolha da pessoa volta: a permissão por tipo de opção, com Cancelar.
+fn answers(request:&Value) -> Vec<(String,Answer)> {
+    let options = request["params"]["options"].as_array().cloned().unwrap_or_default();
+    let id = |option:&Value| option["optionId"].as_str().filter(|id|!id.trim().is_empty()).map(str::to_owned);
+    let named = |option:&Value| Some((option["name"].as_str().map(str::trim).filter(|n|!n.is_empty()).map(str::to_owned).or_else(||id(option))?,Answer::Option(id(option)?)));
+    if is_question(request) { return options.iter().filter_map(named).collect(); }
+    let of_kind = |kind:&str| options.iter().find(|option|option["kind"] == kind).and_then(|option|Some((option,id(option)?)));
+    let mut out = Vec::new();
+    if let Some((_,id)) = of_kind("allow_once") { out.push(("Permitir uma vez".to_owned(),Answer::Option(id))); }
+    if let Some((option,id)) = of_kind("allow_always") {
+        let label = option_warning(option).map_or_else(||"Permitir nesta conversa".to_owned(),|warning|format!("Permitir nesta conversa ({warning})"));
+        out.push((label,Answer::Option(id)));
+    }
+    if let Some((_,id)) = of_kind("reject_once") { out.push(("Negar".to_owned(),Answer::Option(id))); }
+    if let Some((_,id)) = of_kind("reject_always") { out.push(("Negar sempre".to_owned(),Answer::Option(id))); }
+    // Tipo que o agy ainda não usava: a opção aparece com o nome dele em vez de sumir.
+    out.extend(options.iter().filter(|option|!option["kind"].as_str().is_some_and(|kind|KNOWN_KINDS.contains(&kind))).filter_map(named));
+    out.push(("Cancelar".to_owned(),Answer::Cancel));
+    out
+}
 
 /// Sufixos de esforço nos ids do `agy models` (`gemini-4-neon-high`): o app manda modelo e esforço separados.
 const EFFORTS:[&str;4] = ["low","medium","high","xhigh"];
@@ -75,6 +126,25 @@ pub struct Engine {
     wires:BTreeMap<String,Wire>,
     policies:BTreeMap<RequestId,String>,
     cancel_due:Option<f64>,
+    /// Ferramentas do turno (do agy ou de subagente) ainda sem fim: seguram o relógio do silêncio.
+    /// `true` = continua depois do prompt (comando que não é servidor, agendamento) e avisa sozinha quando acaba.
+    open_tools:BTreeMap<String,bool>,
+    /// Prompt já respondido, mas o agy segue: comando de fundo rodando ou resposta sem prompt (acordou sozinho).
+    held:bool,
+    /// Resposta que o agy começou sem prompt aberto; termina no `usage_update` dela.
+    reply_open:bool,
+    /// Nada mais segura o turno: ele fecha nesta hora se nada recomeçar antes.
+    settle_at:Option<f64>,
+    /// Última saída do turno (texto, pensamento, ferramenta, pergunta); metadado não conta.
+    progress_at:f64,
+    /// O modelo já respondeu algo neste pedido: um 404 depois disso é passageiro.
+    turn_output:bool,
+    /// Comandos de barra que o agy anunciou (`available_commands_update`).
+    commands:Vec<String>,
+    /// O pedido da pessoa já recebeu o "continue" automático uma vez.
+    resumed:bool,
+    /// O turno foi cancelado (Parar ou silêncio): não recomeça sozinho nem segura comando de fundo.
+    stopping:bool,
     /// Falha do modelo que o agy manda como texto: vira o aviso do turno quando ele termina.
     turn_failure:Option<String>,
     /// A abertura já pediu o modo uma vez nesta vida: recusado, segue sem ele (com nota).
@@ -100,7 +170,8 @@ impl Engine {
             state:StateEvent { session:metadata["name"].as_str().unwrap_or("").into(),state:"idle".into(),headless:true,..StateEvent::default() },
             preview:LiveBuffer::default(),thinking:LiveBuffer::default(),tool:None,
             rpc:BTreeMap::new(),server_requests:Vec::new(),request_epochs:BTreeMap::new(),answering:BTreeSet::new(),
-            wires:BTreeMap::new(),policies:BTreeMap::new(),cancel_due:None,turn_failure:None,boot_mode_tried:false,last_event:clock.monotonic_s,
+            wires:BTreeMap::new(),policies:BTreeMap::new(),cancel_due:None,open_tools:BTreeMap::new(),held:false,reply_open:false,settle_at:None,progress_at:clock.monotonic_s,turn_output:false,commands:Vec::new(),resumed:false,stopping:false,
+            turn_failure:None,boot_mode_tried:false,last_event:clock.monotonic_s,
             decoder:acp::Session::new(String::new(),None),conversation }
     }
 
@@ -123,7 +194,7 @@ impl Engine {
     }
 
     pub fn park_idle(&self,now:f64) -> Option<f64> {
-        let open = !self.alive || self.in_progress || self.booting.is_some() || !self.server_requests.is_empty()
+        let open = !self.alive || self.in_progress || self.held || self.booting.is_some() || !self.server_requests.is_empty()
             || self.rpc.values().any(|rpc|!rpc.timed_out);
         (!open).then(||now - self.last_event)
     }
@@ -131,7 +202,40 @@ impl Engine {
     pub fn next_deadline(&self) -> Option<f64> {
         self.preview.deadline().into_iter().chain(self.thinking.deadline())
             .chain(self.rpc.values().filter(|rpc|!rpc.timed_out).filter_map(|rpc|rpc.deadline))
-            .chain(self.cancel_due.filter(|_|self.in_progress)).min_by(f64::total_cmp)
+            .chain(self.cancel_due.filter(|_|self.in_progress))
+            // Prazo que o `tick` não consome nesse estado não entra: vencido, faria o ator girar sem parar.
+            .chain(self.silence_limit().filter(|_|self.in_progress && self.cancel_due.is_none()).map(|limit|self.progress_at + limit))
+            .chain(self.settle_at.filter(|_|!self.in_progress))
+            .chain((self.held && !self.in_progress && self.reply_open).then_some(self.progress_at + REPLY_QUIET_LIMIT))
+            .chain((self.held && !self.in_progress && self.open_tools.values().any(|outlives|*outlives)).then_some(self.progress_at + COMMAND_HOLD_LIMIT))
+            .min_by(f64::total_cmp)
+    }
+
+    /// O que ainda segura um turno cujo prompt já foi respondido.
+    fn holding(&self) -> bool { self.reply_open || !self.server_requests.is_empty() || self.open_tools.values().any(|outlives|*outlives) }
+
+    fn arm_settle(&mut self,now:f64) {
+        if self.held && !self.in_progress && !self.holding() { self.settle_at = Some(now + SETTLE_DEBOUNCE); }
+    }
+
+    fn release_hold(&mut self,effects:&mut Vec<Effect>) {
+        if !self.held { return; }
+        self.held = false; self.reply_open = false; self.settle_at = None;
+        self.open_tools.clear();
+        self.clear_live(effects);
+        effects.push(Effect::WakeQueue);
+        effects.push(Effect::StateChanged);
+    }
+
+    fn pending_reply(&self) -> bool {
+        self.brain_dir.as_deref().is_some_and(|dir|hangar_antigravity::inbox::pending_reply(std::path::Path::new(dir),&self.conversation))
+    }
+
+    /// Silêncio que encerra o turno: pergunta aberta e abertura seguram sem prazo (esperam a pessoa); ferramenta
+    /// aberta segura até o teto dos comandos, porque o agy às vezes perde o aviso de fim.
+    fn silence_limit(&self) -> Option<f64> {
+        if self.booting.is_some() || !self.server_requests.is_empty() { return None; }
+        Some(if self.open_tools.is_empty() { INACTIVITY_LIMIT } else { COMMAND_HOLD_LIMIT })
     }
 
     pub(super) fn input_frame_template(&self) -> Value {
@@ -157,20 +261,17 @@ impl Engine {
     fn shown_state(&self) -> StateEvent {
         let mut state = self.state.clone();
         let asked = self.server_requests.first();
-        state.state = if !self.alive { "dead" } else if asked.is_some() { "awaiting_input" } else if self.in_progress { "working" } else { "idle" }.into();
+        state.state = if !self.alive { "dead" } else if asked.is_some() { "awaiting_input" } else if self.in_progress || self.held { "working" } else { "idle" }.into();
         state.label = self.booting.as_ref().map(|_|"Abrindo a conversa…".into());
         // A pílula de modo lê o campo do Claude, como no Antigravity com terminal.
         state.claude_permission_mode = Some(self.permission_mode.name().into());
         state.question = None; state.options = None;
         if let Some((_,request)) = asked {
             let params = &request["params"];
-            let title = params["toolCall"]["title"].as_str().filter(|t|!t.is_empty())
-                .map_or_else(||"O Antigravity pede permissão para agir".to_owned(),|title|format!("Permitir: {title}?"));
-            let warning = params["options"].as_array().into_iter().flatten().chain(std::iter::once(params))
-                .find_map(|o|o["_meta"]["agy.security.warning"].as_str());
-            state.question = Some(match warning { Some(warning) => format!("{title}\n{warning}"), None => title });
-            state.options = Some(params["options"].as_array().into_iter().flatten()
-                .map(|o|o["name"].as_str().or(o["optionId"].as_str()).unwrap_or("?").to_owned()).collect());
+            let title = params["toolCall"]["title"].as_str().map(str::trim).filter(|t|!t.is_empty());
+            state.question = Some(if is_question(request) { title.unwrap_or("Escolha uma opção.").to_owned() }
+                else { title.map_or_else(||"O Antigravity pede permissão para agir".to_owned(),|title|format!("Permitir: {title}?")) });
+            state.options = Some(answers(request).into_iter().map(|(label,_)|label).collect());
         }
         state
     }
@@ -377,19 +478,33 @@ impl Engine {
                 let params = json!({"sessionId":self.conversation,"prompt":prompt});
                 let id = self.send(Some(operation_id.clone()),None,Call::Prompt,"session/prompt",params,&mut effects);
                 if let Some(wire) = self.wires.get_mut(&operation_id) { wire.kind = WireKind::Prompt { steer }; }
-                if !steer { self.turn_id = Some(id); self.turn_failure = None; }
+                if !steer { self.turn_id = Some(id); self.turn_failure = None; self.turn_output = false; self.resumed = false; self.stopping = false; }
                 self.in_progress = true;
+                self.settle_at = None;
                 self.last_event = clock.monotonic_s;
+                self.progress_at = clock.monotonic_s;
                 effects.push(Effect::StateChanged);
             }
             K::Interrupt => {
-                if !self.in_progress { return Ok(vec![reply(Disposition::Accepted,json!({"interrupted":false}))]); }
+                if !self.in_progress && !self.held { return Ok(vec![reply(Disposition::Accepted,json!({"interrupted":false}))]); }
+                if !self.in_progress {
+                    // Sem prompt aberto ninguém responde ao cancelamento: ele só derruba o que o agy roda por fora.
+                    for (id,_) in std::mem::take(&mut self.server_requests) {
+                        self.request_epochs.remove(&id); self.answering.remove(&id);
+                        effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","id":id,"result":{"outcome":{"outcome":"cancelled"}}}),operation_id:None });
+                    }
+                    effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.conversation}}),operation_id:None });
+                    self.release_hold(&mut effects);
+                    effects.push(reply(Disposition::Accepted,json!({"interrupted":true})));
+                    return Ok(effects);
+                }
                 // O ACP pede que o cliente cancele as permissões abertas junto com o turno.
                 for (id,_) in self.server_requests.clone() {
                     if self.answering.insert(id.clone()) {
                         effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","id":id,"result":{"outcome":{"outcome":"cancelled"}}}),operation_id:None });
                     }
                 }
+                self.stopping = true;
                 self.wires.insert(operation_id.clone(),Wire { kind:WireKind::Cancel,request_id:None,server_request:None,server_epoch:None,interaction:None,final_result:false });
                 effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.conversation}}),operation_id:Some(operation_id.clone()) });
                 self.cancel_due = Some(clock.monotonic_s + CANCEL_LIMIT);
@@ -400,13 +515,15 @@ impl Engine {
                     .find(|(id,_)|native_target(InteractionKind::Approval,&self.conversation,&json!(id)) == expected.target)
                     .cloned().ok_or_else(||runtime_error(InteractionError::Changed))?;
                 self.check_request(&expected,&id,&request)?;
-                let options = request["params"]["options"].as_array().cloned().unwrap_or_default();
-                let chosen = payload["option"].as_u64().and_then(|n|n.checked_sub(1)).and_then(|n|options.get(n as usize))
-                    .and_then(|o|o["optionId"].as_str()).ok_or_else(||error("antigravity_answer_invalid","opção fora da pergunta"))?;
+                let outcome = match payload["option"].as_u64().and_then(|n|n.checked_sub(1)).and_then(|n|answers(&request).into_iter().nth(n as usize)) {
+                    Some((_,Answer::Option(id))) => json!({"outcome":"selected","optionId":id}),
+                    Some((_,Answer::Cancel)) => json!({"outcome":"cancelled"}),
+                    None => return Err(error("antigravity_answer_invalid","opção fora da pergunta")),
+                };
                 self.answering.insert(id.clone());
                 self.wires.insert(operation_id.clone(),Wire { kind:WireKind::Answer,request_id:None,server_request:Some(id.clone()),
                     server_epoch:self.request_epochs.get(&id).copied(),interaction:Some(expected),final_result:false });
-                effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","id":id,"result":{"outcome":{"outcome":"selected","optionId":chosen}}}),
+                effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","id":id,"result":{"outcome":outcome}}),
                     operation_id:Some(operation_id.clone()) });
             }
             K::SetModel => {
@@ -435,6 +552,11 @@ impl Engine {
                 self.send(Some(operation_id.clone()),None,Call::SetMode(wanted),"session/set_mode",params,&mut effects);
             }
             K::Restart | K::Reload => effects.push(Effect::Respawn { operation_id:operation_id.clone(),reason:"restart".into(),patch:Value::Null,reply:json!({}) }),
+            // A compactação do agy é o comando de barra dele, mandado como mensagem.
+            K::Compact => {
+                if !self.commands.iter().any(|c|c == "compact") { return Err(unsupported()); }
+                return self.command(RuntimeCommand { operation_id:operation_id.clone(),kind:K::Input,payload:json!({"text":"/compact"}) },clock);
+            }
             K::ListModels => effects.push(reply(Disposition::Accepted,json!({"models":self.models.iter().map(|m|json!({"id":m.id,"name":m.name})).collect::<Vec<_>>(),
                 "current":self.model}))),
             K::ReadSettings => effects.push(reply(Disposition::Accepted,json!({"model":self.model,"mode":self.mode,"permission_mode":self.permission_mode.name()}))),
@@ -450,6 +572,7 @@ impl Engine {
             EngineInput::Line(line) => {
                 if line["type"] == "cano_saiu" {
                     self.alive = false; self.in_progress = false; self.ready = false; self.initialized = false; self.turn_id = None;
+                    self.open_tools.clear(); self.held = false; self.reply_open = false; self.settle_at = None;
                     self.clear_live(&mut effects);
                     self.state.problema = Some("headless_caiu".into());
                     effects.push(Effect::StateChanged);
@@ -493,6 +616,34 @@ impl Engine {
             tracing::warn!(session=%self.state.session,"antigravity: o turno não parou depois do cancelamento; o processo sobe de novo");
             effects.push(Effect::Respawn { operation_id:format!("cancel_restart:{}:{}",self.generation,self.counter),reason:"restart".into(),patch:Value::Null,reply:json!({}) });
         }
+        if self.in_progress && self.cancel_due.is_none() && let Some(limit) = self.silence_limit() && now >= self.progress_at + limit {
+            self.progress_at = now;
+            self.stopping = true;
+            // O agy segura o prompt enquanto acha que tem subagente ou tarefa viva; o cancelamento fecha o turno
+            // sem matar o processo, e o prazo do cancelamento sobe o processo de novo se nem isso responder.
+            tracing::warn!(session=%self.state.session,code="agy_prompt_inactive","antigravity: turno aberto sem saída do agy; cancelado");
+            let minutes = (limit / 60.0).round() as u64;
+            self.note(format!("O Antigravity ficou {minutes} min sem mandar nada com o turno aberto; o Hangar cancelou o turno. Mande uma mensagem para continuar."),effects);
+            effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.conversation}}),operation_id:None });
+            self.cancel_due = Some(now + CANCEL_LIMIT);
+            return;
+        }
+        if !self.held || self.in_progress { return; }
+        if self.settle_at.is_some_and(|at|now >= at) {
+            self.settle_at = None;
+            if self.holding() { return; }
+            if self.pending_reply() { self.reply_open = true; self.progress_at = now; return; }
+            return self.release_hold(effects);
+        }
+        if self.reply_open && now >= self.progress_at + REPLY_QUIET_LIMIT {
+            self.reply_open = false;
+            if !self.holding() { return self.release_hold(effects); }
+        }
+        // O agy às vezes perde o aviso de fim de um comando: sem saída por muito tempo, o turno solta.
+        if self.open_tools.values().any(|outlives|*outlives) && now >= self.progress_at + COMMAND_HOLD_LIMIT {
+            self.open_tools.retain(|_,outlives|!*outlives);
+            if !self.holding() { self.release_hold(effects); }
+        }
     }
 
     /// Notificação ou pedido do agente, lido pelo decodificador do crate.
@@ -501,6 +652,19 @@ impl Engine {
         let now = self.clock.monotonic_s;
         let raw = line.to_string();
         for out in self.decoder.feed(&raw) {
+            if let acp::Out::Event(event) = &out && matches!(event,acp::Event::TextDelta(_) | acp::Event::ThoughtDelta(_) | acp::Event::TurnFailed(_)
+                | acp::Event::ToolStarted { .. } | acp::Event::ToolUpdated { .. } | acp::Event::PermissionAsked { .. }) {
+                self.progress_at = now;
+                self.settle_at = None;
+                if self.in_progress && matches!(event,acp::Event::TextDelta(_) | acp::Event::ThoughtDelta(_) | acp::Event::ToolStarted { .. }) { self.turn_output = true; }
+                // Fim atrasado de uma ferramenta que já saiu (Parar, turno encerrado) não é o agy acordando.
+                let late = matches!(event,acp::Event::ToolUpdated { id,.. } if !self.open_tools.contains_key(id));
+                // Saída sem prompt aberto: o agy acordou sozinho (tarefa de fundo, recado de subagente).
+                if !late && !self.in_progress && self.booting.is_none() && self.ready {
+                    if !self.held { self.held = true; effects.push(Effect::StateChanged); }
+                    if !matches!(event,acp::Event::PermissionAsked { .. } | acp::Event::ToolUpdated { .. }) { self.reply_open = true; }
+                }
+            }
             match out {
                 // Pedido que não sabemos atender (ex.: `fs/read_text_file`) recebe erro: pendurado, prende o turno.
                 acp::Out::Write(text) => if let Ok(frame) = serde_json::from_str::<Value>(&text) { effects.push(Effect::Write { frame,operation_id:None }); },
@@ -515,24 +679,39 @@ impl Engine {
                     }
                     acp::Event::TextDelta(piece) => {
                         // O agy seguiu depois da falha: o turno não terminou nela.
-                        if !piece.trim().is_empty() { self.turn_failure = None; }
+                        if !piece.trim().is_empty() {
+                            self.turn_failure = None;
+                            // O agy não grava o pensamento no transcript: ele termina quando a resposta começa.
+                            if let Some(text) = self.thinking.clear() { self.publish("thinking",text,effects); }
+                        }
                         if let Some(text) = self.preview.append(&piece,now) { self.publish("preview",text,effects); }
                     }
                     acp::Event::TurnFailed(detail) => self.turn_failure = Some(detail),
                     acp::Event::ThoughtDelta(piece) => if let Some(text) = self.thinking.append(&piece,now) { self.publish("thinking",text,effects); },
-                    acp::Event::ToolStarted { title,name,input,.. } => {
+                    acp::Event::ToolStarted { id,title,name,input,kind } => {
                         self.turn_failure = None;
+                        self.open_tools.insert(id,outlives_prompt(kind.as_deref(),title.as_deref(),input.as_ref()));
                         // Texto depois de uma ferramenta é outra mensagem; o definitivo vem do transcript.
                         if let Some(text) = self.preview.clear() { self.publish("preview",text,effects); }
-                        let (tool_name,input) = match name {
+                        if let Some(text) = self.thinking.clear() { self.publish("thinking",text,effects); }
+                        let (tool_name,mut input) = match name {
                             Some(name) => hangar_transcript::agy_live_tool(&name,input.as_ref().unwrap_or(&Value::Null)),
                             None => (title.unwrap_or_else(||"tool".into()),serde_json::Map::new()),
                         };
+                        // Arquivo inteiro escrito pela ferramenta não vai ao vivo para todos os clientes; o definitivo vem do transcript.
+                        for value in input.values_mut() {
+                            if let Some(text) = value.as_str().filter(|t|t.chars().count() > LIVE_TOOL_TEXT_LIMIT) {
+                                let tail:String = text.chars().rev().take(LIVE_TOOL_TEXT_LIMIT).collect::<Vec<_>>().into_iter().rev().collect();
+                                *value = Value::String(format!("[…] {tail}"));
+                            }
+                        }
                         self.publish("tool",super::live_tool_text(&tool_name,&Value::Object(input)),effects);
                         self.tool = Some(tool_name);
                     }
-                    acp::Event::ToolUpdated { status,.. } => if matches!(status.as_deref(),Some("completed" | "failed")) && self.tool.take().is_some() {
-                        self.publish("tool",String::new(),effects);
+                    acp::Event::ToolUpdated { id,status,.. } => if matches!(status.as_deref(),Some("completed" | "failed")) {
+                        self.open_tools.remove(&id);
+                        if self.tool.take().is_some() { self.publish("tool",String::new(),effects); }
+                        self.arm_settle(now);
                     },
                     acp::Event::ModeChanged(mode) => {
                         // O agy sai do plano sozinho: a pílula e o sidecar seguem o modo dele (o bypass é flag e fica).
@@ -545,11 +724,19 @@ impl Engine {
                         effects.push(Effect::StateChanged);
                     }
                     acp::Event::ModelChanged(model) => { self.model = Some(model); effects.push(Effect::StateChanged); }
-                    acp::Event::ContextUsage { used,size } => { self.token_usage = json!({"used":used,"size":size}); effects.push(Effect::StateChanged); }
+                    acp::Event::Commands(commands) => self.commands = commands,
+                    acp::Event::ContextUsage { used,size } => {
+                        self.token_usage = json!({"used":used,"size":size});
+                        // Toda resposta do agy termina num `usage_update`, também a que começou sem prompt.
+                        if !self.in_progress && self.reply_open { self.reply_open = false; self.arm_settle(now); }
+                        effects.push(Effect::StateChanged);
+                    }
                     _ => {}
                 },
             }
         }
+        // Turno segurado sem nada que o segure e sem prazo: ninguém o soltaria.
+        if self.held && !self.in_progress && self.settle_at.is_none() { self.arm_settle(now); }
     }
 
     fn reply(&mut self,line:&Value,effects:&mut Vec<Effect>) {
@@ -660,16 +847,34 @@ impl Engine {
     fn turn_ended(&mut self,line:&Value,effects:&mut Vec<Effect>) {
         if self.prompt_open() { return; }
         self.in_progress = false; self.turn_id = None; self.cancel_due = None;
-        self.clear_live(effects);
+        let stopped = std::mem::take(&mut self.stopping) || line["result"]["stopReason"] == "cancelled";
+        // Comando que continua depois do prompt segura o turno até avisar que acabou; o cancelamento o derruba junto.
+        if stopped { self.open_tools.clear(); } else { self.open_tools.retain(|_,outlives|*outlives); }
+        self.reply_open = false; self.settle_at = None;
+        self.held = !self.open_tools.is_empty();
+        if self.held { self.progress_at = self.clock.monotonic_s; }
+        if !self.held { self.clear_live(effects); }
         // O agy encerra as permissões do turno junto com ele.
         for (id,_) in std::mem::take(&mut self.server_requests) { self.request_epochs.remove(&id); self.answering.remove(&id); }
         let failure = line.get("error").filter(|e|!e.is_null()).map(|e|e["message"].as_str().unwrap_or("o turno falhou").to_owned());
-        if let Some(detail) = failure.or_else(||self.turn_failure.take()) {
+        let failure = failure.or_else(||self.turn_failure.take());
+        // 404 depois que o modelo já respondeu é falha passageira do Google: o agy segue com um "continue", uma vez por pedido.
+        if failure.as_deref().is_some_and(not_found) && self.turn_output && !self.resumed && !self.held && !stopped {
+            self.resumed = true; self.turn_output = false;
+            self.note("O Antigravity teve uma falha passageira (404) no meio da resposta; o Hangar pediu para ele continuar.".into(),effects);
+            let params = json!({"sessionId":self.conversation,"prompt":[{"type":"text","text":"continue"}]});
+            let id = self.send(None,None,Call::Prompt,"session/prompt",params,effects);
+            self.turn_id = Some(id); self.in_progress = true; self.progress_at = self.clock.monotonic_s;
+            effects.push(Effect::StateChanged);
+            return;
+        }
+        if let Some(detail) = failure {
             self.put_problem("headless_turno_erro",Some(detail.chars().take(300).collect()));
         } else {
             if self.state.problema.as_deref() == Some("headless_turno_erro") { self.state.problema = None; self.state.problema_detalhe = None; }
             match line["result"]["stopReason"].as_str() {
-                Some("refusal") => self.note("O modelo recusou continuar este turno.".into(),effects),
+                // O agy só usa `refusal` para a cota esgotada.
+                Some("refusal") => self.put_problem("headless_turno_erro",Some("Cota do Antigravity esgotada".into())),
                 Some("max_tokens") => self.note("O turno parou no limite de tokens da resposta.".into(),effects),
                 Some("max_turn_requests") => self.note("O turno parou no limite de passos do Antigravity.".into(),effects),
                 _ => {}
@@ -722,6 +927,8 @@ impl Engine {
                 let disposition = match outcome {
                     WriteOutcome::Written => {
                         if same { self.server_requests.retain(|(key,_)|key != &id); self.answering.remove(&id); self.request_epochs.remove(&id); }
+                        // Pergunta feita sem prompt aberto: o agy segue a resposta dele depois dela.
+                        if self.held && !self.in_progress { self.reply_open = true; self.progress_at = self.clock.monotonic_s; }
                         Disposition::Accepted
                     }
                     WriteOutcome::NotWritten => { if same { self.answering.remove(&id); } Disposition::Rejected }
@@ -749,6 +956,7 @@ impl Engine {
             if line["method"] == "session/request_permission" { self.agent_line(&line,&mut effects); }
         }
         self.in_progress = snapshot.aberto;
+        self.progress_at = self.clock.monotonic_s;
         if !snapshot.aberto { self.rpc.retain(|_,rpc|rpc.call != Call::Prompt); self.turn_id = None; }
         else if self.turn_id.is_none() { self.turn_id = Some(format!("agy:{}:retomado",self.generation)); }
         let prefix = &snapshot.inflight["acp"];
@@ -774,6 +982,8 @@ impl Engine {
         let mut effects = Vec::new();
         self.clear_live(&mut effects);
         effects.extend(self.hydrate(snapshot)?);
+        // A pergunta que segurava o turno foi resolvida enquanto o socket estava fora: sem prazo, ninguém o soltaria.
+        if self.held && !self.in_progress && self.settle_at.is_none() { self.arm_settle(self.clock.monotonic_s); }
         if !self.in_progress { effects.push(Effect::WakeQueue); }
         Ok(effects)
     }
@@ -924,7 +1134,7 @@ mod tests {
         for line in before { feed(&mut engine,line.clone(),2.0); }
         let card = engine.view();
         assert_eq!(card["state"],"awaiting_input");
-        assert_eq!(card["options"].as_array().map(Vec::len),Some(2));
+        assert_eq!(card["options"],json!(["Permitir uma vez","Negar","Cancelar"]));
         assert!(card["question"].as_str().unwrap().contains("rm -f /tmp/agy-prova/nao-existe.txt"));
         let interaction = card["interaction_id"].as_str().expect("cartão sem identidade").to_owned();
         assert_eq!(command(&mut engine,"s0",OperationKind::Select,json!({"option":2})).unwrap_err().code,"erro_interacao_sem_identidade");
@@ -1052,6 +1262,384 @@ mod tests {
         assert!(engine.apply(EngineInput::Tick,at(5.0)).unwrap().iter().all(|e|!matches!(e,Effect::Respawn { .. })));
         let late = engine.apply(EngineInput::Tick,at(1.0 + CANCEL_LIMIT)).unwrap();
         assert!(late.iter().any(|e|matches!(e,Effect::Respawn { reason,.. } if reason == "restart")));
+    }
+
+    fn update(update:Value) -> Value { json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":OPENED,"update":update}}) }
+
+    fn restarted(effects:&[Effect]) -> bool { effects.iter().any(|e|matches!(e,Effect::Respawn { reason,.. } if reason == "restart")) }
+
+    fn cancelled(effects:&[Effect]) -> bool { frames(effects).iter().any(|f|f["method"] == "session/cancel") }
+
+    #[test]
+    fn a_prompt_silent_for_the_limit_with_nothing_open_is_cancelled_with_a_note() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,update(json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"pronto"}})),10.0);
+        // Metadado não é progresso do turno.
+        feed(&mut engine,update(json!({"sessionUpdate":"usage_update","used":10,"size":100})),10.0 + INACTIVITY_LIMIT - 5.0);
+        assert!(!cancelled(&engine.apply(EngineInput::Tick,at(10.0 + INACTIVITY_LIMIT - 1.0)).unwrap()));
+        let late = engine.apply(EngineInput::Tick,at(10.0 + INACTIVITY_LIMIT)).unwrap();
+        assert!(cancelled(&late) && !restarted(&late),"cancelar fecha o turno sem matar o processo");
+        assert!(late.iter().any(|e|matches!(e,Effect::Policy { kind,payload,.. } if kind == "local_output" && payload["text"].as_str().is_some_and(|t|t.contains("15 min")))));
+        // O agy não respondeu ao cancelamento: aí sim o processo sobe de novo.
+        assert!(restarted(&engine.apply(EngineInput::Tick,at(10.0 + INACTIVITY_LIMIT + CANCEL_LIMIT)).unwrap()));
+    }
+
+    #[test]
+    fn an_open_tool_or_permission_holds_the_silence_clock() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,update(json!({"sessionUpdate":"tool_call","toolCallId":"c1","status":"in_progress","title":"cargo build"})),10.0);
+        assert!(!cancelled(&engine.apply(EngineInput::Tick,at(10.0 + COMMAND_HOLD_LIMIT - 1.0)).unwrap()));
+        let done = 10.0 + COMMAND_HOLD_LIMIT - 1.0;
+        feed(&mut engine,update(json!({"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"completed"})),done);
+        assert!(!cancelled(&engine.apply(EngineInput::Tick,at(done + INACTIVITY_LIMIT - 1.0)).unwrap()));
+        assert!(cancelled(&engine.apply(EngineInput::Tick,at(done + INACTIVITY_LIMIT)).unwrap()));
+    }
+
+    #[test]
+    fn a_turn_adopted_open_from_the_cano_also_ends_after_the_limit() {
+        let mut engine = engine(json!({"conversation_id":OPENED,"initialized":true,"ready":true}));
+        let init = json!({"jsonrpc":"2.0","id":"agy:0:3","result":{"sessionId":OPENED}}).to_string();
+        engine.hydrate(CanoSnapshot { kind:"cano_snapshot".into(),versao:2,pid:9,init:Some(init),aberto:true,pendentes:vec![],ultimo_result:None,
+            rate_limit:None,stderr_tail:vec![],saiu:None,inflight:json!({}) }).unwrap();
+        assert!(engine.next_deadline().is_some_and(|d|d <= INACTIVITY_LIMIT));
+        assert!(cancelled(&engine.apply(EngineInput::Tick,at(INACTIVITY_LIMIT)).unwrap()));
+    }
+
+    fn permission(tool_call:Value,options:Value) -> Value {
+        json!({"jsonrpc":"2.0","id":"7","method":"session/request_permission","params":{"sessionId":OPENED,"toolCall":tool_call,"options":options}})
+    }
+
+    fn select(engine:&mut Engine,id:&str,option:u64) -> Vec<Effect> {
+        let interaction = engine.view()["interaction_id"].as_str().expect("cartão sem identidade").to_owned();
+        command(engine,id,OperationKind::Select,json!({"option":option,"interaction_id":interaction})).unwrap()
+    }
+
+    #[test]
+    fn a_native_question_is_a_choice_not_a_permission() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,permission(json!({"toolCallId":"interaction_1","title":"Qual banco usar?"}),
+            json!([{"optionId":"pg","name":"Postgres","kind":"allow_once"},{"optionId":"sq","name":"SQLite","kind":"allow_once"}])),2.0);
+        let card = engine.view();
+        assert_eq!(card["question"],"Qual banco usar?");
+        assert_eq!(card["options"],json!(["Postgres","SQLite"]));
+        let answer = select(&mut engine,"s1",2);
+        assert_eq!(frames(&answer)[0]["result"]["outcome"],json!({"outcome":"selected","optionId":"sq"}));
+    }
+
+    #[test]
+    fn the_permission_card_names_each_kind_keeps_the_warning_on_its_option_and_can_be_cancelled() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let warning = json!({"agy.security.warning":{"title":"Atenção","message":"vale para todo comando curl"}});
+        feed(&mut engine,permission(json!({"toolCallId":"call_1","title":"curl x"}),json!([
+            {"optionId":"once","name":"Allow","kind":"allow_once"},
+            {"optionId":"always","name":"Always allow","kind":"allow_always","_meta":warning},
+            {"optionId":"no","name":"Deny","kind":"reject_once"}])),2.0);
+        let card = engine.view();
+        assert_eq!(card["options"],json!(["Permitir uma vez","Permitir nesta conversa (vale para todo comando curl)","Negar","Cancelar"]));
+        assert!(!card["question"].as_str().unwrap().contains("curl x\n"),"o aviso vai na opção, não na pergunta");
+        let answer = select(&mut engine,"s1",4);
+        assert_eq!(frames(&answer)[0]["result"]["outcome"],json!({"outcome":"cancelled"}));
+    }
+
+    #[test]
+    fn a_refusal_stop_is_the_quota_running_out() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"refusal"}}),2.0);
+        let view = engine.view();
+        assert_eq!((view["state"].as_str(),view["problema"].as_str()),(Some("idle"),Some("headless_turno_erro")));
+        assert_eq!(view["problema_detalhe"],"Cota do Antigravity esgotada");
+    }
+
+    fn chunk(text:&str) -> Value { update(json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}})) }
+    fn usage() -> Value { update(json!({"sessionUpdate":"usage_update","used":1,"size":10})) }
+    fn command_call(id:&str,input:Value) -> Value { update(json!({"sessionUpdate":"tool_call","toolCallId":id,"status":"in_progress","kind":"execute","title":"cargo build","rawInput":input})) }
+    fn tool_done(id:&str) -> Value { update(json!({"sessionUpdate":"tool_call_update","toolCallId":id,"status":"completed"})) }
+    fn state(engine:&Engine) -> String { engine.view()["state"].as_str().unwrap_or("").to_owned() }
+
+    /// Prompt respondido com um comando de fundo ainda rodando (o agy 1.5.11 fazia assim).
+    fn held_by_a_command(engine:&mut Engine) {
+        command(engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(engine,"in1");
+        feed(engine,command_call("c1",json!({"CommandLine":"cargo build","WaitMsBeforeAsync":10000})),2.0);
+        feed(engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
+    }
+
+    #[test]
+    fn a_command_that_outlives_the_prompt_keeps_the_session_working_until_the_wake_reply_ends() {
+        let mut engine = opened(json!({}));
+        held_by_a_command(&mut engine);
+        assert_eq!(state(&engine),"working");
+        feed(&mut engine,tool_done("c1"),60.0);
+        feed(&mut engine,chunk("terminou"),62.0);
+        feed(&mut engine,usage(),65.0);
+        assert_eq!(state(&engine),"working");
+        engine.apply(EngineInput::Tick,at(65.0 + SETTLE_DEBOUNCE - 0.5)).unwrap();
+        assert_eq!(state(&engine),"working");
+        let settled = engine.apply(EngineInput::Tick,at(65.0 + SETTLE_DEBOUNCE)).unwrap();
+        assert_eq!(state(&engine),"idle");
+        assert!(settled.contains(&Effect::WakeQueue));
+    }
+
+    #[test]
+    fn a_daemon_command_does_not_hold_the_turn() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,command_call("d1",json!({"CommandLine":"npm run dev","IsDaemon":true})),2.0);
+        feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
+        assert_eq!(state(&engine),"idle");
+    }
+
+    #[test]
+    fn the_agent_waking_with_no_prompt_open_shows_working_until_its_reply_ends() {
+        let mut engine = opened(json!({}));
+        feed(&mut engine,chunk("a tarefa de fundo acabou"),5.0);
+        assert_eq!(state(&engine),"working");
+        feed(&mut engine,usage(),6.0);
+        assert!(engine.apply(EngineInput::Tick,at(6.0 + SETTLE_DEBOUNCE)).unwrap().contains(&Effect::WakeQueue));
+        assert_eq!(state(&engine),"idle");
+        // Resposta sem o `usage_update` do fim fecha depois do silêncio.
+        feed(&mut engine,chunk("de novo"),100.0);
+        engine.apply(EngineInput::Tick,at(100.0 + REPLY_QUIET_LIMIT - 1.0)).unwrap();
+        assert_eq!(state(&engine),"working");
+        engine.apply(EngineInput::Tick,at(100.0 + REPLY_QUIET_LIMIT)).unwrap();
+        assert_eq!(state(&engine),"idle");
+    }
+
+    #[test]
+    fn stop_after_the_prompt_ended_cancels_the_background_work() {
+        let mut engine = opened(json!({}));
+        held_by_a_command(&mut engine);
+        let out = command(&mut engine,"int1",OperationKind::Interrupt,json!({})).unwrap();
+        assert!(cancelled(&out));
+        assert_eq!(state(&engine),"idle");
+    }
+
+    #[test]
+    fn a_held_command_silent_for_the_hold_limit_releases_the_turn() {
+        let mut engine = opened(json!({}));
+        held_by_a_command(&mut engine);
+        feed(&mut engine,update(json!({"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"in_progress","rawOutput":{"output":"compilando"}})),600.0);
+        engine.apply(EngineInput::Tick,at(600.0 + COMMAND_HOLD_LIMIT - 1.0)).unwrap();
+        assert_eq!(state(&engine),"working");
+        engine.apply(EngineInput::Tick,at(600.0 + COMMAND_HOLD_LIMIT)).unwrap();
+        assert_eq!(state(&engine),"idle");
+    }
+
+    #[test]
+    fn a_reply_on_its_way_on_disk_keeps_the_turn_through_the_gap() {
+        let brain = tempfile::tempdir().unwrap();
+        let logs = brain.path().join(OPENED).join(".system_generated").join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let mut engine = opened(json!({"brain_dir":brain.path().to_string_lossy()}));
+        held_by_a_command(&mut engine);
+        feed(&mut engine,tool_done("c1"),60.0);
+        std::fs::write(logs.join("transcript.jsonl"),json!({"type":"SYSTEM_MESSAGE","content":"[Message] sender=x/task-1 priority=MESSAGE_PRIORITY_HIGH content=fim"}).to_string()).unwrap();
+        engine.apply(EngineInput::Tick,at(60.0 + SETTLE_DEBOUNCE)).unwrap();
+        assert_eq!(state(&engine),"working","o modelo ainda vai responder ao fim da tarefa");
+        engine.apply(EngineInput::Tick,at(60.0 + SETTLE_DEBOUNCE + REPLY_QUIET_LIMIT)).unwrap();
+        assert_eq!(state(&engine),"idle");
+    }
+
+    #[test]
+    fn a_late_update_of_an_ordinary_tool_after_the_prompt_does_not_leave_the_session_working() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
+        feed(&mut engine,update(json!({"sessionUpdate":"tool_call_update","toolCallId":"r1","status":"in_progress"})),4.0);
+        assert_eq!(state(&engine),"idle","atualização de ferramenta que o turno já não tem não segura a sessão");
+    }
+
+    fn failure_text(text:&str) -> Value { chunk(&format!("\n⚠ agent executor error: {text}\n")) }
+
+    #[test]
+    fn a_saved_conversation_the_model_refuses_says_so() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,failure_text("Error 400, Message: messages.3.content.0: Invalid `signature` in `thinking` block, Status: INVALID_ARGUMENT"),2.0);
+        feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
+        assert!(engine.view()["problema_detalhe"].as_str().is_some_and(|t|t.contains("conversa nova")));
+    }
+
+    #[test]
+    fn a_404_after_the_model_answered_asks_it_to_continue_once() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,chunk("começando"),2.0);
+        feed(&mut engine,failure_text("NOT_FOUND (code 404): Requested entity was not found."),3.0);
+        let out = feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),4.0);
+        let resumed = frames(&out).into_iter().find(|f|f["method"] == "session/prompt").expect("pede para continuar");
+        assert_eq!(resumed["params"]["prompt"][0]["text"],"continue");
+        assert_eq!((state(&engine).as_str(),engine.view()["problema"].is_null()),("working",true));
+        // A segunda falha igual no mesmo pedido fica na tela.
+        feed(&mut engine,chunk("de novo"),5.0);
+        feed(&mut engine,failure_text("NOT_FOUND (code 404): Requested entity was not found."),6.0);
+        let again = feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),7.0);
+        assert!(!frames(&again).iter().any(|f|f["method"] == "session/prompt"));
+        assert_eq!(engine.view()["problema"],"headless_turno_erro");
+    }
+
+    #[test]
+    fn a_404_before_the_model_answered_is_an_error_on_screen() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,failure_text("NOT_FOUND (code 404): model not found"),2.0);
+        let out = feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
+        assert!(!frames(&out).iter().any(|f|f["method"] == "session/prompt"));
+        assert_eq!(engine.view()["problema"],"headless_turno_erro");
+    }
+
+    #[test]
+    fn compact_goes_as_the_command_the_agent_announced() {
+        let mut engine = opened(json!({}));
+        assert!(command(&mut engine,"c0",OperationKind::Compact,json!({})).is_err(),"sem o comando anunciado não há compactação");
+        feed(&mut engine,update(json!({"sessionUpdate":"available_commands_update","availableCommands":[{"name":"compact"}]})),1.0);
+        let out = command(&mut engine,"c1",OperationKind::Compact,json!({})).unwrap();
+        let frame = frames(&out).into_iter().find(|f|f["method"] == "session/prompt").expect("compactação vai como prompt");
+        assert_eq!(frame["params"]["prompt"][0]["text"],"/compact");
+    }
+
+    #[test]
+    fn a_huge_live_tool_input_is_cut_before_it_is_published() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let big = "x".repeat(50_000);
+        let out = feed(&mut engine,update(json!({"sessionUpdate":"tool_call","toolCallId":"w1","status":"in_progress","name":"write_to_file",
+            "rawInput":{"TargetFile":"/tmp/a.txt","CodeContent":big}})),2.0);
+        let published = out.iter().find_map(|e|match e { Effect::Publish { channel,data } if channel == "tool" => data["text"].as_str().map(str::len), _ => None }).unwrap();
+        assert!(published < 10_000,"{published}");
+    }
+
+    #[test]
+    fn after_the_silence_cancel_no_deadline_is_left_in_the_past() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let at_limit = 1.0 + INACTIVITY_LIMIT;
+        assert!(cancelled(&engine.apply(EngineInput::Tick,at(at_limit)).unwrap()));
+        assert!(engine.next_deadline().is_some_and(|d|d > at_limit),"prazo vencido faz o ator girar até o agy responder");
+        // O Parar da pessoa depois de muito silêncio também não deixa o prazo do silêncio para trás.
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let late = 1.0 + INACTIVITY_LIMIT + 60.0;
+        engine.command(RuntimeCommand { operation_id:"int1".into(),kind:OperationKind::Interrupt,payload:json!({}) },at(late)).unwrap();
+        assert!(engine.next_deadline().is_some_and(|d|d > late));
+    }
+
+    #[test]
+    fn a_message_sent_while_the_turn_settles_leaves_no_deadline_in_the_past() {
+        let mut engine = opened(json!({}));
+        held_by_a_command(&mut engine);
+        feed(&mut engine,tool_done("c1"),60.0);
+        engine.command(RuntimeCommand { operation_id:"in2".into(),kind:OperationKind::Input,payload:json!({"text":"b"}) },at(70.0)).unwrap();
+        assert!(engine.next_deadline().is_some_and(|d|d > 70.0),"o fechamento do turno anterior não vale com um prompt aberto");
+    }
+
+    #[test]
+    fn a_command_without_its_input_yet_does_not_hold_the_turn() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,update(json!({"sessionUpdate":"tool_call","toolCallId":"x1","status":"in_progress","kind":"execute","title":"npm run dev"})),2.0);
+        feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
+        assert_eq!(state(&engine),"idle");
+    }
+
+    #[test]
+    fn a_tool_that_never_reports_back_does_not_hold_the_silence_clock_forever() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,update(json!({"sessionUpdate":"tool_call","toolCallId":"c1","status":"in_progress","title":"x"})),10.0);
+        assert!(!cancelled(&engine.apply(EngineInput::Tick,at(10.0 + COMMAND_HOLD_LIMIT - 1.0)).unwrap()));
+        assert!(cancelled(&engine.apply(EngineInput::Tick,at(10.0 + COMMAND_HOLD_LIMIT)).unwrap()));
+    }
+
+    #[test]
+    fn a_stopped_turn_neither_resumes_after_a_404_nor_keeps_its_background_command() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,chunk("começando"),2.0);
+        feed(&mut engine,command_call("c1",json!({"CommandLine":"cargo build"})),2.5);
+        feed(&mut engine,failure_text("NOT_FOUND (code 404): Requested entity was not found."),3.0);
+        command(&mut engine,"int1",OperationKind::Interrupt,json!({})).unwrap();
+        let out = feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"cancelled"}}),4.0);
+        assert!(!frames(&out).iter().any(|f|f["method"] == "session/prompt"),"Parar não recomeça o turno");
+        assert_eq!(state(&engine),"idle","o Parar derruba o comando de fundo junto");
+    }
+
+    #[test]
+    fn a_reject_always_option_stays_on_the_card() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,permission(json!({"toolCallId":"call_1","title":"curl x"}),json!([
+            {"optionId":"once","name":"Allow","kind":"allow_once"},{"optionId":"no","name":"Deny","kind":"reject_once"},
+            {"optionId":"never","name":"Always deny","kind":"reject_always"}])),2.0);
+        assert_eq!(engine.view()["options"],json!(["Permitir uma vez","Negar","Negar sempre","Cancelar"]));
+        assert_eq!(frames(&select(&mut engine,"s1",3))[0]["result"]["outcome"],json!({"outcome":"selected","optionId":"never"}));
+    }
+
+    #[test]
+    fn a_held_turn_whose_question_the_cano_resolved_gets_a_deadline_on_reattach() {
+        let mut engine = opened(json!({}));
+        feed(&mut engine,permission(json!({"toolCallId":"call_1","title":"x"}),json!([{"optionId":"a","name":"Allow","kind":"allow_once"}])),5.0);
+        assert_eq!(state(&engine),"awaiting_input");
+        let init = json!({"jsonrpc":"2.0","id":"agy:0:3","result":{"sessionId":OPENED}}).to_string();
+        engine.reattach(CanoSnapshot { kind:"cano_snapshot".into(),versao:2,pid:9,init:Some(init),aberto:false,pendentes:vec![],ultimo_result:None,
+            rate_limit:None,stderr_tail:vec![],saiu:None,inflight:json!({}) }).unwrap();
+        assert!(engine.next_deadline().is_some(),"segurada sem prazo fica em Trabalhando para sempre");
+    }
+
+    #[test]
+    fn a_late_update_of_a_tool_already_closed_does_not_hold_the_session_again() {
+        let mut engine = opened(json!({}));
+        held_by_a_command(&mut engine);
+        command(&mut engine,"int1",OperationKind::Interrupt,json!({})).unwrap();
+        feed(&mut engine,update(json!({"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"failed"})),5.0);
+        assert_eq!(state(&engine),"idle");
+    }
+
+    #[test]
+    fn a_permission_asked_by_another_conversation_still_gets_a_card() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let mut asked = permission(json!({"toolCallId":"call_9","title":"cargo test"}),json!([{"optionId":"a","name":"Allow","kind":"allow_once"}]));
+        asked["params"]["sessionId"] = json!("11111111-2222-4333-8444-555555555555");
+        feed(&mut engine,asked,2.0);
+        assert_eq!(state(&engine),"awaiting_input");
+    }
+
+    #[test]
+    fn a_thought_ends_when_the_agent_answers_or_calls_a_tool() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let thought = |text:&str| update(json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":text}}));
+        let cleared = |out:&[Effect]| out.iter().any(|e|matches!(e,Effect::Publish { channel,data } if channel == "thinking" && data["text"] == ""));
+        feed(&mut engine,thought("vou ler o arquivo"),2.0);
+        assert!(cleared(&feed(&mut engine,update(json!({"sessionUpdate":"tool_call","toolCallId":"r1","status":"in_progress","title":"ler"})),3.0)),
+            "o agy não grava o pensamento: sem fechar aqui, o Pensando fica até o fim do turno");
+        feed(&mut engine,thought("agora respondo"),4.0);
+        assert!(cleared(&feed(&mut engine,chunk("pronto"),5.0)));
     }
 
     #[test]

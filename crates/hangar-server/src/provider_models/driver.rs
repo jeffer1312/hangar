@@ -198,7 +198,6 @@ pub async fn pi_read_back(
 }
 pub async fn kimi_switch(
     io: &dyn Io,
-    alias: Option<&str>,
     display: Option<&str>,
     effort: Option<&str>,
     timing: Timing,
@@ -213,29 +212,34 @@ pub async fn kimi_switch(
     let mut opened = false;
     while Instant::now() < until {
         io.wait(timing.settle).await;
-        if io.capture().await?.contains("Select a model") {
+        if pure::kimi_picker_open(&io.capture().await?) {
             opened = true;
             break;
         }
     }
     if !opened {
         io.key("Escape", false).await?;
-        return Err(ModelError::text(
-            409,
-            "o picker do /model do Kimi nao abriu",
-        ));
+        return Err(ModelError::text(409, "o picker do /model do Kimi não abriu"));
     }
-    if let Some(alias) = alias {
-        io.key(alias, true).await?;
+    // A busca do picker só casa com o nome exibido; o identificador da config não acha nada.
+    if let Some(name) = display {
+        io.key(name, true).await?;
         io.wait(timing.open).await;
+        if !kimi_walk_to(io, name, timing).await? {
+            kimi_close_picker(io, timing).await?;
+            return Err(ModelError::text(
+                409,
+                format!("o modelo {name} não aparece no picker do Kimi"),
+            ));
+        }
     }
     if let Some(effort) = effort {
         let row = pure::parse_thinking_row(&io.capture().await?);
         let Some(row) = row else {
-            io.key("Escape", false).await?;
+            kimi_close_picker(io, timing).await?;
             return Err(ModelError::text(
                 409,
-                "este modelo nao tem niveis de pensamento no picker",
+                "este modelo não tem níveis de pensamento no picker",
             ));
         };
         let levels: Vec<_> = row["levels"]
@@ -246,17 +250,17 @@ pub async fn kimi_switch(
             .map(str::to_lowercase)
             .collect();
         let Some(want) = levels.iter().position(|s| s == effort) else {
-            io.key("Escape", false).await?;
+            kimi_close_picker(io, timing).await?;
             return Err(ModelError::text(
                 409,
-                format!("nivel {effort} nao aparece no picker deste modelo"),
+                format!("nível {effort} não aparece no picker deste modelo"),
             ));
         };
         let current = row["current"].as_str().unwrap_or("").to_lowercase();
-        let position = levels
-            .iter()
-            .position(|s| s == &current)
-            .ok_or_else(|| ModelError::text(409, "nível atual ilegível no picker"))?;
+        let Some(position) = levels.iter().position(|s| s == &current) else {
+            kimi_close_picker(io, timing).await?;
+            return Err(ModelError::text(409, "nível atual ilegível no picker"));
+        };
         for _ in 0..want.abs_diff(position) {
             io.key(if want > position { "Right" } else { "Left" }, false)
                 .await?;
@@ -277,10 +281,9 @@ pub async fn kimi_switch(
         let new_effort = thinking
             .as_ref()
             .filter(|v| Some(*v) != before_effort.as_ref());
-        let model_ok = alias.is_none()
-            || display.is_some_and(|name| {
-                pure::new_line_matches(switched.as_ref(), before_model.as_ref(), "name", name)
-            });
+        let model_ok = display.is_none_or(|name| {
+            pure::new_line_matches(switched.as_ref(), before_model.as_ref(), "name", name)
+        });
         let effort_ok = effort.is_none_or(|level| {
             pure::new_line_matches(thinking.as_ref(), before_effort.as_ref(), "level", level)
                 || pure::new_line_matches(switched.as_ref(), before_model.as_ref(), "level", level)
@@ -291,7 +294,7 @@ pub async fn kimi_switch(
             );
         }
         if let Some(new) = new_model.or(new_effort) {
-            io.key("Escape", false).await?;
+            kimi_close_picker(io, timing).await?;
             return Err(ModelError::text(
                 409,
                 format!(
@@ -301,13 +304,48 @@ pub async fn kimi_switch(
             ));
         }
         if Instant::now() >= until {
-            io.key("Escape", false).await?;
+            kimi_close_picker(io, timing).await?;
             return Err(ModelError::text(
                 409,
-                "sem confirmacao da troca no terminal",
+                "sem confirmação da troca no terminal",
             ));
         }
     }
+}
+
+/// A busca deixa o modelo pedido entre outros parecidos ("K3" também acha "K3-256k"): desce até a linha exata.
+/// Sem linha marcada a lista pode ainda não ter redesenhado: espera até o prazo, salvo com "No matches" na tela.
+async fn kimi_walk_to(io: &dyn Io, name: &str, timing: Timing) -> Result<bool, ModelError> {
+    let until = Instant::now() + timing.result;
+    let mut moves = 0;
+    loop {
+        let pane = io.capture().await?;
+        match pure::kimi_picker_cursor(&pane) {
+            Some(cursor) if cursor == name => return Ok(true),
+            Some(_) if moves < 12 => {
+                io.key("Down", false).await?;
+                io.wait(timing.nav).await;
+                moves += 1;
+            }
+            Some(_) => return Ok(false),
+            None if pane.contains("No matches") || Instant::now() >= until => return Ok(false),
+            None => io.wait(timing.settle).await,
+        }
+    }
+}
+/// Com busca digitada, o primeiro Esc só a limpa: insiste até o picker sumir, senão a sessão fica num menu aberto.
+async fn kimi_close_picker(io: &dyn Io, timing: Timing) -> Result<(), ModelError> {
+    for _ in 0..3 {
+        if !pure::kimi_picker_open(&io.capture().await?) {
+            return Ok(());
+        }
+        io.key("Escape", false).await?;
+        io.wait(timing.settle).await;
+    }
+    if pure::kimi_picker_open(&io.capture().await?) {
+        return Err(ModelError::text(409, "o picker do /model do Kimi ficou aberto no terminal: feche com Esc antes de mandar mensagem"));
+    }
+    Ok(())
 }
 
 /// `/model <id>` no `agy`, só com a sessão parada e a caixa vazia (como o Claude na troca de modo). Confirma pelo

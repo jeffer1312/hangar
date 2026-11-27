@@ -47,6 +47,8 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::POST && path == "/api/keyring/unlock" { return true; }
     // Cofre de senhas (`vault::http`): nunca repassado.
     if crate::vault::http::matches(method, path) { return true; }
+    // Integrações MCP (`integrations::http`): nunca repassado.
+    if crate::integrations::http::matches(method, path) { return true; }
     // Relatório de diagnóstico (`diag_report::report_route`): só o dono, nunca repassado.
     if *method == Method::POST && path == "/api/diag/report" { return true; }
     // SideStore no aparelho do cabo (`device_install::routes`): nunca repassado.
@@ -292,5 +294,28 @@ mod tests {
         ] {
             assert!(rust_route(&method, path), "rota de voz fora do Rust: {method} {path}");
         }
+    }
+
+    #[test]
+    fn integrations_routes_belong_to_rust() {
+        for (method, path) in [
+            (Method::GET, "/api/integrations/catalog"),
+            (Method::GET, "/api/integrations"),
+            (Method::POST, "/api/integrations"),
+            (Method::PATCH, "/api/integrations/github"),
+            (Method::DELETE, "/api/integrations/github"),
+            (Method::POST, "/api/integrations/github/oauth/start"),
+            (Method::POST, "/api/integrations/github/oauth/open-on-desktop"),
+            (Method::GET, "/api/integrations/oauth/callback"),
+            (Method::POST, "/api/integrations/github/test"),
+            (Method::GET, "/api/integrations/github/tools"),
+            (Method::POST, "/api/integrations/approvals/req-1"),
+            (Method::DELETE, "/api/integrations/approvals/req-1"),
+        ] {
+            assert!(rust_route(&method, path), "rota de integrações fora do Rust: {method} {path}");
+        }
+        assert!(!rust_route(&Method::GET, "/api/integrations/oauth/other"));
+        assert!(!rust_route(&Method::GET, "/api/integrations/approvals/req-1"));
+        assert!(!rust_route(&Method::POST, "/api/integrations/catalog"));
     }
 }

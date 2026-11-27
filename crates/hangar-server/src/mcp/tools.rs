@@ -1,6 +1,7 @@
-//! As 26 tools. Cada uma chama a rota pública que o `hangar-send`/`hangar-preview` chama, pelo
-//! roteador deste processo e como o dono; o `html_render` publica direto na loja de páginas e os
-//! verbos do navegador vão ao app desktop, como no CLI.
+//! As tools do MCP (29 fixas + integrações fixadas `int__*`). As nativas chamam a rota pública que
+//! o `hangar-send`/`hangar-preview` chama, pelo roteador deste processo e como o dono; o `html_render`
+//! publica direto na loja de páginas, os verbos do navegador vão ao app desktop e as integrações
+//! externas passam por guarda compartilhada, filtro de projeto e aprovação antes do cliente MCP.
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ use serde_json::{Map, Value, json};
 use tower_service::Service;
 
 use super::identity::{self, Local, Origin};
+use super::integrations as mcp_integrations;
 use super::nav;
 use super::whatsapp::{self, Trim};
 use crate::groups::exit::segment;
@@ -55,6 +57,8 @@ pub struct Tools {
     server_id: String,
     /// Duas chamadas do mesmo turno não intercalam `click` e `snapshot` no navegador de uma sessão.
     nav_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Índice das tools fixadas (`int__<id>__<tool>`) descobertas no último `tools/list`.
+    pinned_tools: mcp_integrations::PinnedToolIndex,
 }
 
 /// Resultado de dicionário: o texto indentado e o mesmo valor estruturado, como o SDK do Python.
@@ -410,11 +414,32 @@ impl Tools {
     pub fn new(st: Arc<AppState>, api: Router) -> Self {
         let http = crate::http_client().no_proxy().build().expect("cliente http do MCP");
         let server_id = st.current_server_id();
-        Self { st, api, http, server_id, nav_locks: Mutex::default() }
+        Self {
+            st,
+            api,
+            http,
+            server_id,
+            nav_locks: Mutex::default(),
+            pinned_tools: mcp_integrations::PinnedToolIndex::default(),
+        }
+    }
+
+    /// Lista as ferramentas de integrações fixadas visíveis para quem chama.
+    pub(super) async fn list_pinned_tools(&self, headers: &HeaderMap) -> Vec<rmcp::model::Tool> {
+        mcp_integrations::list_pinned_tools(&self.st, &self.api, &self.pinned_tools, headers).await
     }
 
     /// `draft`: o andamento do `whatsapp_draft`, lido pelo cancelamento em `mod.rs`.
-    pub async fn call(&self, name: &str, raw: JsonObject, headers: &HeaderMap, draft: Option<Arc<outbox::Progress>>) -> CallToolResult {
+    /// `external_started`: sinaliza quando `clients.call_tool` já enviou a chamada ao MCP externo.
+    pub async fn call(
+        &self,
+        name: &str,
+        raw: JsonObject,
+        headers: &HeaderMap,
+        draft: Option<Arc<outbox::Progress>>,
+        external_started: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ) -> CallToolResult {
+        let external_started = external_started.unwrap_or_default();
         let outcome = match name {
             "who_am_i" => self.who_am_i(headers).await,
             "sessions" => self.sessions(headers).await,
@@ -458,6 +483,30 @@ impl Tools {
                 Ok(a) => self.whatsapp_draft(headers, a, draft.unwrap_or_default()).await,
                 Err(e) => Err(e),
             },
+            "integrations_list" => match args::<mcp_integrations::IntegrationsListArgs>(name, raw) {
+                Ok(a) => mcp_integrations::integrations_list(&self.st, &self.api, headers, a).await.map(dict),
+                Err(e) => Err(e),
+            },
+            "integration_tools" => match args::<mcp_integrations::IntegrationToolsArgs>(name, raw) {
+                Ok(a) => mcp_integrations::integration_tools(&self.st, &self.api, headers, a).await.map(dict),
+                Err(e) => Err(e),
+            },
+            "integration_call" => match args::<mcp_integrations::IntegrationCallArgs>(name, raw) {
+                Ok(a) => mcp_integrations::integration_call(&self.st, &self.api, &self.server_id, headers, a, external_started).await,
+                Err(e) => Err(e),
+            },
+            other if other.starts_with("int__") => {
+                mcp_integrations::call_pinned_tool(
+                    &self.st,
+                    &self.api,
+                    &self.server_id,
+                    &self.pinned_tools,
+                    headers,
+                    other,
+                    raw,
+                    external_started,
+                ).await
+            }
             _ => Err(format!("Unknown tool: {name}")),
         };
         let result = outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]));
@@ -534,68 +583,9 @@ impl Tools {
         Ok(dict(whatsapp::third_party(value, trim, whatsapp::LIMIT)))
     }
 
-    /// Falha fechada: grupo (ou o `fed` dele), convites, pares externos, convidados ou registro da dona que não se lê
-    /// também recusa. As leituras independentes correm juntas; a recusa segue a ordem das conferências.
+    /// Falha fechada: delega à guarda compartilhada preservando os códigos de erro do WhatsApp.
     async fn whatsapp_unshared(&self, me: &str) -> Result<(), String> {
-        let link = async {
-            match &self.st.groups {
-                Some(groups) => groups.link_strict(me).await.map_err(|_| unshared_failed("grupo da sessão ilegível")),
-                None => Ok(None),
-            }
-        };
-        // A vida pela mesma fonte que o porteiro do convidado usa: sessão de outra vida com o mesmo nome não é dele.
-        let (link, life) = tokio::join!(link, crate::login_guests::gate::session_life(&self.st, me));
-        let link = link?;
-        // Vale com ou sem configuração de convites: o que a outra máquina compartilha não se confere daqui.
-        if whatsapp::has_remote_member(link.as_ref()) { return Err(whatsapp::SHARED_REFUSAL.into()); }
-        // Os membros do grupo nesta máquina passam pelas mesmas conferências: o grupo repassa o que a sessão lê.
-        let others: Vec<String> = whatsapp::local_members(me, link.as_ref()).into_iter().skip(1).map(str::to_owned).collect();
-        let other_lives = futures_util::future::join_all(others.iter().map(|m| crate::login_guests::gate::session_life(&self.st, m))).await;
-        let members: Vec<(String, Option<String>)> = std::iter::once((me.to_owned(), life)).chain(others.into_iter().zip(other_lives)).collect();
-        match &self.st.share {
-            // Configuração de convidados que não se carregou não prova que não há convite nem par: recusa.
-            None if self.st.share_unavailable => return Err(unshared_failed("estado de compartilhamento indisponível")),
-            // Sem configuração de convites não há convite nem par a conferir.
-            None => {}
-            Some(share) if share.pairs.unreadable() => return Err(unshared_failed("arquivo de pares externos ilegível")),
-            Some(share) if whatsapp::shared_here(&share.store, &share.pairs, me, link.as_ref()) => {
-                return Err(whatsapp::SHARED_REFUSAL.into());
-            }
-            Some(_) => {}
-        }
-        let (guests, record) = tokio::join!(self.guest_unseen(members), self.owner_record_unshared(link));
-        guests.and(record)
-    }
-
-    /// Nenhum convidado com login vê a sessão nem um membro do grupo dela nesta máquina (nome e vida de cada um).
-    async fn guest_unseen(&self, members: Vec<(String, Option<String>)>) -> Result<(), String> {
-        let guests = self.st.login_guests.store.clone();
-        let seen = tokio::task::spawn_blocking(move || -> crate::login_guests::store::Result<bool> {
-            for (name, life) in &members {
-                if guests.seen_by_any_guest(name, life.as_deref())? { return Ok(true); }
-            }
-            Ok(false)
-        }).await
-            .map_err(|_| unshared_failed("leitura dos convidados interrompida"))?
-            .map_err(|_| unshared_failed("arquivo de convidados ilegível"))?;
-        if seen { Err(whatsapp::SHARED_REFUSAL.into()) } else { Ok(()) }
-    }
-
-    /// Grupo entre máquinas: o par de fora feito noutra máquina só aparece no registro da dona.
-    async fn owner_record_unshared(&self, link: Option<Sidecar>) -> Result<(), String> {
-        let (Some(link), Some(groups)) = (link, &self.st.groups) else { return Ok(()) };
-        let Some(fed) = &link.fed else { return Ok(()) };
-        let path = format!("/api/groups/{}", segment(&link.gid));
-        let record = if fed.owner == groups.server_id() {
-            self.answer(None, Method::GET, &path, None, coded).await.map_err(|e| unshared_failed(&format!("registro do grupo: {e}")))?
-        } else {
-            self.st.peers.call_group(&fed.owner, reqwest::Method::GET, &path, None).await.map_err(|e| unshared_failed(&e.text(&fed.owner)))?
-        };
-        match whatsapp::record_is_shared(&record, &groups.server_id()) {
-            Some(false) => Ok(()),
-            Some(true) => Err(whatsapp::SHARED_REFUSAL.into()),
-            None => Err(unshared_failed(&format!("a dona '{}' não disse quem está no grupo", fed.owner))),
-        }
+        whatsapp::ensure_unshared(&self.st, &self.api, me).await
     }
 
     /// Rascunho de WhatsApp: cria pela rota do dono e espera a resposta dele no cartão, dentro do prazo da chamada. Só
@@ -1637,7 +1627,6 @@ pub(super) async fn call_route(mut api: Router, token: &str, caller: Option<&str
 fn unshared_failed(why: &str) -> String {
     format!("{}: {why}; a sessão não lê o WhatsApp sem saber se é compartilhada", whatsapp::CHECK_FAILED)
 }
-
 /// O código na frente, quando a rota deu um: o agente decide por ele (`erro_contrato_mudou`, `mission_gate_pending`).
 fn coded(status: u16, value: &Value) -> String {
     match value["detail"]["code"].as_str() {

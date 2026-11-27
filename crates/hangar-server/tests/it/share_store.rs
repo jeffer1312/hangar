@@ -645,3 +645,17 @@ fn pair_invite_level_survives_a_restart() {
     let without = raw.as_array().unwrap().iter().filter(|r| r.get("level").is_none()).count();
     assert_eq!(without, 1, "registro sem nível não ganha a chave");
 }
+
+#[test]
+fn corrupt_file_marks_unreadable_until_persisted() {
+    let f = Fixture::new();
+    assert!(!f.store.unreadable(), "arquivo ausente não é ilegível");
+    std::fs::write(f.file(), "[]").unwrap();
+    assert!(!f.reopen().unreadable());
+    std::fs::write(f.file(), "{corrompido").unwrap();
+    let reopened = f.reopen();
+    assert!(reopened.unreadable(), "shares.json ilegível deve sinalizar unreadable()");
+    assert_eq!(bad_files(f.dir.path()), ["{corrompido"]);
+    reopened.create("s0", life("t:1"), Kind::Share, false).unwrap();
+    assert!(!reopened.unreadable(), "gravação bem-sucedida limpa unreadable()");
+}

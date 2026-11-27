@@ -160,6 +160,19 @@ pub fn suggestion(rows: &[Value]) -> Option<Value> {
         })
 }
 
+/// O arquivo do cache de cota, também lido pela barra do Kimi.
+pub fn cache_path(home: &std::path::Path, local_app_data: Option<&str>) -> PathBuf {
+    if cfg!(windows) {
+        local_app_data
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("AppData/Local"))
+            .join("hangar/cotas-cache.json")
+    } else {
+        home.join(".hangar/cotas-cache.json")
+    }
+}
+
 impl AccountService {
     pub async fn invalidate_quota(&self, id: &str) -> std::io::Result<()> {
         let path = self.quota_path();
@@ -170,17 +183,7 @@ impl AccountService {
     }
 
     pub fn quota_path(&self) -> PathBuf {
-        if cfg!(windows) {
-            self.env
-                .base
-                .get("LOCALAPPDATA")
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| self.env.home.join("AppData/Local"))
-                .join("hangar/cotas-cache.json")
-        } else {
-            self.env.home.join(".hangar/cotas-cache.json")
-        }
+        cache_path(&self.env.home, self.env.base.get("LOCALAPPDATA").map(String::as_str))
     }
 
     /// A ponte só serve à renovação do token Claude: sem ela as outras fontes são lidas igual.

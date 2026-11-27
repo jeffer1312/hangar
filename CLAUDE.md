@@ -839,13 +839,15 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   (`jeffer1312/hangar-whatsapp`), só do dono.** O modelo só cria rascunho (`whatsapp_draft`); a
   mensagem sai pelo "Enviar" do cartão no desktop nativo ou no Expo, nunca por outro caminho. Tetos
   (3/min, 20/dia, rascunhos abertos), expiração em 10 min, recusa a contato novo, filtro de anexo e
-  trava 463/475 sem reenvio ficam no binário. `whatsapp_draft` recusa em sessão compartilhada e sem o
+  trava 463/475 sem reenvio ficam no binário. O dono pode editar só o texto no cartão (`send-edited`, binário api 3;
+  binário antigo recebe 409 `whatsapp_edit_unsupported`, nunca o original no lugar). `whatsapp_draft` recusa em sessão compartilhada e sem o
   prazo de 660 s; `MarkRead`, `SendPresence` e `SubscribePresence` seguem proibidos (lista fechada).
   Instalar exige aceite (`accepted.json`); o router usa `Edge::owner_only` e a 8766 não o monta; as
   ferramentas marcam texto de terceiros. Mídia antiga só a pedido, com teto. Loopback com HMAC nos dois
   sentidos: resposta sem assinatura é 502 `whatsapp_untrusted`. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#whatsapp-só-leitura-22112026) e
-  [envio](docs/decisoes/plataforma.md#whatsapp-envio-por-rascunho-aprovado-24112026).
+  [envio](docs/decisoes/plataforma.md#whatsapp-envio-por-rascunho-aprovado-24112026) e
+  [edição](docs/decisoes/plataforma.md#whatsapp-foto-conversa-e-edição-no-cartão-26112026).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,

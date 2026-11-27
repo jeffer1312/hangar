@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use indexmap::IndexMap;
@@ -81,12 +81,26 @@ pub struct ShareStore {
     taken: AtomicU64,
     /// Número da fotografia que está no disco; a gravação acontece sob este lock, fora do `state`.
     written: Mutex<u64>,
+    /// O arquivo de convites estava ilegível na abertura e foi posto de lado; até gravar de novo, não prova ausência.
+    unreadable: AtomicBool,
 }
 
 impl ShareStore {
     pub fn open(path: PathBuf, clock: Clock) -> Self {
-        let state = load(&path, (clock)());
-        Self { path, clock, state: Mutex::new(state), taken: AtomicU64::new(0), written: Mutex::new(0) }
+        let (state, unreadable) = load(&path, (clock)());
+        Self {
+            path,
+            clock,
+            state: Mutex::new(state),
+            taken: AtomicU64::new(0),
+            written: Mutex::new(0),
+            unreadable: AtomicBool::new(unreadable),
+        }
+    }
+
+    /// O arquivo de convites não se leu e nada foi gravado desde então.
+    pub fn unreadable(&self) -> bool {
+        self.unreadable.load(Ordering::SeqCst)
     }
 
     /// O relógio da loja (o injetado nos testes).
@@ -114,6 +128,7 @@ impl ShareStore {
         }
         crate::runtime::queue::atomic_write(&self.path, &bytes)?;
         *written = seq;
+        self.unreadable.store(false, Ordering::SeqCst);
         Ok(())
     }
 
@@ -466,13 +481,19 @@ fn peek_in<'a>(state: &'a State, code: &str, kind: Kind, now: f64) -> Result<&'a
     Ok(share)
 }
 
-fn load(path: &std::path::Path, now: f64) -> State {
-    let parsed = std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
-        serde_json::from_slice::<Vec<Share>>(&bytes).map_err(|e| e.to_string())
-    });
-    match parsed {
-        Ok(records) => records.into_iter().map(|s| (s.id.clone(), s)).collect(),
-        Err(_) if !path.exists() => State::new(),
+fn load(path: &std::path::Path, now: f64) -> (State, bool) {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (State::new(), false),
+        Err(error) => {
+            // Qualquer falha diferente de arquivo ausente (ex.: permissão negada no diretório pai)
+            // mantém `unreadable = true` para nunca presumir ausência de compartilhamentos.
+            tracing::warn!("[share] {} ilegivel, comecando vazio: {error}", path.display());
+            return (State::new(), true);
+        }
+    };
+    match serde_json::from_slice::<Vec<Share>>(&bytes) {
+        Ok(records) => (records.into_iter().map(|s| (s.id.clone(), s)).collect(), false),
         Err(error) => {
             // Ilegível vira "nenhum convite": perde acessos, mas não derruba o servidor. Vai pro
             // lado, senão a próxima gravação o apagaria de vez.
@@ -482,7 +503,7 @@ fn load(path: &std::path::Path, now: f64) -> State {
             if let Err(e) = std::fs::rename(path, &bad) {
                 tracing::warn!("[share] nao consegui guardar {name} ilegivel: {e}");
             }
-            State::new()
+            (State::new(), true)
         }
     }
 }

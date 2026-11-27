@@ -25,6 +25,8 @@ test.each([
   { kind: 'motor sem conta não finge assinatura Anthropic', session: { provider: 'claude', engine: 'foo', conta: 'chave:foo', config_dir: '/home/user/.claude' }, expected: 'foo' },
   { kind: 'motor sem conta nem ID mostra só motor', session: { provider: 'claude', engine: 'foo', config_dir: '/home/user/.claude' }, expected: 'foo' },
   { kind: 'conta chave identifica motor mesmo sem campo engine', session: { provider: 'claude', conta: 'chave:foo', config_dir: '/home/user/.claude' }, expected: 'foo' },
+  { kind: 'Antigravity padrão', session: { provider: 'antigravity', conta: 'antigravity:/home/user/.gemini' }, expected: m.mobile_antigravity_default_account() },
+  { kind: 'Antigravity adicional usa o nome da pasta', session: { provider: 'antigravity', conta: 'antigravity:/home/user/.antigravity-trabalho/' }, expected: 'trabalho' },
   { kind: 'sem campos de identidade', session: {}, expected: null },
   { kind: 'Claude sem identidade', session: { provider: 'claude', conta: null, config_dir: null }, expected: null },
   { kind: 'Codex sem identidade', session: { provider: 'codex', conta: null, codex_home: null, codex_account: null }, expected: null },

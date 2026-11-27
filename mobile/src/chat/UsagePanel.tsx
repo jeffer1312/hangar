@@ -9,6 +9,7 @@ import { useSessions } from '../stores/sessions';
 import { ContextRing } from './ContextRing';
 import { statusChips } from './statusChips';
 import { linhaStats, settingsLabel, usageWindows } from './usage';
+import { useAgyUsageWindows } from './useAgyUsageWindows';
 import { superficie } from '../theme/superficie';
 import * as m from '../paraglide/messages';
 
@@ -28,11 +29,13 @@ export function UsagePanel({ serverId, name, onOpenLimits, showTitle = true }: P
   const chat = chatStore(serverId, name);
   const statusLine = chat.use((s) => s.statusLine);
   const stats = chat.use((s) => s.stats);
+  const turnState = chat.use((s) => s.stateEvent?.state);
   const session = useSessions((s) => s.byServerRecord?.[serverId]?.find((x) => x.name === name)
     ?? s.rows.find((x) => x.serverId === serverId && x.name === name) ?? null);
   const f = useMemo(() => parseStatusLine(statusLine, session), [statusLine, session]);
   const chips = useMemo(() => statusChips(f), [f]);
-  const windows = useMemo(() => usageWindows(f), [f]);
+  const agyWindows = useAgyUsageWindows(serverId, session, turnState === 'idle');
+  const windows = useMemo(() => { const own = usageWindows(f); return own.length ? own : agyWindows; }, [f, agyWindows]);
   const numbers = stats ? linhaStats(stats) : [];
   const isCodex = session?.provider === 'codex';
 

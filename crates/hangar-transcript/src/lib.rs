@@ -8,7 +8,7 @@ mod codex;
 mod agents;
 mod antigravity;
 pub use agents::{parse_pi_object, parse_kimi_object, PiStream};
-pub use antigravity::{AgyStream, MAIN_SENDER as AGY_MAIN_SENDER, live_tool as agy_live_tool};
+pub use antigravity::{AgyStream, MAIN_SENDER as AGY_MAIN_SENDER, failed_subagent as agy_failed_subagent, live_tool as agy_live_tool};
 pub mod history;
 mod peer;
 pub mod interactions;

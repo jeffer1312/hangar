@@ -10,6 +10,7 @@ pub mod drive;
 mod drive_agy_tests;
 mod native;
 mod observe;
+mod kimi_status;
 pub(in crate::runtime) mod storage;
 pub(in crate::runtime) mod targets;
 pub use observe::{

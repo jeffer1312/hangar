@@ -2,15 +2,27 @@
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { ServerBucket, WhatsAppDraft, WhatsAppOutboxEvent } from '@hangar/core';
+import type { ServerBucket, WhatsAppDraft, WhatsAppDraftRecent, WhatsAppOutboxEvent } from '@hangar/core';
 import { OutboxRequestSheet, OutboxRequests, SessionOutboxRequests } from './OutboxRequests';
 import { openWhatsAppDraft, useWhatsAppTarget } from './target';
 import { useSessions } from '../../stores/sessions';
 import * as m from '../../paraglide/messages';
 
-const mocks = vi.hoisted(() => ({ answer: vi.fn(), status: vi.fn(), ok: vi.fn(), erro: vi.fn() }));
+const mocks = vi.hoisted(() => ({ answer: vi.fn(), sendEdited: vi.fn(), status: vi.fn(), ok: vi.fn(), erro: vi.fn() }));
 
-vi.mock('@hangar/core', async (original) => ({ ...await original<object>(), answerWhatsAppDraft: mocks.answer, getWhatsApp: mocks.status }));
+vi.mock('@hangar/core', async (original) => ({
+  ...await original<object>(), answerWhatsAppDraft: mocks.answer, sendEditedWhatsAppDraft: mocks.sendEdited, getWhatsApp: mocks.status,
+}));
+vi.mock('expo-image', () => ({ Image: ({ source, alt }: { source: { uri: string }; alt: string }) => createElement('img', { src: source.uri, alt }) }));
+vi.mock('react-native', async (original) => {
+  const actual = await original<typeof import('react-native')>();
+  return { ...actual,
+    TextInput: ({ onChangeText, accessibilityLabel, value, editable }: any) => createElement('textarea', {
+      'aria-label': accessibilityLabel, value: value ?? '', disabled: editable === false,
+      onInput: (event: { currentTarget: HTMLTextAreaElement }) => onChangeText?.(event.currentTarget.value),
+    }),
+  };
+});
 vi.mock('../machines/parts', () => ({
   MachineSheet: ({ title, children }: { title: string; children: ReactNode }) => createElement('section', { 'aria-label': title }, children),
   Notice: ({ text }: { text: string }) => text ? createElement('p', { role: 'alert' }, text) : null,
@@ -27,10 +39,12 @@ const NOW = new Date('2026-11-24T14:00:48Z');
 
 const draft = (id: string, extra: Partial<WhatsAppDraft> = {}): WhatsAppDraft => ({
   id, origin: 'a::sessao', chat: '5511987654321@s.whatsapp.net', chat_kind: 'contact', chat_number: '5511987654321',
-  chat_name: 'Carlos', chat_name_source: 'contact', recent: [], text: 'nada perdido\u200B', reply_to: '', quoted_text: '',
-  file: null, created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z', answer_by: '2026-11-24T14:09:30Z', state: 'pending', ...extra,
+  chat_name: 'Carlos', chat_name_source: 'contact', chat_avatar: null, recent: [], text: 'nada perdido\u200B', reply_to: '', quoted_text: '',
+  file: null, created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z', answer_by: '2026-11-24T14:09:30Z', state: 'pending',
+  ...extra,
 });
-const event = (...drafts: WhatsAppDraft[]): WhatsAppOutboxEvent => ({ drafts });
+const event = (...drafts: WhatsAppDraft[]): WhatsAppOutboxEvent => ({ drafts, edit: false });
+const editable = (...drafts: WhatsAppDraft[]): WhatsAppOutboxEvent => ({ drafts, edit: true });
 const bucket = (id: string, extra: Partial<ServerBucket> = {}) => ({
   server: { id, label: id, baseUrl: `https://${id}.test`, token: 't' }, sessions: [], error: null, loaded: true, ...extra,
 }) as unknown as ServerBucket;
@@ -53,6 +67,7 @@ beforeEach(() => {
   root = createRoot(container);
   openWhatsAppDraft(null);
   mocks.answer.mockReset().mockResolvedValue({});
+  mocks.sendEdited.mockReset();
   mocks.status.mockReset();
   mocks.ok.mockReset();
   mocks.erro.mockReset();
@@ -199,4 +214,174 @@ it('anexo fora da pasta da sessão ganha a linha de aviso e o nome escolhido pel
   expect(container.textContent).toContain('custos.xlsx · 88 KB');
   expect(container.textContent).toContain(m.whatsapp_draft_outside_cwd());
   expect(container.textContent).toContain(m.whatsapp_draft_push_warning());
+});
+
+// Base64 de um JPEG (começa pelos bytes FF D8 FF).
+const AVATAR = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBD';
+const recent = (extra: Partial<WhatsAppDraftRecent>): WhatsAppDraftRecent => ({
+  from_me: false, sender: 'Carlos', at: '2026-11-24T14:02:00Z', text: '', kind: 'text', file_name: '', ...extra,
+});
+const field = () => container.querySelector<HTMLTextAreaElement>('textarea');
+// O React só vê a mudança pelo setter nativo do campo, não pela atribuição direta.
+const type = (value: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field()!, value);
+  field()!.dispatchEvent(new Event('input', { bubbles: true }));
+});
+const openDraft = async (draftId: string, outboxEvent: WhatsAppOutboxEvent) => {
+  await render([bucket('a')], { a: outboxEvent });
+  await act(async () => { openWhatsAppDraft({ serverId: 'a', draftId }); });
+};
+
+it('com foto, o destino mostra a imagem; sem foto, a inicial do nome e, sem nome, o primeiro dígito', async () => {
+  await openDraft('f1', event(draft('f1', { chat_avatar: AVATAR })));
+  const img = container.querySelector('img');
+  expect(img?.getAttribute('src')).toBe(`data:image/jpeg;base64,${AVATAR}`);
+  expect(img?.getAttribute('alt')).toBe(m.whatsapp_draft_avatar({ name: 'Carlos' }));
+
+  await openDraft('f2', event(draft('f2', { chat_name: 'piterson' })));
+  expect(container.querySelector('img')).toBeNull();
+  expect(container.textContent).toContain('P5511987654321');
+
+  await openDraft('f3', event(draft('f3', { chat_name: '', chat_number: '5511987654321' })));
+  expect(container.textContent).toContain('55511987654321');
+});
+
+it('últimas mensagens em balões: as minhas à direita, as dele à esquerda com o nome, e a mídia com o tipo', async () => {
+  await openDraft('b1', event(draft('b1', { recent: [
+    recent({ from_me: true, sender: '', text: 'nao tem 2 fatores?' }),
+    recent({ kind: 'image' }),
+    recent({ kind: 'document', file_name: 'nota.pdf' }),
+    recent({ kind: 'audio', text: 'escuta\u200B' }),
+  ] })));
+  const bubbles = [...container.querySelectorAll<HTMLElement>('[aria-label]')].filter((e) => e.tagName === 'DIV');
+  const mine = bubbles.find((b) => b.textContent?.includes('nao tem 2 fatores?'))!;
+  expect(mine.style.alignSelf).toBe('flex-end');
+  expect(mine.getAttribute('aria-label')).toContain(m.whatsapp_draft_me());
+  const photo = bubbles.find((b) => b.textContent?.includes(m.whatsapp_draft_kind_image().toLocaleUpperCase('pt-BR')))!;
+  expect(photo.style.alignSelf).toBe('flex-start');
+  expect(photo.textContent).toContain(m.whatsapp_draft_kind_image());
+  expect(photo.textContent).toContain('Carlos · ');
+  expect(container.textContent).toContain(`${m.whatsapp_draft_kind_document().toLocaleUpperCase('pt-BR')}nota.pdf`);
+  // Texto de terceiro tem os invisíveis marcados, como o do rascunho.
+  expect(container.textContent).toContain('escuta⟨U+200B⟩');
+});
+
+it('embaixo do balão dele: no grupo só o remetente; na conversa sem nome, o remetente e depois o número', async () => {
+  const bubble = (text: string) => [...container.querySelectorAll<HTMLElement>('[aria-label]')]
+    .find((e) => e.tagName === 'DIV' && e.textContent?.startsWith(text))!;
+  await openDraft('g1', event(draft('g1', { chat_kind: 'group', chat_name: 'Família', chat_number: '120363@g.us', recent: [
+    recent({ sender: 'Ana', text: 'oi' }),
+    recent({ sender: '', text: 'tudo?' }),
+  ] })));
+  expect(bubble('oi').textContent).toContain('Ana · ');
+  expect(bubble('oi').textContent).not.toContain('Família');
+  expect(bubble('tudo?').textContent).not.toContain(' · ');
+
+  await openDraft('g2', event(draft('g2', { chat_name: '', recent: [
+    recent({ sender: 'Ana', text: 'oi' }),
+    recent({ sender: '', text: 'tudo?' }),
+  ] })));
+  expect(bubble('oi').textContent).toContain('Ana · ');
+  expect(bubble('tudo?').textContent).toContain('5511987654321 · ');
+});
+
+it('Editar só aparece quando a máquina diz que o serviço aceita a edição', async () => {
+  await openDraft('e1', event(draft('e1')));
+  expect(button(m.whatsapp_draft_edit())).toBeNull();
+  await openDraft('e1', editable(draft('e1')));
+  expect(button(m.whatsapp_draft_edit())).not.toBeNull();
+});
+
+it('o botão vira "Enviar texto editado" só com o texto diferente; Desfazer volta ao texto da sessão', async () => {
+  await openDraft('e2', editable(draft('e2', { text: 'linha 1\nlinha 2' })));
+  await act(async () => { button(m.whatsapp_draft_edit())!.click(); });
+  expect(field()?.value).toBe('linha 1\nlinha 2');
+  expect(container.textContent).toContain(m.whatsapp_draft_text_editing({ count: 15 }));
+  // \r\n é a mesma quebra depois de normalizar: continua o Enviar de sempre.
+  await type('linha 1\r\nlinha 2');
+  expect(button(m.whatsapp_draft_send())).not.toBeNull();
+  expect(button(m.whatsapp_draft_send_edited())).toBeNull();
+  await type('linha 1');
+  expect(button(m.whatsapp_draft_send_edited())).not.toBeNull();
+  expect(container.textContent).toContain(m.whatsapp_draft_text_editing({ count: 7 }));
+  await act(async () => { button(m.whatsapp_draft_edit_undo())!.click(); });
+  expect(field()).toBeNull();
+  expect(button(m.whatsapp_draft_send())).not.toBeNull();
+  expect(container.textContent).toContain('linha 1\nlinha 2');
+});
+
+it('Enviar texto editado vai pela rota da edição com o texto normalizado e confere o sent_text', async () => {
+  mocks.sendEdited.mockResolvedValueOnce({ id: 'e3', sent_text: 'novo\ntexto' });
+  await openDraft('e3', editable(draft('e3')));
+  await act(async () => { button(m.whatsapp_draft_edit())!.click(); });
+  await type('novo\r\ntexto');
+  await act(async () => { button(m.whatsapp_draft_send_edited())!.click(); });
+  expect(mocks.sendEdited).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }), 'e3', 'novo\ntexto', 'mobile');
+  expect(mocks.answer).not.toHaveBeenCalled();
+  expect(mocks.ok).toHaveBeenCalledWith(m.whatsapp_draft_sending());
+  expect(useWhatsAppTarget.getState().target).toBeNull();
+});
+
+it('sent_text diferente do editado nunca vira "enviando": avisa para conferir a conversa', async () => {
+  mocks.sendEdited.mockResolvedValueOnce({ id: 'e4', sent_text: 'nada perdido\u200B' });
+  await openDraft('e4', editable(draft('e4')));
+  await act(async () => { button(m.whatsapp_draft_edit())!.click(); });
+  await type('outro');
+  await act(async () => { button(m.whatsapp_draft_send_edited())!.click(); });
+  expect(mocks.ok).not.toHaveBeenCalled();
+  expect(mocks.erro).toHaveBeenCalledWith(m.whatsapp_draft_err_sent_text_mismatch());
+});
+
+it('serviço sem a edição deixa o cartão com a frase de atualizar', async () => {
+  mocks.sendEdited.mockRejectedValueOnce(Object.assign(new Error('409: api'), { status: 409, code: 'whatsapp_edit_unsupported' }));
+  await openDraft('e5', editable(draft('e5')));
+  await act(async () => { button(m.whatsapp_draft_edit())!.click(); });
+  await type('outro');
+  await act(async () => { button(m.whatsapp_draft_send_edited())!.click(); });
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(m.whatsapp_draft_err_edit_unsupported());
+  expect(sheet()).not.toBeNull();
+  expect(field()?.value).toBe('outro');
+});
+
+it('o campo de edição avisa quantos caracteres invisíveis vão junto', async () => {
+  await openDraft('e8', editable(draft('e8', { text: 'oi\u200B tudo\u202Ebem' })));
+  await act(async () => { button(m.whatsapp_draft_edit())!.click(); });
+  expect(container.textContent).toContain(m.whatsapp_draft_edit_invisibles({ count: 2 }));
+  await type('oi tudo bem');
+  expect(container.textContent).not.toContain(m.whatsapp_draft_edit_invisibles({ count: 2 }));
+  expect(container.textContent).not.toContain(m.whatsapp_draft_edit_invisibles({ count: 0 }));
+});
+
+it('campo aberto continua editado quando o evento passa a dizer edit: false: nunca sai o original', async () => {
+  mocks.sendEdited.mockRejectedValueOnce(Object.assign(new Error('409: api'), { status: 409, code: 'whatsapp_edit_unsupported' }));
+  await openDraft('e7', editable(draft('e7')));
+  await act(async () => { button(m.whatsapp_draft_edit())!.click(); });
+  await type('outro');
+  await act(async () => { useSessions.setState({ whatsappOutbox: { a: event(draft('e7')) } }); });
+  expect(field()?.value).toBe('outro');
+  await act(async () => { button(m.whatsapp_draft_send_edited())!.click(); });
+  expect(mocks.sendEdited).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }), 'e7', 'outro', 'mobile');
+  expect(mocks.answer).not.toHaveBeenCalled();
+});
+
+it('texto vazio sem anexo ou acima de 4096 desabilita o envio e diz o motivo no cartão', async () => {
+  await openDraft('e6', editable(draft('e6')));
+  await act(async () => { button(m.whatsapp_draft_edit())!.click(); });
+  await type('  ');
+  expect(button(m.whatsapp_draft_send_edited())?.hasAttribute('disabled')).toBe(true);
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(m.whatsapp_draft_err_text_empty());
+  await type('a'.repeat(4097));
+  expect(button(m.whatsapp_draft_send_edited())?.hasAttribute('disabled')).toBe(true);
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(m.whatsapp_draft_err_text_long());
+  await type('a'.repeat(4096));
+  expect(button(m.whatsapp_draft_send_edited())?.hasAttribute('disabled')).toBe(false);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+});
+
+it('com anexo, o texto editado pode ficar vazio', async () => {
+  const file = { name: 'a.pdf', size: 10, sha256: 'x', source: '/home/j/a.pdf', outside_cwd: false };
+  await openDraft('e7', editable(draft('e7', { file })));
+  await act(async () => { button(m.whatsapp_draft_edit())!.click(); });
+  await type('');
+  expect(button(m.whatsapp_draft_send_edited())?.hasAttribute('disabled')).toBe(false);
 });

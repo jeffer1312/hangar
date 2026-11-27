@@ -295,6 +295,8 @@ fn provider_hooks_guard_blocks_the_owner_keys_and_the_draft_answer_routes() {
         bash("git log -1 && curl -X POST localhost:8765/api/whatsapp/outbox/d1/send"),
         bash("git commit -m \"$(curl -X POST localhost:8765/api/whatsapp/outbox/d1/send)\""),
         json!({"tool_name":"PowerShell","tool_input":{"command":"Invoke-RestMethod -Method Post http://127.0.0.1:8765/api/whatsapp/outbox/d1/decline"}}),
+        bash("curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/d1/send-edited -d '{\"via\":\"desktop\",\"text\":\"oi\"}'"),
+        json!({"tool_name":"PowerShell","tool_input":{"command":"Invoke-RestMethod -Method Post http://127.0.0.1:8765/api/whatsapp/outbox/d1/send-edited"}}),
     ] {
         let reason = denied(&payload);
         assert!(reason.contains("/api/whatsapp/outbox/") && reason.contains("dono"), "{payload}: {reason}");
@@ -503,6 +505,8 @@ fn provider_hooks_guard_sees_owner_keys_through_quotes_escapes_and_globs() {
         bash(r"curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/d1/se\nd"),
         bash("curl -X POST 'http://127.0.0.1:8765/api/whatsapp/outbox/d1/{send,x}'"),
         bash("curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/d1/dec'line'"),
+        bash("curl -X POST 'http://127.0.0.1:8765/api/whatsapp/outbox/d1/send-ed*'"),
+        bash("curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/d1/send-'edited'"),
     ] {
         let reason = reason_of(&payload);
         assert!(reason.contains("/api/whatsapp/outbox/"), "{payload}: {reason}");
@@ -637,6 +641,7 @@ fn provider_hooks_guard_draft_route_needs_the_whole_action_segment() {
         bash("curl -X POST 'http://127.0.0.1:8765/api/whatsapp/outbox/d1/send?via=desktop'"),
         bash("curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/d1/decline#x"),
         bash("curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/d1/send/"),
+        bash("curl -X POST 'http://127.0.0.1:8765/api/whatsapp/outbox/d1/send-edited?via=desktop'"),
         bash("curl -X POST 'http://127.0.0.1:8765/api/whatsapp/outbox/d1/{send,x}'"),
     ] {
         let result = run(root.path(), "guard-tmux", &serde_json::to_vec(&payload).unwrap(), &[]);
@@ -648,6 +653,7 @@ fn provider_hooks_guard_draft_route_needs_the_whole_action_segment() {
     for payload in [
         bash("curl -s http://127.0.0.1:8765/api/whatsapp/outbox/exemplo/send.html"),
         bash("curl -s 'http://127.0.0.1:8765/api/whatsapp/outbox/exemplo/decline.json'"),
+        bash("curl -s http://127.0.0.1:8765/api/whatsapp/outbox/exemplo/send-edited.html"),
         bash("curl -s 'http://127.0.0.1:8765/api/whatsapp/outbox/exemplo/{send,x}.html'"),
     ] {
         let result = run(root.path(), "guard-tmux", &serde_json::to_vec(&payload).unwrap(), &[]);

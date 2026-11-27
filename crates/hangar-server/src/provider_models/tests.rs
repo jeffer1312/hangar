@@ -77,13 +77,12 @@ fn result(result: Result<Value, ModelError>) -> Value {
     }
 }
 #[tokio::test(start_paused = true)]
-async fn python_kimi_driver_contract() {
+async fn kimi_driver_cases() {
     let fixture: Value = serde_json::from_str(include_str!("fixtures/driver.json")).unwrap();
     for case in fixture["cases"].as_array().unwrap() {
         let io = FakeIo::frames(&case["frames"]);
         let got = driver::kimi_switch(
             &io,
-            case["alias"].as_str(),
             case["display"].as_str(),
             case["effort"].as_str(),
             Timing::default(),
@@ -124,6 +123,93 @@ async fn python_pi_readback_route_contract() {
         assert_eq!(result(got), case["expected"], "{}", case["name"]);
     }
 }
+
+const KIMI_PICKER_SEARCH: &str = "  Select a model\n  Tab toggle provider · ↑↓ navigate · Backspace clear · Enter select · Alt+S session-only · Esc cancel\n\n   All   Kimi Code\n\n  Search: K3\n\n   ❯ K3                                Kimi Code\n     K3-256k                           Kimi Code ← current\n     K3.1 Pro                          Kimi Code\n\n  3 / 6\n\n  Thinking  (←→ to switch)\n     Low    [ High ]    Max\n";
+#[test]
+fn kimi_picker_cursor_reads_the_marked_row_without_the_provider_column() {
+    assert_eq!(pure::kimi_picker_cursor(KIMI_PICKER_SEARCH).as_deref(), Some("K3"));
+    let moved = KIMI_PICKER_SEARCH
+        .replace("   ❯ K3 ", "     K3 ")
+        .replace("     K3-256k", "   ❯ K3-256k");
+    assert_eq!(pure::kimi_picker_cursor(&moved).as_deref(), Some("K3-256k"));
+    let empty = "  Select a model\n  Search: kimi-code/k3\n    No matches\n  0 / 6\n";
+    assert_eq!(pure::kimi_picker_cursor(empty), None);
+    assert_eq!(pure::kimi_picker_cursor("   ❯ Trust and continue\n"), None);
+}
+#[tokio::test(start_paused = true)]
+async fn kimi_switch_searches_by_display_name_and_walks_to_the_exact_row() {
+    let moved = KIMI_PICKER_SEARCH
+        .replace("   ❯ K3 ", "     K3 ")
+        .replace("     K3-256k", "   ❯ K3-256k");
+    let io = FakeIo::frames(&json!([
+        "prompt vazio\n",
+        KIMI_PICKER_SEARCH,
+        KIMI_PICKER_SEARCH,
+        moved,
+        "Switched to K3-256k with thinking high for this session only."
+    ]));
+    let got = driver::kimi_switch(&io, Some("K3-256k"), None, Timing::default()).await;
+    assert!(got.is_ok(), "{:?}", got.err().map(|e| e.detail));
+    let keys: Vec<_> = io.keys.lock().unwrap().iter().map(|k| k["key"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(keys, ["/model", "Enter", "K3-256k", "Down", "M-s"]);
+}
+#[tokio::test(start_paused = true)]
+async fn kimi_switch_without_the_row_closes_the_picker_even_with_a_search_typed() {
+    let no_match = "  Select a model\n  Search: K9\n    No matches\n  0 / 6\n";
+    let io = FakeIo::frames(&json!(["prompt vazio\n", no_match, no_match, no_match, no_match, "prompt vazio\n"]));
+    let err = driver::kimi_switch(&io, Some("K9"), None, Timing::default()).await.unwrap_err();
+    assert_eq!(err.status, 409);
+    let keys: Vec<_> = io.keys.lock().unwrap().iter().map(|k| k["key"].as_str().unwrap().to_owned()).collect();
+    // O primeiro Esc só limpa a busca; o picker só fecha no segundo.
+    assert_eq!(keys, ["/model", "Enter", "K9", "Escape", "Escape"]);
+}
+#[test]
+fn kimi_name_twins_lists_other_aliases_with_the_same_shown_name() {
+    let catalog = json!({"models":[{"alias":"p/k3","name":"K3"},{"alias":"q/k3","name":"K3"},{"alias":"p/k4","name":"K4"}]});
+    assert_eq!(pure::kimi_name_twins(&catalog, &catalog["models"][1]), ["p/k3"]);
+    assert!(pure::kimi_name_twins(&catalog, &catalog["models"][2]).is_empty());
+}
+#[test]
+fn kimi_search_name_refuses_a_missing_or_repeated_shown_name() {
+    let catalog = json!({"models":[{"alias":"p/k3","name":"K3"},{"alias":"q/k3","name":"K3"},{"alias":"k9","name":""},{"alias":"p/n","name":3},{"alias":"p/k4","name":"K4"}]});
+    let code = |i: usize| pure::kimi_search_name(&catalog, &catalog["models"][i]).unwrap_err().detail["code"].clone();
+    assert_eq!(code(0), json!("kimi_model_name_duplicate"));
+    assert_eq!(code(2), json!("kimi_model_name_missing"));
+    assert_eq!(code(3), json!("kimi_model_name_missing"));
+    assert_eq!(pure::kimi_search_name(&catalog, &catalog["models"][4]).unwrap(), "K4");
+}
+#[test]
+fn kimi_picker_is_its_title_line_not_a_quote_of_it() {
+    assert!(!pure::kimi_picker_open("• o Kimi abre Select a model no /model\n> \n"));
+    assert!(pure::kimi_picker_open(KIMI_PICKER_SEARCH));
+    let quoted_above = format!("Select a model\n   ❯ Old   x\n{KIMI_PICKER_SEARCH}");
+    assert_eq!(pure::kimi_picker_cursor(&quoted_above).as_deref(), Some("K3"));
+}
+#[tokio::test(start_paused = true)]
+async fn kimi_switch_waits_for_the_search_results_to_draw() {
+    let drawing = "  Select a model\n  Search: K3\n";
+    let io = FakeIo::frames(&json!([
+        "prompt vazio\n",
+        drawing,
+        drawing,
+        KIMI_PICKER_SEARCH,
+        "Switched to K3 with thinking high for this session only."
+    ]));
+    let got = driver::kimi_switch(&io, Some("K3"), None, Timing::default()).await;
+    assert!(got.is_ok(), "{:?}", got.err().map(|e| e.detail));
+    let keys: Vec<_> = io.keys.lock().unwrap().iter().map(|k| k["key"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(keys, ["/model", "Enter", "K3", "M-s"]);
+}
+#[tokio::test(start_paused = true)]
+async fn kimi_identical_baseline_after_the_exact_row_is_rejected() {
+    let baseline = "Switched to K3 with thinking high for this session only.";
+    let io = FakeIo::frames(&json!([baseline, "Select a model", KIMI_PICKER_SEARCH, baseline]));
+    let err = driver::kimi_switch(&io, Some("K3"), None, Timing::default()).await.unwrap_err();
+    assert_eq!(err.status, 409);
+    let keys = io.keys.lock().unwrap();
+    assert_eq!(keys.iter().filter(|v| v["key"] == "M-s").count(), 1);
+    assert_eq!(keys.iter().filter(|v| v["key"] == "Enter").count(), 1);
+}
 #[tokio::test(start_paused = true)]
 async fn kimi_picker_timeout_and_identical_baseline_never_save_global_default() {
     for frames in [
@@ -135,13 +221,13 @@ async fn kimi_picker_timeout_and_identical_baseline_never_save_global_default() 
         ]),
     ] {
         let io = FakeIo::frames(&frames);
-        let outcome = driver::kimi_switch(&io, Some("p/m"), Some("K3"), None, Timing::default())
+        let outcome = driver::kimi_switch(&io, Some("K3"), None, Timing::default())
             .await
             .unwrap_err();
         assert_eq!(outcome.status, 409);
         let keys = io.keys.lock().unwrap();
         assert_eq!(keys.iter().filter(|v| v["key"] == "Enter").count(), 1);
-        assert_eq!(keys.last().unwrap()["key"], "Escape");
+        assert!(keys.iter().all(|v| v["key"] != "M-s"));
     }
 }
 #[tokio::test(start_paused = true)]
