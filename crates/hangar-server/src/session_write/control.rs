@@ -11,6 +11,7 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::request::Parts;
 use axum::http::{Method, StatusCode};
 use axum::response::Response;
+use hangar_delegation::cascade::CascadeTarget;
 use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
 
@@ -19,8 +20,6 @@ use super::input::{
     control_failed, diary_code, json_content_type, payload_code, runtime_failed, sem_turno,
 };
 use super::{Ctx, Write, WriteRoute, admit, busy_body, detail_body, failed_status, invalid_body, json_response, route_write};
-use crate::groups::model::Sidecar;
-use crate::groups::store::file_stem;
 use crate::mods::state::random_hex;
 use crate::interactions::{ExpectedInteraction, InteractionError};
 use crate::routes::{AppState, cors};
@@ -526,14 +525,29 @@ const CASCADE_UNCONFIRMED: &str = "interrupt_unconfirmed";
 
 /// Para as descendentes ligadas de `root` ao mesmo tempo; `None` = nenhuma descendente.
 async fn cascade_from(st: &Arc<AppState>, root: &str) -> Option<Value> {
-    let unavailable = || {
-        st.diag.report("rust.link_cascade_failed", root, "groups_unavailable", "arquivos de grupo indisponíveis; as filhas não pararam junto");
-        json!({"interrupted": [], "failed": [{"name": "*", "code": "groups_unavailable"}]})
+    let Ok(targets) = cascade_targets(st, root).await else {
+        return Some(json!({"interrupted": [], "failed": [{"name": "*", "code": CASCADE_GROUPS_UNAVAILABLE}]}));
     };
-    let Some(groups) = st.groups.as_ref() else { return Some(unavailable()) };
-    let Ok(all) = groups.sidecars().await else { return Some(unavailable()) };
-    let targets = hangar_delegation::cascade::plan(&linked_parents(&all), root);
     if targets.is_empty() { return None; }
+    let (interrupted, failed) = interrupt_descendants(st, targets).await;
+    let failed: Vec<Value> = failed.into_iter().map(|(name, code)| json!({"name": name, "code": code})).collect();
+    Some(json!({"interrupted": interrupted, "failed": failed}))
+}
+
+pub(crate) const CASCADE_GROUPS_UNAVAILABLE: &str = "groups_unavailable";
+
+/// As descendentes ligadas de `root` pelos arquivos de grupo. `Err` = arquivos indisponíveis, já no diário.
+pub(crate) async fn cascade_targets(st: &AppState, root: &str) -> Result<Vec<CascadeTarget>, ()> {
+    let all = match st.groups.as_ref() { Some(groups) => groups.sidecars().await.ok(), None => None };
+    let Some(all) = all else {
+        st.diag.report("rust.link_cascade_failed", root, CASCADE_GROUPS_UNAVAILABLE, "arquivos de grupo indisponíveis; as filhas não pararam junto");
+        return Err(());
+    };
+    Ok(hangar_delegation::cascade::plan(&crate::groups::link_orphans::linked_parents(&all), root))
+}
+
+/// Interrompe cada uma ao mesmo tempo: (as que pararam, (nome, código) das que não). Cada falha vai ao diário.
+pub(crate) async fn interrupt_descendants(st: &Arc<AppState>, targets: Vec<CascadeTarget>) -> (Vec<String>, Vec<(String, String)>) {
     let runs = targets.into_iter().map(|target| {
         let (st, name) = (st.clone(), target.name);
         async move {
@@ -549,23 +563,14 @@ async fn cascade_from(st: &Arc<AppState>, root: &str) -> Option<Value> {
     let (mut interrupted, mut failed) = (Vec::new(), Vec::new());
     for (name, outcome) in futures_util::future::join_all(runs).await {
         match outcome {
-            Ok(()) => interrupted.push(json!(name)),
+            Ok(()) => interrupted.push(name),
             Err(code) => {
                 st.diag.report("rust.link_cascade_failed", &name, &code, "a descendente ligada não parou junto com o pai");
-                failed.push(json!({"name": name, "code": code}));
+                failed.push((name, code));
             }
         }
     }
-    Some(json!({"interrupted": interrupted, "failed": failed}))
-}
-
-/// Filha → pai pelos arquivos de grupo. O arquivo tem o nome saneado; o `harness` guarda o da sessão.
-fn linked_parents(all: &[(String, Sidecar)]) -> std::collections::BTreeMap<String, String> {
-    all.iter().filter_map(|(stem, sidecar)| {
-        let parent = sidecar.linked_parent()?;
-        let name = sidecar.harness.keys().find(|n| file_stem(n) == *stem).cloned().unwrap_or_else(|| stem.clone());
-        Some((name, parent.to_owned()))
-    }).collect()
+    (interrupted, failed)
 }
 
 /// Sem turno conta como parada: não havia o que interromper. Senão, o código da recusa.

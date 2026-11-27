@@ -25,27 +25,27 @@ const BLIND: &str = "convidado-bia";
 
 /// Multiplexador falso: `sessions` tem uma sessão por linha, `hidden` as marcadas `@cp_hidden`, `survive`
 /// faz o `kill-session` responder 0 sem derrubar (o psmux), e `calls` registra cada comando.
-struct Env {
+pub(crate) struct Env {
     _dir: tempfile::TempDir,
-    root: PathBuf,
-    home: PathBuf,
+    pub(crate) root: PathBuf,
+    pub(crate) home: PathBuf,
     queue: PathBuf,
     tmux: PathBuf,
-    python: Arc<Fake>,
+    pub(crate) python: Arc<Fake>,
     server: std::net::SocketAddr,
-    registry: Arc<RuntimeRegistry>,
+    pub(crate) registry: Arc<RuntimeRegistry>,
     share: Arc<hangar_server::share::ShareState>,
     guests: Arc<hangar_server::login_guests::Service>,
 }
 
 impl Env {
-    fn sessions(&self, names: &[&str]) {
+    pub(crate) fn sessions(&self, names: &[&str]) {
         std::fs::write(self.root.join("sessions"), names.iter().map(|n| format!("{n}\n")).collect::<String>()).unwrap();
     }
     fn hidden(&self, names: &[&str]) {
         std::fs::write(self.root.join("hidden"), names.iter().map(|n| format!("{n}\n")).collect::<String>()).unwrap();
     }
-    fn alive(&self) -> Vec<String> {
+    pub(crate) fn alive(&self) -> Vec<String> {
         std::fs::read_to_string(self.root.join("sessions")).unwrap_or_default().lines().map(str::to_owned).collect()
     }
     fn calls(&self, verb: &str) -> Vec<String> {
@@ -68,7 +68,7 @@ impl Env {
         snap["sessions"].as_object().unwrap().values().map(|entry| entry["name"].as_str().unwrap().to_owned()).collect()
     }
     /// A linha do diário com esse código chega (a gravação é em segundo plano).
-    async fn diary_has(&self, name: &str, code: &str) -> bool {
+    pub(crate) async fn diary_has(&self, name: &str, code: &str) -> bool {
         for _ in 0..400 {
             if self.python.diag().iter().any(|l| l["sessao"] == name && l["codigo"] == code) { return true; }
             // estavel: intervalo da espera pela linha do diário; a condição encerra antes do teto de 20 s.
@@ -94,7 +94,7 @@ impl Env {
         std::fs::write(&path, meta.to_string()).unwrap();
         path
     }
-    async fn delete(&self, name: &str) -> (u16, Value) { self.delete_as(name, OWNER).await }
+    pub(crate) async fn delete(&self, name: &str) -> (u16, Value) { self.delete_as(name, OWNER).await }
     async fn delete_as(&self, name: &str, token: &str) -> (u16, Value) {
         let response = fake::client().delete(format!("http://{}/api/sessions/{name}", self.server)).bearer_auth(token).send().await.unwrap();
         let status = response.status().as_u16();
@@ -148,7 +148,7 @@ async fn env_with(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str) -> 
 }
 
 /// `env_with` com o estado ajustado antes de o servidor subir.
-async fn env_full(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str, state_adjust: impl FnOnce(&mut AppState)) -> Env {
+pub(crate) async fn env_full(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str, state_adjust: impl FnOnce(&mut AppState)) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_owned();
     let home = root.join("home");

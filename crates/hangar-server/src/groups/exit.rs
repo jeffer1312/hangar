@@ -33,10 +33,14 @@ pub async fn leave(st: &AppState, groups: &GroupService, name: &str, orq: Option
     Ok((ex.clone(), ex))
 }
 
-/// `leave` e o aviso a cada ex-companheiro de fora: (ex-companheiros, falhas).
+/// `leave` e o aviso a cada ex-companheiro de fora: (ex-companheiros, falhas). É a saída do fechamento,
+/// do Pi/omp/Kimi que acabou e da varredura de membro morto: as filhas ligadas de quem sai ficam marcadas sem pai.
 pub async fn leave_and_notify(st: &AppState, groups: &GroupService, name: &str, why: &'static str) -> Result<(Vec<String>, Vec<Value>), GroupError> {
+    // Antes da saída, que apaga o `linked_by` delas.
+    let orphans = super::link_orphans::leaving(groups, name).await;
     let (ex, tell) = leave(st, groups, name, None, why).await?;
-    let warnings = notify_exit(st, groups, name, &tell).await;
+    let mut warnings = notify_exit(st, groups, name, &tell).await;
+    warnings.extend(super::link_orphans::mark(st, name, orphans).await);
     Ok((ex, warnings))
 }
 

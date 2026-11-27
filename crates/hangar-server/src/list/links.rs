@@ -200,6 +200,19 @@ pub fn fill_links(row: &mut SessionRow, dirs: &Dirs, problems: &mut Problems) {
         }
         None => (row.pair_external, row.pair_externals, row.pair_peers, row.pair_gid, row.pair_task, row.linked_by, row.pair_owner, row.pair_lead) = (None, None, None, None, None, None, None, None),
     }
+    // Religada, o pai novo vale: a marca antiga só não tinha saído ainda.
+    row.orphaned_from = if row.linked_by.is_some() { None } else { orphan_parent(&row.name, dirs, problems) };
+}
+
+/// O pai de quem a filha ficou sem (`link-orphans.json`, no cofre `~/.hangar`); ausente é o normal.
+fn orphan_parent(name: &str, dirs: &Dirs, problems: &mut Problems) -> Option<String> {
+    match hangar_delegation::orphans::read(&dirs.home.join(".hangar")) {
+        Ok(mut all) => all.remove(name).map(|orphan| orphan.parent),
+        Err(_) => {
+            problems.note("list_link_orphans_unreadable", name, "marcas de filha sem pai ilegíveis; tratadas como ausentes");
+            None
+        }
+    }
 }
 
 /// `_decorate_loop`: sem sidecar, nenhum badge. Devolve a falha contornada (sidecar torto), para
@@ -876,6 +889,30 @@ mod tests {
         row.linked_by = Some("pai".into());
         fill_links(&mut row, &dirs, &mut Problems::default());
         assert_eq!(row.linked_by, None);
+    }
+
+    #[test]
+    fn orphaned_from_comes_from_the_orphan_marks_and_yields_to_a_new_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = dirs_at(tmp.path());
+        let fill = |name: &str, problems: &mut Problems| { let mut row = blank_row(name); fill_links(&mut row, &dirs, problems); row };
+        let hangar = tmp.path().join(".hangar");
+        hangar_delegation::orphans::record(&hangar, "pai", &["filha".to_owned()], 1.0).unwrap();
+        let row = fill("filha", &mut Problems::default());
+        assert_eq!((row.orphaned_from.as_deref(), row.linked_by.as_deref()), (Some("pai"), None));
+        assert_eq!(fill("outra", &mut Problems::default()).orphaned_from, None);
+        // Religada antes de a marca sair: vale o pai novo.
+        let pair = dirs.claude.join(".hangar-pair");
+        std::fs::create_dir_all(&pair).unwrap();
+        std::fs::write(pair.join("filha.json"), r#"{"peers": ["novo"], "linked_by": "novo"}"#).unwrap();
+        let row = fill("filha", &mut Problems::default());
+        assert_eq!((row.orphaned_from.as_deref(), row.linked_by.as_deref()), (None, Some("novo")));
+        // Marcas ilegíveis valem ausentes e vão ao diário.
+        std::fs::remove_file(pair.join("filha.json")).unwrap();
+        std::fs::write(hangar_delegation::orphans::path(&hangar), "{").unwrap();
+        let mut problems = Problems::default();
+        assert_eq!(fill("filha-torta", &mut problems).orphaned_from, None);
+        assert_eq!(problems.into_vec().iter().map(|p| p.code).collect::<Vec<_>>(), ["list_link_orphans_unreadable"]);
     }
 
     #[test]

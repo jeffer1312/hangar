@@ -76,6 +76,7 @@ pub fn list_sig<'a>(rows: impl IntoIterator<Item = &'a SessionRow>) -> String {
             // Só no Rust: vazio deixa a assinatura byte a byte com a do Python.
             if let (Value::Array(items), false) = (&mut sig, i.plugin_tool_servers.is_empty()) { items.push(json!(i.plugin_tool_servers)); }
             if let (Value::Array(items), Some(parent)) = (&mut sig, i.linked_by.as_ref()) { items.push(json!({"linked_by": parent})); }
+            if let (Value::Array(items), Some(parent)) = (&mut sig, i.orphaned_from.as_ref()) { items.push(json!({"orphaned_from": parent})); }
             if let (Value::Array(items), Some(owner)) = (&mut sig, i.pair_owner.as_ref()) { items.push(json!({"pair_owner": owner})); }
             if let (Value::Array(items), Some(lead)) = (&mut sig, i.pair_lead.as_ref()) { items.push(json!({"pair_lead": lead})); }
             if let (Value::Array(items), Some(name)) = (&mut sig, i.rename_suggestion.as_ref()) { items.push(json!({"rename_suggestion": name, "weak": i.rename_weak})); }
@@ -123,6 +124,20 @@ mod tests {
         let first = list_sig(&[row.clone()]);
         row.interaction_id = Some("b".into());
         assert_ne!(first, list_sig(&[row]));
+    }
+
+    /// A filha que perde o pai muda só esse campo: sem ele na assinatura, "sem pai" não chegaria à tela.
+    #[test]
+    fn orphaned_from_alone_changes_the_signature() {
+        let mut row: SessionRow = serde_json::from_value(json!({"name": "filha"})).unwrap();
+        let before = list_sig(&[row.clone()]);
+        row.orphaned_from = Some("pai".into());
+        let after = list_sig(&[row.clone()]);
+        assert_ne!(before, after);
+        let items: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(items[0].as_array().unwrap().last(), Some(&json!({"orphaned_from": "pai"})));
+        row.orphaned_from = Some("outro".into());
+        assert_ne!(after, list_sig(&[row]), "outro pai, outra assinatura");
     }
 
     #[test]

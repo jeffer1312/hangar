@@ -17,7 +17,7 @@
  },
  {
   "name": "sessions",
-  "description": "Lista as sessões vivas nesta máquina (nome, estado, cwd, provider). `voce: true` marca esta sessão; mesmo `grupo` = mesmo grupo de trabalho. `membros` são os outros do grupo, com `servidor::sessao` para quem está em outra máquina; `dona` é a máquina que guarda um grupo entre máquinas. `linked_by` é a sessão que abriu esta como filha ligada; `question` é a pergunta ou o menu aberto nela. Equivale a `hangar-send --list` sem os servidores remotos.",
+  "description": "Lista as sessões vivas nesta máquina (nome, estado, cwd, provider). `voce: true` marca esta sessão; mesmo `grupo` = mesmo grupo de trabalho. `membros` são os outros do grupo, com `servidor::sessao` para quem está em outra máquina; `dona` é a máquina que guarda um grupo entre máquinas. `linked_by` é a sessão que abriu esta como filha ligada; `orphaned_from`, a que a abriu e já fechou (ela segue aberta, sem pai); `question` é a pergunta ou o menu aberto nela. Equivale a `hangar-send --list` sem os servidores remotos.",
   "inputSchema": {
    "properties": {},
    "title": "sessionsArguments",

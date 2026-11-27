@@ -1,0 +1,100 @@
+//! Filha ligada que perdeu o pai (ele fechou ou morreu): a marca em `link-orphans.json`
+//! (`hangar_delegation::orphans`), gravada em toda saída do grupo e tirada quando a filha fecha, é
+//! religada ou some da lista.
+use std::collections::BTreeMap;
+
+use serde_json::{Value, json};
+
+use super::link_state::blocking;
+use super::model::Sidecar;
+use super::service::GroupService;
+use super::store::file_stem;
+use crate::routes::AppState;
+use hangar_delegation::orphans;
+
+const FAILED_EVENT: &str = "rust.link_orphan_failed";
+
+/// Filha → pai pelos arquivos de grupo. O arquivo tem o nome saneado; o `harness` guarda o da sessão.
+pub(crate) fn linked_parents(all: &[(String, Sidecar)]) -> BTreeMap<String, String> {
+    all.iter().filter_map(|(stem, sidecar)| {
+        let parent = sidecar.linked_parent()?;
+        let name = sidecar.harness.keys().find(|n| file_stem(n) == *stem).cloned().unwrap_or_else(|| stem.clone());
+        Some((name, parent.to_owned()))
+    }).collect()
+}
+
+/// As filhas que vão perder o pai `name`, lidas antes da saída dele, que apaga o `linked_by` delas.
+/// `name` pode ser o stem saneado (a varredura só o conhece): o pai sai com o nome que a filha guardou.
+pub(crate) struct Leaving { parent: String, children: Vec<String> }
+
+pub(crate) async fn leaving(groups: &GroupService, name: &str) -> Result<Leaving, ()> {
+    let all = groups.sidecars().await.map_err(|_| ())?;
+    let mut parent = name.to_owned();
+    let children = linked_parents(&all).into_iter().filter(|(_, p)| p == name || file_stem(p) == name)
+        .map(|(child, p)| { parent = p; child }).collect();
+    Ok(Leaving { parent, children })
+}
+
+/// Grava as órfãs da saída que já valeu. Falha vai ao diário e volta como aviso `{sessao, erro}`.
+pub(crate) async fn mark(st: &AppState, name: &str, leaving: Result<Leaving, ()>) -> Option<Value> {
+    let Ok(Leaving { parent, children }) = leaving else { return Some(failed(st, name, "link_orphans_groups_unreadable", NOT_RECORDED)) };
+    if children.is_empty() { return None; }
+    let (dir, at) = (st.hangar_dir.clone(), crate::state::monitor::wall_now());
+    let first = children[0].clone();
+    match blocking(move || orphans::record(&dir, &parent, &children, at)).await {
+        // A saída já mandou a lista reler; a marca chega depois dela.
+        Ok(()) => { st.list.invalidate(); None }
+        Err(_) => Some(failed(st, &first, "link_orphans_record_failed", NOT_RECORDED)),
+    }
+}
+
+/// A filha que fechou não é mais órfã de ninguém. `None` = nada a avisar.
+pub(crate) async fn closed(st: &AppState, name: &str) -> Option<Value> {
+    let (dir, names) = (st.hangar_dir.clone(), vec![name.to_owned()]);
+    blocking(move || orphans::clear(&dir, &names)).await.err().map(|_| failed(st, name, "link_orphans_clear_failed", "a marca de filha sem pai não saiu no fechamento"))
+}
+
+/// Religadas a um pai novo: a marca antiga sai. Falha só vai ao diário: a ligação já valeu.
+pub(crate) async fn relinked(st: &AppState, children: &[String]) {
+    let (dir, names) = (st.hangar_dir.clone(), children.to_vec());
+    if blocking(move || orphans::clear(&dir, &names)).await.is_err() {
+        st.diag.report(FAILED_EVENT, children.first().map_or("", String::as_str), "link_orphans_clear_failed", "a marca de filha sem pai não saiu na religação");
+    }
+}
+
+/// Filha renomeada: a marca segue o nome novo. Falhar não desfaz a troca de nome, já feita.
+pub(crate) async fn renamed(st: &AppState, old: &str, new: &str) {
+    let (dir, from, to) = (st.hangar_dir.clone(), old.to_owned(), new.to_owned());
+    if blocking(move || orphans::rename(&dir, &from, &to)).await.is_err() {
+        st.diag.report(FAILED_EVENT, new, "link_orphans_rename_failed", "a marca de filha sem pai não seguiu o nome novo");
+    }
+}
+
+/// As marcadas, para a varredura conferir se ainda estão na lista. Ilegível = nenhuma, no diário.
+pub(crate) async fn marked(st: &AppState) -> Vec<String> {
+    let dir = st.hangar_dir.clone();
+    match blocking(move || orphans::read(&dir)).await {
+        Ok(all) => all.into_keys().collect(),
+        Err(_) => {
+            if crate::warn_limit::allow(None, "link_orphans_unreadable") {
+                st.diag.report(FAILED_EVENT, "", "link_orphans_unreadable", "marcas de filha sem pai ilegíveis");
+            }
+            Vec::new()
+        }
+    }
+}
+
+/// As que a varredura deu por fora da lista. Falha só vai ao diário: a próxima rodada tenta de novo.
+pub(crate) async fn gone(st: &AppState, names: &[String]) {
+    let (dir, all) = (st.hangar_dir.clone(), names.to_vec());
+    if blocking(move || orphans::clear(&dir, &all)).await.is_err() {
+        st.diag.report(FAILED_EVENT, names.first().map_or("", String::as_str), "link_orphans_clear_failed", "a marca de filha sem pai que sumiu da lista não saiu");
+    }
+}
+
+const NOT_RECORDED: &str = "a marca de filha sem pai não foi gravada";
+
+fn failed(st: &AppState, name: &str, code: &str, reason: &'static str) -> Value {
+    st.diag.report(FAILED_EVENT, name, code, reason);
+    json!({"sessao": name, "erro": crate::session_write::bridge::cleanup_warning(code)})
+}

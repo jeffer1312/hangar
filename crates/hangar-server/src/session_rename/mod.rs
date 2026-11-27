@@ -300,6 +300,7 @@ impl Ctx {
             None => groups.rename(old, new).await,
         }.map_err(|e| match e { crate::groups::service::GroupError::Store(_) => "groups_store_failed".to_owned(), other => other.to_string() })?;
         crate::groups::link_return::renamed(&self.st, old, new).await;
+        crate::groups::link_orphans::renamed(&self.st, old, new).await;
         Ok(())
     }
 

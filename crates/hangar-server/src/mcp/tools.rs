@@ -703,8 +703,9 @@ impl Tools {
             "voce": s["name"].as_str().is_some_and(|n| Some(n) == me.as_deref()), "grupo": s["pair_gid"],
             // Membro de outra máquina vem como `servidor::sessao`; `dona` só em grupo entre máquinas.
             "membros": s["pair_peers"], "dona": s["pair_owner"],
-            // A filha ligada diz quem a abriu, e a pergunta aberta dela aparece sem abrir a conversa.
-            "linked_by": s["linked_by"], "question": s["question"]})).collect();
+            // A filha ligada diz quem a abriu (ou de quem ficou sem, se ele fechou), e a pergunta aberta dela
+            // aparece sem abrir a conversa.
+            "linked_by": s["linked_by"], "question": s["question"], "orphaned_from": s["orphaned_from"]})).collect();
         let content = rows.iter().map(|r| ContentBlock::text(serde_json::to_string_pretty(r).unwrap_or_default())).collect();
         let mut result = CallToolResult::success(content);
         result.structured_content = Some(json!({"result": rows}));

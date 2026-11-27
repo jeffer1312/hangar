@@ -285,7 +285,10 @@ pub(super) async fn pair(State(st): State<Arc<AppState>>, ConnectInfo(peer): Con
         Err(error) => return asked.store_failed(&error),
     };
     drop(held);
-    if !children.is_empty() { record_linked(&asked.st, children).await; }
+    if !children.is_empty() {
+        super::link_orphans::relinked(&asked.st, &children).await;
+        record_linked(&asked.st, children).await;
+    }
     // Só quem estava solto recebe o protocolo; grupo de orquestração não recebe nada. A ligação também
     // não: o protocolo viraria um turno a mais da filha, pago pelo pai.
     let notices = if orq || body.link { Vec::new() } else { newcomers };

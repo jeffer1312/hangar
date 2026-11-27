@@ -93,7 +93,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         cleanup.push(cleanup_failed(&st, &name, "close_chain_failed", "o vínculo then da sessão encerrada não saiu"));
     }
     record_closed_name(&st, &name, closed["transcript"].as_str()).await;
-    let leave = match st.groups.clone() { Some(groups) => leave_warnings(&st, &groups, &name, "session_closed").await, None => Vec::new() };
+    let mut leave = match st.groups.clone() { Some(groups) => leave_stopping_children(&st, &groups, &name, "session_closed").await, None => Vec::new() };
+    leave.extend(crate::groups::link_orphans::closed(&st, &name).await);
     cleanup.extend(after_close(&st, &name).await);
     let mut response = super::json_response(StatusCode::OK, json!({"ok": true, "warning": null}));
     crate::routes::cors(req.headers(), response.headers_mut());
@@ -103,6 +104,11 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 /// Limpeza que não terminou depois de a sessão fechar: vai ao diário e volta no `warning`, com o código.
 fn cleanup_failed(st: &AppState, name: &str, code: &str, reason: &'static str) -> Value {
     st.diag.report("rust.close_failed", name, code, reason);
+    cleanup_warning(code)
+}
+
+/// O corpo do aviso de limpeza que não terminou, com o código.
+pub(crate) fn cleanup_warning(code: &str) -> Value {
     json!({"code": "erro_limpeza_fechamento_falhou", "params": {"codigo": code},
         "msg": format!("a sessão fechou, mas a limpeza não terminou ({code})")})
 }
@@ -131,6 +137,22 @@ fn name_env(st: &AppState) -> Option<crate::runtime::close_name::NameEnv> {
 /// A conversa que a lista conhece para o nome (o `_jsonl_of_session` do Python).
 async fn listed_transcript(st: &AppState, name: &str) -> Option<std::path::PathBuf> {
     st.list.discovered_session(name).await.ok().flatten().and_then(|(row, _)| row.jsonl).map(std::path::PathBuf::from)
+}
+
+/// A saída do grupo de quem já morreu, e depois a interrupção das descendentes ligadas dele: elas seguem
+/// abertas, as filhas marcadas sem pai. Lidas antes da saída, que apaga o `linked_by` delas. A que não
+/// parou vai no aviso `{sessao, erro}` (o diário já tem o `rust.link_cascade_failed`).
+async fn leave_stopping_children(st: &Arc<AppState>, groups: &crate::groups::service::GroupService, name: &str, why: &'static str) -> Vec<Value> {
+    use crate::session_write::control::{CASCADE_GROUPS_UNAVAILABLE, cascade_targets, interrupt_descendants};
+    let targets = cascade_targets(st, name).await;
+    let mut warnings = leave_warnings(st, groups, name, why).await;
+    let failed = match targets {
+        Ok(targets) if targets.is_empty() => Vec::new(),
+        Ok(targets) => interrupt_descendants(st, targets).await.1,
+        Err(()) => vec![(name.to_owned(), CASCADE_GROUPS_UNAVAILABLE.to_owned())],
+    };
+    warnings.extend(failed.into_iter().map(|(child, code)| json!({"sessao": child, "erro": cleanup_warning(&code)})));
+    warnings
 }
 
 /// Sai do grupo; os avisos que não saíram e a falha da própria saída viram `{sessao, erro}`.
@@ -320,7 +342,8 @@ pub fn other_cleanup(state:std::sync::Weak<AppState>)->crate::runtime::other_ter
         let Some(st)=state.upgrade()else{return Ok(vec![]);};let Some(runtime)=st.state.runtime.get().cloned()else{return Ok(vec![json!({"code":"other_cleanup_unavailable"})]);};
         let life=closed.life;let mut warnings=Vec::new();let name=life.name().to_owned();
         if !runtime.other_cleanup_allowed(&life).await? {return Ok(vec![json!({"code":"other_cleanup_replaced"})]);}
-        if let Some(groups)=st.groups.clone(){warnings.extend(leave_warnings(&st,&groups,&name,"other_session_closed").await);}
+        if let Some(groups)=st.groups.clone(){warnings.extend(leave_stopping_children(&st,&groups,&name,"other_session_closed").await);}
+        if runtime.other_cleanup_allowed(&life).await? {warnings.extend(crate::groups::link_orphans::closed(&st,&name).await);}
         if runtime.other_cleanup_allowed(&life).await? && let Some(share)=st.share.clone() {
             match share.store.revoke_session(&name,None) {Ok(0)=>{},Ok(_)=>crate::share::owner_routes::sync_tunnel(&share).await,Err(_)=>warnings.push(json!({"code":"other_share_cleanup_failed"}))}
         }

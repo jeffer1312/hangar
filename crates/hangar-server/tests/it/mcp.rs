@@ -332,7 +332,7 @@ async fn sessions_marks_the_caller() {
     let mine: Vec<_> = rows.iter().filter(|r| r["voce"] == true).map(|r| r["name"].clone()).collect();
     assert_eq!(mine, [json!("s0")]);
     assert!(rows.iter().all(|r| r.as_object().unwrap().keys().eq(["name", "state", "cwd", "provider", "headless", "voce", "grupo",
-        "membros", "dona", "linked_by", "question"])), "membros com `servidor::sessao`, a máquina dona do grupo, quem abriu a filha e a pergunta dela");
+        "membros", "dona", "linked_by", "question", "orphaned_from"])), "membros com `servidor::sessao`, a máquina dona do grupo, quem abriu a filha, a pergunta dela e o pai que ela perdeu");
     assert_eq!(result["content"].as_array().unwrap().len(), rows.len(), "um bloco de texto por sessão, como o SDK do Python");
     let mut nobody = Mcp::open(s.addr, &[]).await;
     let rows = nobody.call("sessions", json!({})).await["structuredContent"]["result"].clone();
