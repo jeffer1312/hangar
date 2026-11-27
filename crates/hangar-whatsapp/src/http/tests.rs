@@ -974,6 +974,22 @@ async fn the_automatic_update_runs_as_a_job_only_to_switch() {
         (&json!("v0.2.0"), &Value::Null, &json!({"tag": "v0.2.0", "code": code})), "falha antes do registro não prende a tag: {body}");
 }
 
+/// Com arquivos de uma volta fora do lugar, a passada só recupera na vez: com ela ocupada (um "Apagar dados" em curso),
+/// não mexe em nada e o marcador fica.
+#[tokio::test]
+async fn the_automatic_recovery_waits_for_the_turn() {
+    let s = Scene::with_github(Some(fake_github(&["v0.2.0", "v0.1.1"]).await));
+    s.serve(Signing::Signed).await;
+    s.install("v0.1.1");
+    let data = s.paths().data.clone();
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("messages.db.migrated"), b"x").unwrap();
+    let guard = s.wa.installer.inline().unwrap();
+    assert_eq!(s.wa.auto_update().await, None);
+    drop(guard);
+    assert!(data.join("messages.db.migrated").exists() && !data.join("messages.db").exists(), "mexeu nos arquivos sem a vez");
+}
+
 /// Sem release nova, a passada não pede a vez: nem com ela ocupada, nem deixa tarefa no `GET`.
 #[tokio::test]
 async fn the_automatic_update_without_a_new_release_does_not_take_the_turn() {

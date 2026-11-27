@@ -86,6 +86,12 @@ impl WhatsApp {
     /// vez ([`install::auto_wants`]): só a troca a reserva, e roda como tarefa que o `GET` mostra.
     /// `None`: WhatsApp não instalado, ou troca a fazer com outra tarefa, operação ou envio segurando a vez.
     pub async fn auto_update(&self) -> Option<AutoUpdate> {
+        // Arquivos de uma volta fora do lugar vêm antes de procurar versão, e na vez: "Apagar dados" e a troca do
+        // dono mexem nos mesmos arquivos. Com o serviço parado nenhum envio segura a vez.
+        if install::recovery_pending(&self.ctx.paths) {
+            let _turn = self.installer.inline().ok()?;
+            return install::auto_recover(&self.ctx).await;
+        }
         match install::auto_wants(&self.ctx).await {
             install::AutoPlan::NotInstalled => None,
             install::AutoPlan::Done(done) => Some(done),

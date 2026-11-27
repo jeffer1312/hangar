@@ -50,6 +50,10 @@ fn record(diary: Option<&Path>, update: Option<&AutoUpdate>) {
     match result {
         Ok(Outcome::Updated) => tracing::info!(from = %from, to = %to, "WhatsApp: atualizado de {from} para {to}"),
         Ok(outcome) => tracing::debug!(outcome = ?outcome, from = %from, to = %to, "WhatsApp: atualização automática sem troca"),
+        // Só a lista dos arquivos presos sai no log: os outros detalhes podem trazer a saída do binário.
+        Err(failure) if failure.code == hangar_whatsapp::install::RESTORE_PENDING => {
+            tracing::warn!(code = failure.code, files = %failure.detail, "WhatsApp: arquivos de uma volta seguem fora do lugar");
+        }
         Err(failure) => {
             tracing::warn!(code = failure.code, from = %from, to = %to, "WhatsApp: a atualização automática falhou");
         }
@@ -59,7 +63,7 @@ fn record(diary: Option<&Path>, update: Option<&AutoUpdate>) {
     }
 }
 
-/// O detalhe da falha fica só no log: pode trazer a saída do binário.
+/// O diário leva só o código: o detalhe pode trazer a saída do binário.
 fn diary_line(update: Option<&AutoUpdate>) -> Option<Value> {
     let AutoUpdate { from, to, result } = update?;
     match result {

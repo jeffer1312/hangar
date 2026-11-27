@@ -383,12 +383,6 @@ pub fn write_update_check(paths: &Paths, check: &UpdateCheck) -> Result<(), Fail
 /// [`AutoPlan::Switch`]. A procura que responde fica em `update-check.json`.
 pub async fn auto_wants(ctx: &Context) -> AutoPlan {
     let Some(old) = current(&ctx.paths) else { return AutoPlan::NotInstalled };
-    // Arquivos de uma volta fora do lugar vêm antes de procurar versão: sem eles, subir criaria um banco vazio.
-    match recover(ctx).await {
-        Ok(false) => {}
-        Ok(true) => return AutoPlan::Done(AutoUpdate { from: old.tag.clone(), to: old.tag, result: Ok(Outcome::Restored) }),
-        Err(failure) => return AutoPlan::Done(AutoUpdate { from: old.tag.clone(), to: old.tag, result: Err(failure) }),
-    }
     let latest = match release::latest(&ctx.github).await {
         Ok(latest) => latest,
         Err(failure) => return AutoPlan::Done(AutoUpdate { to: old.tag.clone(), from: old.tag, result: Err(failure) }),
@@ -401,7 +395,7 @@ pub async fn auto_wants(ctx: &Context) -> AutoPlan {
     }
     if !release::newer(&latest.tag, &old.tag) {
         let result = Ok(Outcome::AlreadyLatest);
-        record_check(&ctx.paths, &latest.tag, &Attempt { migration: Some(false), registered: false }, &result);
+        record_check(&ctx.paths, &latest.tag, &Attempt { migration: Some(false), registered: false, schema_unread: false }, &result);
         return AutoPlan::Done(AutoUpdate { from: old.tag, to: latest.tag, result });
     }
     if skip_known(&ctx.paths, &latest.tag) {
@@ -467,7 +461,13 @@ struct Attempt {
     migration: Option<bool>,
     /// O serviço já foi registrado: a falha daqui em diante prende a tag.
     registered: bool,
+    /// Um dos esquemas não se leu (prazo, arquivo ocupado): a confirmação pedida não prende a tag, e a próxima
+    /// passada pergunta de novo.
+    schema_unread: bool,
 }
+
+/// O `last_error` da confirmação pedida sem um dos esquemas lidos.
+const SCHEMA_UNREAD: &str = "whatsapp_schema_unread";
 
 /// A última procura viu `tag` esperando confirmação, ou falhando depois de registrar a nova: o relógio não a tenta,
 /// e a procura gravada só ganha a hora nova. Uma `migration` que a tentativa não chegou a ler (`last_error`) não
@@ -511,6 +511,7 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
     let changes = format_changes(new_schema, file_schema);
     tracing::info!(?new_schema, ?file_schema, changes, "whatsapp: esquema do arquivo e da versão nova");
     attempt.migration = Some(changes);
+    attempt.schema_unread = new_schema.is_none() || file_schema.is_none();
     if changes && mode != Mode::Confirmed {
         tracing::info!(from = %old.tag, to = %latest.tag, "whatsapp: a versão nova pode mudar o formato dos dados; esperando confirmação");
         discard_download(old, &binary, fetched);
@@ -627,7 +628,7 @@ fn record_check(paths: &Paths, latest: &str, attempt: &Attempt, result: &Result<
     let previous = read_update_check(paths).filter(|c| c.latest == latest);
     let kept = || previous.as_ref().and_then(|c| c.failed.clone());
     let (failed, last_error) = match result {
-        Ok(Outcome::NeedsConfirm) => (kept(), None),
+        Ok(Outcome::NeedsConfirm) => (kept(), attempt.schema_unread.then(|| CheckFailure { tag: latest.to_owned(), code: SCHEMA_UNREAD.to_owned() })),
         Ok(_) => (None, None),
         Err(failure) => {
             let failure = CheckFailure { tag: latest.to_owned(), code: failure.code.to_owned() };
@@ -935,6 +936,31 @@ fn write_pending(paths: &Paths, stuck: &[Stuck]) -> Result<(), String> {
     write_file(&paths.restore_pending(), &body)
 }
 
+/// Há arquivos de uma volta fora do lugar: o marcador, ou o banco ausente com o migrado ao lado (o marcador que não
+/// gravou). A passada do relógio recupera antes de procurar versão, e na vez do instalador.
+pub fn recovery_pending(paths: &Paths) -> bool {
+    paths.restore_pending().exists() || !implicit_pending(paths).is_empty()
+}
+
+/// [`recover`] pela passada do relógio, já na vez: o resultado vai ao diário.
+pub async fn auto_recover(ctx: &Context) -> Option<AutoUpdate> {
+    let tag = current(&ctx.paths)?.tag;
+    let result = recover(ctx).await.map(|_| Outcome::Restored);
+    Some(AutoUpdate { from: tag.clone(), to: tag, result })
+}
+
+/// Sem marcador, o banco ausente com o migrado ao lado é o par preso de uma volta cujo marcador não gravou: subir
+/// criaria um banco vazio por cima.
+fn implicit_pending(paths: &Paths) -> Vec<Stuck> {
+    let name = |suffix: &str| paths.data.join(format!("messages.db{suffix}"));
+    let at = |suffix: &str| paths.data.join(format!("{MIGRATED}{suffix}"));
+    if name("").try_exists().unwrap_or(true) || !at("").try_exists().unwrap_or(false) {
+        return Vec::new();
+    }
+    DB_FILES.iter().filter(|suffix| at(suffix).exists() && !name(suffix).exists())
+        .map(|suffix| Stuck { name: name(suffix), at: at(suffix) }).collect()
+}
+
 /// [`recover`] com quem religa o serviço.
 async fn recover_with<F, Fut>(paths: &Paths, up: F) -> Result<bool, Failure>
 where
@@ -947,7 +973,10 @@ where
     // O marcador só sai com o serviço de pé: religar que falha fica para a próxima, que acha tudo no lugar e só religa.
     up().await?;
     let file = paths.restore_pending();
-    std::fs::remove_file(&file).map_err(|e| Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display())))?;
+    match std::fs::remove_file(&file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display()))),
+        _ => {}
+    }
     tracing::info!("whatsapp: os arquivos do banco voltaram ao lugar e o serviço respondeu");
     Ok(true)
 }
@@ -964,7 +993,10 @@ fn settle_pending(paths: &Paths) -> Result<bool, Failure> {
         // A gravação é atômica: ilegível é mão de fora, e sem os pares não há como saber onde estão os arquivos.
         Ok(body) => serde_json::from_slice(&body).map_err(|e| Failure::new(RESTORE_PENDING, format!(
             "{}: {e}; confira os messages.db.migrated* em {} e apague esse registro", file.display(), paths.data.display())))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => match implicit_pending(paths) {
+            implicit if implicit.is_empty() => return Ok(false),
+            implicit => implicit,
+        },
         Err(e) => return Err(Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display()))),
     };
     let left: Vec<Stuck> = stuck.into_iter().filter(|s| !settle(s)).collect();
@@ -1593,6 +1625,23 @@ mod tests {
         assert!(up.get(), "o serviço não subiu");
     }
 
+    /// Sem marcador (ele não gravou), o banco ausente com o migrado ao lado é tratado como o par preso: volta ao lugar
+    /// antes de subir, nunca um banco vazio por cima.
+    #[tokio::test]
+    async fn a_missing_database_next_to_the_migrated_one_is_put_back_without_a_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path());
+        std::fs::create_dir_all(&paths.data).unwrap();
+        assert!(!recovery_pending(&paths));
+        write_db_file(&paths.data.join("messages.db.migrated"), "migrated");
+        write_db_file(&paths.data.join("messages.db.migrated-wal"), "wal");
+        assert!(recovery_pending(&paths));
+        let up = std::cell::Cell::new(false);
+        assert_eq!(recover_with(&paths, || async { up.set(true); Ok(()) }).await, Ok(true));
+        assert_eq!((read(&paths.data.join("messages.db")), read(&paths.data.join("messages.db-wal"))), ("migrated".into(), "wal".into()));
+        assert!(up.get() && !recovery_pending(&paths));
+    }
+
     /// Sem nenhum dos dois arquivos (quarentena, apagado à mão) a pendência fica: subir criaria um banco vazio.
     #[tokio::test]
     async fn a_pair_with_both_files_gone_stays_pending() {
@@ -1817,7 +1866,10 @@ mod tests {
                 assert!(downloaded.exists(), "{mode:?}: o programa que já estava na pasta saiu");
                 assert!(binary.exists(), "{mode:?}: a versão instalada continua");
                 let check = read_update_check(&ctx.paths).unwrap();
-                assert_eq!((check.latest.as_str(), check.migration, check.failed, check.last_error), ("v0.2.0", true, None, None), "{mode:?}");
+                // Sem um dos esquemas lidos, a confirmação pedida não prende a tag: a próxima passada pergunta de novo.
+                let unread = (schema.is_none() || data.is_none()).then(|| CheckFailure { tag: "v0.2.0".into(), code: SCHEMA_UNREAD.into() });
+                assert_eq!((check.latest.as_str(), check.migration, check.failed, check.last_error), ("v0.2.0", true, None, unread), "{mode:?}");
+                assert_eq!(skip_known(&ctx.paths, "v0.2.0"), schema.is_some() && data.is_some(), "{mode:?}");
             }
         }
     }
@@ -1852,14 +1904,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(dir.path());
         let failure = |tag: &str, code: &str| Some(CheckFailure { tag: tag.into(), code: code.into() });
-        let (before, after) = (Attempt { migration: None, registered: false }, Attempt { migration: Some(false), registered: true });
+        let (before, after) = (Attempt { migration: None, registered: false, schema_unread: false }, Attempt { migration: Some(false), registered: true, schema_unread: false });
         let read = || { let c = read_update_check(&paths).unwrap(); (c.migration, c.failed, c.last_error) };
         record_check(&paths, "v0.2.0", &after, &Err(Failure::new("whatsapp_not_started", "x")));
         assert_eq!(read(), (false, failure("v0.2.0", "whatsapp_not_started"), None));
         record_check(&paths, "v0.2.0", &before, &Err(Failure::new("whatsapp_download_failed", "x")));
         assert_eq!(read(), (false, failure("v0.2.0", "whatsapp_not_started"), failure("v0.2.0", "whatsapp_download_failed")),
             "a migração lida antes fica, e a tag segue presa");
-        record_check(&paths, "v0.2.0", &Attempt { migration: Some(true), registered: false }, &Ok(Outcome::NeedsConfirm));
+        record_check(&paths, "v0.2.0", &Attempt { migration: Some(true), registered: false, schema_unread: false }, &Ok(Outcome::NeedsConfirm));
         assert_eq!(read(), (true, failure("v0.2.0", "whatsapp_not_started"), None));
         record_check(&paths, "v0.2.0", &after, &Ok(Outcome::Updated));
         assert_eq!(read(), (false, None, None));
