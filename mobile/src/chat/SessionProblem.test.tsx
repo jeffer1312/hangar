@@ -35,7 +35,6 @@ describe('SessionProblem', () => {
     expect(await texto('limit_switch_failed', 'auto_continue_capped:server_5xx')).toBe(m.problema_auto_continue_capped());
     // Outra falha da troca segue com a frase da troca.
     expect(await texto('limit_switch_failed', 'reopen_failed')).toBe(m.problema_limit_switch_failed());
-    expect(m.problema_auto_continue_capped()).toBe('Continuei sozinho 2 vezes seguidas sem resposta e parei para não virar laço. Mande uma mensagem para seguir.');
     expect(autoContinueCappedLabel('auto_continue_cappedx')).toBeNull();
     expect(autoContinueCappedLabel('erro_envio_falhou')).toBeNull();
   });

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ChatEvent } from '@hangar/core';
+import * as m from '../../paraglide/messages';
 import { autoContinueCancellable, autoContinueText, fixStates, fixTracker, isApiError, isAutoContinue, isFixRunningNote, noticeAction, sameFixStates, noticeCount, noticeDetail, noticeKey, noticeKeyLabel, noticeTitle, parseNoticeIgnores } from './notices';
 
 const ev = (text: string, notice_meta: ChatEvent['notice_meta'], extra: Partial<ChatEvent> = {}): ChatEvent =>
@@ -76,14 +77,14 @@ describe('aviso da CLI do Claude', () => {
 
   test('continuar sozinho: a nota lê os horários do meta, trocada a cada passo', () => {
     expect(isAutoContinue(autoNote('waiting'))).toBe(true);
-    expect(autoContinueText(autoNote('waiting'))).toBe('A conexão caiu às 10:05; continuo quando a rede voltar.');
-    expect(autoContinueText(autoNote('continued', { continued_at: at(10, 20), count: 2 }))).toBe('A conexão caiu às 10:05; continuei às 10:20.');
-    expect(autoContinueText(autoNote('failed', { code: 'erro_envio_falhou' }))).toBe('A conexão caiu às 10:05; não consegui continuar (erro_envio_falhou).');
-    expect(autoContinueText(autoNote('cancelled'))).toBe('A conexão caiu às 10:05; não continuei (cancelado).');
-    expect(autoContinueText(autoNote('skipped', { code: 'user_after_stop' }))).toBe('A conexão caiu às 10:05; não continuei.');
+    expect(autoContinueText(autoNote('waiting'))).toBe(m.auto_continue_waiting_line({ stopped: '10:05' }));
+    expect(autoContinueText(autoNote('continued', { continued_at: at(10, 20), count: 2 }))).toBe(m.auto_continue_line({ stopped: '10:05', continued: '10:20' }));
+    expect(autoContinueText(autoNote('failed', { code: 'erro_envio_falhou' }))).toBe(m.auto_continue_failed_line({ stopped: '10:05', code: 'erro_envio_falhou' }));
+    expect(autoContinueText(autoNote('cancelled'))).toBe(m.auto_continue_cancelled_line({ stopped: '10:05' }));
+    expect(autoContinueText(autoNote('skipped', { code: 'user_after_stop' }))).toBe(m.auto_continue_skipped_line({ stopped: '10:05' }));
     // Reboot: `stopped_at` é a hora do boot, o texto diz só quando continuou.
-    expect(autoContinueText(autoNote('continued', { cause: 'reboot', continued_at: at(10, 20) }))).toBe('O computador reiniciou no meio do turno; continuei às 10:20.');
-    expect(autoContinueText(autoNote('failed', { cause: 'reboot', code: 'erro_envio_falhou' }))).toBe('O computador reiniciou no meio do turno; não consegui continuar (erro_envio_falhou).');
+    expect(autoContinueText(autoNote('continued', { cause: 'reboot', continued_at: at(10, 20) }))).toBe(m.auto_continue_reboot_line({ continued: '10:20' }));
+    expect(autoContinueText(autoNote('failed', { cause: 'reboot', code: 'erro_envio_falhou' }))).toBe(m.auto_continue_reboot_failed_line({ code: 'erro_envio_falhou' }));
     expect(autoContinueText(autoNote('de-uma-versao-futura'))).toBe('texto do servidor');
     expect(isAutoContinue(ev('⚙️ x', { state: 'waiting' }))).toBe(false);
   });
