@@ -3835,12 +3835,13 @@ export async function skipQuestion(name: string, requestId: string, interactionI
   return res.json() as Promise<{ ok: boolean }>;
 }
 
-/** `cascade` só vem com `cascade=1` e descendente ligada conhecida. `interrupted: false` = o pai não tinha
- *  turno e só as descendentes foram paradas (com `cascade=1`, sem turno não é erro). */
+/** `cascade` só vem com `cascade=1` e descendente ligada conhecida, ou com `unavailable` quando o servidor não
+ *  conseguiu ler quais são as filhas. `interrupted: false` = o pai não tinha turno e só as descendentes foram
+ *  paradas (com `cascade=1`, sem turno não é erro). */
 export interface InterruptResult {
   ok: boolean;
   interrupted?: boolean;
-  cascade?: { interrupted: string[]; failed: { name: string; code: string }[] };
+  cascade?: { interrupted: string[]; failed: { name: string; code: string }[]; unavailable?: string };
 }
 
 // clear=true tambem limpa o input do terminal (2o Esc no backend). So passar quando havia msg pendente.
@@ -3858,6 +3859,12 @@ export async function interrupt(name: string, clear = false, server?: Server, op
   };
   return server ? apiFetchForServer<InterruptResult>(server, path, init)
                 : apiFetch<InterruptResult>(path, init);
+}
+
+/** As filhas ligadas não foram conferidas: podem seguir trabalhando, e a tela avisa. */
+export function interruptCascadeUnchecked(result: InterruptResult | null | undefined): boolean {
+  const unavailable = result?.cascade?.unavailable;
+  return typeof unavailable === 'string' && unavailable.length > 0;
 }
 
 /** As descendentes que não pararam junto; resposta sem `cascade` (servidor antigo, sem filhas) é lista vazia. */

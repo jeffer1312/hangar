@@ -507,25 +507,31 @@ pub(super) async fn unowned_response(st: &AppState, name: &str, peer: SocketAddr
 
 /// Texto para a sessão adormecida: vai à fila da chave dela e a vida nova o entrega; o acordar já corre à parte.
 async fn queue_while_asleep(st: &AppState, name: &str, key: &str, text: &str) -> (StatusCode, Value) {
-    let Some(runtime) = st.state.runtime.get() else { return (StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_watcher", "o servidor ainda não abriu as sessões", json!({}))) };
+    queue_while_asleep_entry(st, name, key, text).await.0
+}
+
+/// `queue_while_asleep` com o id da linha que entrou na fila do ator, quando entrou por ela; a fila da sessão
+/// adormecida não devolve id.
+async fn queue_while_asleep_entry(st: &AppState, name: &str, key: &str, text: &str) -> ((StatusCode, Value), Option<String>) {
+    let Some(runtime) = st.state.runtime.get() else { return ((StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_watcher", "o servidor ainda não abriu as sessões", json!({}))), None) };
     // Comando de barra não tem linha na fila: só a vida nova o executa.
     if !queued(text) {
         let error = crate::runtime::gateway::asleep_waking();
-        return (StatusCode::CONFLICT, detail_body(&error.code, &error.message, json!({})));
+        return ((StatusCode::CONFLICT, detail_body(&error.code, &error.message, json!({}))), None);
     }
     match runtime.queue_asleep(name, key, text).await {
-        Ok(()) => (StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})),
+        Ok(()) => ((StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})), None),
         // A vida nova já pegou a fila e o acordar ainda confere a subida (a porta segue fechada): o texto entra
         // pela fila do ator dela, uma vez só, e ele o entrega quando ficar pronto.
         Err(error) if error.code == "runtime_lease" => {
             let id = random_hex(16);
             let row = crate::runtime::queue::Action::Append { text: text.into(), delivered: false, ts: None, pre_transcript: true, entry_id: Some(id.clone()) };
-            match runtime.queue_action(name, id, row).await {
-                Ok(_) => (StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})),
-                Err(other) => (StatusCode::SERVICE_UNAVAILABLE, detail_body(&other.code, &other.message, json!({}))),
+            match runtime.queue_action(name, id.clone(), row).await {
+                Ok(_) => ((StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})), Some(id)),
+                Err(other) => ((StatusCode::SERVICE_UNAVAILABLE, detail_body(&other.code, &other.message, json!({}))), None),
             }
         }
-        Err(error) => (StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({}))),
+        Err(error) => ((StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({}))), None),
     }
 }
 
@@ -556,7 +562,8 @@ pub async fn deliver_reply(st: &AppState, name: &str, text: &str) -> (StatusCode
 }
 
 /// O mesmo recado, com o id da linha que ele criou na fila de `name`, para tirá-la depois se ainda esperar.
-/// Só a entrada do Rust tem esse id; adormecida, abrindo ou sem dono voltam `None`.
+/// A entrada do Rust tem esse id, e a adormecida cuja vida nova já pegou a fila também; a fila da adormecida,
+/// abrindo ou sem dono voltam `None`.
 pub async fn deliver_reply_entry(st: &AppState, name: &str, text: &str) -> ((StatusCode, Value), Option<String>) {
     write_input_entry(st, name, text, false).await
 }
@@ -696,7 +703,7 @@ async fn write_input_entry(st: &AppState, name: &str, text: &str, steer: bool) -
         }
         Write::Busy => (StatusCode::CONFLICT, busy_body()),
         Write::Opening(key) => queue_opening(st, name, &key, text, steer).await,
-        Write::Asleep(key) => queue_while_asleep(st, name, &key, text).await,
+        Write::Asleep(key) => return queue_while_asleep_entry(st, name, &key, text).await,
         // Pedido que veio pela ponte do Python: a entrega sai depois da resposta da rota, num prazo
         // (`groups::bridge::deliver_deferred`).
         Write::Unowned => match crate::groups::bridge::current() {

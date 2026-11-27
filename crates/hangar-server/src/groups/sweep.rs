@@ -110,7 +110,10 @@ impl Sweeper {
         // O stem do sidecar é saneado e a lista traz o nome cru: tira os dois, ou uma sessão
         // com espaço no nome seria dada como morta.
         let alive: HashSet<String> = live.iter().cloned().chain(live.iter().map(|n| file_stem(n))).collect();
-        let mut candidates: Vec<String> = referenced.iter().chain(&orphans).filter(|n| !alive.contains(*n)).cloned().collect();
+        // A marca de órfã guarda o nome cru: o stem de `a b` viva não segura a marca de outra `a-b` que sumiu.
+        let raw: HashSet<&String> = live.iter().collect();
+        let mut candidates: Vec<String> = referenced.iter().filter(|n| !alive.contains(*n))
+            .chain(orphans.iter().filter(|n| !raw.contains(n))).cloned().collect();
         candidates.sort_unstable();
         candidates.dedup();
         self.absent.retain(|n, _| candidates.contains(n));

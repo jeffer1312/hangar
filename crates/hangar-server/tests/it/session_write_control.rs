@@ -876,23 +876,50 @@ async fn a_guard_refused_parent_does_not_cascade() {
     assert!(cascade_failures(&python).is_empty(), "a filha que não existe nem foi procurada");
 }
 
-/// Sem os arquivos de grupo nenhuma filha é conhecida: o Parar responde sem `cascade` (nada a mostrar na
-/// tela) e a falha de leitura vai só ao diário.
+/// Arquivos de grupo ilegíveis: a resposta do pai fica como veio e leva `cascade.unavailable`, sem nomes, para a tela
+/// dizer que as filhas não foram conferidas; a falha vai também ao diário. Sem serviço de grupos não há filha ligada.
 #[tokio::test]
-async fn unreadable_groups_stop_without_a_cascade_warning() {
+async fn unreadable_groups_say_the_children_were_not_checked() {
+    use hangar_server::groups::{orq::OrqVault, service::GroupService, store::PairDir};
     let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
     open_headless(&registry, dir.path(), "p").await;
     let (python, _) = spawn_fake().await;
     let mut state = AppState::new(config("127.0.0.1"));
     state.write_gate_wait = Duration::from_secs(5);
     state.diag = python.bind_diary(state.diag.clone());
-    state.groups = None;
-    assert!(state.state.runtime.set(registry).is_ok());
+    // A pasta dos grupos é um arquivo: a leitura falha.
+    let pair = dir.path().join("pair");
+    std::fs::write(&pair, "não é pasta").unwrap();
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair, dir.path().join("arquivo")), Arc::new(OrqVault::from_state(&state)), "casa".into())));
+    assert!(state.state.runtime.set(registry.clone()).is_ok());
     let diag = state.diag.clone();
     let server = spawn_state_for(&python, state).await;
     let (status, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
-    assert!(body.get("cascade").is_none(), "sem filha conhecida não há aviso: {body}");
+    assert_eq!(body["cascade"], json!({"interrupted": [], "failed": [], "unavailable": "groups_unavailable"}), "{body}");
     diag.flush().await;
     assert!(cascade_failures(&python).iter().any(|d| d["sessao"] == "p" && d["codigo"] == "groups_unavailable"), "{:?}", python.diag());
+
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
+    state.write_gate_wait = Duration::from_secs(5);
+    state.groups = None;
+    assert!(state.state.runtime.set(registry).is_ok());
+    let server = spawn_state_for(&python, state).await;
+    let (_, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
+    assert!(body.get("cascade").is_none(), "sem grupos não há filha a conferir: {body}");
+}
+
+/// `clear` torto com o pai sem turno é recusado como no caminho admitido, e nenhuma filha para.
+#[tokio::test]
+async fn a_bad_clear_with_a_parent_without_turn_stops_nothing() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "p").await;
+    let child = open_headless(&registry, dir.path(), "a").await;
+    let (python, server, diag) = linked_family(registry, dir.path()).await;
+    let (status, body) = send(server, "POST", "p/interrupt?cascade=1&clear=talvez", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}");
+    assert!(!child.lock().unwrap().iter().any(|e| e.to_string().contains("interrupt")), "nada foi à filha");
+    diag.flush().await;
+    assert!(cascade_failures(&python).is_empty(), "a árvore nem foi lida");
 }

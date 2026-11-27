@@ -35,7 +35,7 @@ import { SessionProblem, showsSessionProblem } from './SessionProblem';
 import { SessionPickerSheet } from './SessionPickerSheet';
 import { useLiveVoice } from '../features/voice/liveVoiceStore';
 import { PlanActions } from './PlanActions';
-import { askPayloadFromToolUse, canChooseSurface, codexSubagentState, fetchSessionsForServer, isOrq, matchAgentSubagent, selectOptionForServer, submitSelectedForServer, interrupt, interruptCascadeFailed, recarregarSessao, setModoExecucao, implementCodexPlan, setPermissionMode, projectSubagentActivity, subagentEnded } from '@hangar/core';
+import { askPayloadFromToolUse, canChooseSurface, codexSubagentState, fetchSessionsForServer, isOrq, matchAgentSubagent, selectOptionForServer, submitSelectedForServer, interrupt, interruptCascadeFailed, interruptCascadeUnchecked, recarregarSessao, setModoExecucao, implementCodexPlan, setPermissionMode, projectSubagentActivity, subagentEnded } from '@hangar/core';
 import { agentIdentities } from '../features/activity/agentModel';
 import { createEventProjection } from './eventProjection';
 import type { Provider, SessionInfo } from '@hangar/core';
@@ -417,6 +417,8 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
         const failed = interruptCascadeFailed(result);
         if (failed.length && rotaAtual.current === rota) {
           mostrarAviso(m.interrupt_cascade_failed({ names: failed.join(', ') }));
+        } else if (interruptCascadeUnchecked(result) && rotaAtual.current === rota) {
+          mostrarAviso(m.interrupt_cascade_unchecked());
         }
         // Pai sem turno: nenhum Esc saiu, a mensagem pendente segue onde estava.
         if (result?.interrupted === false) return;

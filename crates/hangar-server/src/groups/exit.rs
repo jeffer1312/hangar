@@ -48,9 +48,15 @@ pub async fn leave_dead_member(st: &AppState, groups: &GroupService, name: &str)
 async fn leave_marking(st: &AppState, groups: &GroupService, name: &str, why: &'static str, by_stem: bool) -> Result<(Vec<String>, Vec<Value>), GroupError> {
     // Antes da saída, que apaga o `linked_by` delas.
     let orphans = super::link_orphans::leaving(groups, name, by_stem).await;
-    let (ex, tell) = leave(st, groups, name, None, why).await?;
-    let mut warnings = notify_exit(st, groups, name, &tell).await;
-    warnings.extend(super::link_orphans::mark(st, name, orphans).await);
+    let (ex, tell) = match leave(st, groups, name, None, why).await {
+        Ok(left) => left,
+        Err(error) => {
+            super::link_orphans::mark_after_failed_leave(st, groups, name, orphans).await;
+            return Err(error);
+        }
+    };
+    let warnings = notify_exit(st, groups, name, &tell).await;
+    super::link_orphans::mark(st, name, orphans).await;
     Ok((ex, warnings))
 }
 

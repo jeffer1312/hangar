@@ -3,8 +3,6 @@
 //! religada ou some da lista.
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
-
 use super::link_state::blocking;
 use super::model::Sidecar;
 use super::service::GroupService;
@@ -39,22 +37,37 @@ pub(crate) async fn leaving(groups: &GroupService, name: &str, by_stem: bool) ->
     Ok(Leaving { parent, children })
 }
 
-/// Grava as órfãs da saída que já valeu. Falha vai ao diário e volta como aviso `{sessao, erro}`.
-pub(crate) async fn mark(st: &AppState, name: &str, leaving: Result<Leaving, ()>) -> Option<Value> {
-    let Ok(Leaving { parent, children }) = leaving else { return Some(failed(st, name, "link_orphans_groups_unreadable", NOT_RECORDED)) };
-    if children.is_empty() { return None; }
+/// Grava as órfãs da saída que já valeu. A marca é só o rótulo da linha: a falha vai ao diário, nunca à tela.
+pub(crate) async fn mark(st: &AppState, name: &str, leaving: Result<Leaving, ()>) {
+    let Ok(Leaving { parent, children }) = leaving else { return failed(st, name, "link_orphans_groups_unreadable", NOT_RECORDED) };
+    if children.is_empty() { return; }
     let (dir, at) = (st.hangar_dir.clone(), crate::state::monitor::wall_now());
     let first = children[0].clone();
     match blocking(move || orphans::record(&dir, &parent, &children, at)).await {
         // A saída já mandou a lista reler; a marca chega depois dela.
-        Ok(()) => { st.list.invalidate(); None }
-        Err(_) => Some(failed(st, &first, "link_orphans_record_failed", NOT_RECORDED)),
+        Ok(()) => st.list.invalidate(),
+        Err(_) => failed(st, &first, "link_orphans_record_failed", NOT_RECORDED),
     }
 }
 
-/// A filha que fechou não é mais órfã de ninguém. `None` = nada a avisar.
-pub(crate) async fn closed(st: &AppState, name: &str) -> Option<Value> {
-    clear(st, vec![name.to_owned()]).await.err().map(|_| failed(st, name, "link_orphans_clear_failed", "a marca de filha sem pai não saiu no fechamento"))
+/// A saída que falhou pode ter valido antes do erro (o contrato que não foi para o arquivo): marca só as filhas que
+/// já perderam o vínculo; a saída desfeita deixa todas ligadas e não marca nada.
+pub(crate) async fn mark_after_failed_leave(st: &AppState, groups: &GroupService, name: &str, leaving: Result<Leaving, ()>) {
+    let Ok(leaving) = leaving else { return };
+    if leaving.children.is_empty() { return; }
+    let Ok(all) = groups.sidecars().await else { return failed(st, name, "link_orphans_groups_unreadable", NOT_RECORDED) };
+    mark(st, name, Ok(unlinked(&linked_parents(&all), leaving))).await;
+}
+
+/// As filhas lidas antes da saída que não estão mais ligadas a `parent`.
+fn unlinked(links: &BTreeMap<String, String>, Leaving { parent, children }: Leaving) -> Leaving {
+    let children = children.into_iter().filter(|child| links.get(child) != Some(&parent)).collect();
+    Leaving { parent, children }
+}
+
+/// A filha que fechou não é mais órfã de ninguém. Falha só vai ao diário: o fechamento já valeu.
+pub(crate) async fn closed(st: &AppState, name: &str) {
+    if clear(st, vec![name.to_owned()]).await.is_err() { failed(st, name, "link_orphans_clear_failed", "a marca de filha sem pai não saiu no fechamento"); }
 }
 
 /// Nome reusado por uma sessão nova: a marca da vida que acabou não passa para ela. Falha só vai ao
@@ -109,8 +122,24 @@ async fn clear(st: &AppState, names: Vec<String>) -> std::io::Result<()> {
 
 const NOT_RECORDED: &str = "a marca de filha sem pai não foi gravada";
 
-fn failed(st: &AppState, name: &str, code: &str, reason: &'static str) -> Value {
+fn failed(st: &AppState, name: &str, code: &str, reason: &'static str) {
     st.diag.report(FAILED_EVENT, name, code, reason);
-    json!({"sessao": name, "erro": {"code": "link_orphan_mark_failed", "params": {"codigo": code},
-        "msg": format!("a marca de filha sem pai não foi atualizada ({code})")}})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_children_that_lost_the_link_are_marked_after_a_failed_leave() {
+        let leaving = || Leaving { parent: "pai".into(), children: vec!["a".into(), "b".into()] };
+        // A saída valeu antes do erro: as duas perderam o vínculo.
+        assert_eq!(unlinked(&BTreeMap::new(), leaving()).children, ["a", "b"]);
+        // A saída foi desfeita: as duas seguem ligadas ao pai.
+        let restored = BTreeMap::from([("a".to_owned(), "pai".to_owned()), ("b".to_owned(), "pai".to_owned())]);
+        assert!(unlinked(&restored, leaving()).children.is_empty());
+        // Religada a outro pai no meio: também não é mais filha deste.
+        let other = BTreeMap::from([("a".to_owned(), "outro".to_owned()), ("b".to_owned(), "pai".to_owned())]);
+        assert_eq!(unlinked(&other, leaving()).children, ["a"]);
+    }
 }

@@ -233,6 +233,21 @@ async fn the_sweep_forgets_an_orphan_only_after_it_is_gone_from_the_list() {
     assert_eq!(*env.forgot.lock().unwrap(), ["sumiu"], "a da lista viva fica marcada");
 }
 
+/// A marca de órfã é do nome cru: `a b` viva não segura a marca de `a-b`, outra sessão, que sumiu.
+#[tokio::test(start_paused = true)]
+async fn a_live_name_with_the_same_stem_does_not_keep_another_orphan_mark() {
+    let tmp = tempfile::tempdir().unwrap();
+    let groups = Arc::new(GroupService::new(PairDir::new(tmp.path().join("pair"), tmp.path().join("arquivo")),
+        Arc::new(OrqVault::from_state(&hangar_server::routes::AppState::new(fake::config("")))), "casa".into()));
+    let env = Arc::new(OrphanEnv { live: vec!["a b".into()], marked: vec!["a b".into(), "a-b".into()], forgot: Mutex::default(),
+        reported: Mutex::default() });
+    let mut sweeper = Sweeper::new(groups, env.clone());
+    sweeper.round().await;
+    tokio::time::advance(MIN_ABSENCE).await;
+    sweeper.round().await;
+    assert_eq!(*env.forgot.lock().unwrap(), ["a-b"], "só a viva fica marcada");
+}
+
 /// Só marcas de órfã e a lista vazia: nenhuma linha de "lista indisponível" no diário, e as marcas ficam.
 #[tokio::test(start_paused = true)]
 async fn an_empty_list_with_only_orphan_marks_is_not_a_list_failure() {

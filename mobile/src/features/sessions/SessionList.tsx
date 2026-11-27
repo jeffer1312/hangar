@@ -161,19 +161,20 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     const order = [...kids, s];
     for (const x of order) useSessions.getState().markDeleting(x.serverId, x.name);
     const failed: string[] = [];
-    let warning: unknown = null;
+    // Um aviso por sessão fechada: o da filha não esconde o do pai.
+    const warnings: string[] = [];
     for (const x of order) {
       try {
         const r = await deleteSessionForServer(server, x.name);
-        if (r.warning && !warning) warning = r.warning;
+        if (r.warning) warnings.push(formataErro(r.warning) ?? String(r.warning));
       } catch (e: unknown) {
         useSessions.getState().unmarkDeleting(x.serverId, x.name);
         failed.push(`${x.name} (${mensagemDe(e)})`);
       }
     }
     if (failed.length) toast.erro(m.session_close_children_failed({ names: failed.join(', ') }));
-    if (warning) toast.erro(formataErro(warning) ?? String(warning));
-    if (!failed.length && !warning) toast.ok(s.name);
+    if (warnings.length) toast.erro(warnings.join('\n'));
+    if (!failed.length && !warnings.length) toast.ok(s.name);
   }, []);
 
   const excluir = useCallback(

@@ -855,6 +855,22 @@ describe('SessionList', () => {
     expect(container.querySelector('[data-row="srv1::filha-a"]')).toBeNull();
   });
 
+  it('with_children_shows_every_close_warning', async () => {
+    calls.sessions = family();
+    calls.deleteSessionForServer
+      .mockResolvedValueOnce({ ok: true, warning: 'aviso-filha-a' })
+      .mockResolvedValueOnce({ ok: true, warning: null })
+      .mockResolvedValueOnce({ ok: true, warning: 'aviso-pai' });
+    await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-row="srv1::pai"]')!.click());
+    const choices = calls.alert.mock.calls[0][2] as Choice[];
+    await act(async () => { choices.find((c) => c.text === 'session_close_with_children:2')!.onPress!(); });
+    await vi.waitFor(() => expect(calls.error).toHaveBeenCalled());
+    // Nenhuma exclusão recusada: os dois avisos chegam juntos, o da filha não esconde o do pai.
+    expect(calls.error).toHaveBeenCalledExactlyOnceWith('aviso-filha-a\naviso-pai');
+    expect(calls.ok).not.toHaveBeenCalled();
+  });
+
   it('parar de acompanhar remove só o convite, sem DELETE nem troca da máquina ativa', async () => {
     calls.deleteSession.mockResolvedValueOnce({ ok: true, warning: null });
     useServers.setState({ servers: [server, { ...server, id: 'guest', baseUrl: 'https://guest.test', invite: true }] });

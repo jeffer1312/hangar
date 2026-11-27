@@ -37,7 +37,7 @@ const MAX_READ: u64 = 32 * 1024 * 1024;
 pub(crate) const MAX_CHARS: usize = 8000;
 /// Sem filha nas linhas, o arquivo de grupo confirma antes de soltar: a lista pode ser de antes da ligação.
 const RESCAN: Duration = Duration::from_secs(30);
-/// Pai e filha trocando turnos sozinhos: cada volta leva 20 s ou mais, então o limite é por filha e longo.
+/// Pai e filha trocando turnos sozinhos: o limite é por filha e longo, para não virar laço.
 const RATE_MAX: usize = 3;
 const RATE_WINDOW: Duration = Duration::from_secs(600);
 /// Falha passageira (histórico ilegível, pai ocupado ou reabrindo) tenta de novo depois disso.
@@ -237,6 +237,10 @@ struct Watcher {
     /// Última interação avisada (ou já avisada antes do reinício) por filha, nesta vigia: dois menus com o
     /// mesmo texto são avisos distintos, e falha ao gravar o registro não reavisa.
     notified: HashMap<String, String>,
+    /// Linha do aviso na fila do pai que o registro não gravou: o cancelamento ainda a acha.
+    unrecorded: HashMap<String, String>,
+    /// Desde quando a filha está sem interação com a chave de um aviso ainda gravada.
+    closed: HashMap<String, Instant>,
 }
 
 impl Watcher {
@@ -264,6 +268,8 @@ impl Watcher {
         self.cancel_retry_at.retain(|n, _| present(n));
         self.open_asks.retain(|n| present(n));
         self.notified.retain(|n, _| present(n));
+        self.unrecorded.retain(|n, _| present(n));
+        self.closed.retain(|n, _| present(n));
         self.rate.forget_old(now);
         self.question_rate.forget_old(now);
         // Já na primeira vista: o registro criado aqui só deixa voltar resposta posterior a ele.
@@ -281,10 +287,10 @@ impl Watcher {
             }
         }
         let mut links: Option<LinkReturns> = None;
-        // Interação já avisada nesta vigia não relê o arquivo; só a que fechou com aviso ainda na fila.
+        // Interação já avisada nesta vigia não relê o arquivo; só a que fechou depois do aviso.
         let asks = !self.asks_seeded || children.iter().any(|r| match open_interaction(r) {
             Some(id) => self.notified.get(&r.name) != Some(&id),
-            None => self.open_asks.contains(&r.name),
+            None => self.open_asks.contains(&r.name) || self.notified.contains_key(&r.name) || self.closed.contains_key(&r.name),
         });
         if asks {
             let dir = st.hangar_dir.clone();
@@ -293,9 +299,13 @@ impl Watcher {
                 Err(e) => return unreadable(st, &e),
             };
             self.asks_seeded = true;
-            self.open_asks = children.iter().filter(|r| read.get(&r.name).is_some_and(|l| l.asked_queue_id.is_some())).map(|r| r.name.clone()).collect();
+            self.open_asks = children.iter().filter(|r| read.get(&r.name).is_some_and(|l| l.asked_queue_id.is_some()) || self.unrecorded.contains_key(&r.name))
+                .map(|r| r.name.clone()).collect();
             for row in children {
-                if let Some(link) = read.get(&row.name) { self.ask(st, row, link, now).await; }
+                let Some(link) = read.get(&row.name) else { continue };
+                let mut link = link.clone();
+                if link.asked_queue_id.is_none() { link.asked_queue_id = self.unrecorded.get(&row.name).cloned(); }
+                self.ask(st, row, &link, now).await;
             }
             links = Some(read);
         }
@@ -340,8 +350,11 @@ enum QuestionStep {
     /// Aberta há menos de `SETTLE`.
     Wait,
     Skip,
-    /// Avisos demais desta filha em 10 min.
+    /// Avisos demais desta filha na janela de `RATE_WINDOW`.
     Limited,
+    /// A interação avisada fechou sem linha na fila: a chave gravada sai, ou o próximo pedido de mesmo texto,
+    /// depois de um reinício, seria dado como já avisado.
+    Forget,
 }
 
 impl Watcher {
@@ -350,8 +363,19 @@ impl Watcher {
         let child = &row.name;
         let Some(id) = open_interaction(row) else {
             self.asking.remove(child);
-            return link.asked_queue_id.clone().map_or(QuestionStep::Skip, QuestionStep::Cancel);
+            if let Some(queued) = &link.asked_queue_id { return QuestionStep::Cancel(queued.clone()); }
+            if link.asked_key.is_some() {
+                // Fechada depois de avisada nesta vigia, ou fechada há `SETTLE`: logo depois do reinício o pedido ainda
+                // aberto pode voltar com outro ID, e a chave é o que segura o aviso repetido.
+                let since = *self.closed.entry(child.clone()).or_insert(now);
+                return if self.notified.contains_key(child) || now - since >= SETTLE { QuestionStep::Forget } else { QuestionStep::Wait };
+            }
+            // Nada gravado a limpar: a vigia esquece a interação fechada e para de reler o arquivo por ela.
+            self.closed.remove(child);
+            self.notified.remove(child);
+            return QuestionStep::Skip;
         };
+        self.closed.remove(child);
         let since = match self.asking.get(child) {
             Some((since, seen)) if *seen == id => *since,
             _ => { self.asking.insert(child.clone(), (now, id.clone())); now }
@@ -390,6 +414,13 @@ impl Watcher {
                 report(st, child, "link_question_rate_limited", "perguntas demais da filha em 10 min; não avisa o pai", "");
                 self.question_retry_at.insert(child.to_owned(), now + BACKOFF);
             }
+            QuestionStep::Forget => {
+                // Gravação que falha mantém `notified`: o próximo pedido de mesmo texto é outro aviso, e tenta de novo.
+                if record_ask(st, child, |entry| if entry.asked_queue_id.is_none() { entry.asked_key = None; }).await {
+                    self.notified.remove(child);
+                    self.closed.remove(child);
+                }
+            }
             QuestionStep::Cancel(queued) => {
                 if self.cancel_retry_at.get(child).is_some_and(|t| now < *t) { return; }
                 let cancelled = crate::session_write::control::cancel_waiting(st, parent, &queued).await;
@@ -405,7 +436,14 @@ impl Watcher {
                 }
                 self.cancel_retry_at.remove(child);
                 self.open_asks.remove(child);
-                record_ask(st, child, move |entry| if entry.asked_queue_id.as_deref() == Some(queued.as_str()) { entry.asked_queue_id = None; }).await;
+                self.unrecorded.remove(child);
+                let closed = id.is_none();
+                // A interação fechada leva a chave junto; trocada por outra, a chave fica até a nova ser avisada.
+                let cleared = record_ask(st, child, move |entry| if entry.asked_queue_id.as_deref() == Some(queued.as_str()) {
+                    entry.asked_queue_id = None;
+                    if closed { entry.asked_key = None; }
+                }).await;
+                if closed && cleared { self.notified.remove(child); }
             }
             QuestionStep::Send(text) => {
                 let Some(id) = id else { return };
@@ -417,13 +455,22 @@ impl Watcher {
                     if transient(status) { self.question_retry_at.insert(child.to_owned(), now + BACKOFF); return; }
                     // Recusa de vez (pai sumiu, pedido recusado): esta pergunta não insiste.
                     self.notified.insert(child.to_owned(), id);
+                    self.unrecorded.remove(child);
                     record_ask(st, child, move |entry| { entry.asked_key = Some(key); entry.asked_queue_id = None; }).await;
                     return;
                 }
                 self.question_rate.record(child, now);
                 if queued.is_some() { self.open_asks.insert(child.to_owned()); }
                 self.notified.insert(child.to_owned(), id);
-                record_ask(st, child, move |entry| { entry.asked_key = Some(key); entry.asked_queue_id = queued; }).await;
+                let line = queued.clone();
+                // Sem o registro gravado, a linha fica na memória: a pergunta que fechar ainda a tira da fila do pai.
+                if record_ask(st, child, move |entry| { entry.asked_key = Some(key); entry.asked_queue_id = queued; }).await {
+                    self.unrecorded.remove(child);
+                } else if let Some(line) = line {
+                    self.unrecorded.insert(child.to_owned(), line);
+                } else {
+                    self.unrecorded.remove(child);
+                }
                 st.diag.record_line(forwarded_line(child));
             }
         }
@@ -440,19 +487,21 @@ fn ask_key(id: &str, kind: Option<&InteractionKind>, text: &str) -> String {
     format!("notice:{hex}")
 }
 
-/// Grava a pergunta avisada no registro da filha; falha vai ao diário (`notified` segura o reaviso).
-async fn record_ask(st: &AppState, child: &str, change: impl FnOnce(&mut LinkReturn) + Send + 'static) {
+/// Grava a pergunta avisada no registro da filha; falha vai ao diário (`notified` segura o reaviso). `true` = gravado.
+async fn record_ask(st: &AppState, child: &str, change: impl FnOnce(&mut LinkReturn) + Send + 'static) -> bool {
     let (dir, name) = (st.hangar_dir.clone(), child.to_owned());
     let written = blocking(move || link_state::update(&dir, |all| { if let Some(entry) = all.get_mut(&name) { change(entry); } })).await;
-    if let Err(e) = written { report(st, child, "link_returns_write_failed", "pergunta da filha avisada não gravada", &io_kind(&e)); }
+    if let Err(e) = &written { report(st, child, "link_returns_write_failed", "pergunta da filha avisada não gravada", &io_kind(e)); }
+    written.is_ok()
 }
 
 fn forwarded_line(child: &str) -> serde_json::Value {
     serde_json::json!({"evento": "rust.link_question_forwarded", "nivel": "ok", "sessao": child, "codigo": "link_question_forwarded"})
 }
 
-/// A interação que a filha espera: o formulário da pergunta vence o menu, que é o mesmo pedido na tela.
-fn open_interaction(row: &SessionRow) -> Option<String> {
+/// A interação que a filha espera: o formulário da pergunta vence o menu, que é o mesmo pedido na tela. O
+/// `child_status` publica a mesma, que é a que o aviso cita e o `/answer` confere.
+pub(crate) fn open_interaction(row: &SessionRow) -> Option<String> {
     if row.state != "awaiting_input" { return None; }
     row.ask_form.as_ref().and_then(|form| form["interaction_id"].as_str()).or(row.interaction_id.as_deref())
         .filter(|id| !id.is_empty()).map(str::to_owned)
@@ -664,10 +713,11 @@ fn not_returned(child: &str, why: &str) -> String {
     format!("[de: {child}] (a resposta não voltou sozinha: {why}; abra a conversa de {child})")
 }
 
-fn message(child: &str, answer: &str) -> String {
+/// `key` vai no corte: a página seguinte pedida com ela não junta o pedaço de outra resposta.
+fn message(child: &str, answer: &str, key: &str) -> String {
     if answer.chars().count() <= MAX_CHARS { return format!("[de: {child}] {answer}"); }
     let cut: String = answer.chars().take(MAX_CHARS).collect();
-    format!("[de: {child}] {cut}\n(cortado; o resto pela tool child_status, offset {MAX_CHARS})")
+    format!("[de: {child}] {cut}\n(cortado; o resto pela tool child_status, offset {MAX_CHARS}, answer_key {key})")
 }
 
 /// Pai ocupado, reabrindo ou runtime doente passam; o resto (sessão sumida, pedido recusado) não.
@@ -749,9 +799,9 @@ async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at:
         return if transient(status) { Outcome::Retry } else { Outcome::Done };
     }
     if dropped.is_none() { rate.record(child, Instant::now()); }
-    let (dir, name) = (st.hangar_dir.clone(), child.to_owned());
+    let (dir, name, notice) = (st.hangar_dir.clone(), child.to_owned(), dropped.is_some());
     let written = blocking(move || link_state::update(&dir, |all| {
-        if let Some(entry) = all.get_mut(&name) { entry.returned_at = Some(reply_at); entry.returned_key = Some(key); }
+        if let Some(entry) = all.get_mut(&name) { entry.returned_at = Some(reply_at); entry.returned_key = Some(key); entry.returned_notice = notice; }
     })).await;
     if let Err(e) = written {
         report(st, child, "link_returns_write_failed", "returned_at da filha não gravado", &io_kind(&e));
@@ -777,7 +827,7 @@ const NO_ANSWER: (&str, &str) = ("link_return_no_answer", "turno da filha sem re
 /// `allow` só é consultado com resposta inteira (conta no limite quando deixa passar).
 fn reply(child: &str, found: Result<(&str, String), Refusal>, allow: impl FnOnce() -> bool) -> Option<Reply> {
     match found {
-        Ok((answer, key)) if allow() => Some(Reply { text: message(child, answer), key, dropped: None }),
+        Ok((answer, key)) if allow() => Some(Reply { text: message(child, answer, &key), key, dropped: None }),
         Ok((_, key)) => Some(Reply {
             text: not_returned(child, "respostas demais em 10 minutos, parece um laço entre vocês"), key, dropped: Some(RATE_LIMITED),
         }),
@@ -1317,17 +1367,43 @@ mod tests {
         assert_eq!(w.question_step(&working, &queued, question, t0), QuestionStep::Cancel("row1".into()));
         // Trocada por outra: a do aviso antigo sai antes de avisar a nova.
         assert_eq!(w.question_step(&waiting("q2", "y", &[]), &queued, question, t0 + SETTLE), QuestionStep::Cancel("row1".into()));
-        // Linha já tirada (ou entregue sem id): nada.
+        // Linha já tirada (ou entregue sem id): a chave gravada sai com a interação fechada.
         let done = LinkReturn { asked_queue_id: None, ..queued };
-        assert_eq!(w.question_step(&working, &done, question, t0), QuestionStep::Skip);
+        assert_eq!(w.question_step(&working, &done, question, t0), QuestionStep::Forget);
+        // Sem chave nem linha: nada, e a vigia esquece a interação.
+        w.notified.insert("f".into(), "q1".into());
+        assert_eq!(w.question_step(&working, &linked(), question, t0), QuestionStep::Skip);
+        assert!(!w.notified.contains_key("f"));
+    }
+
+    /// Permissão avisada que fechou: depois de um reinício, outra de mesmo texto é outro aviso.
+    #[tokio::test(start_paused = true)]
+    async fn a_closed_notice_does_not_hide_the_next_one_with_the_same_text() {
+        let (t0, approval) = (Instant::now(), Some(&InteractionKind::Approval));
+        let QuestionStep::Send(text) = settled_step(&waiting("p1", "Permitir Bash?", &[]), approval, t0) else { panic!("esperava Send") };
+        let asked = LinkReturn { asked_key: Some(ask_key("p1", approval, &text)), ..linked() };
+        let mut closed = waiting("p1", "Permitir Bash?", &[]);
+        closed.state = "working".into();
+        let mut w = Watcher::default();
+        w.notified.insert("f".into(), "p1".into());
+        assert_eq!(w.question_step(&closed, &asked, approval, t0), QuestionStep::Forget);
+        // Vigia nova com a chave ainda gravada: espera o pedido voltar com outro ID antes de soltar a chave.
+        let mut fresh = Watcher::default();
+        assert_eq!(fresh.question_step(&closed, &asked, approval, t0), QuestionStep::Wait);
+        assert_eq!(fresh.question_step(&closed, &asked, approval, t0 + SETTLE), QuestionStep::Forget);
+        // A chave saiu do registro: a vigia nova avisa o pedido seguinte de mesmo texto.
+        let mut reborn = Watcher::default();
+        let next = waiting("p2", "Permitir Bash?", &[]);
+        reborn.question_step(&next, &linked(), approval, t0);
+        assert!(matches!(reborn.question_step(&next, &linked(), approval, t0 + SETTLE), QuestionStep::Send(_)));
     }
 
     #[test]
     fn answer_is_cut() {
-        assert_eq!(message("f", "oi"), "[de: f] oi");
+        assert_eq!(message("f", "oi", "k1"), "[de: f] oi");
         let long = "é".repeat(MAX_CHARS + 5);
-        let cut = message("f", &long);
+        let cut = message("f", &long, "k1");
         assert!(cut.starts_with(&format!("[de: f] {}", "é".repeat(MAX_CHARS))));
-        assert!(cut.ends_with("(cortado; o resto pela tool child_status, offset 8000)"), "{cut}");
+        assert!(cut.ends_with("(cortado; o resto pela tool child_status, offset 8000, answer_key k1)"), "{cut}");
     }
 }

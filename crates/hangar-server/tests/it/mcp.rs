@@ -523,6 +523,14 @@ async fn child_status_pages_the_final_answer_of_a_linked_child_only() {
         assert_eq!((&got["answer"]["offset"], &got["answer"]["total_chars"], &got["answer"]["next_offset"]), (&json!(offset), &json!(20000), &next));
         assert_eq!(got["returned"], false, "nada voltou sozinho ainda");
     }
+    // A página seguinte pedida com a identidade da resposta passa; com a de outra resposta, o cursor expirou.
+    let first = mcp.call("child_status", json!({"alvo": "s0"})).await;
+    let key = first["structuredContent"]["answer"]["answer_key"].clone();
+    assert!(key.as_str().is_some_and(|k| !k.is_empty()), "{first}");
+    let same = mcp.call("child_status", json!({"alvo": "s0", "offset": 8000, "answer_key": key})).await;
+    assert_eq!(same["structuredContent"]["answer"]["text"].as_str(), Some(pages[1].as_str()), "{same}");
+    let moved = mcp.call("child_status", json!({"alvo": "s0", "offset": 8000, "answer_key": "outra"})).await;
+    assert!(failed(&moved) && first_text(&moved).starts_with("child_status_cursor_expired"), "{moved}");
     let past = mcp.call("child_status", json!({"alvo": "s0", "offset": 30000})).await;
     let past = &past["structuredContent"]["answer"];
     assert_eq!((&past["text"], &past["next_offset"]), (&json!(""), &Value::Null), "além do fim: página vazia");

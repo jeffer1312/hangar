@@ -126,7 +126,7 @@ struct Contract { conteudo: Option<String>, #[serde(default)] mtime: Option<Stri
 struct Close { alvo: String }
 
 #[derive(Deserialize)]
-struct ChildStatus { alvo: String, #[serde(default)] offset: Option<usize> }
+struct ChildStatus { alvo: String, #[serde(default)] offset: Option<usize>, #[serde(default)] answer_key: Option<String> }
 
 /// `answers` no formato do corpo do `/answer`, que confere cada item.
 #[derive(Deserialize)]
@@ -457,12 +457,18 @@ fn not_born_yet(status: u16, value: &Value) -> bool {
     status == 404 && value["detail"]["code"] == "erro_sessao_inexistente"
 }
 
-/// Uma página da resposta final, contada em `char`; `offset` além do fim volta página vazia.
-fn answer_page(text: &str, offset: usize) -> Value {
+/// Uma página da resposta final, contada em `char`; `offset` além do fim volta página vazia. `key` é a identidade da
+/// resposta: a página seguinte pedida com ela não junta o pedaço de outra.
+fn answer_page(text: &str, offset: usize, key: &str) -> Value {
     let total = text.chars().count();
     let page: String = text.chars().skip(offset).take(link_return::MAX_CHARS).collect();
     let end = offset.saturating_add(link_return::MAX_CHARS);
-    json!({"text": page, "offset": offset, "total_chars": total, "next_offset": (end < total).then_some(end)})
+    json!({"text": page, "offset": offset, "total_chars": total, "next_offset": (end < total).then_some(end), "answer_key": key})
+}
+
+/// O texto da resposta `key` voltou ao pai: o aviso de que ela não voltou grava a mesma chave e não conta.
+fn returned_text(link: Option<&link_state::LinkReturn>, key: &str) -> bool {
+    link.is_some_and(|l| l.returned_key.as_deref() == Some(key) && !l.returned_notice)
 }
 
 impl Tools {
@@ -585,6 +591,17 @@ impl Tools {
             .await.unwrap_or(false)
     }
 
+    /// O convidado com login dono da sessão `name`; `None` = sessão do dono. Convidados ilegíveis sem última leitura
+    /// boa é erro: a lista inteira não sai sem saber quem pergunta.
+    async fn login_guest_of(&self, name: &str) -> Result<Option<crate::login_guests::store::Guest>, String> {
+        let life = crate::login_guests::gate::session_life(&self.st, name).await;
+        let (store, name) = (self.st.login_guests.store.clone(), name.to_owned());
+        tokio::task::spawn_blocking(move || {
+            if store.snapshot(true).is_none() { return Err("sessions_guests_unreadable: arquivo de convidados ilegível".to_owned()); }
+            Ok(store.owner(&name, life.as_deref(), true))
+        }).await.map_err(|_| "sessions_guests_unreadable: a leitura dos convidados foi interrompida".to_owned())?
+    }
+
     fn home(&self) -> PathBuf {
         self.st.list.env().dirs.as_ref().map(|d| d.home.clone()).or_else(std::env::home_dir).unwrap_or_default()
     }
@@ -698,7 +715,14 @@ impl Tools {
     async fn sessions(&self, headers: &HeaderMap) -> Outcome {
         let me = self.caller(headers).await.ok().filter(|(_, voice)| !voice).map(|(name, _)| name);
         let rows = self.ok(Method::GET, "/api/sessions", None).await?;
-        let rows: Vec<Value> = rows.as_array().into_iter().flatten().map(|s| json!({"name": s["name"], "state": s["state"],
+        let mut rows: Vec<Value> = rows.as_array().cloned().unwrap_or_default();
+        // A rota é lida com o token do dono: a sessão de um convidado com login só vê o que ele alcança.
+        if let Some(name) = &me && let Some(guest) = self.login_guest_of(name).await? {
+            let store = self.st.login_guests.store.clone();
+            rows = tokio::task::spawn_blocking(move || guest_view(rows, |name, life| store.visible(Some(&guest), name, life))).await
+                .map_err(|_| "sessions_guests_unreadable: a leitura dos convidados foi interrompida".to_owned())?;
+        }
+        let rows: Vec<Value> = rows.iter().map(|s| json!({"name": s["name"], "state": s["state"],
             "cwd": s["cwd"], "provider": s["provider"], "headless": s["headless"],
             "voce": s["name"].as_str().is_some_and(|n| Some(n) == me.as_deref()), "grupo": s["pair_gid"],
             // Membro de outra máquina vem como `servidor::sessao`; `dona` só em grupo entre máquinas.
@@ -863,15 +887,18 @@ impl Tools {
         let busy = row.is_some_and(|r| matches!(r.state.as_str(), "working" | "awaiting_input"));
         let answer = if busy { None } else { link_return::final_answer(&events).map(|(e, _)| e.text.clone().unwrap_or_default()) };
         let key = link_return::reply_key(&events);
+        if let Some(asked) = a.answer_key.as_deref().filter(|k| !k.is_empty()) && (answer.is_none() || asked != key) {
+            return Err(format!("child_status_cursor_expired: a resposta de '{alvo}' mudou desde a página lida; recomece sem offset"));
+        }
         let dir = self.st.hangar_dir.clone();
         let links = link_state::blocking(move || link_state::read(&dir)).await
             .map_err(|e| format!("child_status_returns_unreadable: link-returns.json ilegível ({:?})", e.kind()))?;
-        let returned = links.get(alvo).and_then(|l| l.returned_key.as_deref()) == Some(key.as_str());
+        let returned = returned_text(links.get(alvo), &key);
         Ok(dict(json!({
             "state": row.map(|r| r.state.clone()), "question": row.and_then(|r| r.question.clone()),
-            "options": row.and_then(|r| r.options.clone()), "interaction_id": row.and_then(|r| r.interaction_id.clone()),
+            "options": row.and_then(|r| r.options.clone()), "interaction_id": row.and_then(|r| link_return::open_interaction(r).or_else(|| r.interaction_id.clone())),
             "last_reply_at": row.and_then(|r| r.last_reply_at), "returned": returned,
-            "answer": answer.map(|text| answer_page(&text, a.offset.unwrap_or(0))),
+            "answer": answer.map(|text| answer_page(&text, a.offset.unwrap_or(0), &key)),
         })))
     }
 
@@ -1472,6 +1499,22 @@ mod tests {
         assert!(!counts_as_owner(Err(()), "minha", None), "convidados ilegíveis não contam");
     }
 
+    /// O `sessions` de um convidado com login só lista o que ele alcança, sem a pergunta nem o nome das outras.
+    #[test]
+    fn a_login_guest_lists_only_the_sessions_it_reaches() {
+        let rows = vec![
+            json!({"name": "dela", "lifecycle_id": "k:1", "question": "Qual base?", "pair_peers": ["dona", "irma"], "linked_by": "dona"}),
+            json!({"name": "irma", "lifecycle_id": "k:2", "orphaned_from": "dona"}),
+            json!({"name": "dona", "lifecycle_id": "k:3", "question": "segredo do dono"}),
+        ];
+        let visible = |name: &str, life: Option<&str>| matches!((name, life), ("dela", Some("k:1")) | ("irma", Some("k:2")));
+        let seen = guest_view(rows, visible);
+        assert_eq!(seen.iter().map(|r| r["name"].as_str().unwrap()).collect::<Vec<_>>(), ["dela", "irma"]);
+        assert_eq!(seen[0]["question"], "Qual base?", "a pergunta da sessão dele aparece");
+        assert_eq!((&seen[0]["pair_peers"], &seen[0]["linked_by"], &seen[1]["orphaned_from"]), (&json!(["irma"]), &Value::Null, &Value::Null));
+        assert!(!seen.iter().any(|r| r.to_string().contains("segredo")), "{seen:?}");
+    }
+
     #[tokio::test]
     async fn a_route_body_past_the_limit_is_an_error_not_an_empty_answer() {
         let api = Router::new().route("/big", axum::routing::get(|| async { vec![b'x'; ROUTE_BODY_LIMIT + 1] }));
@@ -1570,14 +1613,24 @@ mod tests {
     #[test]
     fn the_answer_is_paged_in_chars() {
         let text = format!("{}{}{}", "á".repeat(8000), "b".repeat(8000), "ç".repeat(4000));
-        let first = answer_page(&text, 0);
+        let first = answer_page(&text, 0, "k1");
         assert_eq!((first["text"].as_str().unwrap(), &first["next_offset"]), ("á".repeat(8000).as_str(), &json!(8000)));
-        assert_eq!(first["total_chars"], 20000);
-        assert_eq!(answer_page(&text, 8000)["text"], "b".repeat(8000));
-        let last = answer_page(&text, 16000);
+        assert_eq!((&first["total_chars"], &first["answer_key"]), (&json!(20000), &json!("k1")));
+        assert_eq!(answer_page(&text, 8000, "k1")["text"], "b".repeat(8000));
+        let last = answer_page(&text, 16000, "k1");
         assert_eq!((last["text"].as_str().unwrap(), &last["next_offset"]), ("ç".repeat(4000).as_str(), &Value::Null));
-        let past = answer_page(&text, 30000);
+        let past = answer_page(&text, 30000, "k1");
         assert_eq!((past["text"].as_str().unwrap(), &past["next_offset"], &past["offset"]), ("", &Value::Null, &json!(30000)));
+    }
+
+    /// O aviso de que a resposta não voltou grava a chave dela para não se repetir, mas não conta como texto devolvido.
+    #[test]
+    fn a_notice_in_place_of_the_answer_is_not_returned() {
+        let link = |notice| link_state::LinkReturn { returned_key: Some("k1".into()), returned_notice: notice, ..Default::default() };
+        assert!(returned_text(Some(&link(false)), "k1"));
+        assert!(!returned_text(Some(&link(true)), "k1"));
+        assert!(!returned_text(Some(&link(false)), "k2"));
+        assert!(!returned_text(None, "k1"));
     }
 
     /// O erro da rota do WhatsApp chega à tool com o código na frente e a frase dela.
@@ -1822,6 +1875,20 @@ mod tests {
 /// O mesmo dono da abertura (`session_guest`): o nome em outra vida é do dono; convidados ilegíveis não contam.
 fn counts_as_owner<E>(guests: Result<Option<Value>, E>, name: &str, life: Option<&str>) -> bool {
     matches!(guests, Ok(raw) if raw.as_ref().is_none_or(|raw| crate::session_open::server::session_guest(raw, name, life).is_none()))
+}
+
+/// A lista vista por um convidado com login: só as sessões que `visible` (nome, vida) deixa, e nelas nenhum nome de
+/// sessão que ele não alcança (companheiros, quem abriu a filha).
+fn guest_view(rows: Vec<Value>, visible: impl Fn(&str, Option<&str>) -> bool) -> Vec<Value> {
+    let seen: std::collections::HashSet<String> = rows.iter()
+        .filter_map(|r| r["name"].as_str().filter(|name| visible(name, r["lifecycle_id"].as_str())).map(str::to_owned)).collect();
+    rows.into_iter().filter(|r| r["name"].as_str().is_some_and(|name| seen.contains(name))).map(|mut r| {
+        if let Some(peers) = r["pair_peers"].as_array_mut() { peers.retain(|p| p.as_str().is_some_and(|p| seen.contains(p))); }
+        for field in ["linked_by", "orphaned_from"] {
+            if r[field].as_str().is_some_and(|p| !seen.contains(p)) { r[field] = Value::Null; }
+        }
+        r
+    }).collect()
 }
 
 /// A rota pública como o dono, fora de uma tool: a recusa do rascunho na chamada largada também passa por aqui.

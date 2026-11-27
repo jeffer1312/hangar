@@ -469,7 +469,8 @@ enum Payload {
     // Mensagem entregue e o texto do campo que a originou (com anexo os dois diferem).
     Sent(SessionKey, String, String, Result<Delivery, Failure>),
     /// As descendentes ligadas que não pararam junto com o Parar.
-    Interrupted(SessionKey, Result<Vec<String>, Failure>),
+    /// `bool`: o pedido levou `clear` (havia texto a devolver ao campo).
+    Interrupted(SessionKey, bool, Result<api::Interrupted, Failure>),
     Acted(SessionKey, Action, String, Result<serde_json::Value, Failure>),
     Files(SessionKey, Option<SessionOwner>, u64, Vec<Result<Picked, String>>),
     // `None` marca o início do envio daquele anexo.
@@ -2210,8 +2211,8 @@ impl Hangar {
                 cx.notify();
                 return;
             }
-            Payload::Interrupted(key, result) => {
-                self.receive_interrupted(key, result);
+            Payload::Interrupted(key, clear, result) => {
+                self.receive_interrupted(key, clear, result, window, cx);
                 cx.notify();
                 return;
             }
@@ -2832,11 +2833,20 @@ impl Hangar {
         }
     }
 
-    fn receive_interrupted(&mut self, key: SessionKey, result: Result<Vec<String>, Failure>) {
+    fn receive_interrupted(&mut self, key: SessionKey, clear: bool, result: Result<api::Interrupted, Failure>, window: &mut Window, cx: &mut Context<Self>) {
         self.stopping.remove(&key);
         let note = match result {
-            Ok(failed) if failed.is_empty() => (tr("stop_requested"), false),
-            Ok(failed) => (cascade_failed_note(&failed), true),
+            Ok(done) => {
+                // Só com o Esc confirmado a mensagem sai do registro e volta ao campo: pai sem turno ou falha a deixam
+                // onde estava, e no campo ela iria em dobro.
+                if done.parent && clear && let Some(text) = self.delivery.take_unconfirmed(&key) {
+                    let current = self.selected_key().as_ref() == Some(&key);
+                    self.return_to_field(&key, vec![text], current, window, cx);
+                    if current { self.composer.update(cx, |input, cx| input.focus(window, cx)); }
+                    self.action_feedback.insert(key.clone(), (tr("stop_returned"), false));
+                }
+                interrupted_note(&done)
+            }
             Err(error) => (Self::failure(&error), true),
         };
         self.stop_feedback.insert(key, note);
@@ -4179,31 +4189,25 @@ impl Hangar {
         cx.notify();
     }
 
-    // Mensagem aceita que a conversa ainda não mostrou volta ao campo, e só então o backend limpa a entrada do terminal.
+    // Com mensagem aceita que a conversa ainda não mostrou, o backend limpa a entrada do terminal; ela volta ao campo
+    // na resposta, só com o Esc confirmado.
     fn interrupt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.confirm = None;
         if self.connection_dialog || !self.can_interrupt() { cx.notify(); return; }
         let (Some(api), Some(session)) = (self.session_api(), self.selected.as_ref()) else { return; };
         let Some(key) = self.selected_key() else { return; };
         if self.stopping.contains(&key) { return; }
-        let returned = self.delivery.take_unconfirmed(&key);
-        if let Some(text) = &returned {
-            let current = self.composer.read(cx).value().to_string();
-            let merged = if current.trim().is_empty() { text.clone() } else { format!("{text}\n{current}") };
-            self.composer.update(cx, |input, cx| { input.set_value(merged, window, cx); input.focus(window, cx); });
-        }
+        let clear = self.delivery.has_unconfirmed(&key);
         self.stopping.insert(key.clone());
         self.error = None;
         self.stop_feedback.remove(&key);
         let name = session.name.clone();
-        let clear = returned.is_some();
         let (connection, selection) = (self.connection, self.selection);
         let tx = self.tx.clone();
         self.runtime.spawn(async move {
             let result = api.interrupt(&name, clear, true).await;
-            let _ = tx.send(Envelope { connection, selection: Some(selection), payload: Payload::Interrupted(key, result) }).await;
+            let _ = tx.send(Envelope { connection, selection: Some(selection), payload: Payload::Interrupted(key, clear, result) }).await;
         });
-        if clear { self.action_feedback.insert(self.selected_key().expect("selected"), (tr("stop_returned"), false)); }
         cx.notify();
     }
 
@@ -8210,6 +8214,14 @@ fn cascade_failed_note(failed: &[String]) -> String {
     tr_shared("interrupt_cascade_failed", &[("names", &failed.join(", "))])
 }
 
+/// A linha do Parar: falha das filhas antes de tudo; pai sem turno não é "interrupção solicitada".
+fn interrupted_note(done: &api::Interrupted) -> (String, bool) {
+    if !done.failed.is_empty() { return (cascade_failed_note(&done.failed), true); }
+    if done.unchecked { return (tr_shared("interrupt_cascade_unchecked", &[]), true); }
+    if !done.parent { return (tr("stop_no_turn"), false); }
+    (tr("stop_requested"), false)
+}
+
 /// O verbo do spinner do terminal ("Sketching… (6s · esc to interrupt)" → "Sketching…"); rótulo sem ele, "Trabalhando…".
 /// Os segundos são contados por nós, então os do terminal saem junto com o resto dos parênteses.
 fn working_verb(label: Option<&str>) -> String {
@@ -9769,6 +9781,19 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
+    /// Pai sem turno não aparece como "interrupção solicitada", e filha que falhou ou não foi conferida é aviso.
+    #[test]
+    fn the_stop_note_says_what_the_stop_did() {
+        use crate::api::Interrupted;
+        use crate::i18n::{tr, tr_shared};
+        let note = |parent, failed: &[&str], unchecked| super::interrupted_note(&Interrupted { parent, failed: failed.iter().map(|n| (*n).to_owned()).collect(), unchecked });
+        assert_eq!(note(true, &[], false), (tr("stop_requested"), false));
+        assert_eq!(note(false, &[], false), (tr("stop_no_turn"), false));
+        assert_eq!(note(false, &["kid"], false), (tr_shared("interrupt_cascade_failed", &[("names", "kid")]), true));
+        assert_eq!(note(true, &[], true), (tr_shared("interrupt_cascade_unchecked", &[]), true));
+        assert_ne!(tr("stop_no_turn"), "stop_no_turn", "a frase existe no messages");
+    }
+
     #[test]
     fn cancelled_download_brings_back_the_card_it_replaced() {
         use super::FileCard;

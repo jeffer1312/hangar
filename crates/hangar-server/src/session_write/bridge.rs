@@ -99,8 +99,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         cleanup.push(cleanup_failed(&st, &name, "close_chain_failed", "o vínculo then da sessão encerrada não saiu"));
     }
     record_closed_name(&st, &name, closed["transcript"].as_str()).await;
-    let mut leave = match st.groups.clone() { Some(groups) => leave_stopping_children(&st, &groups, &name, "session_closed", children).await, None => Vec::new() };
-    leave.extend(crate::groups::link_orphans::closed(&st, &name).await);
+    let leave = match st.groups.clone() { Some(groups) => leave_stopping_children(&st, &groups, &name, "session_closed", children).await, None => Vec::new() };
+    crate::groups::link_orphans::closed(&st, &name).await;
     cleanup.extend(after_close(&st, &name).await);
     let mut response = super::json_response(StatusCode::OK, json!({"ok": true, "warning": null}));
     crate::routes::cors(req.headers(), response.headers_mut());
@@ -363,7 +363,7 @@ pub fn other_cleanup(state:std::sync::Weak<AppState>)->crate::runtime::other_ter
         if !runtime.other_cleanup_allowed(&life).await? {return Ok(vec![json!({"code":"other_cleanup_replaced"})]);}
         // Só a saída e a marca de órfã: quem interrompe as filhas é o `DELETE` do dono, que as lê antes de fechar.
         if let Some(groups)=st.groups.clone(){warnings.extend(leave_warnings(&st,&groups,&name,"other_session_closed").await);}
-        if runtime.other_cleanup_allowed(&life).await? {warnings.extend(crate::groups::link_orphans::closed(&st,&name).await);}
+        if runtime.other_cleanup_allowed(&life).await? {crate::groups::link_orphans::closed(&st,&name).await;}
         if runtime.other_cleanup_allowed(&life).await? && let Some(share)=st.share.clone() {
             match share.store.revoke_session(&name,None) {Ok(0)=>{},Ok(_)=>crate::share::owner_routes::sync_tunnel(&share).await,Err(_)=>warnings.push(json!({"code":"other_share_cleanup_failed"}))}
         }

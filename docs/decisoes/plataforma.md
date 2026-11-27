@@ -4267,7 +4267,12 @@ ninguém.
   (`without_child_prefix`).
 - **`child_status` lê pela rota `/history`.** Devolve estado, pergunta aberta e a resposta final
   inteira em páginas de `MAX_CHARS` (`offset`/`next_offset`), o mesmo turno que o retorno lê; o pai
-  deixa de esperar com `sleep`. `sessions` ganha `linked_by`, `question` e `orphaned_from`.
+  deixa de esperar com `sleep`. A página leva `answer_key`, a identidade da resposta: pedida com ela
+  depois de a filha responder outra coisa, volta `child_status_cursor_expired` em vez de juntar pedaços
+  de duas respostas. `returned` só conta o texto: o aviso de que a resposta não voltou (limite, turno
+  sem texto) grava a mesma chave com `returned_notice`. O `interaction_id` é o de `open_interaction`,
+  o mesmo do aviso e do `/answer`. `sessions` ganha `linked_by`, `question` e `orphaned_from`; chamada
+  de sessão de convidado com login lista só as sessões que ele alcança, sem nome das outras.
 - **Pergunta encaminhada uma vez por `interaction_id`; menu e permissão só avisam.** A vigia do
   retorno (`groups/link_return.rs`) manda `[de: <filha>]` ao pai depois de 20 s de pergunta aberta,
   com teto por filha em 10 min. Só `InteractionKind::Question` (o `AskUserQuestion`) traz "Responda com
@@ -4277,6 +4282,9 @@ ninguém.
   `erro_permissao_do_dono`. No Claude com terminal todo menu é `Menu`, inclusive "Do you want to
   proceed?". Interação resolvida com o aviso ainda na fila do pai tira a linha dela
   (`asked_queue_id`); pai ocupado ou acordando mantém a linha registrada e tenta de novo em 30 s.
+  Gravação do registro que falha guarda a linha na memória da vigia, para o cancelamento ainda achá-la.
+  Interação fechada leva junto o `asked_key`: senão, depois de um reinício, o próximo pedido de mesmo
+  texto seria dado como já avisado.
   Tipo ilegível (vínculo da conversa ainda por ligar logo ao subir) espera mais `KIND_GRACE` (60 s)
   antes de virar aviso ao dono: o aviso não se refaz como pergunta depois. `[de: …]` e não
   `[painel: …]`: o painel diz "não responda".
@@ -4287,8 +4295,11 @@ ninguém.
   tool `interrupt`. A árvore sai de `cascade::plan`, em largura, até `MAX_DEPTH = 3` níveis e sem
   voltar a quem já apareceu (vínculo em ciclo termina). Só conta como parada a resposta que confirma
   que não há turno; a que não parou vai no `cascade.failed` da resposta, num aviso só, e no diário
-  (`rust.link_cascade_failed`). Arquivos de grupo ilegíveis não dão filha conhecida: a resposta sai sem
-  `cascade` e a falha fica só no diário, porque nenhuma parada pedida falhou à vista da pessoa.
+  (`rust.link_cascade_failed`). Arquivos de grupo ilegíveis: a resposta do pai fica como veio e leva
+  `cascade.unavailable` (sem nomes), e a tela diz que as filhas não foram conferidas, porque a pessoa
+  pediu para parar a árvore e elas podem seguir trabalhando. Sem serviço de grupos não há filha ligada
+  e nada vem. O nativo e o Expo só devolvem ao campo a mensagem ainda não mostrada depois do Esc
+  confirmado: com `interrupted: false` ou falha ela segue onde estava.
   O pai sem turno é o caso normal depois de delegar: adormecido ou estacionado responde sem turno sem
   acordar, e a recusa da admissão (sem turno, abrindo) não segura a cascata. Com descendente
   conhecida, pai sem turno ou abrindo vira 200 `{"interrupted": false, "cascade": …}`; senão a tela
@@ -4301,8 +4312,11 @@ ninguém.
   fechamento (`linked_child_not_stopped`), em todo agente do pai: é o campo que os clientes leem. Toda saída do grupo grava a marca em
   `~/.hangar/link-orphans.json` (`hangar_delegation::orphans`): o DELETE (dono ou convidado), a
   limpeza de Pi/omp/Kimi, o `DELETE /pair` e a varredura de membro morto, que é quem tira o pai que
-  morreu sozinho. A linha leva
-  `orphaned_from`, e os clientes mostram "sem pai · era de <pai>". A marca sai quando a filha fecha, é
+  morreu sozinho. A saída que falha depois de valer (o contrato que não foi para o arquivo) marca as
+  filhas que já perderam o vínculo; a desfeita não marca nenhuma. A marca é só o rótulo da linha: a
+  falha ao gravá-la ou tirá-la vai ao diário (`rust.link_orphan_failed`), nunca ao aviso da tela. A linha leva
+  `orphaned_from`, e os clientes mostram "sem pai · era de <pai>" em toda lista e barra (linha, trilho, abas, bandeja, busca;
+  no Expo, a linha, o chip e o trilho do tablet). A marca sai quando a filha fecha, é
   religada, some da lista ou nome reusado abre outra vida; rename a leva junto. Pela tela, fechar um
   pai com filhas abertas pergunta "fechar também as N filhas?".
 - **Sem teto de recados pai↔filha.** Nenhum laço medido nos 30 dias; o `storm` do grupo e o teto do

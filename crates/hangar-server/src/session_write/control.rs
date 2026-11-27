@@ -465,7 +465,11 @@ pub async fn interrupt(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         Ok(admitted) => admitted,
         // O pai sem turno (adormecido, abrindo, sem agente) não segura as filhas: a pessoa pediu parar tudo.
         // As outras recusas (orquestrador, runtime doente) chegam sem a raiz e não param nada.
-        Err((refused, Some(root))) if asked => return refused_with_cascade(refused, cascade_from(&st, &root).await, &headers).await,
+        Err((refused, Some(root))) if asked => {
+            // O corpo torto não para nada, como no caminho admitido.
+            if parse_clear(query.as_deref()).is_none() { return invalid_body(&headers); }
+            return refused_with_cascade(refused, cascade_from(&st, &root).await, &headers).await;
+        }
         Err((refused, _)) => return refused,
     };
     let Some(clear) = parse_clear(query.as_deref()) else { return invalid_body(ctx.headers()) };
@@ -484,7 +488,9 @@ fn with_cascade((status, mut body): Answer, cascaded: Option<Value>) -> Answer {
     let Some(cascaded) = cascaded else { return (status, body) };
     let opening = status == StatusCode::CONFLICT && body["detail"]["code"].as_str()
         .is_some_and(|code| code == crate::runtime::codex_relaunch::STARTING || code == "other_terminal_starting");
-    if !status.is_success() && (opening || cascade_outcome(&(status, body.clone())).is_ok()) {
+    // Descendentes não lidas: nenhuma foi alcançada, e a resposta do pai fica como veio.
+    let reached = cascaded.get("unavailable").is_none();
+    if reached && !status.is_success() && (opening || cascade_outcome(&(status, body.clone())).is_ok()) {
         return (StatusCode::OK, json!({"ok": true, "interrupted": false, "cascade": cascaded}));
     }
     if let Some(object) = body.as_object_mut() { object.insert("cascade".into(), cascaded); }
@@ -555,10 +561,12 @@ const CASCADE_UNOWNED: &str = "session_unowned";
 const MSG_CASCADE_UNOWNED: &str = "nenhum agente do Hangar nesta sessão para interromper";
 const CASCADE_UNCONFIRMED: &str = "interrupt_unconfirmed";
 
-/// Para as descendentes ligadas de `root` ao mesmo tempo; `None` = nenhuma descendente conhecida. Arquivos
-/// de grupo ilegíveis ficam só no diário: sem filha conhecida, não há parada que falhou para mostrar.
+/// Para as descendentes ligadas de `root` ao mesmo tempo; `None` = leitura boa sem descendente. Arquivos de grupo
+/// ilegíveis voltam `unavailable`, sem nomes: quem pediu para parar a árvore fica sabendo que as filhas não foram conferidas.
 async fn cascade_from(st: &Arc<AppState>, root: &str) -> Option<Value> {
-    let targets = cascade_targets(st, root).await.ok()?;
+    let Ok(targets) = cascade_targets(st, root).await else {
+        return Some(json!({"interrupted": [], "failed": [], "unavailable": CASCADE_GROUPS_UNAVAILABLE}));
+    };
     if targets.is_empty() { return None; }
     let (interrupted, failed) = interrupt_descendants(st, targets).await;
     let failed: Vec<Value> = failed.into_iter().map(|(name, code)| json!({"name": name, "code": code})).collect();
@@ -567,10 +575,11 @@ async fn cascade_from(st: &Arc<AppState>, root: &str) -> Option<Value> {
 
 const CASCADE_GROUPS_UNAVAILABLE: &str = "groups_unavailable";
 
-/// As descendentes ligadas de `root` pelos arquivos de grupo. `Err` = arquivos indisponíveis, já no diário.
+/// As descendentes ligadas de `root` pelos arquivos de grupo. `Err` = arquivos indisponíveis, já no diário. Sem
+/// serviço de grupos não há filha ligada.
 pub(crate) async fn cascade_targets(st: &AppState, root: &str) -> Result<Vec<CascadeTarget>, ()> {
-    let all = match st.groups.as_ref() { Some(groups) => groups.sidecars().await.ok(), None => None };
-    let Some(all) = all else {
+    let Some(groups) = st.groups.as_ref() else { return Ok(Vec::new()) };
+    let Some(all) = groups.sidecars().await.ok() else {
         st.diag.report("rust.link_cascade_failed", root, CASCADE_GROUPS_UNAVAILABLE, "arquivos de grupo indisponíveis; as filhas não pararam junto");
         return Err(());
     };

@@ -247,6 +247,23 @@ fn session_life_key(code: &str) -> Option<(&str, Option<&'static str>)> {
     }
 }
 
+/// O que o Parar fez. `parent`: o pai foi interrompido (`interrupted: false` = ele não tinha turno, e só as filhas
+/// receberam o Parar; servidor antigo, sem o campo, conta como interrompido). `failed`: filhas que não pararam.
+/// `unchecked`: o servidor não conseguiu ler quais são as filhas.
+#[derive(Debug, Default, PartialEq)]
+pub struct Interrupted {
+    pub parent: bool,
+    pub failed: Vec<String>,
+    pub unchecked: bool,
+}
+
+impl Interrupted {
+    fn of(body: &Value) -> Self {
+        Self { parent: body.get("interrupted").and_then(Value::as_bool).unwrap_or(true), failed: cascade_failed(body),
+            unchecked: body.pointer("/cascade/unavailable").is_some_and(|v| !v.is_null()) }
+    }
+}
+
 /// Nomes de `cascade.failed` da resposta do `/interrupt`.
 fn cascade_failed(body: &Value) -> Vec<String> {
     body.pointer("/cascade/failed").and_then(Value::as_array).map(|failed| failed.iter()
@@ -854,8 +871,7 @@ impl Api {
     }
 
     /// `cascade` só no Parar: cancelar o cartão de pergunta usa a mesma rota e não pode parar as filhas.
-    /// Devolve as descendentes ligadas que não pararam junto.
-    pub async fn interrupt(&self, name: &str, clear: bool, cascade: bool) -> Result<Vec<String>, Failure> {
+    pub async fn interrupt(&self, name: &str, clear: bool, cascade: bool) -> Result<Interrupted, Failure> {
         let mut url = self.endpoint(Some(name), Some("interrupt"));
         {
             let mut query = url.query_pairs_mut();
@@ -864,8 +880,13 @@ impl Api {
         }
         let r = self.client.post(url).timeout(Duration::from_secs(15)).send().await.map_err(|_| Failure::transport(true))?;
         let r = self.checked(r, true).await?;
-        // O pai já parou: corpo ilegível não vira falha, só não diz nada das filhas.
-        Ok(cascade_failed(&r.json::<Value>().await.unwrap_or(Value::Null)))
+        match r.json::<Value>().await {
+            Ok(body) => Ok(Interrupted::of(&body)),
+            // Com a cascata, o corpo diz se o pai tinha turno e quais filhas pararam: ilegível é resultado incerto,
+            // nunca "todas pararam". Sem ela, o 200 já é a resposta.
+            Err(_) if cascade => Err(Failure::transport(true)),
+            Err(_) => Ok(Interrupted { parent: true, ..Interrupted::default() }),
+        }
     }
 
     // Mutação sem retry: timeout ou queda depois de enviar vira incerteza, nunca repetição.
@@ -2024,7 +2045,8 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let mut seen = Vec::new();
-            for reply in [r#"{"ok":true}"#, r#"{"ok":true,"cascade":{"interrupted":["kid-a"],"failed":[{"name":"kid-b","code":"cascade_timeout"}]}}"#] {
+            for reply in [r#"{"ok":true}"#, r#"{"ok":true,"cascade":{"interrupted":["kid-a"],"failed":[{"name":"kid-b","code":"cascade_timeout"}]}}"#,
+                r#"{"ok":true,"interrupted":false,"cascade":{"interrupted":[],"failed":[],"unavailable":"groups_unavailable"}}"#, r#"{"ok":tr"#] {
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut stream = BufReader::new(stream);
                 let mut head = String::new();
@@ -2040,11 +2062,17 @@ mod tests {
             seen
         });
         let api = Api::new(&format!("http://{address}"), "fixture-token").unwrap();
-        assert_eq!(api.interrupt("a b", false, false).await.unwrap(), Vec::<String>::new());
-        assert_eq!(api.interrupt("a b", true, true).await.unwrap(), vec!["kid-b".to_owned()]);
+        assert_eq!(api.interrupt("a b", false, false).await.unwrap(), Interrupted { parent: true, ..Interrupted::default() });
+        assert_eq!(api.interrupt("a b", true, true).await.unwrap(), Interrupted { parent: true, failed: vec!["kid-b".to_owned()], unchecked: false });
+        // Pai sem turno e filhas não lidas: nada disso é "parou".
+        assert_eq!(api.interrupt("a b", false, true).await.unwrap(), Interrupted { parent: false, failed: Vec::new(), unchecked: true });
+        // Corpo cortado depois do 200: resultado incerto, não "nenhuma filha falhou".
+        assert!(api.interrupt("a b", false, true).await.unwrap_err().uncertain);
         assert_eq!(server.await.unwrap(), vec![
             "POST /api/sessions/a%20b/interrupt?clear=false".to_owned(),
             "POST /api/sessions/a%20b/interrupt?clear=true&cascade=1".to_owned(),
+            "POST /api/sessions/a%20b/interrupt?clear=false&cascade=1".to_owned(),
+            "POST /api/sessions/a%20b/interrupt?clear=false&cascade=1".to_owned(),
         ]);
         assert_eq!(cascade_failed(&json!({"cascade": {"failed": [{"name": "kid-c", "code": "interrupt_unconfirmed"}]}})), vec!["kid-c".to_owned()]);
         assert!(cascade_failed(&Value::Null).is_empty());

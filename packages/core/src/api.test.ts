@@ -18,7 +18,7 @@ import { mensagemDeErro, formataErro } from './errosApi';
 import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer, getNewChatCommandsForServer } from './api';
 import { fetchSessionsForServer, getSessions, openSessionsStream, probeServerResponse } from './api';
 import { scanDir, scanDirForServer, listClaudeConfigs, listClaudeConfigsForServer } from './api';
-import { answerQuestions, closePluginPane, inputPluginField, interrupt, interruptCascadeFailed, isInputRefusal, openEventStreamForServer, pressPluginButton, selectOption, selectOptionForServer, sendInputForServer, showPluginPane, skipQuestion, submitSelected, submitSelectedForServer } from './api';
+import { answerQuestions, closePluginPane, inputPluginField, interrupt, interruptCascadeFailed, interruptCascadeUnchecked, isInputRefusal, openEventStreamForServer, pressPluginButton, selectOption, selectOptionForServer, sendInputForServer, showPluginPane, skipQuestion, submitSelected, submitSelectedForServer } from './api';
 import type { AskQuestionPayload, StateEvent } from './types';
 import { discardFile, fileAuthHeader, fileUrlNative, getPairContract, getPlans, listFiles, pathDiff, readFile, searchFiles, setPlanPin, unpairSession, writeFile } from './api';
 import type { Server } from './servers';
@@ -594,6 +594,12 @@ describe('contratos de conversa com servidor explícito', () => {
     expect(interruptCascadeFailed(result)).toEqual(['filha-b']);
     expect(interruptCascadeFailed({ ok: true })).toEqual([]);
     expect(interruptCascadeFailed(undefined)).toEqual([]);
+    // Filhas não conferidas: sem nomes, mas não é "todas pararam".
+    const unchecked = { ok: true, cascade: { interrupted: [], failed: [], unavailable: 'groups_unavailable' } };
+    expect(interruptCascadeUnchecked(unchecked)).toBe(true);
+    expect(interruptCascadeFailed(unchecked)).toEqual([]);
+    expect(interruptCascadeUnchecked(result)).toBe(false);
+    expect(interruptCascadeUnchecked(undefined)).toBe(false);
   });
 
   it('chamada antiga de interrupção conserva clear=false e tratamento de 401', async () => {

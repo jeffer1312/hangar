@@ -16,6 +16,10 @@ pub struct LinkReturn {
     /// Qual resposta voltou: `last_reply_at` muda com qualquer escrita no transcript, a resposta não.
     #[serde(default)]
     pub returned_key: Option<String>,
+    /// O que voltou com `returned_key` foi só o aviso de que a resposta não voltou (limite, turno sem texto): a chave
+    /// segura o aviso repetido, mas o texto não chegou ao pai.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub returned_notice: bool,
     /// Última interação avisada ao pai: a pergunta pelo `interaction_id`, menu e permissão pelo texto do aviso
     /// (`notice:<hash>`). O ID nasce outro depois de reiniciar: só a pergunta vai de novo, com o novo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
