@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::classify::StopKind;
+use crate::scheduler::StopHit;
 
 /// Continuações seguidas sem uma resposta real do modelo entre elas.
 pub const CHAIN_MAX: usize = 2;
@@ -23,6 +24,8 @@ pub const SERVER_5XX_MAX: usize = 1;
 /// Por quanto tempo uma chave já continuada segue barrada. Parada com mais de 2 h não continua, então
 /// uma semana cobre de sobra a mesma linha de erro sendo vista de novo.
 const KEY_KEEP_S: f64 = 7.0 * 24.0 * 3600.0;
+/// Paradas encerradas lembradas por sessão: só serve à mesma linha reemitida logo depois.
+const ENDED_MAX: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,6 +71,22 @@ struct Sent {
     key: String,
 }
 
+/// A parada que espera a rede, gravada para que reiniciar o servidor não deixe a nota de espera sem desfecho.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Waiting {
+    pub hit: StopHit,
+    /// Trocas da nota já tentadas.
+    pub count: u64,
+    /// A nota de espera chegou à conversa.
+    pub note_out: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Ended {
+    key: String,
+    at: f64,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct Entry {
     /// A corrente atual; a resposta real do modelo a esvazia.
@@ -76,6 +95,12 @@ struct Entry {
     /// Todas as continuações dentro de `KEY_KEEP_S`: servem à chave já usada e à janela da hora.
     #[serde(default)]
     sent: Vec<Sent>,
+    /// Paradas com desfecho (continuada, cancelada, descartada): a mesma linha vista de novo não volta a
+    /// esperar nem ganha outra nota.
+    #[serde(default)]
+    ended: Vec<Ended>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    waiting: Option<Waiting>,
 }
 
 impl Entry {
@@ -155,6 +180,40 @@ impl Ledger {
             return;
         }
         entry.chain.clear();
+        self.save();
+    }
+
+    /// Grava a parada que espera a rede; a da sessão, se havia, é trocada.
+    pub fn park(&mut self, session: &str, waiting: Waiting) {
+        self.doc.sessions.entry(session.to_owned()).or_default().waiting = Some(waiting);
+        self.save();
+    }
+
+    /// As paradas que esperavam quando o registro foi gravado, com o nome atual da sessão.
+    pub fn parked(&self) -> Vec<Waiting> {
+        self.doc.sessions.iter().filter_map(|(session, entry)| {
+            let mut waiting = entry.waiting.clone()?;
+            // Renomear move a entrada inteira; o nome dentro da parada é o de antes.
+            waiting.hit.name.clone_from(session);
+            Some(waiting)
+        }).collect()
+    }
+
+    pub fn has_ended(&self, session: &str, key: &str, now: f64) -> bool {
+        self.doc.sessions.get(session)
+            .is_some_and(|entry| entry.ended.iter().any(|ended| ended.key == key && now - ended.at < KEY_KEEP_S))
+    }
+
+    /// A parada teve desfecho: sai da espera gravada e a mesma chave não espera de novo.
+    pub fn end(&mut self, session: &str, key: &str, now: f64) {
+        let entry = self.doc.sessions.entry(session.to_owned()).or_default();
+        if entry.waiting.as_ref().is_some_and(|waiting| waiting.hit.key() == key) {
+            entry.waiting = None;
+        }
+        entry.ended.retain(|ended| ended.key != key && now - ended.at < KEY_KEEP_S);
+        entry.ended.push(Ended { key: key.to_owned(), at: now });
+        let extra = entry.ended.len().saturating_sub(ENDED_MAX);
+        entry.ended.drain(..extra);
         self.save();
     }
 

@@ -9,13 +9,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 pub use futures_util::future::BoxFuture;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::classify::StopKind;
-use crate::ledger::{Ledger, Source};
+use crate::ledger::{Ledger, Source, Waiting};
 use crate::probe::{HttpProbe, Probe};
 use crate::text;
 
@@ -30,7 +31,7 @@ pub const STALE_S: f64 = 2.0 * 3600.0;
 /// O motivo do Cancelar da nota; qualquer outro `why` do `Command::Cancel` é uma desistência com esse motivo.
 pub const CANCELLED: &str = "cancelled";
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StopHit {
     pub name: String,
     pub provider: String,
@@ -52,6 +53,7 @@ pub struct Facts {
     pub life: String,
     pub off: bool,
     pub state: String,
+    /// Mensagem da pessoa esperando na fila. A própria nota da continuação não conta.
     pub queue_pending: bool,
     pub question_open: bool,
     pub orq: bool,
@@ -90,7 +92,15 @@ pub fn spawn<H: Host + 'static>(host: Arc<H>, ledger: Arc<Mutex<Ledger>>) -> (Un
 pub fn spawn_with_probe<H: Host + 'static, P: Probe + 'static>(host: Arc<H>, ledger: Arc<Mutex<Ledger>>, probe: Arc<P>)
     -> (UnboundedSender<Command>, JoinHandle<()>) {
     let (sender, commands) = tokio::sync::mpsc::unbounded_channel();
-    let scheduler = Scheduler { host, ledger, probe, parked: HashMap::new(), next_tick: None };
+    // A espera gravada antes de o servidor reiniciar volta à agenda: sem isso a nota ficaria "continuo
+    // quando a rede voltar" para sempre. A sessão que mudou de vida nesse meio desiste no primeiro tique.
+    let restored = ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner).parked();
+    let parked = restored.into_iter().map(|waiting| {
+        let send_at = (waiting.hit.kind == StopKind::Server5xx).then(|| Instant::now() + jitter());
+        let parked = Parked { key: waiting.hit.key(), hit: waiting.hit, count: waiting.count, note_out: waiting.note_out, send_at };
+        (parked.hit.name.clone(), parked)
+    }).collect();
+    let scheduler = Scheduler { host, ledger, probe, parked, next_tick: None };
     (sender, tokio::spawn(scheduler.run(commands)))
 }
 
@@ -122,17 +132,45 @@ pub struct Scheduler<H: Host, P: Probe> {
 
 impl<H: Host, P: Probe> Scheduler<H, P> {
     async fn run(mut self, mut commands: UnboundedReceiver<Command>) {
+        self.arm_tick();
         loop {
             let wake = self.next_wake();
             let far = Instant::now() + Duration::from_secs(3600);
+            // Comando antes do relógio: um Cancelar que chegou enquanto a agenda esperava o servidor não
+            // pode perder o sorteio para o atraso que venceu no mesmo instante.
             tokio::select! {
+                biased;
                 command = commands.recv() => match command {
                     Some(command) => self.command(command).await,
                     None => break,
                 },
-                () = tokio::time::sleep_until(wake.unwrap_or(far)), if wake.is_some() => self.wake().await,
+                () = tokio::time::sleep_until(wake.unwrap_or(far)), if wake.is_some() => self.wake(&mut commands).await,
             }
         }
+    }
+
+    /// O que chegou enquanto a agenda esperava a sonda ou o servidor vale antes de um envio.
+    async fn drain(&mut self, commands: &mut UnboundedReceiver<Command>) {
+        while let Ok(command) = commands.try_recv() {
+            self.command(command).await;
+        }
+    }
+
+    /// A chave da parada da sessão cujo envio já venceu.
+    fn due_key(&self, name: &str) -> Option<String> {
+        let now = Instant::now();
+        self.parked.get(name).filter(|parked| parked.send_at.is_some_and(|at| at <= now)).map(|parked| parked.key.clone())
+    }
+
+    async fn close(&mut self, name: &str, end: End) {
+        if let Some(parked) = self.parked.remove(name) {
+            self.finish(name, parked, end).await;
+        }
+    }
+
+    fn persist(&self, parked: &Parked) {
+        let waiting = Waiting { hit: parked.hit.clone(), count: parked.count, note_out: parked.note_out };
+        self.ledger().park(&parked.hit.name, waiting);
     }
 
     fn ledger(&self) -> MutexGuard<'_, Ledger> {
@@ -180,7 +218,13 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
     async fn stop(&mut self, hit: StopHit) {
         let name = hit.name.clone();
         let key = hit.key();
+        let now = self.host.now();
         if self.parked.get(&name).is_some_and(|parked| parked.key == key) {
+            return;
+        }
+        // A mesma linha vista de novo depois do desfecho (releitura do transcript) não volta a esperar nem
+        // derruba a parada que espera agora.
+        if hit.kind.is_transient() && self.ledger().has_ended(&name, &key, now) {
             return;
         }
         // Outra parada na mesma sessão: o turno andou depois da anterior, que não continua mais.
@@ -193,9 +237,9 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
         if !hit.kind.is_transient() {
             return;
         }
-        let now = self.host.now();
         if now - hit.at > STALE_S {
             self.skip_diary(&name, "stale");
+            self.ledger().end(&name, &key, now);
             return;
         }
         // Na hora da parada o estado ao vivo ainda pode estar virando; trabalhando, fila e pergunta são
@@ -203,11 +247,13 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
         let facts = self.host.facts(&name).await;
         if let Some(why) = give_up(&hit, facts.as_ref(), false) {
             self.skip_diary(&name, why);
+            self.ledger().end(&name, &key, now);
             return;
         }
         let allowed = self.ledger().allow(&name, Source::Transient, &key, hit.kind, now);
         if let Err(cap) = allowed {
             self.host.diary(&name, &format!("auto_continue_capped:{}", cap.code()), "continuar sozinho: um teto do registro barrou");
+            self.ledger().end(&name, &key, now);
             return;
         }
         // O 5xx não espera a rede, só o atraso.
@@ -216,10 +262,11 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
         let meta = json!({"kind": "auto_continue", "state": "waiting", "stopped_at": parked.hit.at});
         let waiting = format!("A conexão caiu às {}; continuo quando a rede voltar.", self.host.hhmm(parked.hit.at));
         parked.note_out = self.note(&name, &mut parked, "waiting", waiting, meta).await;
+        self.persist(&parked);
         self.parked.insert(name, parked);
     }
 
-    async fn wake(&mut self) {
+    async fn wake(&mut self, commands: &mut UnboundedReceiver<Command>) {
         let now = Instant::now();
         if self.next_tick.is_some_and(|tick| tick <= now) {
             self.next_tick = None;
@@ -230,9 +277,7 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
             .map(|(name, _)| name.clone())
             .collect();
         for name in due {
-            if let Some(parked) = self.parked.remove(&name) {
-                self.send(&name, parked).await;
-            }
+            self.send(&name, commands).await;
         }
         self.arm_tick();
     }
@@ -276,19 +321,30 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
         }
     }
 
-    async fn send(&mut self, name: &str, parked: Parked) {
-        let now = self.host.now();
-        if now - parked.hit.at > STALE_S {
-            return self.finish(name, parked, End::Skipped("stale".to_owned())).await;
+    async fn send(&mut self, name: &str, commands: &mut UnboundedReceiver<Command>) {
+        self.drain(commands).await;
+        let Some(key) = self.due_key(name) else { return };
+        let Some(at) = self.parked.get(name).map(|parked| parked.hit.at) else { return };
+        if self.host.now() - at > STALE_S {
+            return self.close(name, End::Skipped("stale".to_owned())).await;
         }
         let facts = self.host.facts(name).await;
+        // O servidor pode demorar a responder; um Cancelar, renomear ou outra parada nesse meio vence.
+        self.drain(commands).await;
+        if self.due_key(name).as_ref() != Some(&key) {
+            return;
+        }
+        let Some(parked) = self.parked.remove(name) else { return };
         if let Some(why) = give_up(&parked.hit, facts.as_ref(), true) {
             return self.finish(name, parked, End::Skipped(why.to_owned())).await;
         }
+        let now = self.host.now();
         let allowed = self.ledger().allow(name, Source::Transient, &parked.key, parked.hit.kind, now);
         if let Err(cap) = allowed {
             return self.finish(name, parked, End::Skipped(format!("capped:{}", cap.code()))).await;
         }
+        // Sai da espera gravada antes de mandar: reiniciar no meio do envio não pode mandar o continue de novo.
+        self.ledger().end(name, &parked.key, now);
         match self.host.send_continue(name, text::TRANSIENT).await {
             Ok(_) => {
                 let at = self.host.now();
@@ -301,6 +357,7 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
 
     /// Diário do desfecho e a nota trocada no lugar. Desistência só troca a nota que já saiu.
     async fn finish(&mut self, name: &str, mut parked: Parked, end: End) {
+        self.ledger().end(name, &parked.key, self.host.now());
         let stopped = self.host.hhmm(parked.hit.at);
         let mut meta = json!({"kind": "auto_continue", "stopped_at": parked.hit.at});
         let (state, text) = match &end {

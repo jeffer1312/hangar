@@ -7,6 +7,7 @@ use hangar_auto_continue::scheduler::{BoxFuture, CANCELLED};
 use hangar_auto_continue::{Cap, Command, Facts, Host, Ledger, Probe, Source, StopHit, StopKind, ledger, spawn_with_probe, text};
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 const BASE: f64 = 1_800_000_000.0;
@@ -24,6 +25,8 @@ struct Note {
 struct Fake {
     start: Instant,
     facts: Mutex<Option<Facts>>,
+    /// Quanto o servidor demora a dar os fatos.
+    facts_delay: Mutex<Duration>,
     send: Mutex<Result<bool, String>>,
     /// A sonda falha estas vezes antes de responder.
     fails_left: Mutex<usize>,
@@ -40,6 +43,7 @@ impl Fake {
         Arc::new(Self {
             start: Instant::now(),
             facts: Mutex::new(Some(Facts { life: "L1".into(), state: "idle".into(), ..Facts::default() })),
+            facts_delay: Mutex::new(Duration::ZERO),
             send: Mutex::new(Ok(true)),
             fails_left: Mutex::new(0),
             down: Mutex::new(false),
@@ -81,7 +85,13 @@ impl Fake {
 
 impl Host for Fake {
     fn facts<'a>(&'a self, _name: &'a str) -> BoxFuture<'a, Option<Facts>> {
-        Box::pin(async move { self.facts.lock().unwrap().clone() })
+        Box::pin(async move {
+            let delay = *self.facts_delay.lock().unwrap();
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            self.facts.lock().unwrap().clone()
+        })
     }
     fn probe_target(&self, _name: &str) -> Option<String> {
         Some(TARGET.to_owned())
@@ -130,14 +140,15 @@ impl Probe for Fake {
 struct Run {
     commands: UnboundedSender<Command>,
     ledger: Arc<Mutex<Ledger>>,
-    _home: tempfile::TempDir,
+    task: JoinHandle<()>,
+    home: tempfile::TempDir,
 }
 
 fn start(fake: &Arc<Fake>) -> Run {
     let home = tempfile::tempdir().unwrap();
     let ledger = Arc::new(Mutex::new(Ledger::load(ledger::path(home.path()))));
-    let (commands, _task) = spawn_with_probe(fake.clone(), ledger.clone(), fake.clone());
-    Run { commands, ledger, _home: home }
+    let (commands, task) = spawn_with_probe(fake.clone(), ledger.clone(), fake.clone());
+    Run { commands, ledger, task, home }
 }
 
 fn hit(name: &str, line: &str, kind: StopKind, at: f64) -> StopHit {
@@ -154,6 +165,15 @@ async fn settle() {
 }
 
 impl Run {
+    /// O servidor reinicia: a agenda morre e a nova lê o mesmo arquivo do registro.
+    async fn restart(&mut self, fake: &Arc<Fake>) {
+        self.task.abort();
+        let _ = (&mut self.task).await;
+        let ledger = Arc::new(Mutex::new(Ledger::load(ledger::path(self.home.path()))));
+        let (commands, task) = spawn_with_probe(fake.clone(), ledger.clone(), fake.clone());
+        (self.commands, self.ledger, self.task) = (commands, ledger, task);
+    }
+
     fn send(&self, command: Command) {
         self.commands.send(command).unwrap();
     }
@@ -365,4 +385,140 @@ async fn a_rename_moves_the_parked_stop() {
     assert_eq!(note.meta["state"], "continued");
     assert_eq!(run.allow("new", "line-1", fake.clock()), Err(Cap::Once));
     assert_eq!(run.allow("old", "line-1", fake.clock()), Ok(()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancel_while_the_server_answers_slowly_wins() {
+    let fake = Fake::new();
+    let run = start(&fake);
+    run.send(Command::Stop(hit("s", "line-1", StopKind::Server5xx, fake.clock())));
+    settle().await;
+    // O atraso vence e o servidor leva mais que ele todo para dar os fatos: o Cancelar chega nesse meio.
+    *fake.facts_delay.lock().unwrap() = Duration::from_secs(40);
+    wait(31).await;
+    assert!(fake.sends().is_empty());
+    run.send(Command::Cancel { name: "s".into(), why: CANCELLED });
+    wait(120).await;
+    assert!(fake.sends().is_empty(), "{:?}", fake.sends());
+    let note = fake.last_note();
+    assert_eq!(note.meta["state"], "cancelled");
+    assert_eq!(note.call, "autocont:line-1:cancelled");
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancel_after_the_network_returns_sends_nothing() {
+    let fake = Fake::new();
+    let run = start(&fake);
+    run.send(Command::Stop(hit("s", "line-1", StopKind::Network, fake.clock())));
+    // A rede responde no primeiro tique e o atraso começa.
+    wait(16).await;
+    assert_eq!(fake.probes().len(), 1);
+    run.send(Command::Cancel { name: "s".into(), why: CANCELLED });
+    wait(120).await;
+    assert!(fake.sends().is_empty());
+    assert_eq!(fake.last_note().meta["state"], "cancelled");
+    assert_eq!(fake.probes().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_same_line_again_after_the_end_is_ignored() {
+    let fake = Fake::new();
+    *fake.down.lock().unwrap() = true;
+    let run = start(&fake);
+    let at = fake.clock();
+    run.send(Command::Stop(hit("s", "line-1", StopKind::Network, at)));
+    settle().await;
+    run.send(Command::Cancel { name: "s".into(), why: CANCELLED });
+    settle().await;
+    assert_eq!(fake.notes().len(), 2);
+    // A releitura do transcript manda a mesma linha de novo: nem espera, nem derruba a parada nova.
+    run.send(Command::Stop(hit("s", "line-2", StopKind::Network, fake.clock())));
+    settle().await;
+    run.send(Command::Stop(hit("s", "line-1", StopKind::Network, at)));
+    settle().await;
+    let notes = fake.notes();
+    assert_eq!(notes.len(), 3, "{notes:?}");
+    assert_eq!((notes[2].id.as_str(), notes[2].meta["state"].as_str()), ("autocont:line-2", Some("waiting")));
+    *fake.down.lock().unwrap() = false;
+    wait(120).await;
+    let sends = fake.sends();
+    assert_eq!(sends.len(), 1, "{sends:?}");
+    let done = fake.last_note();
+    assert_eq!((done.id.as_str(), done.meta["state"].as_str()), ("autocont:line-2", Some("continued")));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_waiting_stop_survives_a_restart() {
+    let fake = Fake::new();
+    *fake.down.lock().unwrap() = true;
+    let mut run = start(&fake);
+    run.send(Command::Stop(hit("s", "line-1", StopKind::Network, fake.clock())));
+    settle().await;
+    assert_eq!(fake.last_note().meta["state"], "waiting");
+    run.restart(&fake).await;
+    *fake.down.lock().unwrap() = false;
+    wait(120).await;
+    assert_eq!(fake.sends().len(), 1);
+    let done = fake.last_note();
+    assert_eq!(done.id, "autocont:line-1");
+    assert_eq!(done.meta["state"], "continued");
+    assert_eq!(done.meta["count"], 2);
+    // O continue saiu: outro reinício não manda de novo.
+    run.restart(&fake).await;
+    wait(120).await;
+    assert_eq!(fake.sends().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restored_stop_of_another_life_gives_up() {
+    let fake = Fake::new();
+    *fake.down.lock().unwrap() = true;
+    let mut run = start(&fake);
+    run.send(Command::Stop(hit("s", "line-1", StopKind::Network, fake.clock())));
+    settle().await;
+    run.restart(&fake).await;
+    // Enquanto o servidor estava fora a sessão foi reaberta.
+    fake.set_facts(|facts| facts.life = "L2".into());
+    wait(60).await;
+    assert!(fake.sends().is_empty());
+    let note = fake.last_note();
+    assert_eq!(note.meta["state"], "skipped");
+    assert_eq!(note.meta["code"], "life_changed");
+    assert_eq!(note.meta["count"], 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_busy_session_gives_up() {
+    let later: [(&str, fn(&mut Facts)); 3] = [
+        ("working", |facts: &mut Facts| facts.state = "working".into()),
+        ("question_open", |facts: &mut Facts| facts.question_open = true),
+        ("queue_pending", |facts: &mut Facts| facts.queue_pending = true),
+    ];
+    for (code, change) in later {
+        let fake = Fake::new();
+        let run = start(&fake);
+        run.send(Command::Stop(hit("s", "line-1", StopKind::Network, fake.clock())));
+        settle().await;
+        assert_eq!(fake.last_note().meta["state"], "waiting", "{code}");
+        fake.set_facts(change);
+        wait(300).await;
+        assert!(fake.sends().is_empty(), "{code}");
+        let note = fake.last_note();
+        assert_eq!((note.meta["state"].as_str(), note.meta["code"].as_str()), (Some("skipped"), Some(code)));
+        assert!(fake.diary().contains(&format!("auto_continue_skipped:{code}")), "{code}");
+    }
+    let at_once: [(&str, fn(&mut Facts)); 2] = [
+        ("orq", |facts: &mut Facts| facts.orq = true),
+        ("handoff", |facts: &mut Facts| facts.handoff = true),
+    ];
+    for (code, change) in at_once {
+        let fake = Fake::new();
+        fake.set_facts(change);
+        let run = start(&fake);
+        run.send(Command::Stop(hit("s", "line-1", StopKind::Network, fake.clock())));
+        wait(300).await;
+        assert!(fake.notes().is_empty(), "{code}");
+        assert!(fake.probes().is_empty(), "{code}");
+        assert_eq!(fake.diary(), [format!("auto_continue_skipped:{code}")]);
+    }
 }
