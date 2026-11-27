@@ -345,6 +345,8 @@ enum Refusal {
     NoAnswer(String),
     AlreadyReturned,
     TooOld,
+    /// O turno parou numa linha de erro da API: não é resposta. Com o continue, a resposta real volta depois.
+    ApiError,
 }
 
 /// Critérios 4 em diante, sobre o turno lido: devolve o texto e a identidade da resposta.
@@ -355,12 +357,21 @@ fn decide<'a>(c: &Check, turn: &'a Turn) -> Result<(&'a str, String), Refusal> {
         let key = unanswered_key(&turn.events);
         return Err(if returned(&key) { Refusal::AlreadyReturned } else { Refusal::NoAnswer(key) });
     };
+    if api_error(answer) { return Err(Refusal::ApiError); }
     let key = answer_key(answer, asked);
     if returned(&key) { return Err(Refusal::AlreadyReturned); }
     // `last_reply_at` cai no mtime do transcript sem hora no evento; a do evento é a da resposta.
     let at = answer.ts.filter(|&t| t != 0.0).or(c.last_reply_at).unwrap_or(0.0);
     if c.now - at >= MAX_AGE { return Err(Refusal::TooOld); }
     Ok((answer.text.as_deref().unwrap_or_default(), key))
+}
+
+/// A linha `isApiErrorMessage` do Claude chega como resposta do modelo, marcada pelo parser com
+/// `notice_meta.level = "error"`; o texto `API Error:` cobre quem não leva a marca.
+fn api_error(e: &ChatEvent) -> bool {
+    e.kind == ChatKind::AssistantMsg
+        && (e.notice_meta.as_ref().is_some_and(|meta| meta.get("level").and_then(|level| level.as_str()) == Some("error"))
+            || e.text.as_deref().is_some_and(|text| text.trim_start().starts_with("API Error")))
 }
 
 fn blank_answer(e: &ChatEvent) -> bool { e.kind == ChatKind::AssistantMsg && e.text.as_deref().is_none_or(|t| t.trim().is_empty()) }
@@ -459,6 +470,11 @@ async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at:
             return Outcome::Done;
         }
         Err(Refusal::NotAsked | Refusal::AlreadyReturned) => return Outcome::Done,
+        // Sem aviso ao pai: o continue sozinho (ou a troca de conta) dá a resposta real, que volta com outra chave.
+        Err(Refusal::ApiError) => {
+            report(st, child, "link_return_api_error", "turno da filha parou num erro da API; não é resposta e não volta", "");
+            return Outcome::Done;
+        }
         Ok(_) | Err(Refusal::NoAnswer(_)) => {}
     }
     if !still_same(current().as_deref().map(Vec::as_slice), child, reply_at) { return Outcome::Moved; }
@@ -600,6 +616,25 @@ mod tests {
         // Sem ler desde o começo, a primeira lida pode não ser a primeira da conversa.
         assert_eq!(decide(&c, &turn(first, false)), Err(Refusal::NotAsked));
         assert_eq!(decide(&c, &turn(vec![ev(ChatKind::AssistantMsg, "só resposta")], true)), Err(Refusal::NotAsked));
+    }
+
+    /// O turno parou no erro da API: a linha de erro não volta ao pai como resposta, com ou sem a marca do parser.
+    #[test]
+    fn an_api_error_line_is_not_the_answer() {
+        let c = check();
+        let marked = ChatEvent {
+            notice_meta: serde_json::json!({"level": "error"}).as_object().cloned(),
+            ..ev(ChatKind::AssistantMsg, "Can't reach the API server (EAI_AGAIN)")
+        };
+        for error in [marked, ev(ChatKind::AssistantMsg, "API Error: Connection lost mid-response.")] {
+            let mut events = asked("[de: pai] x");
+            events[3] = error;
+            assert_eq!(decide(&c, &turn(events, false)), Err(Refusal::ApiError));
+            assert!(reply("f", Err(Refusal::ApiError), || true).is_none(), "nem aviso de sem resposta");
+        }
+        // O aviso da CLI no formato de resposta (só com `key`) não é a linha de erro.
+        let note = ChatEvent { notice_meta: serde_json::json!({"key": "x"}).as_object().cloned(), ..ev(ChatKind::AssistantMsg, "feito") };
+        assert!(!api_error(&note));
     }
 
     /// O pai pede, a rede cai, o Hangar manda o "continue" sozinho e a filha termina: a resposta volta ao pai.
