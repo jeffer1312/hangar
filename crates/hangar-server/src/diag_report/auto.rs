@@ -511,7 +511,7 @@ mod tests {
         let t = telemetry(home.path());
         let done = estado(json!({"fase": "pronto", "ok": true, "origem": "auto", "versao_de": "0.1.0.8600", "versao_para": "0.1.0.8700"}));
         // Uma pasta no lugar do arquivo das marcas: a leitura falha em todo sistema.
-        let marks = home.path().join(".hangar/telemetry/once.json");
+        let marks = home.path().join(".hangar/telemetry-v3/once.json");
         std::fs::create_dir_all(&marks).unwrap();
         assert!(count_outcome(&t, &done, "latest", at()).is_err());
         assert!(t.counters().is_empty());
