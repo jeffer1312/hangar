@@ -137,6 +137,13 @@ describe('cartão', () => {
     expect(locked).toMatch(/\d{2}:\d{2}/);
     expect(whatsappDraftRefusalText('whatsapp_qualquer')).toBeUndefined();
   });
+
+  it('envio recusado durante a atualização ou com a vez ocupada tem frase do app e o cartão fica', () => {
+    expect(whatsappDraftRefusalText('whatsapp_updating')).toBe(m.native_whatsapp_send_updating());
+    expect(whatsappDraftRefusalText('whatsapp_busy')).toBe(m.native_whatsapp_update_busy());
+    expect(draftRefusalEndsCard('whatsapp_updating')).toBe(false);
+    expect(draftRefusalEndsCard('whatsapp_busy')).toBe(false);
+  });
 });
 
 describe('answerWhatsAppDraft', () => {

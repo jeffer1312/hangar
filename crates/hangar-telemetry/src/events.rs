@@ -60,7 +60,13 @@ named_enum!(Event {
     ClientRoute => "client_route",
     ServerStartup => "server_startup",
     ChatOpen => "chat_open",
+    LogDropped => "log_dropped",
 });
+
+named_enum!(
+    /// Nível de uma linha de log que vai no pacote.
+    LogLevel { Warn => "warn", Error => "error" }
+);
 
 /// Valor de uma dimensão; só nasce dos tipos deste módulo.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -294,6 +300,7 @@ mod tests {
         names.extend(UpdateStepName::ALL.iter().map(|v| v.as_str()));
         names.extend(UpdateOrigin::ALL.iter().map(|v| v.as_str()));
         names.extend(PeerKind::ALL.iter().map(|v| v.as_str()));
+        names.extend(LogLevel::ALL.iter().map(|v| v.as_str()));
         names.extend(FEATURE_ROUTES.iter().map(|(_, _, code)| *code));
         names.extend([CLAUDE_MODELS, CODEX_MODELS, KIMI_MODELS, ANTIGRAVITY_MODELS].concat());
         for name in names {

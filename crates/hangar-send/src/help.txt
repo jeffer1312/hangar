@@ -156,6 +156,18 @@ Retenção ou recusa pelo destino (política crossSessionInbound dele) chega dep
   EOF
   )"
 
+SAÍDA do recado 1:1 (hangar-send <sessao> <mensagem...>):
+  0  entregue ou na fila; ou o servidor não respondeu no prazo e o recado (mesmo remetente e
+     texto, com hora depois do envio) apareceu na conversa do destino ("chegou -> …")
+  1  recusa ou erro (a frase diz qual)
+  2  nada saiu: servidor inacessível (também o daqui, num recado a servidor::sessao) ou uso errado
+  4  o servidor não respondeu no prazo e a conversa do destino não provou a chegada (o recado não
+     apareceu na janela, recado igual sem horário, conversa ilegível ou par externo): pode ter
+     chegado, porque o servidor pode gravar depois
+  O comando nunca reenvia sozinho. Com 4, confira com hangar-send --list antes de reenviar.
+
 PRAZOS: API_TIMEOUT (padrão 30) e API_CONNECT_TIMEOUT (padrão 3), em segundos, mudam o prazo de
 cada pedido ao servidor. Têm prazo próprio: a varredura de outras máquinas no --list (8 s), o --new
 e o --resume (120 s), e a conexão do --new e do --close noutra máquina (8 s).
+HANGAR_SEND_CHECK_SECONDS (padrão 6): quanto o recado sem resposta no prazo espera aparecer na
+conversa do destino, lida a cada 1 s.

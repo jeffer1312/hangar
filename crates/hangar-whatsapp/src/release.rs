@@ -60,6 +60,29 @@ pub fn parse_version(output: &str) -> Option<(String, u32)> {
     (!version.is_empty()).then(|| (version.to_owned(), api))
 }
 
+/// O esquema do `messages.db` que o programa grava, pelo `--schema-version`. `None` quando ele não diz: o
+/// binário que não conhece a flag a recusa e sai com outro código.
+pub async fn schema_of(binary: &Path) -> Option<u32> {
+    number(command(binary, "--schema-version")).await
+}
+
+/// O esquema do `messages.db` em `data`, lido pelo programa `binary` com `--data-schema-version --data <data>`, que
+/// só lê o arquivo e diz 0 sem ele. `None` quando ele não diz: binário sem a flag ou arquivo que não se lê.
+pub async fn data_schema_of(binary: &Path, data: &Path) -> Option<u32> {
+    let mut command = command(binary, "--data-schema-version");
+    command.arg("--data").arg(data);
+    number(command).await
+}
+
+/// Só a saída 0 com um número; prazo, erro ou outra saída é `None`.
+async fn number(mut command: tokio::process::Command) -> Option<u32> {
+    let output = tokio::time::timeout(VERSION_TIMEOUT, command.output()).await.ok()?.ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()?.trim().parse().ok()
+}
+
 /// Roda `--version` do programa baixado: recusa API menor que [`MIN_API`]. Devolve a versão que ele diz.
 ///
 /// # Errors
@@ -67,11 +90,7 @@ pub fn parse_version(output: &str) -> Option<(String, u32)> {
 /// `whatsapp_version_unreadable` quando o programa não roda ou não responde no formato; `whatsapp_api_too_old`.
 pub async fn check(binary: &Path) -> Result<String, Failure> {
     let unreadable = |detail: String| Failure::new("whatsapp_version_unreadable", format!("{} --version: {detail}", binary.display()));
-    let mut command = tokio::process::Command::new(binary);
-    command.arg("--version").stdin(std::process::Stdio::null()).kill_on_drop(true);
-    #[cfg(windows)]
-    command.creation_flags(0x0800_0000);
-    let output = tokio::time::timeout(VERSION_TIMEOUT, command.output()).await
+    let output = tokio::time::timeout(VERSION_TIMEOUT, command(binary, "--version").output()).await
         .map_err(|_| unreadable("não respondeu".into()))?
         .map_err(|e| unreadable(e.to_string()))?;
     let text = String::from_utf8_lossy(&output.stdout);
@@ -80,6 +99,14 @@ pub async fn check(binary: &Path) -> Result<String, Failure> {
         return Err(Failure::new("whatsapp_api_too_old", format!("hangar-whatsapp {version} fala a API {api}; o Hangar precisa da {MIN_API}")));
     }
     Ok(version)
+}
+
+fn command(binary: &Path, arg: &str) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(binary);
+    command.arg(arg).stdin(std::process::Stdio::null()).kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    command
 }
 
 #[cfg(test)]
@@ -135,6 +162,47 @@ mod tests {
             } else {
                 assert_eq!(got.unwrap_err().code, "whatsapp_api_too_old");
             }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_schema_comes_from_the_flag_and_an_old_binary_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("hangar-whatsapp");
+        let cases = [
+            ("[ \"$1\" = --schema-version ] && echo 2", Some(2)),
+            ("echo 'flag provided but not defined: -schema-version' >&2; exit 2", None),
+            ("echo dois", None),
+            ("echo 2; exit 1", None),
+        ];
+        for (script, want) in cases {
+            std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
+            std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            assert_eq!(schema_of(&program).await, want, "{script}");
+        }
+    }
+
+    /// O esquema do arquivo vem do programa novo, com a pasta dos dados; sem a flag, ou com o arquivo ilegível, não se sabe.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_data_schema_comes_from_the_program_with_the_data_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("hangar-whatsapp");
+        let data = dir.path().join("dados");
+        let asked = format!("[ \"$1\" = --data-schema-version ] && [ \"$2\" = --data ] && [ \"$3\" = '{}' ]", data.display());
+        let cases = [
+            (format!("{asked} && echo 1"), Some(1)),
+            (format!("{asked} && echo 0"), Some(0)),
+            ("echo 'flag provided but not defined: -data-schema-version' >&2; exit 2".to_owned(), None),
+            ("echo 'erro: read messages.db' >&2; exit 1".to_owned(), None),
+            ("echo 2; exit 1".to_owned(), None),
+            ("echo dois".to_owned(), None),
+        ];
+        for (script, want) in cases {
+            std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
+            std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            assert_eq!(data_schema_of(&program, &data).await, want, "{script}");
         }
     }
 }

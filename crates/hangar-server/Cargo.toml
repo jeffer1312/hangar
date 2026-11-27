@@ -121,7 +121,7 @@ fancy-regex = "=0.20.0"
 # A consulta estrita conserva as grafias e os aliases aceitos pela referência.
 unicode_names2 = "=1.3.0"
 # Largura em células para cortar o pane na coluna da conversa (`plugin_screen.cell_width`).
-unicode-width = "=0.2.2"
+unicode-width.workspace = true
 memchr.workspace = true
 md-5.workspace = true
 sha1_smol.workspace = true

@@ -1,4 +1,5 @@
-//! Telemetria anônima de uso do Hangar: contadores por dia (UTC), sem texto livre por construção.
+//! Telemetria anônima de uso do Hangar: contadores por dia (UTC), sem texto livre por construção, e
+//! as linhas de aviso e erro do servidor, que o servidor limpa antes de `Telemetry::log`.
 //! `wire`, `events` e `buckets` compilam sem a feature `runtime`: o receptor
 //! (`services/telemetry-ingest`) usa só eles.
 pub mod buckets;

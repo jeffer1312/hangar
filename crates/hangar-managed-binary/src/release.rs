@@ -124,10 +124,16 @@ impl Binary {
 
     /// Baixa uma vez por versão; devolve o caminho do programa em `<dir>/bin/<versão>/`.
     pub async fn fetch(&self, github: &Github, release: &Release, platform: Platform, dir: &Path) -> Result<PathBuf, Error> {
+        self.fetch_new(github, release, platform, dir).await.map(|(dest, _)| dest)
+    }
+
+    /// [`Binary::fetch`] dizendo também se esta chamada baixou o programa: o que já estava pronto na pasta pode
+    /// ser o que o serviço roda, e quem descarta o download não deve apagá-lo.
+    pub async fn fetch_new(&self, github: &Github, release: &Release, platform: Platform, dir: &Path) -> Result<(PathBuf, bool), Error> {
         let member = self.program_file(platform);
         let dest = dir.join("bin").join(release.version()).join(&member);
         if ready(&dest) {
-            return Ok(dest);
+            return Ok((dest, false));
         }
         let asset = self.asset(platform, release.version())?;
         let base = format!("{}/{}/releases/download/{}", github.download, self.repo, release.tag);
@@ -138,7 +144,7 @@ impl Binary {
         tokio::task::spawn_blocking(move || install(&data, &expected, &member, &target))
             .await
             .map_err(|e| Error::Write(e.to_string()))??;
-        Ok(dest)
+        Ok((dest, true))
     }
 }
 

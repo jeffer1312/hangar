@@ -263,6 +263,9 @@ pub(super) fn refusal_text(code: Option<&str>, locked_until: Option<&str>) -> Op
         "whatsapp_outdated" | "whatsapp_send_unsupported" => "whatsapp_draft_err_outdated",
         // Hangar novo com serviço sem a rota da edição: o rascunho continua esperando.
         "whatsapp_edit_unsupported" => "whatsapp_draft_err_edit_unsupported",
+        // A vez do envio está com a troca de versão ou outra operação; o rascunho continua esperando.
+        "whatsapp_updating" => return Some(tr("whatsapp_send_updating")),
+        "whatsapp_busy" => return Some(tr("whatsapp_update_busy")),
         _ => return None,
     };
     Some(tr_shared(key, &[]))
@@ -938,6 +941,19 @@ mod tests {
         crate::i18n::english_in_this_thread(false);
         assert_eq!(refusal_text(Some("whatsapp_edit_unsupported"), None), Some(tr_shared("whatsapp_draft_err_edit_unsupported", &[])));
         assert!(!ends_card(Some("whatsapp_edit_unsupported")));
+    }
+
+    /// A troca de versão segura a vez do envio: o cartão diz por que, no idioma do app, não a falha genérica.
+    #[test]
+    fn a_held_turn_has_its_own_phrase_and_keeps_the_card() {
+        for english in [false, true] {
+            crate::i18n::english_in_this_thread(english);
+            assert_eq!(refusal_text(Some("whatsapp_updating"), None), Some(tr("whatsapp_send_updating")));
+            assert_eq!(refusal_text(Some("whatsapp_busy"), None), Some(tr("whatsapp_update_busy")));
+            for key in ["whatsapp_send_updating", "whatsapp_update_busy"] { assert_ne!(tr(key), key, "{key} sem tradução ({english})"); }
+        }
+        crate::i18n::english_in_this_thread(false);
+        assert!(!ends_card(Some("whatsapp_updating")) && !ends_card(Some("whatsapp_busy")), "o rascunho continua esperando");
     }
 
     #[test]

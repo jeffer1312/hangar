@@ -280,6 +280,11 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **Config e opção moram em MODAL, não em painel docado.** Só o `DesktopSessionContext` fica
   docado. Tela de config usa **container query**, nunca media query — quem aperta a linha é a
   largura do painel.
+- **Página de configuração do nativo ocupa a largura do painel.** A coluna vem de
+  `page_column` (`desktop-native/src/app/settings.rs`); página não define largura própria. Só texto
+  corrido para em `READING_WIDTH` (explicação da página, da seção e da linha, e o artigo do
+  Manual). Ao criar página, use `page_top`, `section_head` e `setting_row`, que já aplicam isso.
+  [Decisão](docs/decisoes/frontend.md#configurações-do-nativo-ocupam-a-largura-do-painel-27112026).
 - **Configurações do Expo usam listas de ajustes agrupados.** Cada linha mostra o nome e o
   valor atual; o toque edita ou abre os detalhes. Agrupe opções relacionadas, com rótulos únicos
   e explicações curtas quando ajudarem a decidir. Ações frequentes ficam à vista; diagnóstico
@@ -314,6 +319,10 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   transcript confirmar. [Regra](docs/decisoes/harnesses.md#mensagem-na-conversa-sem-cortar-o-turno-16112026).
 - **Dedup de fila/pending é delicado** — bolhas `pending`/`queued-` reconciliam por texto
   normalizado contra o transcript real.
+- **Envio só é incerto quando pode ter chegado; 503 com código anterior à escrita e conexão que
+  não abriu voltam o texto como recusa, e o incerto some quando a conversa mostra a mensagem.** As
+  cópias são `input_not_sent`/`settle_input_refusal` (nativo) e `isInputRefusal` (core), com a
+  mesma lista de códigos. [Medição](docs/decisoes/frontend.md#envio-que-não-saiu-e-envio-incerto-27112026).
 - **Vite HMR pode servir componente VAZIO** (stub <1KB, sem erro no console): a tela some sem
   nada quebrar. Remédio: reiniciar o serviço do front. Verificação de front SEMPRE inclui abrir
   a tela e confirmar que montou.
@@ -707,8 +716,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   [plataforma.md](docs/decisoes/plataforma.md#relatório-automático-quando-a-atualização-falha-30102026).
 - **Telemetria anônima é do Rust: crate `hangar-telemetry`, ligado pelo servidor em
   `telemetry_routes.rs` e `telemetry_hooks.rs`.** Conta só ação do dono (convidado, 8766 e login de
-  convidado nunca) e a saúde do servidor; nunca texto livre: toda dimensão é enum, bool, versão ou
-  código de lista fechada, e o que está fora vira `other`. Nada é contado nem gravado sem
+  convidado nunca) e a saúde do servidor. Toda dimensão é enum, bool, versão ou código de lista
+  fechada, e o que está fora vira `other`; texto livre só nas linhas de aviso e erro do log do
+  servidor, depois da limpeza por regras de `telemetry_scrub.rs` (pode deixar passar pedaço do texto do
+  erro; a doc diz isso), até 100 distintas por dia. Nada é contado nem gravado sem
   `consent: true` em `~/.hangar/telemetry.json`; `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1` e CI vencem
   e apagam a fila. Um pacote por dia UTC; o receptor (`services/telemetry-ingest`) grava evento e
   valor que não conhece, desde que no formato do `wire`, em vez de recusá-los. Evento ou valor novo entra em `events.rs` e em
@@ -840,14 +851,18 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   mensagem sai pelo "Enviar" do cartão no desktop nativo ou no Expo, nunca por outro caminho. Tetos
   (3/min, 20/dia, rascunhos abertos), expiração em 10 min, recusa a contato novo, filtro de anexo e
   trava 463/475 sem reenvio ficam no binário. O dono pode editar só o texto no cartão (`send-edited`, binário api 3;
-  binário antigo recebe 409 `whatsapp_edit_unsupported`, nunca o original no lugar). `whatsapp_draft` recusa em sessão compartilhada e sem o
+  binário antigo recebe 409 `whatsapp_edit_unsupported`, nunca o original no lugar). Atualiza sozinho: 2 min após a subida e de hora em hora, com os portões do hcu;
+  release que muda o `user_version` só com confirmação do dono, e o binário grava
+  `messages.db.schema<v>.bak` antes de migrar, que o Hangar tenta devolver se a nova não sobe; envio durante a troca é
+  409 `whatsapp_updating` (outra operação na vez: `whatsapp_busy`). `whatsapp_draft` recusa em sessão compartilhada e sem o
   prazo de 660 s; `MarkRead`, `SendPresence` e `SubscribePresence` seguem proibidos (lista fechada).
   Instalar exige aceite (`accepted.json`); o router usa `Edge::owner_only` e a 8766 não o monta; as
   ferramentas marcam texto de terceiros. Mídia antiga só a pedido, com teto. Loopback com HMAC nos dois
   sentidos: resposta sem assinatura é 502 `whatsapp_untrusted`. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#whatsapp-só-leitura-22112026) e
   [envio](docs/decisoes/plataforma.md#whatsapp-envio-por-rascunho-aprovado-24112026) e
-  [edição](docs/decisoes/plataforma.md#whatsapp-foto-conversa-e-edição-no-cartão-26112026).
+  [edição](docs/decisoes/plataforma.md#whatsapp-foto-conversa-e-edição-no-cartão-26112026) e
+  [atualização](docs/decisoes/plataforma.md#whatsapp-atualiza-sozinho-26112026).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,

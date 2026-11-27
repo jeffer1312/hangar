@@ -322,7 +322,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   aviso de extensão de rascunho da pessoa, e comparar duas capturas não resolve.
 - **Statusline e prévia vêm de sidecar do agente, não do pane.** O pane corta na largura da
   janela. `""` é resposta ("nada em voo"), `None` é ausência. Sessão Pi já aberta só publica
-  depois de `/reload`.
+  depois de `/reload`. No Claude, arquivo da prévia que existe e envelheceu vale `""`, nunca a
+  volta ao pane; no pane, a prévia corta o painel de diff lateral do Claude Code pela régua dele.
+  [Motivo](#prévia-ao-vivo-sidecar-do-agente-primeiro-pane-depois).
 - **Estado da sessão Claude vem do registro nativo (`<config>/sessions/<pid>.json`) quando ele
   existe e o pid vive**; marcador de hook e pane são o fallback. `idle`/`busy`/`waiting` são o
   estado da TUI escrito por ela mesma; `waiting` inclui diálogo aberto (`/model`), que o pane
@@ -4055,7 +4057,19 @@ prévia em voo descartava o `❯` da caixa como se fosse mensagem do usuário. A
   (3) a extensão coalesce em 150ms e `unref()` o timer, porque `message_update` dispara por token e
   um timer pendente não pode segurar o processo do Pi vivo; (4) teto de idade de 10min, pro caso da
   extensão morrer no meio do turno — aí o pane volta a mandar em vez de congelar a última frase.
-  Vale o mesmo aviso da statusline: **sessão Pi já aberta só publica depois de `/reload`**. O
+  Vale o mesmo aviso da statusline: **sessão Pi já aberta só publica depois de `/reload`**.
+
+  Em 27/11/2026 o teto de 10 min fez a prévia de uma sessão Claude pular no desktop nativo: um `scp`
+  de 13 min deixou velhos o arquivo da prévia e o marcador `working` (que só renova a cada
+  ferramenta), e o servidor voltou ao pane. O Claude Code estava com o painel de diff aberto à direita,
+  na mesma linha do terminal, e as linhas do código (`434 std::fs::create_dir_all…`) entraram na
+  prévia. Com o código grudado, o parágrafo já gravado não era reconhecido, e a prévia alternava entre
+  ele e o atual a cada rodada de 750 ms, com alturas diferentes. O hook do Claude roda um processo por
+  evento e não morre no meio do turno como a extensão do Pi: no Claude, arquivo que existe e envelheceu
+  vale `""`. O pane continua o plano B de sessão sem hook, e a prévia dele corta na coluna da régua
+  `─` do painel (a que vai da borda dele ao fim da linha). A faixa vazia entre conversa e painel não
+  serve de sinal: casava com o painel dos mods e com a caixa de prévia do AskUserQuestion nas capturas
+  dos testes. O
   **Claude Code também publica** desde 17/08/2026: `hooks/preview_hook.py` (instalado pelo
   `hook_installer.ensure_preview_hook_installed` no startup) escuta o evento `MessageDisplay`
   (Claude Code ≥ 2.1.152 — deltas INCREMENTAIS do texto em exibição, medido: 5 parágrafos = 6

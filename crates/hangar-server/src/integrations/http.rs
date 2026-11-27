@@ -188,7 +188,7 @@ async fn reply(state: &AppState, peer: Option<SocketAddr>, request: Request) -> 
 
     match (method, route) {
         (Method::GET, Route::Catalog) => {
-            json_response(StatusCode::OK, json!({"presets": hangar_integrations::catalog()}))
+            json_response(StatusCode::OK, json!({"presets": hangar_integrations::catalog_for_port(state.integrations.local_port())}))
         }
         (Method::GET, Route::Collection) => list_integrations(state).await,
         (Method::POST, Route::Collection) => create_integration(state, request).await,
@@ -224,6 +224,8 @@ struct IntegrationView {
     status: IntegrationStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    brand: Option<hangar_integrations::Brand>,
 }
 
 fn build_view(
@@ -236,10 +238,16 @@ fn build_view(
     if status == IntegrationStatus::Ready && last_error.is_some() {
         status = IntegrationStatus::Error;
     }
+    let url = match &config.transport {
+        hangar_integrations::Transport::RemoteHttp { url, .. } => Some(url.as_str()),
+        hangar_integrations::Transport::LocalStdio { .. } => None,
+    };
+    let brand = hangar_integrations::brand_for(config.preset.as_deref(), url);
     IntegrationView {
         config,
         status,
         last_error,
+        brand,
     }
 }
 
