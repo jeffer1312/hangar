@@ -446,9 +446,11 @@ fn cells_before(line: &str, column: usize) -> String {
 }
 
 /// Onde começa o painel de diff que o Claude Code abre ao lado da conversa, na mesma linha do
-/// terminal: a régua `─` que vai da borda dele ao fim da linha, com essa coluna vazia em todas as
-/// outras. As réguas da caixa de digitar começam na coluna 0 e ficam de fora.
+/// terminal: a régua `─` que vai da borda dele até a borda direita da tela, com essa coluna vazia em
+/// todas as outras linhas. Régua da resposta não chega à borda; as da caixa de digitar começam na
+/// coluna 0 e ficam de fora.
 fn side_panel_column(lines: &[&str]) -> Option<usize> {
+    let screen = lines.iter().map(|l| cells(right(l)).len()).max()?;
     let lines: Vec<&str> = lines.iter().copied().filter(|l| !l.starts_with('─')).collect();
     let rows: Vec<Vec<bool>> = lines.iter().map(|l| cells(l)).collect();
     lines.iter().find_map(|line| {
@@ -456,6 +458,7 @@ fn side_panel_column(lines: &[&str]) -> Option<usize> {
         let prefix = line.trim_end_matches('─');
         let column = cells(prefix).len();
         (line[prefix.len()..].chars().count() >= 10 && column >= PANEL_MIN_COLUMN && prefix.ends_with(whitespace)
+            && cells(line).len() + 2 >= screen
             && rows.iter().all(|r| !r.get(column - 1).copied().unwrap_or(false))).then_some(column)
     })
 }
@@ -1034,6 +1037,13 @@ mod tests {
         let pane = format!("{}\n✻ Puzzling… (29m 39s · ↓ 21.4k tokens)\n{wide}\n❯ \n{wide}\n", rows.join("\n"));
         assert_eq!(pane_preview(&pane, None).0,
             "Com 8 MB de pilha o teste passa, então a recursão é só o caminho list_tools → filtro de projeto,\n  que estoura no debug do Windows com os 2 MB padrão do tokio.");
+    }
+
+    #[test]
+    fn a_rule_inside_the_reply_is_not_a_side_panel() {
+        let wide = "─".repeat(200);
+        let pane = format!("● Antes                       ────────────\n  depois da régua, texto que passa da coluna trinta\n{wide}\n❯ \n{wide}\n");
+        assert_eq!(pane_preview(&pane, None).0, "Antes                       ────────────\n  depois da régua, texto que passa da coluna trinta");
     }
 
     #[test]
