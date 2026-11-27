@@ -3314,6 +3314,28 @@ nas vagas de escrita). No Windows, os três arquivos focados tiveram 92 aprovado
 as mesmas 11 se reproduziram na base pura, incluindo diferenças nos campos `sessions` e
 `closed` anteriores à correção.
 
+### Worktree sem branch e busca de repositórios até o fim (27/11/2026)
+
+Worktree aberta direto na base do remoto (`worktree add --detach … origin/develop`), usada para
+correção que vai direto na develop, não tinha base: a base saía da branch, e sem branch o status
+vinha com `base: null`. A limpeza automática a descartava antes de qualquer regra (mesclada,
+sem alterações, parada), e a tela mostrava "Sem branch" para sempre. Em 27/11/2026 havia quatro
+assim num repositório, todas com os commits já na `origin/develop`. Agora a base dela é a
+branch principal do remoto (`refs/remotes/origin/HEAD`; sem `origin`, a do único remoto que
+tem HEAD). Não é a branch do checkout principal, que costuma estar numa branch de trabalho.
+Sem HEAD de remoto, ou com dois remotos sem `origin`, continua sem base. A prova por PR fica
+de fora: ela precisa do nome da branch.
+
+A busca de repositórios percorria as raízes numa linha só, com teto de 20 mil pastas e 2 s. As
+raízes desta máquina somam cerca de 244 mil pastas (uma pasta de dados tem 108 mil), e o aviso
+"A busca não terminou" aparecia sempre. Respeitar o `.gitignore`, como o `fd`, foi medido e
+descartado: perdia 120 dos 239 repositórios, porque um repositório guarda-chuva ignora os clones
+que tem dentro. A busca agora roda no pool do `rayon`, lê o `.git` na listagem da própria pasta
+(sem stat extra por pasta), não segura a trava do cache enquanto varre e tem teto de 1 milhão de
+pastas e 5 s. Medido nas mesmas raízes, em release: antes, 0,16 a 0,54 s com 232 repositórios e
+busca incompleta; agora, 0,2 a 0,26 s com cache de disco quente e 1,2 s na primeira leitura, os
+mesmos 232, completa.
+
 ## Passagem ao Rust no boot com a fila Python ocupada
 
 (05/10/2026, DELPHI-02.) Nos dois reinícios do dia, a sessão terminal abriu no Python e
