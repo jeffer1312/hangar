@@ -91,7 +91,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `server-latest.json` (entrada sem o campo ganha o valor do commit dela) e `requires_api` no
   `native-latest.json`; manifesto sem o campo = 1. `scripts/check-client-api.sh` (pre-commit e CI)
   recusa mudança em `crates/hangar-api/src/`, `desktop-native/src/api/` ou literal `"/api/` novo no
-  nativo sem subir o número acima do da base; escape `HANGAR_SEM_CLIENT_API: <motivo>` na mensagem.
+  nativo sem subir o número acima do da base; escape `HANGAR_SEM_CLIENT_API: <motivo>` na mensagem de
+  qualquer commit do PR.
   O servidor só acrescenta API: remover ou quebrar rota que o app consome exige um ciclo de aviso (a
   rota fica até nenhum app publicado precisar dela). Evidência em
   [Atualização com contrato de API](#atualização-com-contrato-de-api-19102026).
