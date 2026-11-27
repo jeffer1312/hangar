@@ -1620,6 +1620,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-auto-continue"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-boot"
 version = "0.1.0"
 dependencies = [

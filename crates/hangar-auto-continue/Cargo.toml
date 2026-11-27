@@ -1,0 +1,18 @@
+[package]
+name = "hangar-auto-continue"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas, compilar este crate sozinho guarda outra cópia de cada
+# dependência no target.
+[dependencies]
+hangar-core.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+tracing.workspace = true
+reqwest = { workspace = true, features = ["rustls", "multipart"] }
+
+[dev-dependencies]
+tempfile.workspace = true
