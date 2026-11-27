@@ -1276,7 +1276,7 @@ struct Unsent {
     failing: AtomicBool,
     /// Lotes seguidos que o servidor respondeu sem gravar.
     rejected: AtomicU8,
-    /// Dia (UTC) do último retrato de preferências mandado; o envio que falha o apaga.
+    /// Máquina e dia (UTC) do último retrato de preferências mandado; o envio que falha o apaga.
     settings_day: std::sync::Mutex<String>,
 }
 
@@ -1418,7 +1418,9 @@ impl Hangar {
     /// O retrato das preferências, uma vez por dia (UTC), à máquina ativa e nunca a convite, como o tempo à vista.
     fn send_settings_snapshot(&mut self) {
         let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
-        if !self.client_telemetry.take_settings_day(&chrono::Utc::now().format("%Y-%m-%d").to_string()) { return; }
+        // Por máquina: trocar a ativa no mesmo dia manda o retrato à nova; o servidor descarta o repetido.
+        let key = format!("{}|{}", self.active_key(), chrono::Utc::now().format("%Y-%m-%d"));
+        if !self.client_telemetry.take_settings_day(&key) { return; }
         let mut event = serde_json::json!({"evento": "settings.snapshot", "valores": settings_values(&appearance::get(), &self.tour.seen)});
         // O servidor conta um retrato por aparelho e dia; o id fica na máquina dele, fora do pacote.
         if let Some(device) = crate::update::confirm::device_id() { event["aparelho"] = Value::from(device); }
