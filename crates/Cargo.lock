@@ -1623,6 +1623,7 @@ dependencies = [
 name = "hangar-auto-continue"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "hangar-core",
  "reqwest",
  "serde",
