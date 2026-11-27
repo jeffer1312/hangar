@@ -218,16 +218,9 @@ fn now_seconds() -> f64 { std::time::SystemTime::now().duration_since(std::time:
 
 /// O subagente do disco de um Agent: prompt normalizado inteiro, senão os 400 primeiros caracteres (o mais recente
 /// vence, e a lista já vem do mais recém-escrito).
-fn agent_model(subs: &[SubRun], agent_id: Option<&str>, agent_path: Option<&str>, prompt: Option<&str>, asked: Option<String>) -> Option<String> {
-    let sub = match agent_id {
-        Some(id) => subs.iter().find(|s| s.agent_id == id),
-        None => match agent_path {
-            Some(path) => subs.iter().find(|sub| sub.agent_path.as_deref() == Some(path)),
-            None => match_sub(subs, prompt),
-        },
-    };
+fn agent_model(subs: &[SubRun], agent: &AgentRun, asked: Option<String>) -> Option<String> {
     // Na lista sem modelo (só erro de API, ilegível): o apelido seria afirmar o que não rodou.
-    match sub { Some(s) => s.model.clone(), None => asked }
+    match match_agent(subs, agent) { Some(s) => s.model.clone(), None => asked }
 }
 
 fn match_sub<'a>(subs: &'a [SubRun], prompt: Option<&str>) -> Option<&'a SubRun> {
@@ -1647,7 +1640,7 @@ impl Hangar {
     /// O modelo do card do Agent: o que respondeu, quando o subagente já está na lista; antes, o apelido pedido.
     pub(super) fn agent_card_model(&self, call: usize, asked: Option<String>) -> Option<String> {
         let Some(agent) = self.conversation.activity.agents.iter().find(|a| a.call == call) else { return asked };
-        agent_model(&self.act.subs, agent.agent_id.as_deref(), agent.agent_path.as_deref(), agent.prompt.as_deref(), asked)
+        agent_model(&self.act.subs, agent, asked)
     }
 
     pub(super) fn effective_agent(&self, call: usize) -> Option<AgentRun> {
@@ -2475,14 +2468,16 @@ mod tests {
         use super::{agent_model, parse_sub};
         let answered = parse_sub(&serde_json::json!({"agentId": "a", "agentPath":"/root/review", "prompt": "faz X", "model": "gpt-6.1-sol"})).unwrap();
         let subs = vec![answered, sub("b", "faz Y")];
-        assert_eq!(agent_model(&subs, None, None, Some("faz X"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(agent_model(&subs, Some("a"), None, Some("outro prompt"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(agent_model(&subs, None, None, Some("faz Y"), Some("opus".into())), None);
-        assert_eq!(agent_model(&subs, None, None, Some("ainda não listado"), Some("opus".into())).as_deref(), Some("opus"));
-        assert_eq!(agent_model(&[], None, None, Some("faz X"), None), None);
-        assert_eq!(agent_model(&[], None, Some("/root/review"), None, Some("asked".into())).as_deref(), Some("asked"));
-        assert_eq!(agent_model(&subs, None, Some("/root/review"), None, Some("asked".into())).as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(agent_model(&subs, Some("other-uuid"), Some("/root/review"), None, Some("asked".into())).as_deref(), Some("asked"));
+        let agent = |id: Option<&str>, path: Option<&str>, prompt: Option<&str>| AgentRun { agent_id: id.map(Into::into), agent_path: path.map(Into::into),
+            prompt: prompt.map(Into::into), prompt_key: prompt.map(prompt_key), ..parent("t", "", None, false) };
+        assert_eq!(agent_model(&subs, &agent(None, None, Some("faz X")), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, &agent(Some("a"), None, Some("outro prompt")), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, &agent(None, None, Some("faz Y")), Some("opus".into())), None);
+        assert_eq!(agent_model(&subs, &agent(None, None, Some("ainda não listado")), Some("opus".into())).as_deref(), Some("opus"));
+        assert_eq!(agent_model(&[], &agent(None, None, Some("faz X")), None), None);
+        assert_eq!(agent_model(&[], &agent(None, Some("/root/review"), None), Some("asked".into())).as_deref(), Some("asked"));
+        assert_eq!(agent_model(&subs, &agent(None, Some("/root/review"), None), Some("asked".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, &agent(Some("other-uuid"), Some("/root/review"), None), Some("asked".into())).as_deref(), Some("asked"));
     }
 
     #[test]
