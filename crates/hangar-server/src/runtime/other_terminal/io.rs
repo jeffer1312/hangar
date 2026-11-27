@@ -12,12 +12,13 @@ pub struct ProcessOtherIo {
     io: Arc<ProcessIo>,
     /// Quem era o pane na última captura. A prova de quem observa a consome: vale para a rodada dela, uma vez.
     captured: Arc<std::sync::Mutex<Option<PaneIdentity>>>,
+    kimi_wire: Arc<std::sync::Mutex<super::kimi_status::WireTail>>,
 }
 impl ProcessOtherIo {
     pub fn new(target: &OtherTarget, options: &OtherOptions) -> Self {
         let request=CaptureRequest {consumer:format!("other:{}:{}",target.key,target.generation),name:target.name.clone(),provider:target.provider.as_str().into(),
             binding:format!("{}:{}",target.key,target.generation),target:target.pane_address.clone(),started:clock().epoch_s,lines:200,colors:true,join:false};
-        Self {pool:options.pool.clone(),request,target:target.clone(),processes:options.processes.clone(),io:Arc::new(ProcessIo::default()),captured:Arc::default()}
+        Self {pool:options.pool.clone(),request,target:target.clone(),processes:options.processes.clone(),io:Arc::new(ProcessIo::default()),captured:Arc::default(),kimi_wire:Arc::default()}
     }
     fn driver(&self,target:&OtherTarget,guard:Option<&OtherWriteGuard>)->TerminalDriver {
         let mut binding=target.binding.clone();binding.pane=target.pane_address.clone();
@@ -140,6 +141,19 @@ impl OtherIo for ProcessOtherIo {
         let result=if literal {driver.text(value).await}else{driver.key(value,true).await};
         if result.disposition==crate::terminal_input::Disposition::Accepted {Ok(())}else{Err(write_failure(&result,false))}
     })}
+    fn kimi_permission(&self) -> BoxFuture<'_, Result<Option<String>, RuntimeError>> {
+        let (wire, path) = (self.kimi_wire.clone(), self.target.transcript.clone());
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let mut wire = wire.lock().unwrap_or_else(|error| error.into_inner());
+                match wire.read(&path) {
+                    Ok(facts) => Ok(facts.permission.clone()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                    Err(_) => Err(failed("erro_permissao_leitura")),
+                }
+            }).await.map_err(|_| failed("erro_permissao_leitura"))?
+        })
+    }
     fn release<'a>(&'a self)->BoxFuture<'a,()> {Box::pin(async move {let _=self.pool.release(&self.request.consumer).await;})}
 }
 

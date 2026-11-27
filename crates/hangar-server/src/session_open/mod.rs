@@ -23,6 +23,8 @@ pub mod restore;
 pub mod server;
 pub mod terminal;
 #[cfg(test)]
+mod kimi_permission_tests;
+#[cfg(test)]
 mod tests;
 
 pub use resolve::{OpenCaller, OpenFacts, Resolved, resolve_open};
@@ -67,11 +69,12 @@ impl ServiceTier {
     pub fn is_fast(self) -> bool { self != Self::Default }
 }
 
-/// Modo de permissão: os do `claude --help` e os do picker `/permissions` do Codex.
+/// Modos de permissão aceitos pelo lançador de cada agente.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionMode {
     #[serde(rename = "acceptEdits")] AcceptEdits,
     #[serde(rename = "auto")] Auto,
+    #[serde(rename = "yolo")] Yolo,
     #[serde(rename = "bypassPermissions")] BypassPermissions,
     #[serde(rename = "manual")] Manual,
     #[serde(rename = "dontAsk")] DontAsk,
@@ -92,9 +95,14 @@ impl PermissionMode {
     pub fn name(self) -> &'static str {
         match self {
             Self::AcceptEdits => "acceptEdits", Self::Auto => "auto", Self::BypassPermissions => "bypassPermissions",
-            Self::Manual => "manual", Self::DontAsk => "dontAsk", Self::Plan => "plan",
+            Self::Yolo => "yolo", Self::Manual => "manual", Self::DontAsk => "dontAsk", Self::Plan => "plan",
             Self::AskForApproval => "Ask for approval", Self::ApproveForMe => "Approve for me", Self::FullAccess => "Full Access",
         }
+    }
+
+    /// Modos que a CLI do Kimi aceita por flag na abertura; sem flag vale a configuração dele.
+    pub fn kimi(name: &str) -> Option<Self> {
+        [Self::Yolo, Self::Auto].into_iter().find(|mode| mode.name() == name)
     }
 
     pub fn claude(name: &str) -> Option<Self> { Self::CLAUDE.into_iter().find(|m| m.name() == name) }

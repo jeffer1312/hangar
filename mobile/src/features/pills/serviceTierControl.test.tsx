@@ -22,7 +22,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
-  getCodexModels: api.codex, getModelOptions: api.models, setServiceTier: api.tier, getPermissionModes: api.permissions,
+  getKimiModels: async () => ({ models: [], default: null }), getCodexModels: api.codex, getModelOptions: api.models, setServiceTier: api.tier, getPermissionModes: api.permissions,
   getCredentialsForServer: api.credentials,
   getEnginesForServer: api.engines, claudeProviderModels: api.providerModels, switchClaudeProvider: api.providerWrite,
   setModelEffort: api.modelWrite, setEngineModel: api.modelWrite, setCodexModel: api.modelWrite,
@@ -67,7 +67,7 @@ vi.mock('../../paraglide/messages', async original => ({
     + 'native_ctl_no_results comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_mode_title '
     + 'native_ctl_loading native_ctl_retry native_ctl_probe native_mode_probe_hint permissao_sem_ciclo '
     + 'chat_mode_plan chat_mode_normal native_codex_permission_probe_hint composer_codex_approval '
-    + 'native_mode_plan native_mode_auto native_mode_manual native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk '
+    + 'native_kimi_mode_manual native_kimi_mode_yolo native_kimi_mode_auto native_mode_plan native_mode_auto native_mode_manual native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk '
     + 'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable '
     + 'native_ctl_speed native_ctl_speed_normal native_ctl_speed_ultrafast native_ctl_speed_normal_hint native_ctl_speed_fast_hint '
     + 'native_ctl_speed_ultrafast_hint native_ctl_speed_ultrafast_unavailable '
@@ -868,4 +868,22 @@ describe('Fast na folha de ajustes real', () => {
     expect(api.codex).not.toHaveBeenCalled();
     expect(api.tier).not.toHaveBeenCalled();
   });
+});
+
+
+it('Kimi mostra seus três modos e aplica a permissão na máquina da conversa', async () => {
+  api.permissions.mockResolvedValue({ current: 'manual', modes: ['manual', 'yolo', 'auto'], sondavel: false });
+  api.modeWrite.mockResolvedValue({ mode: 'yolo', current: 'yolo' });
+  state.rows[0] = { ...state.rows[0], provider: 'kimi' };
+  const { container } = await mount('kimi', 'a', { which: 'mode', n: 1 });
+  const modeLink = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('native_ctl_mode_title'));
+  expect(modeLink).toBeDefined();
+  await act(async () => modeLink!.click());
+  expect(container.textContent).toContain('native_kimi_mode_manual');
+  expect(container.textContent).toContain('native_kimi_mode_yolo');
+  expect(container.textContent).toContain('native_kimi_mode_auto');
+  const option = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('native_kimi_mode_yolo'));
+  expect(option).toBeDefined();
+  await act(async () => option!.click());
+  expect(api.modeWrite).toHaveBeenCalledWith('sess', 'yolo', expect.objectContaining({ id: 'a' }));
 });

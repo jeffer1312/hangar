@@ -1444,7 +1444,7 @@ impl NewSession {
             }
             "codex" => { body["codex_account"] = json!(self.codex_account); },
             // Sem `config_dir`: a sessão abre na conta padrão do agy.
-            "antigravity" => { if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); } }
+            "antigravity" | "kimi" => { if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); } }
             "omp" => { let profile = self.omp.read(cx).value().trim().to_owned(); if !profile.is_empty() { body["omp_profile"] = json!(profile); } }
             _ => {}
         }
@@ -1527,7 +1527,7 @@ impl NewSession {
             body = json!({"name": name, "cwd": cwd, "provider": provider, "model": text(&self.model), "effort": text(&self.effort),
                 "config_dir": if claude { self.requested_config() } else { Value::Null },
                 "engine": if claude { text(&self.engine) } else { Value::Null },
-                "permission_mode": if claude { text(&self.permission) } else { Value::Null },
+                "permission_mode": if claude || provider == "kimi" { text(&self.permission) } else { Value::Null },
                 "omp_profile": if provider == "omp" { text(&omp) } else { Value::Null },
                 "headless": has_surfaces(provider) && self.headless,
                 "resumo_por_modelo": self.baton_by_model});

@@ -489,7 +489,7 @@ async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCal
 const EFFORTS: &[&str] = &["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"];
 fn permission_name(mode: PermissionMode) -> &'static str {
     match mode {
-        PermissionMode::AcceptEdits => "accept_edits", PermissionMode::Auto => "auto",
+        PermissionMode::AcceptEdits => "accept_edits", PermissionMode::Auto => "auto", PermissionMode::Yolo => "yolo",
         PermissionMode::BypassPermissions => "bypass_permissions", PermissionMode::Manual => "manual",
         PermissionMode::DontAsk => "dont_ask", PermissionMode::Plan => "plan", PermissionMode::AskForApproval => "ask_for_approval",
         PermissionMode::ApproveForMe => "approve_for_me", PermissionMode::FullAccess => "full_access",

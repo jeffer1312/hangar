@@ -1,3 +1,4 @@
+import { KimiPermissionsAnimation } from './kimi-permissions-animation';
 import { ScheduledTasksAnimation } from './ScheduledTasksAnimation';
 import { ReviewsAnimation } from './reviews-animation';
 import type { ComponentType } from 'react';
@@ -41,6 +42,7 @@ import { TelemetryConsentAnimation } from './TelemetryConsentAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
+  'kimi-permissions': KimiPermissionsAnimation,
   'ajustes-sessao-abas': SessionSettingsAnimation,
   antigravity: AntigravityAnimation,
   'termos-antigravity': AntigravityTermsAnimation,

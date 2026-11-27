@@ -77,6 +77,7 @@ pub type NewsAnimation = fn(started: Instant, width: Pixels, window: &mut Window
 /// A animação pelo nome do arquivo da novidade (`animacao:`); nome desconhecido = cartão só com texto.
 pub fn animation(name: &str) -> Option<NewsAnimation> {
     match name {
+        "kimi-permissions" => Some(speed_choice::render_kimi),
         "historico-compositor" => Some(composer_history::render),
         "codex-atividade" => Some(codex_activity::render),
         "etiquetas-maquina-conta" => Some(account_tags::render),

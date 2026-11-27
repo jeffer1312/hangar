@@ -23,6 +23,7 @@ pub(crate) mod chrome;
 mod computer;
 mod whatsapp;
 mod controls;
+pub(crate) use controls::control_option;
 mod plan_review;
 mod create;
 mod device;
@@ -9561,7 +9562,7 @@ impl Render for Hangar {
             .capture_action(cx.listener(|this, _: &gpui_kit::base::input::OutdentInline, window, cx| {
                 if this.connection_dialog || !this.composer.read(cx).focus_handle(cx).is_focused(window) { return; }
                 match this.provider().0 {
-                    "claude" | "antigravity" => this.cycle_permission(cx),
+                    "claude" | "antigravity" | "kimi" => this.cycle_permission(cx),
                     "codex" => this.toggle_codex_mode(cx),
                     _ => return,
                 }

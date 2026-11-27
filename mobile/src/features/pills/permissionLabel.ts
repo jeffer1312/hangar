@@ -11,4 +11,11 @@ const LABEL: Record<string, () => string> = {
   dontAsk: m.native_mode_dontAsk,
 };
 
-export const permissionLabel = (mode: string) => LABEL[mode]?.() ?? mode;
+const KIMI_LABEL: Record<string, () => string> = {
+  manual: m.native_kimi_mode_manual,
+  yolo: m.native_kimi_mode_yolo,
+  auto: m.native_kimi_mode_auto,
+};
+
+export const permissionLabel = (mode: string, provider?: string) =>
+  (provider === 'kimi' ? KIMI_LABEL : LABEL)[mode]?.() ?? mode;

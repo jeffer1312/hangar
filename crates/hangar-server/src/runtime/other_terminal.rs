@@ -326,6 +326,8 @@ pub trait OtherIo: Send + Sync {
         literal: bool,
         guard: Option<&'a OtherWriteGuard>,
     ) -> BoxFuture<'a, Result<(), RuntimeError>>;
+    /// Modo estruturado do agente; sem arquivo de conversa, o modo ainda é desconhecido.
+    fn kimi_permission(&self) -> BoxFuture<'_, Result<Option<String>, RuntimeError>> { Box::pin(async { Ok(None) }) }
     fn release<'a>(&'a self) -> BoxFuture<'a, ()>;
 }
 #[derive(Clone)]

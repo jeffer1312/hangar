@@ -12782,5 +12782,8 @@
   "integrations_tools_load_error": "Não foi possível carregar as ferramentas ({reason}).",
   "integrations_validation_command_quotes": "Feche todas as aspas do comando antes de salvar.",
   "integrations_validation_header_name": "Nome de cabeçalho inválido: {name}.",
-  "integrations_validation_url_insecure": "Use HTTPS (ou localhost) quando enviar token ou cabeçalhos."
+  "integrations_validation_url_insecure": "Use HTTPS (ou localhost) quando enviar token ou cabeçalhos.",
+  "native_kimi_mode_manual": "Sempre perguntar",
+  "native_kimi_mode_yolo": "Perguntar quando necessário",
+  "native_kimi_mode_auto": "Nunca perguntar"
 }
