@@ -102,11 +102,21 @@ impl Batch {
             if !LOG_LEVELS.contains(&line.level.as_str()) { return Err("log_level"); }
             if !is_name(&line.target) { return Err("log_target"); }
             let chars = line.message.chars().count();
-            if !(1..=MAX_LOG_CHARS).contains(&chars) || line.message.chars().any(char::is_control) { return Err("log_message"); }
+            if !(1..=MAX_LOG_CHARS).contains(&chars) || line.message.chars().any(is_invisible) { return Err("log_message"); }
             if line.count == 0 { return Err("log_count"); }
         }
         Ok(())
     }
+}
+
+/// Caractere que não aparece ou mexe no que vem depois: controle (Cc), formato (Cf, como U+200B,
+/// U+202E e U+FEFF) e separador de linha ou parágrafo (U+2028, U+2029).
+pub fn is_invisible(c: char) -> bool {
+    // ponytail: faixas Cf do Unicode 15.1 escritas à mão; categoria nova só entra aqui.
+    c.is_control() || matches!(c as u32,
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2 | 0x180E
+        | 0x200B..=0x200F | 0x2028..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB
+        | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
 }
 
 /// Formato de nome que o receptor aceita (evento, chave e valor): o mesmo `code_ok` do relatório.
@@ -265,6 +275,10 @@ mod tests {
         assert_eq!(with(log(&"a".repeat(MAX_LOG_CHARS + 1))).validate(), Err("log_message"));
         assert_eq!(with(log("")).validate(), Err("log_message"));
         assert_eq!(with(log("duas\nlinhas")).validate(), Err("log_message"));
+        for hidden in ['\u{2028}', '\u{2029}', '\u{202E}', '\u{200B}', '\u{FEFF}', '\u{AD}'] {
+            assert_eq!(with(log(&format!("a{hidden}b"))).validate(), Err("log_message"), "U+{:04X}", hidden as u32);
+        }
+        assert_eq!(with(log("acentuação, ç e — ficam")).validate(), Ok(()));
         assert_eq!(with(LogLine { level: "info".into(), ..log("x") }).validate(), Err("log_level"));
         assert_eq!(with(LogLine { target: "Hangar Server".into(), ..log("x") }).validate(), Err("log_target"));
         assert_eq!(with(LogLine { count: 0, ..log("x") }).validate(), Err("log_count"));

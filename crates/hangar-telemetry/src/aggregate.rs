@@ -15,7 +15,7 @@ use crate::queue::{self, DayFile};
 use crate::send::Failure;
 use crate::state::{self, State};
 use crate::switch::{self, Disabled};
-use crate::wire::{Counter, Env, LogLine, MAX_LOG_CHARS, MAX_LOG_LINES, is_id, is_name};
+use crate::wire::{Counter, Env, LogLine, MAX_LOG_CHARS, MAX_LOG_LINES, is_id, is_invisible, is_name};
 
 /// Relógio de parede; os testes injetam o deles.
 pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
@@ -216,7 +216,7 @@ impl Telemetry {
         if !self.enabled() {
             return;
         }
-        let message: String = message.chars().map(|c| if c.is_control() { ' ' } else { c }).take(MAX_LOG_CHARS).collect();
+        let message: String = message.chars().map(|c| if is_invisible(c) { ' ' } else { c }).take(MAX_LOG_CHARS).collect();
         let message = message.trim();
         if message.is_empty() {
             return;
@@ -519,6 +519,14 @@ pub(crate) mod tests {
         assert_eq!(logs[0].target, "other");
         assert!(logs[0].message.starts_with("primeira segunda é"));
         assert_eq!(logs[0].message.chars().count(), MAX_LOG_CHARS);
+    }
+
+    #[test]
+    fn invisible_characters_become_spaces() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.log(LogLevel::Error, "hangar_server::x", "a\u{2028}b\u{2029}c\u{202E}d\u{200B}e\u{FEFF}f");
+        assert_eq!(telemetry.logs()[0].message, "a b c d e f");
     }
 
     #[test]

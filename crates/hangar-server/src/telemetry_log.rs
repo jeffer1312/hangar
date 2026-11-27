@@ -1,7 +1,10 @@
 //! As linhas de aviso e erro do log que vão à telemetria. A camada só põe a linha num canal limitado
-//! (cheio, descarta); a tarefa de `telemetry_routes` limpa (`telemetry_scrub`) e conta.
+//! (cheio, descarta e conta o descarte); a tarefa de `telemetry_routes` limpa (`telemetry_scrub`) e conta.
 use std::fmt::{self, Write};
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+
+use hangar_telemetry::wire::is_name;
 
 use tokio::sync::mpsc;
 use tracing::field::{Field, Visit};
@@ -9,29 +12,38 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
 const CAPACITY: usize = 256;
+/// Os únicos campos do evento que entram, e só com valor no formato de nome: o resto pode trazer
+/// texto da pessoa (nome de sessão, caminho, resposta de um serviço).
+const SAFE_KEYS: &[&str] = &[
+    "code", "codigo", "status", "kind", "cause", "step", "provider", "surface", "error", "ok", "result", "attempt",
+    "tentativa", "ms", "http_status", "method",
+];
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Line {
     pub(crate) error: bool,
     pub(crate) target: String,
-    /// A mensagem e os campos `k=v`, como o `fmt` escreve no arquivo; ainda sem limpeza.
+    /// A mensagem e os campos seguros `k=v`; a mensagem ainda sem limpeza.
     pub(crate) message: String,
 }
 
-type Channel = (mpsc::Sender<Line>, Mutex<Option<mpsc::Receiver<Line>>>);
+type Channel = (mpsc::Sender<Line>, Mutex<Option<mpsc::Receiver<Line>>>, Arc<AtomicU64>);
 
 static CHANNEL: LazyLock<Channel> = LazyLock::new(|| {
     let (tx, rx) = mpsc::channel(CAPACITY);
-    (tx, Mutex::new(Some(rx)))
+    (tx, Mutex::new(Some(rx)), Arc::new(AtomicU64::new(0)))
 });
+
+/// Quantas linhas o canal cheio descartou desde a última leitura.
+pub(crate) fn take_dropped() -> u64 { CHANNEL.2.swap(0, Ordering::Relaxed) }
 
 /// O consumidor desta vida; só o primeiro pedido leva.
 pub(crate) fn take_lines() -> Option<mpsc::Receiver<Line>> { CHANNEL.1.lock().ok()?.take() }
 
 /// A camada que `init_log` instala ao lado do `fmt`.
-pub fn layer() -> Capture { Capture(CHANNEL.0.clone()) }
+pub fn layer() -> Capture { Capture(CHANNEL.0.clone(), CHANNEL.2.clone()) }
 
-pub struct Capture(mpsc::Sender<Line>);
+pub struct Capture(mpsc::Sender<Line>, Arc<AtomicU64>);
 
 impl<S: Subscriber> Layer<S> for Capture {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
@@ -48,7 +60,9 @@ impl<S: Subscriber> Layer<S> for Capture {
         }
         let mut text = Text::default();
         event.record(&mut text);
-        let _ = self.0.try_send(Line { error, target: target.to_owned(), message: text.0 });
+        if self.0.try_send(Line { error, target: target.to_owned(), message: text.0 }).is_err() {
+            self.1.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -62,15 +76,23 @@ impl Text {
         }
         let _ = self.0.write_fmt(args);
     }
+
+    /// Campo de chave segura com valor de nome; em minúsculas porque o `kind` do `io::Error` vem `NotFound`.
+    fn field(&mut self, key: &str, value: &str) {
+        let value = value.to_ascii_lowercase();
+        if SAFE_KEYS.contains(&key) && is_name(&value) {
+            self.push(format_args!("{key}={value}"));
+        }
+    }
 }
 
 impl Visit for Text {
     fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "message" { self.push(format_args!("{value}")) } else { self.push(format_args!("{}={value:?}", field.name())) }
+        if field.name() == "message" { self.push(format_args!("{value}")) } else { self.field(field.name(), value) }
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        if field.name() == "message" { self.push(format_args!("{value:?}")) } else { self.push(format_args!("{}={value:?}", field.name())) }
+        if field.name() == "message" { self.push(format_args!("{value:?}")) } else { self.field(field.name(), &format!("{value:?}")) }
     }
 }
 
@@ -82,33 +104,36 @@ mod tests {
     #[test]
     fn only_warn_and_error_go_out_with_their_fields() {
         let (tx, mut rx) = mpsc::channel(8);
-        let subscriber = tracing_subscriber::registry().with(Capture(tx));
+        let subscriber = tracing_subscriber::registry().with(Capture(tx, Arc::default()));
         // Com um assinante só, o interesse que outro teste em paralelo gravou desligaria estes pontos
         // (o mesmo cuidado de `groups/store.rs`).
         let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
         tracing::subscriber::with_default(subscriber, || {
             // O alvo deste módulo é da telemetria e seria ignorado: os pontos levam o de outro.
             tracing::info!(target: "hangar_server::list", "só no arquivo");
-            tracing::warn!(target: "hangar_server::list", code = "list_failed", n = 3, "lista não lida: {}", "x");
+            tracing::warn!(target: "hangar_server::list", code = "list_failed", n = 3, session = "minha-sessao", "lista não lida: {}", "x");
             tracing::error!(target: "hangar_server::telemetry_routes", "da própria telemetria");
             tracing::error!(target: "hangar_telemetry::send", "do crate");
-            tracing::error!(target: "hangar_server::list", kind = ?std::io::ErrorKind::NotFound, "sumiu");
+            tracing::error!(target: "hangar_server::list", kind = ?std::io::ErrorKind::NotFound, code = "Fulano Silva", status = 502, "sumiu");
         });
         let target = "hangar_server::list".to_owned();
-        assert_eq!(rx.try_recv().unwrap(), Line { error: false, target: target.clone(), message: r#"lista não lida: x code="list_failed" n=3"#.into() });
-        assert_eq!(rx.try_recv().unwrap(), Line { error: true, target, message: "sumiu kind=NotFound".into() });
+        assert_eq!(rx.try_recv().unwrap(), Line { error: false, target: target.clone(), message: "lista não lida: x code=list_failed".into() });
+        assert_eq!(rx.try_recv().unwrap(), Line { error: true, target, message: "sumiu kind=notfound status=502".into() }, "código fora do formato sai inteiro");
         assert!(rx.try_recv().is_err());
     }
 
     #[test]
     fn full_channel_drops_instead_of_waiting() {
         let (tx, mut rx) = mpsc::channel(1);
+        let dropped = Arc::new(AtomicU64::new(0));
         let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
-        tracing::subscriber::with_default(tracing_subscriber::registry().with(Capture(tx)), || {
+        tracing::subscriber::with_default(tracing_subscriber::registry().with(Capture(tx, dropped.clone())), || {
             tracing::warn!(target: "hangar_server::list", "primeira");
             tracing::warn!(target: "hangar_server::list", "segunda");
+            tracing::warn!(target: "hangar_server::list", "terceira");
         });
         assert_eq!(rx.try_recv().unwrap().message, "primeira");
         assert!(rx.try_recv().is_err());
+        assert_eq!(dropped.load(Ordering::Relaxed), 2, "o descarte é contado");
     }
 }

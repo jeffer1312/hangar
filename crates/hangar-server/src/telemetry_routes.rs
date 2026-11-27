@@ -18,7 +18,8 @@ use serde_json::{Value, json};
 use crate::diag_report::Scrubber;
 use crate::groups::peers::PeerClient;
 use crate::telemetry_log::Line;
-use crate::telemetry_scrub::Names;
+use crate::telemetry_names::{NameBook, read_local};
+use crate::telemetry_scrub::Words;
 use crate::routes::AppState;
 use crate::session_write::{detail, json_response};
 
@@ -36,8 +37,8 @@ const ROUTE_FAILURES: &[&str] = &["error", "timeouterror", "aborterror", "typeer
 /// `codigo` de `app.crash`, em minúsculas: nome do erro do JS, ou `panic` do nativo.
 const FATAL_CODES: &[&str] = &["error", "typeerror", "referenceerror", "rangeerror", "syntaxerror", "panic"];
 const LOG_BATCH: usize = 64;
-// ponytail: um lote por segundo, até 64 linhas; o resto espera no canal (256) ou é descartado.
-// Ler os nomes custa uma volta na lista, e aviso dela mesma não vira laço apertado.
+// ponytail: um lote por segundo, até 64 linhas; o resto espera no canal (256) ou é descartado e
+// contado. Aviso que a própria limpeza provoca não vira laço apertado.
 const LOG_EVERY: Duration = Duration::from_secs(1);
 
 #[derive(Deserialize)]
@@ -108,33 +109,56 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
     tasks
 }
 
-/// As linhas de aviso e erro do log, limpas lote a lote.
+/// As linhas de aviso e erro do log, limpas lote a lote. Sem conjunto bom de nomes o lote não sai e
+/// conta em `log_dropped`, como o que o canal cheio jogou fora.
 async fn log_lines(st: Arc<AppState>, telemetry: Arc<Telemetry>, mut lines: tokio::sync::mpsc::Receiver<Line>) {
     let scrubber = Scrubber::for_env(&st.accounts.env);
+    let started = std::time::Instant::now();
+    let mut book = NameBook::default();
     let mut batch = Vec::with_capacity(LOG_BATCH);
     while lines.recv_many(&mut batch, LOG_BATCH).await > 0 {
-        if telemetry.enabled() && let Some(names) = names(&st).await {
-            record_lines(&telemetry, &scrubber, &names, &batch);
+        let mut dropped = crate::telemetry_log::take_dropped();
+        if telemetry.enabled() {
+            refresh_names(&st, &mut book, started.elapsed()).await;
+            match book.words() {
+                Some(words) => record_lines(&telemetry, &scrubber, &words, &batch),
+                None => {
+                    tracing::debug!(lines = batch.len(), "telemetria: linhas de log descartadas, sem conjunto de nomes");
+                    dropped += batch.len() as u64;
+                }
+            }
+            if dropped > 0 {
+                telemetry.count(Event::LogDropped, Dims::new(), dropped);
+            }
         }
         batch.clear();
         tokio::time::sleep(LOG_EVERY).await;
     }
 }
 
-/// Sessões vivas, peers e esta máquina. Sem a lista não há como tirar os nomes: `None`, e o lote não sai.
-async fn names(st: &AppState) -> Option<Names> {
-    let sessions = st.list.snapshot().await.ok()?.rows.iter().map(|row| row.name.clone()).collect();
-    let peers = st.peers.clone();
-    let mut machines: Vec<String> = tokio::task::spawn_blocking(move || peers.ids()).await.ok()?.into_iter().collect();
-    machines.push(st.server_id.clone());
-    machines.extend(crate::pages::routes::machine_name());
-    Some(Names { sessions, machines })
+/// O último retrato pronto da lista entra a cada lote, sem pedir outro; specs, contas e máquinas são
+/// relidos a cada 30 s. Sem retrato pronto, um pedido à lista na mesma cadência.
+async fn refresh_names(st: &AppState, book: &mut NameBook, now: Duration) {
+    let due = book.due(now);
+    let sessions: Option<Vec<String>> = match st.list.last_rows() {
+        Some(rows) => Some(rows.iter().map(|row| row.name.clone()).collect()),
+        None if due => st.list.snapshot().await.ok().map(|produced| produced.rows.iter().map(|row| row.name.clone()).collect()),
+        None => None,
+    };
+    if let Some(sessions) = sessions {
+        book.see(&chrono::Utc::now().format("%Y-%m-%d").to_string(), sessions);
+    }
+    if due {
+        let (home, peers, server_id) = (st.accounts.env.home.clone(), st.peers.clone(), st.server_id.clone());
+        let read = tokio::task::spawn_blocking(move || read_local(&home, peers.ids(), &server_id, crate::pages::routes::machine_name())).await;
+        book.read(now, read.ok().and_then(Result::ok));
+    }
 }
 
-pub(crate) fn record_lines(telemetry: &Telemetry, scrubber: &Scrubber, names: &Names, lines: &[Line]) {
+pub(crate) fn record_lines(telemetry: &Telemetry, scrubber: &Scrubber, words: &Words, lines: &[Line]) {
     for line in lines {
         let level = if line.error { LogLevel::Error } else { LogLevel::Warn };
-        telemetry.log(level, &line.target, &crate::telemetry_scrub::clean(scrubber, &line.message, names));
+        telemetry.log(level, &line.target, &crate::telemetry_scrub::clean(scrubber, &line.message, words));
     }
 }
 
@@ -456,14 +480,16 @@ mod tests {
     fn log_lines_are_cleaned_before_counting() {
         let home = tempfile::tempdir().unwrap();
         let telemetry = test_telemetry(home.path(), true);
-        let names = Names { sessions: vec!["ajuste-login-Coordenadora".into()], machines: vec!["estudio-02".into()] };
+        let names = crate::telemetry_scrub::Names {
+            sessions: vec!["ajuste-login-Coordenadora".into()], accounts: Vec::new(), machines: vec!["estudio-02".into()],
+        };
         let line = |error, message: &str| Line { error, target: "hangar_server::list".into(), message: message.into() };
         let lines = [
             line(true, "sessão ajuste-login-Coordenadora não abriu em /home/fulano/pessoal/x"),
             line(false, "peer estudio-02 lento"),
             line(true, "sessão ajuste-login-Coordenadora não abriu em /home/fulano/pessoal/y"),
         ];
-        record_lines(&telemetry, &Scrubber::new(Some("/home/fulano".into()), None), &names, &lines);
+        record_lines(&telemetry, &Scrubber::new(Some("/home/fulano".into()), None), &names.words(), &lines);
         let logs: Vec<(String, String, u64)> = telemetry.logs().into_iter().map(|l| (l.level, l.message, l.count)).collect();
         assert_eq!(logs, vec![
             ("error".into(), "sessão <sessão> não abriu em <caminho>".into(), 2),

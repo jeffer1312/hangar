@@ -60,7 +60,7 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 | `server_exit` | `kind` (`crash`, `update`, `requested`), `cause` | Como o servidor anterior parou; contado na subida seguinte |
 | `limit_switch` | `code` | Troca de conta pelo limite de uso: trocou, ficou ou falhou |
 | `client_fatal` | `client`, `code` (tipo do erro, como `typeerror`, ou `panic` no desktop) | Queda do app. O texto do erro nunca sai |
-| `log_dropped` | — | Linha de aviso ou erro nova que não entrou no pacote porque o dia já tinha 100 linhas diferentes |
+| `log_dropped` | — | Linha de aviso ou erro que não entrou no pacote: o dia já tinha 100 linhas diferentes, o servidor estava gerando linhas demais no momento, ou os nomes a tirar não puderam ser lidos |
 
 ### Atualização
 
@@ -83,24 +83,32 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 
 Cada linha de nível aviso (`warn`) ou erro (`error`) que o `hangar-server` escreve no log dele
 vai também ao pacote do dia como `{level, target, message, count}`: `target` é o módulo do código que
-escreveu (como `hangar_server::list`), `message` é o texto da linha com os campos, e `count` quantas
-vezes a mesma linha, já limpa, apareceu no dia. As linhas do nível informativo, do celular e do desktop
-não vão.
+escreveu (como `hangar_server::list`), `message` é o texto da linha, e `count` quantas vezes a mesma
+linha, já limpa, apareceu no dia. As linhas do nível informativo, do celular e do desktop não vão.
+Dos campos da linha só entram `code`, `codigo`, `status`, `kind`, `cause`, `step`, `provider`,
+`surface`, `error`, `ok`, `result`, `attempt`, `tentativa`, `ms`, `http_status` e `method`, e só
+com valor de código (minúsculas, dígitos e `_ . : -`); os outros ficam fora.
 
 Antes de contar, o servidor limpa o texto na própria máquina:
 
+- todo trecho entre aspas duplas, simples ou crases vira `"…"`: é dado, não a frase do código;
 - tira credenciais (tokens, `Bearer`, senhas em URL e em JSON, chaves conhecidas), IPs, nomes do
   Tailscale (`*.ts.net`) e trechos longos em hex ou base64, com as mesmas regras do "Reportar
   problema";
-- todo caminho de arquivo (absoluto, com `~/` ou `%LOCALAPPDATA%`, de unidade do Windows ou de rede)
-  vira `<caminho>`, sem guardar nem o nome do arquivo;
-- endereço `http(s)` vira `<url>` e e-mail vira `<email>`;
-- o nome de cada sessão aberta vira `<sessão>`, e o nome desta máquina e das máquinas do
-  `peers.json` vira `<máquina>`, lidos na hora de cada lote;
-- número com 6 dígitos ou mais (pid, porta alta, id) vira `<n>`;
+- todo caminho de arquivo (absoluto, com `~/` ou `%LOCALAPPDATA%`, de unidade do Windows ou de rede,
+  também com espaço no meio, como `C:\Program Files\…`) vira `<caminho>`, sem guardar nem o nome do arquivo;
+- endereço `http(s)` vira `<url>`, e-mail vira `<email>`, `host:porta` e nome com ponto (`a.rs`,
+  `casa.exemplo.com`) viram `<nome>`; número de versão (`0.42.0`) fica;
+- nomes da pessoa viram marcador: sessão (toda sessão vista hoje e ontem, aberta ou não, e as dos
+  registros de abertura) vira `<sessão>`; conta do Claude e do Codex, rótulo de conta e usuário do
+  sistema viram `<conta>`; esta máquina, o nome dela e as do `peers.json` viram `<máquina>`. Esses
+  nomes são relidos a cada 30 s; sem uma leitura boa deles a linha não sai;
+- id (UUID, hex de 16 ou mais) vira `<id>` e número com 6 dígitos ou mais (pid, porta alta) vira `<n>`;
+- caractere invisível (controle, formatação como U+200B e U+202E, separador de linha) vira espaço;
 - a mensagem é cortada em 300 caracteres.
 
-Por pacote vão no máximo 100 linhas diferentes; passando disso, a linha nova só soma `log_dropped`.
+Por pacote vão no máximo 100 linhas diferentes; passando disso, a linha nova só soma `log_dropped`,
+que conta também a linha descartada por excesso no momento ou por falta dos nomes.
 Sem resposta ao aviso, ou com "Não enviar", nenhuma linha é guardada.
 
 ## O que nunca sai

@@ -88,6 +88,7 @@ pub mod status;
 pub mod telemetry_routes;
 pub mod telemetry_hooks;
 pub(crate) mod telemetry_log;
+pub(crate) mod telemetry_names;
 pub(crate) mod telemetry_scrub;
 pub mod usage_cli;
 pub mod send_cli;
