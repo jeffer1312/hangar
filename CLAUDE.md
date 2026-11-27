@@ -314,6 +314,10 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   transcript confirmar. [Regra](docs/decisoes/harnesses.md#mensagem-na-conversa-sem-cortar-o-turno-16112026).
 - **Dedup de fila/pending é delicado** — bolhas `pending`/`queued-` reconciliam por texto
   normalizado contra o transcript real.
+- **Envio só é incerto quando pode ter chegado; 503 com código anterior à escrita e conexão que
+  não abriu voltam o texto como recusa, e o incerto some quando a conversa mostra a mensagem.** As
+  cópias são `input_not_sent`/`settle_input_refusal` (nativo) e `isInputRefusal` (core), com a
+  mesma lista de códigos. [Medição](docs/decisoes/frontend.md#envio-que-não-saiu-e-envio-incerto-27112026).
 - **Vite HMR pode servir componente VAZIO** (stub <1KB, sem erro no console): a tela some sem
   nada quebrar. Remédio: reiniciar o serviço do front. Verificação de front SEMPRE inclui abrir
   a tela e confirmar que montou.

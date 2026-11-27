@@ -1394,3 +1394,60 @@ textura de trás.
   que os TTFs.
 - Trocar a Geist pela Inter não mudaria a legibilidade: a 14 px as duas quase não se distinguem.
   A Inter é opção de Aparência, não a fonte padrão.
+
+## Envio que não saiu e envio incerto (27/11/2026)
+
+O `/input` que falha cai em dois baldes: **recusa** (o texto volta ao campo, reenviar é seguro) e
+**incerto** (pode ter chegado; o aviso pede conferir antes de reenviar). Antes, conexão que nem
+abriu e 503 com código do servidor caíam no incerto, e o aviso ficava na tela mesmo depois de a
+mensagem aparecer na conversa.
+
+Medição nesta máquina: 7 dias de diário de uso, 0 envios incertos em 1.695 mensagens recebidas;
+60 dias de transcripts, 0 mensagens duplicadas por falha de envio. O conserto é de correção da
+regra, não de volume: por isso a chave de envio (idempotência) ficou de fora.
+
+- **Recusa só com prova de que nada foi gravado.** Conexão que não abriu (nativo:
+  `reqwest::Error::is_connect() || is_builder()`, em `input_not_sent`), 4xx exceto 408 (prazo
+  vencido no meio do caminho) e 503 com um código da lista abaixo. Todo o resto continua incerto:
+  corte depois de conectar, 5xx sem código, 502/504 de proxy, 200 ilegível, 503 com código fora
+  da lista. A regra tem duas cópias que mudam juntas: `input_not_sent` + `settle_input_refusal`
+  (`desktop-native/src/api/mod.rs`) e `isInputRefusal` (`packages/core/src/api.ts`), cada uma com
+  a lista `INPUT_REFUSED_BEFORE_WRITE`.
+- **Os 503 conferidos em `crates/hangar-server/src/session_write/`**, todos devolvidos antes de
+  qualquer escrita na fila ou no agente:
+
+  | Código | De onde sai |
+  |---|---|
+  | `server_starting` | `startup::guard` (`{"detail":"server_starting"}`, texto no `detail`) |
+  | `runtime_unhealthy` | `route_write` com a entrada doente (`mod.rs`) |
+  | `runtime_unavailable` | `no_runtime`, servidor sem o registro de sessões (`mod.rs`) |
+  | `runtime_watcher` | fila da sessão que abre ou adormecida sem registro (`input.rs`), `bridge.rs` |
+  | `orq_runs_unavailable` | `orchestration_guard` sem conseguir ler as execuções (`mod.rs`) |
+  | `codex_terminal_unadopted` | Codex com terminal adotado que fechou em seguida (`route_write`) |
+  | `codex_sidecar_invalid`, `claude_sidecar_invalid`, `antigravity_sidecar_invalid` | arquivo de sessão sem dono no Rust (`unowned.rs`) |
+  | `erro_lista_indisponivel`, `erro_mux_indisponivel` | lista ou multiplexador fora ao procurar a sessão (`unowned.rs`) |
+
+- **Exceção: `runtime_reply_lost` fica incerto.** As filas da sessão adormecida ou que ainda abre
+  (`queue_while_asleep`, `queue_opening` em `input.rs`) devolvem 503 com o código do ator, e esse
+  código (`runtime/protocol.rs`) pode vir depois de a linha ter sido gravada. Pelo mesmo motivo a
+  lista é fechada: código novo de ator (`other_terminal_life_changed`, `queue_io`) nunca vira
+  recusa sem ser conferido aqui.
+- **O incerto some sozinho quando a conversa mostra a mensagem.** Vale uma `user_msg` com id fora
+  do que estava na tela no Enter, que não começa com `queued-` (a linha da fila não prova entrega),
+  com o mesmo texto (`matches_real` no nativo, `sameMessage` no Expo) e `ts >= Enter − 30 s` (folga
+  para relógio adiantado). Sem `ts` (fala comum do Claude), só vale quando o histórico já estava
+  carregado no Enter. No nativo (`desktop-native/src/delivery.rs`) o texto que voltou ao campo sai
+  dele só se ninguém o mexeu, como no Expo (`mobile/src/stores/chat.ts`).
+- **Expo: queda de rede continua incerta.** O `fetch` do React Native não separa conexão recusada
+  de corte no meio; só o 503 com código passou a ser recusa, e só no `/input`: o 503 do `/steer`
+  continua incerto. `sendInputForServer` e o `request` de `mobile/src/chat/queueDelivery.ts` põem
+  `code` no erro (`failureWithCode`).
+- **`hangar-send` cortado confere na conversa do destino, nunca reenvia.** Lê
+  `/history?limit=40` no mesmo servidor e token do envio, por `HANGAR_SEND_CHECK_SECONDS` (padrão
+  6 s): prova é a linha `queued-…` ou `ts >= início − 30 s`; sem `ts`, só a única fala com aquele
+  corpo. Saída 0 "chegou", 3 não apareceu, 4 não deu para conferir (par externo sempre 4).
+
+Fora do conserto, notado: sem terminal, `Disposition::Unknown` ou `runtime_reply_lost` no
+`session_write/input.rs` volta 400 `erro_envio_falhou`, que os clientes tratam como recusa (0 casos
+nos 7 dias); e o `SEND_TIMEOUT_S = 30` do `skills/orquestrar/scripts/orq.py` mata o `hangar-send`
+antes da conferência.
