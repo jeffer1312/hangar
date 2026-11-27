@@ -402,16 +402,20 @@ async fn a_wipe_takes_the_copies_of_the_messages_too() {
     }
 }
 
-/// O serviço de pé já apagou banco e mídia: uma cópia que não sai depois disso é apagar em parte, nunca "não apaguei".
+/// Uma cópia que não sai para o apagar antes do banco: o serviço nem é chamado, e o banco fica no lugar (banco
+/// apagado com a cópia ao lado seria lido como volta presa, e as mensagens voltariam).
 #[tokio::test]
-async fn a_copy_that_stays_after_the_service_wiped_is_a_partial_wipe() {
+async fn a_copy_that_does_not_go_stops_the_wipe_before_the_database() {
     let s = Scene::new();
     s.serve(Signing::Signed).await;
     let data = s.paths().data.clone();
     std::fs::create_dir_all(data.join("messages.db.schema1.bak/x")).unwrap();
+    std::fs::write(data.join("messages.db"), b"x").unwrap();
     let (status, body) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
-    assert_eq!((status, code(&body)), (500, "whatsapp_wipe_partial"), "{body}");
+    assert_eq!((status, code(&body)), (500, "whatsapp_wipe_failed"), "{body}");
     assert_eq!(body["detail"]["params"]["failed"], "messages.db.schema1.bak");
+    assert!(!s.seen.lock().unwrap().iter().any(|r| r.ends_with("/v1/wipe")), "o serviço apagou com a cópia ainda no disco");
+    assert!(data.join("messages.db").exists());
 }
 
 /// Um arquivo que não sai no meio (no Windows, aberto pelo serviço): a resposta diz o que já saiu.

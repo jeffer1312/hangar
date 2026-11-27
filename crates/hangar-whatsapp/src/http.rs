@@ -380,18 +380,20 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     }
     // Atualização em curso troca o processo no meio do pedido: apagar espera a vez, de pé ou parado.
     let Ok(_guard) = wa.installer.inline() else { return busy() };
+    // As cópias saem antes do banco: as de uma volta são do Hangar (a versão antiga religada por ela não conhece as
+    // `.bak`), e uma que não sai deixa o banco no lugar. Banco apagado com a cópia ao lado seria lido como volta presa,
+    // e as mensagens voltariam.
+    let data = wa.ctx.paths.data.clone();
+    match tokio::task::spawn_blocking(move || wipe_copies(&data, Vec::new())).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(partial)) => return partial_wipe(partial),
+        Err(_) => return refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),
+    }
     // De pé é o serviço respondendo: só a falta de conexão leva ao ramo do disco, com as guardas dele.
     match wa.client.call(reqwest::Method::POST, "/v1/wipe", &[], Some(&json!({"confirm": true}))).await {
         Ok(reply) if (200..300).contains(&reply.status) => {
-            // As cópias de uma volta são do Hangar, e a versão antiga religada por ela não conhece as `.bak`. O que o
-            // serviço apagou já saiu: uma cópia que fica depois disso é apagar em parte.
-            let data = wa.ctx.paths.data.clone();
-            let wiped = vec!["messages.db".into(), "session.db".into(), "media".into()];
-            return match tokio::task::spawn_blocking(move || wipe_copies(&data, wiped)).await {
-                Ok(Ok(_)) => relay(reply),
-                Ok(Err(partial)) => partial_wipe(partial),
-                Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),
-            };
+            let _ = std::fs::remove_file(wa.ctx.paths.restore_pending());
+            return relay(reply);
         }
         Ok(reply) => return relay(reply),
         Err(CallError::Off(_)) => {}
@@ -678,7 +680,8 @@ fn pick(query: &str, allowed: &[&str]) -> Vec<(String, String)> {
 /// Apaga bancos (com o WAL e o journal do SQLite) e mídia; `control.*` fica, para o binário subir igual.
 /// Parar no meio (no Windows, arquivo aberto) devolve o que já saiu.
 fn wipe_data(data: &Path) -> Result<(), Partial> {
-    let mut removed = Vec::new();
+    // As cópias antes do banco, pelo mesmo motivo do `wipe`.
+    let mut removed = wipe_copies(data, Vec::new())?;
     let stop = |name: String, e: std::io::Error, removed: Vec<String>| Partial { detail: format!("{name}: {e}"), failed: name, removed };
     for db in ["messages.db", "session.db"] {
         for suffix in install::DB_FILES {
@@ -690,7 +693,6 @@ fn wipe_data(data: &Path) -> Result<(), Partial> {
             }
         }
     }
-    let removed = wipe_copies(data, removed)?;
     match std::fs::remove_dir_all(data.join("media")) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(stop("media".into(), e, removed)),
         _ => Ok(()),
