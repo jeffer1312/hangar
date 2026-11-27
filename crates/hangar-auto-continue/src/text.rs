@@ -7,8 +7,9 @@ pub const TRANSIENT: &str = "A conexão caiu no meio do turno. Continue de onde 
 /// Reboot no meio do turno e o "Reabrir e continuar".
 pub const REBOOT: &str = "Continue de onde parou. O turno anterior foi cortado no meio: um comando ou ação que ele começou pode ter terminado ou ainda estar rodando. Antes de repetir algo que muda estado, confirme que não teve efeito e não está rodando; se não der para saber, diga isso em vez de repetir.";
 
-/// A sessão reaberta depois do limite de uso ou do login recusado.
-pub const LIMIT: &str = "Continue de onde parou.";
+/// A sessão reaberta depois do limite de uso ou do login recusado. Diz o motivo para não coincidir com o
+/// "Continue de onde parou." que a pessoa escreve.
+pub const LIMIT: &str = "A sessão reabriu depois do limite de uso ou do login recusado. Continue de onde parou.";
 
 /// Igualdade depois do `trim`: o "continua" que a pessoa escreve nunca é confundido com o automático.
 pub fn is_auto_continue(text: &str) -> bool {
@@ -27,6 +28,7 @@ mod tests {
             assert!(is_auto_continue(&format!("  {text}\n")), "{text}");
         }
         assert!(!is_auto_continue("continua"));
+        assert!(!is_auto_continue("Continue de onde parou."), "o texto curto é o que a pessoa escreve");
         assert!(!is_auto_continue("Continue de onde parou. E depois rode os testes."));
         assert!(!is_auto_continue(""));
     }

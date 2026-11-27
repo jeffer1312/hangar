@@ -271,12 +271,13 @@ impl Watcher {
                     Err(e) => return unreadable(st, &e),
                 }
             }
-            let check = Check {
+            let mut check = Check {
                 last_reply_at: row.last_reply_at, link: links.as_ref().and_then(|l| l.get(&row.name)).cloned(), now: wall_now(),
-                parent: row.linked_by.as_deref().unwrap_or_default(), server,
+                parent: row.linked_by.as_deref().unwrap_or_default(), server, continues: false,
             };
             self.handled.insert(row.name.clone(), reply_at);
             if !settled(&check) { continue; }
+            check.continues = continues_alone(st, row).await;
             let outcome = give_back(st, row, &check, reply_at, &mut self.rate, current).await;
             self.finish(&row.name, outcome, now);
         }
@@ -292,6 +293,8 @@ pub(crate) struct Check<'a> {
     pub parent: &'a str,
     /// Id desta máquina; vazio quando não configurado.
     pub server: &'a str,
+    /// O continuar sozinho vai seguir o turno parado no erro (`continues_alone`).
+    pub continues: bool,
 }
 
 /// Critério 3 pela linha (parada há `SETTLE` e provedor devolvível já filtrados no `round`): resposta
@@ -345,7 +348,7 @@ enum Refusal {
     NoAnswer(String),
     AlreadyReturned,
     TooOld,
-    /// O turno parou numa linha de erro da API: não é resposta. Com o continue, a resposta real volta depois.
+    /// O turno parou numa queda passageira que o continuar sozinho vai seguir: a resposta real volta depois.
     ApiError,
 }
 
@@ -357,7 +360,7 @@ fn decide<'a>(c: &Check, turn: &'a Turn) -> Result<(&'a str, String), Refusal> {
         let key = unanswered_key(&turn.events);
         return Err(if returned(&key) { Refusal::AlreadyReturned } else { Refusal::NoAnswer(key) });
     };
-    if api_error(answer) { return Err(Refusal::ApiError); }
+    if c.continues && api_error(answer) { return Err(Refusal::ApiError); }
     let key = answer_key(answer, asked);
     if returned(&key) { return Err(Refusal::AlreadyReturned); }
     // `last_reply_at` cai no mtime do transcript sem hora no evento; a do evento é a da resposta.
@@ -372,6 +375,24 @@ fn api_error(e: &ChatEvent) -> bool {
     e.kind == ChatKind::AssistantMsg
         && (e.notice_meta.as_ref().is_some_and(|meta| meta.get("level").and_then(|level| level.as_str()) == Some("error"))
             || e.text.as_deref().is_some_and(|text| text.trim_start().starts_with("API Error")))
+}
+
+/// Só a queda passageira com o interruptor ligado e o registro esperando a rede (ou já tendo mandado o
+/// "continue" dela) segue sozinha. Limite, login recusado, prompt longo, teto ou Cancelar nunca continuam: o
+/// erro volta ao pai, senão ele espera para sempre.
+async fn continues_alone(st: &AppState, row: &SessionRow) -> bool {
+    if row.auto_continue_off || !matches!(Provider::parse(&row.provider), Some(Provider::Claude | Provider::ClaudeHeadless)) { return false; }
+    let (Some(auto), Some(jsonl)) = (st.auto_continue.get(), row.jsonl.clone().filter(|j| !j.is_empty())) else { return false };
+    let Ok(Some(key)) = blocking(move || Ok(transient_stop(Path::new(&jsonl)))).await else { return false };
+    auto.ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner).continuing(&row.name, &key, wall_now())
+}
+
+/// A chave (a do `StopHit`) da última linha da conversa, quando ela é uma queda passageira.
+fn transient_stop(jsonl: &Path) -> Option<String> {
+    use crate::session_write::limit_switch::{file_tail, last_main_line};
+    let line = last_main_line(&file_tail(jsonl)?)?;
+    if !hangar_auto_continue::classify_claude_line(&line).is_transient() { return None; }
+    line["uuid"].as_str().map(str::to_owned)
 }
 
 fn blank_answer(e: &ChatEvent) -> bool { e.kind == ChatKind::AssistantMsg && e.text.as_deref().is_none_or(|t| t.trim().is_empty()) }
@@ -470,10 +491,11 @@ async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at:
             return Outcome::Done;
         }
         Err(Refusal::NotAsked | Refusal::AlreadyReturned) => return Outcome::Done,
-        // Sem aviso ao pai: o continue sozinho (ou a troca de conta) dá a resposta real, que volta com outra chave.
+        // Sem aviso ao pai: o continue sozinho dá a resposta real, que volta com outra chave. Relê depois: a espera
+        // que desiste (Cancelar, teto, envio recusado) devolve o erro ao pai.
         Err(Refusal::ApiError) => {
-            report(st, child, "link_return_api_error", "turno da filha parou num erro da API; não é resposta e não volta", "");
-            return Outcome::Done;
+            report(st, child, "link_return_api_error", "turno da filha parou numa queda que continua sozinha; o erro não volta", "");
+            return Outcome::Retry;
         }
         Ok(_) | Err(Refusal::NoAnswer(_)) => {}
     }
@@ -529,7 +551,7 @@ mod tests {
     fn check() -> Check<'static> {
         Check {
             last_reply_at: Some(NOW - 60.0),
-            link: Some(LinkReturn { linked_at: NOW - 600.0, ..LinkReturn::default() }), now: NOW, parent: "pai", server: "casa",
+            link: Some(LinkReturn { linked_at: NOW - 600.0, ..LinkReturn::default() }), now: NOW, parent: "pai", server: "casa", continues: false,
         }
     }
 
@@ -618,23 +640,55 @@ mod tests {
         assert_eq!(decide(&c, &turn(vec![ev(ChatKind::AssistantMsg, "só resposta")], true)), Err(Refusal::NotAsked));
     }
 
-    /// O turno parou no erro da API: a linha de erro não volta ao pai como resposta, com ou sem a marca do parser.
+    /// O turno parou numa queda que continua sozinha: a linha de erro não volta ao pai, com ou sem a marca do
+    /// parser. Sem continuar (limite, login, teto, interruptor desligado), o erro volta como antes.
     #[test]
     fn an_api_error_line_is_not_the_answer() {
-        let c = check();
+        let c = Check { continues: true, ..check() };
         let marked = ChatEvent {
             notice_meta: serde_json::json!({"level": "error"}).as_object().cloned(),
             ..ev(ChatKind::AssistantMsg, "Can't reach the API server (EAI_AGAIN)")
         };
         for error in [marked, ev(ChatKind::AssistantMsg, "API Error: Connection lost mid-response.")] {
             let mut events = asked("[de: pai] x");
-            events[3] = error;
-            assert_eq!(decide(&c, &turn(events, false)), Err(Refusal::ApiError));
+            events[3] = error.clone();
+            assert_eq!(decide(&c, &turn(events.clone(), false)), Err(Refusal::ApiError));
             assert!(reply("f", Err(Refusal::ApiError), || true).is_none(), "nem aviso de sem resposta");
+            let back = decide(&check(), &turn(events, false)).map(|(a, _)| a.to_owned());
+            assert_eq!(back, Ok(error.text.unwrap()), "sem o continue, o pai recebe o erro");
         }
+        let limit = ChatEvent {
+            notice_meta: serde_json::json!({"level": "error"}).as_object().cloned(),
+            ..ev(ChatKind::AssistantMsg, "You've hit your 5-hour limit")
+        };
+        let mut events = asked("[de: pai] x");
+        events[3] = limit;
+        assert_eq!(decide(&check(), &turn(events, false)).map(|(a, _)| a), Ok("You've hit your 5-hour limit"));
         // O aviso da CLI no formato de resposta (só com `key`) não é a linha de erro.
         let note = ChatEvent { notice_meta: serde_json::json!({"key": "x"}).as_object().cloned(), ..ev(ChatKind::AssistantMsg, "feito") };
         assert!(!api_error(&note));
+    }
+
+    /// Só a queda passageira no fim da conversa tem chave de continuar; limite, login e resposta normal, não.
+    #[test]
+    fn only_a_transient_stop_at_the_end_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("f.jsonl");
+        let line = |fields: serde_json::Value| {
+            let mut line = serde_json::json!({"type": "assistant", "isSidechain": false, "uuid": "e1", "isApiErrorMessage": true,
+                "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "API Error"}]}});
+            for (key, value) in fields.as_object().unwrap() { line[key] = value.clone(); }
+            format!("{line}\n")
+        };
+        std::fs::write(&jsonl, line(serde_json::json!({"error": "server_error", "apiError": "connection_failed"}))).unwrap();
+        assert_eq!(transient_stop(&jsonl).as_deref(), Some("e1"));
+        for refused in [serde_json::json!({"error": "rate_limit", "apiError": "usage_limit_reached", "apiErrorStatus": 429}),
+            serde_json::json!({"error": "authentication_failed"}), serde_json::json!({"error": "invalid_request", "apiError": "prompt_too_long"}),
+            serde_json::json!({"isApiErrorMessage": false, "message": {"model": "claude-opus-5-5", "content": [{"type": "text", "text": "ok"}]}})] {
+            std::fs::write(&jsonl, line(refused.clone())).unwrap();
+            assert_eq!(transient_stop(&jsonl), None, "{refused}");
+        }
+        assert_eq!(transient_stop(&dir.path().join("ausente.jsonl")), None);
     }
 
     /// O pai pede, a rede cai, o Hangar manda o "continue" sozinho e a filha termina: a resposta volta ao pai.

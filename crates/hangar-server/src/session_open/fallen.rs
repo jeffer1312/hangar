@@ -186,7 +186,7 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     let task = tokio::spawn(async move {
         let _reopening = reopening;
         let host = super::server::ServerHost::new(st.clone()).await;
-        if let Err(code) = super::restore::restore_one(&host, &st, &program, &fallen.key, &entry, None).await { return Err(code); }
+        if let Err(code) = super::restore::restore_one(&host, &st, &program, &fallen.key, &entry).await { return Err(code); }
         if !continue_turn { return Ok(None); }
         let continued = match st.auto_continue.get() {
             Some(auto) => continue_after_reopen(&LiveResume(st.as_ref()), &auto.ledger, &entry.name, &fallen).await,

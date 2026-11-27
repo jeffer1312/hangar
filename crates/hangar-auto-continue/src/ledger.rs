@@ -227,6 +227,13 @@ impl Ledger {
         }).collect()
     }
 
+    /// A parada desta chave segue sozinha: espera a rede sem Cancelar, ou o "continue" dela já saiu.
+    pub fn continuing(&self, session: &str, key: &str, now: f64) -> bool {
+        let Some(entry) = self.doc.sessions.get(session) else { return false };
+        let waiting = entry.waiting.as_ref().is_some_and(|waiting| waiting.hit.key() == key) && entry.cancelled.as_deref() != Some(key);
+        waiting || entry.sent.iter().any(|sent| sent.key == key && now - sent.at < KEY_KEEP_S)
+    }
+
     pub fn has_ended(&self, session: &str, key: &str, now: f64) -> bool {
         self.doc.sessions.get(session)
             .is_some_and(|entry| entry.ended.iter().any(|ended| ended.key == key && now - ended.at < KEY_KEEP_S))
@@ -500,13 +507,31 @@ mod tests {
         assert_eq!(ledger.allow("s", Source::Transient, "d", StopKind::Network, 240.0), Err(Cap::Hourly));
     }
 
-    /// O caso de 13/11: quatro logins recusados em 38 s, cada um com sua linha.
+    /// Logins recusados seguidos, cada um com sua linha, param na corrente.
     #[test]
-    fn four_login_retries_in_38_s_send_two() {
+    fn repeated_login_retries_stop_at_the_chain() {
         let (_home, mut ledger) = ledger();
         let got: Vec<_> = [(0.0, "login-1"), (12.0, "login-2"), (25.0, "login-3"), (38.0, "login-4")].into_iter()
             .map(|(now, key)| try_continue(&mut ledger, Source::LoginRetry, key, StopKind::Other, now))
             .collect();
         assert_eq!(got, [Ok(()), Ok(()), Err(Cap::Chain), Err(Cap::Chain)]);
+    }
+
+    /// Segue sozinha a parada que espera a rede ou cujo continue saiu; a cancelada, a barrada e outra linha, não.
+    #[test]
+    fn a_stop_continues_while_waiting_or_once_sent() {
+        let (_home, mut ledger) = ledger();
+        let hit = |line: &str| StopHit { name: "s".into(), provider: "claude".into(), kind: StopKind::Network,
+            line_id: Some(line.into()), at: 0.0, life: "k:s".into() };
+        assert!(!ledger.continuing("s", "e1", 10.0), "sem registro");
+        ledger.park("s", Waiting { hit: hit("e1"), count: 0, note_out: true });
+        assert!(ledger.continuing("s", "e1", 10.0));
+        assert!(!ledger.continuing("s", "e2", 10.0), "outra linha");
+        assert!(ledger.cancel("s"));
+        assert!(!ledger.continuing("s", "e1", 10.0), "cancelada");
+        ledger.end("s", "e1", 20.0);
+        assert!(!ledger.continuing("s", "e1", 20.0), "barrada ou descartada");
+        ledger.record("s", Source::Transient, "e1", StopKind::Network, 30.0);
+        assert!(ledger.continuing("s", "e1", 40.0), "o continue saiu");
     }
 }

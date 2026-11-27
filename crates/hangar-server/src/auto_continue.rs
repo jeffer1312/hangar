@@ -146,13 +146,17 @@ pub fn spawn(st: Arc<AppState>) -> Vec<JoinHandle<()>> {
 }
 
 /// O `ListHub` só produz enquanto há assinatura. Quem precisa dela sem cliente aberto: a sessão parada à
-/// espera da rede (os fatos) e a sessão Claude com terminal (a parada dela é lida pela produção da lista).
+/// espera da rede (os fatos) e a sessão Claude com terminal ativa há pouco (a parada dela é lida pela produção
+/// da lista). Parada há mais que `RECENT`, ela não segura a produção.
 async fn hold(host: Arc<Native>, ledger: Arc<Mutex<Ledger>>) {
     loop {
         let waiting = !lock(&ledger).parked().is_empty();
         let need = if waiting { Some(true) } else {
             match host.st.list.discover(None).await {
-                Ok(rows) => Some(rows.iter().any(|row| row.provider == "claude" && !row.headless)),
+                Ok(rows) => {
+                    let now = crate::state::monitor::wall_now();
+                    crate::groups::link_state::blocking(move || Ok(terminal_active(&rows, now))).await.ok()
+                }
                 // Descoberta que falha não decide: fica como estava.
                 Err(error) => {
                     if crate::warn_limit::allow(None, error.code) {
@@ -169,6 +173,20 @@ async fn hold(host: Arc<Native>, ledger: Arc<Mutex<Ledger>>) {
         }
         tokio::time::sleep(HOLD_CHECK).await;
     }
+}
+
+/// Transcript gravado há menos que isto: a sessão trabalha ou acabou de parar. Duas conferências cobrem o turno
+/// que começou e terminou entre elas.
+const RECENT: Duration = Duration::from_secs(2 * HOLD_CHECK.as_secs());
+
+/// Alguma sessão Claude com terminal escreveu na conversa há pouco. A linha da descoberta não traz estado nem
+/// atividade: quem diz é o mtime do transcript.
+fn terminal_active(rows: &[SessionRow], now: f64) -> bool {
+    rows.iter().filter(|row| row.provider == "claude" && !row.headless)
+        .filter_map(|row| row.jsonl.as_deref().filter(|jsonl| !jsonl.is_empty()))
+        .filter_map(|jsonl| std::fs::metadata(jsonl).and_then(|meta| meta.modified()).ok())
+        .filter_map(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .any(|at| now - at.as_secs_f64() < RECENT.as_secs_f64())
 }
 
 struct Native {
@@ -402,7 +420,13 @@ pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow], diag: &D
     for row in rows.iter_mut() { row.auto_continue_off = false; }
     let off = match off_keys(home).await {
         Ok(off) => off,
-        Err(_) => return diag.report(EVENT, "", SWITCH_UNREADABLE, "continuar sozinho: o indice do interruptor nao se leu"),
+        // A lista roda a cada 1,5 s: o diário recebe uma por minuto, como o log.
+        Err(_) => {
+            if crate::warn_limit::allow(Some(EVENT), SWITCH_UNREADABLE) {
+                diag.report(EVENT, "", SWITCH_UNREADABLE, "continuar sozinho: o indice do interruptor nao se leu");
+            }
+            return;
+        }
     };
     if off.is_empty() { return; }
     for row in rows.iter_mut() {
@@ -550,6 +574,23 @@ mod tests {
         }
         person_wrote(&ledger, "s", "continua");
         assert_eq!(third(), Ok(()));
+    }
+
+    /// Só a sessão Claude com terminal que escreveu há pouco segura a lista; parada há tempo ou sem terminal, não.
+    #[test]
+    fn only_a_recently_active_terminal_session_holds_the_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("c.jsonl");
+        std::fs::write(&jsonl, b"{}\n").unwrap();
+        let path = jsonl.to_string_lossy().into_owned();
+        let terminal = row(json!({"name": "s", "provider": "claude", "jsonl": path}));
+        let now = crate::state::monitor::wall_now();
+        assert!(terminal_active(std::slice::from_ref(&terminal), now));
+        assert!(!terminal_active(std::slice::from_ref(&terminal), now + RECENT.as_secs_f64() + 1.0), "parada há tempo");
+        let headless = row(json!({"name": "s", "provider": "claude", "headless": true, "jsonl": path}));
+        assert!(!terminal_active(&[headless], now), "sem terminal o ator vê a parada");
+        assert!(!terminal_active(&[row(json!({"name": "s", "provider": "codex", "jsonl": path}))], now));
+        assert!(!terminal_active(&[row(json!({"name": "s", "provider": "claude", "jsonl": dir.path().join("x").to_string_lossy()}))], now));
     }
 
     #[tokio::test]

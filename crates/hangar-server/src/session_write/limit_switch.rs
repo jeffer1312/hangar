@@ -273,6 +273,16 @@ fn transcript_turn_auto(path:&std::path::Path) -> Option<bool> {
     turn_auto_continued(&events)
 }
 
+/// A chave do teto "uma vez por aviso". Sem o reset, o aviso não tem identidade própria: cada um leva a hora
+/// em que chegou, e quem segura o repetido é a corrente, como no login.
+fn limit_key(hit:&LimitHit,now:f64) -> String {
+    let account = hit.account.as_deref().unwrap_or_default();
+    match hit.limit.resets_at {
+        Some(reset)=>format!("limit:{account}:{}:{reset}",hit.limit.window),
+        None=>format!("limit:{account}:{}:at:{now}",hit.limit.window),
+    }
+}
+
 /// Janela sem reset conhecido fica gasta por cinco horas, a menor das janelas.
 const UNKNOWN_RESET_S:f64 = 5.0 * 3600.0;
 
@@ -391,9 +401,9 @@ impl Switcher {
             self.spent.mark_limit(&current,reset,now,&hit.limit.window);
             return Outcome::Stayed("limit_switch_handoff");
         }
-        // Depois das saídas que nunca continuam e antes de marcar a conta: barrada, a sessão fica onde está.
-        if let Some(cap) = self.capped(host,&hit.name,gate) { return Outcome::Capped(cap); }
+        // A conta que bateu o limite fica gasta para as outras sessões mesmo barrada; a sessão fica onde está.
         self.spent.mark_limit(&current,reset,now,&hit.limit.window);
+        if let Some(cap) = self.capped(host,&hit.name,gate) { return Outcome::Capped(cap); }
         self.move_away(host,&hit.name,&spec,&current).await
     }
 
@@ -524,8 +534,8 @@ impl Switcher {
         Gate { source,key,auto }
     }
 
-    /// O teto do registro, conferido antes de reabrir: barrada, nada reabre, nenhuma conta fica gasta e a
-    /// sessão não muda de conta.
+    /// O teto do registro, conferido antes de reabrir: barrada, nada reabre e a sessão não muda de conta. No
+    /// login recusado nenhuma conta fica gasta; no limite, a que bateu fica.
     fn capped(&self,host:&dyn Host,name:&str,gate:&Gate<'_>) -> Option<Cap> {
         if !gate.auto { return None; }
         let ledger = self.ledger.as_ref()?;
@@ -575,7 +585,7 @@ impl Switcher {
 
     async fn handle(&self,host:&dyn Host,hit:LimitHit) {
         let first = self.first_time(&hit.name,&hit.limit);
-        let key = format!("limit:{}:{}:{:?}",hit.account.as_deref().unwrap_or_default(),hit.limit.window,hit.limit.resets_at);
+        let key = limit_key(&hit,host.now());
         let outcome = if first {
             let gate = self.gate(host,&hit.name,Source::LimitSwitch,&key).await;
             Some(self.switch(host,&hit,&gate).await)
@@ -759,6 +769,17 @@ mod tests {
         // O limite semanal do CLI de 10/2026, entre `api-request` e `turn_duration`.
         let weekly = include_str!("../../tests/it/fixtures/usage_limit/claude_weekly_limit_tui_2026_10.jsonl");
         assert_eq!(transcript_limit(weekly,1792249428.0),Some(UsageLimit { window:"seven_day".into(),resets_at:Some(1792270800.0) }));
+    }
+
+    /// Sem o reset conhecido cada aviso tem chave própria: o "uma vez por aviso" não barra o limite que volta dias
+    /// depois na mesma conta. Com o reset, o mesmo aviso relido é a mesma chave.
+    #[test]
+    fn a_limit_without_reset_gets_its_own_key() {
+        let hit = |resets_at| LimitHit { name:"s".into(),provider:"claude".into(),account:Some("/a".into()),
+            limit:UsageLimit { window:"five_hour".into(),resets_at } };
+        assert_ne!(limit_key(&hit(None),1000.0),limit_key(&hit(None),200_000.0));
+        assert_eq!(limit_key(&hit(Some(5000.0)),1000.0),limit_key(&hit(Some(5000.0)),2000.0));
+        assert_ne!(limit_key(&hit(Some(5000.0)),1000.0),limit_key(&hit(Some(6000.0)),1000.0));
     }
 
     #[test]
@@ -1152,8 +1173,8 @@ mod tests {
 
     fn refused(account:&str) -> AuthHit { AuthHit { name:"s".into(),account:Some(account.into()),code:"authentication_failed".into() } }
 
-    /// O laço de 13/11: o login recusado quatro vezes em poucos segundos. Duas continuações seguidas sem resposta
-    /// real e o teto barra antes de reabrir: nada recarrega, nada troca de conta e nenhuma conta fica gasta.
+    /// O login recusado várias vezes em poucos segundos: duas continuações seguidas sem resposta real e o teto
+    /// barra antes de reabrir. Nada recarrega, nada troca de conta e nenhuma conta fica gasta.
     #[tokio::test]
     async fn repeated_login_refusals_stop_continuing_after_the_chain() {
         let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/b",60.0),quota("/c",20.0)]);
@@ -1215,7 +1236,8 @@ mod tests {
         assert!(fake.problems.lock().unwrap().is_empty());
         switcher.handle(&fake,hit("/a",9200.0)).await;
         assert_eq!(fake.diary().iter().filter(|code|*code == "auto_continue_capped:chain").count(),1,"{:?}",fake.diary());
-        assert!(!switcher.spent.is_spent("/a",1000.0),"barrado, nenhuma conta fica gasta");
+        assert!(switcher.spent.is_spent("/a",1000.0),"barrado, a conta que bateu o limite fica gasta para as outras sessões");
+        assert!(!switcher.spent.is_spent("/b",1000.0));
         assert!(!fake.log().iter().any(|line|line.starts_with("reopen")));
         assert_eq!(fake.problems.lock().unwrap().last(),Some(&LimitProblem::Failed { code:CAPPED.into() }));
     }

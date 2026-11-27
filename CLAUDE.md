@@ -1067,7 +1067,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   [plataforma.md](docs/decisoes/plataforma.md#tempo-da-sessão-parada-vem-da-conversa-não-do-mtime-05112026).
 - **A lista do dono é do Rust; o estado vem dos atores em processo.** `GET /api/sessions` e
   `/api/sessions/events` do dono saem do `ListHub` (`list/hub.rs`): um produtor por servidor,
-  ligado enquanto houver lista aberta, tique de 1,5 s, JSON só quando a assinatura muda; cada
+  ligado enquanto houver lista aberta ou assinatura interna (filha ligada; continuar sozinho com sessão
+  Claude com terminal ativa há pouco ou à espera da rede), tique de 1,5 s, JSON só quando a assinatura muda; cada
   conexão só lê o publicado. Escrita nas pastas de estado das contas (marcador, registro nativo,
   pergunta aberta) reclassifica só a sessão afetada sobre a última rodada boa, juntada em 150 ms;
   observador que falha vai ao diário e o tique continua valendo. Pi/omp/Kimi usam o estado

@@ -510,14 +510,17 @@ fn turn_mark(provider: AgentProvider, state: &str, jsonl: Option<&str>) -> (bool
 }
 
 /// A linha que fecha o turno: a resposta final, o erro da API, a resposta sintética da interrupção ou o
-/// "[Request interrupted by user" da pessoa.
+/// "[Request interrupted by user" da pessoa. A sintética com `tool_use` é chamada no meio do turno (o REPL grava
+/// assim), não fim.
 fn closes_turn(line: &Value) -> bool {
     let content = &line["message"]["content"];
     if line["type"] == "user" {
         let first = content.as_str().or_else(|| content.as_array().and_then(|parts| parts.iter().find_map(|p| p["text"].as_str())));
         return first.is_some_and(|t| t.starts_with("[Request interrupted by user"));
     }
-    line["message"]["stop_reason"] == "end_turn" || line["isApiErrorMessage"] == true || line["message"]["model"] == "<synthetic>"
+    let tool_call = content.as_array().is_some_and(|parts| parts.iter().any(|p| p["type"] == "tool_use"));
+    line["message"]["stop_reason"] == "end_turn" || line["isApiErrorMessage"] == true
+        || (line["message"]["model"] == "<synthetic>" && !tool_call)
 }
 
 /// O turno do Claude segue aberto no fim do transcript: nada depois de `last_line` o fechou. Sem a linha no
@@ -671,10 +674,9 @@ fn agent_problem(st: &crate::routes::AppState, name: &str, shown: bool) {
     else { crate::runtime::terminal_status::clear_problem(&sender, AGENT_MISSING); }
 }
 
-/// `resume`: o boot cujo turno cortado continua depois do agente de pé (`reboot_resume`). O agente que demora
-/// fica para a reconferência, que continua quando ele subir.
-pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry,
-                                resume: Option<u64>) -> Result<(), String> {
+/// O agente que demora fica para a reconferência; a continuação do turno cortado é de quem chama (`continue_later`).
+pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry)
+                                -> Result<(), String> {
     let mut result = reopen(host, key, entry).await;
     // Restaurada é o agente de pé: o `new-session` volta antes de o shell soltar o comando.
     if result.is_ok() && entry.provider != AgentProvider::Codex {
@@ -694,8 +696,13 @@ pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::ro
         event["codigo"] = json!(code);
     }
     crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[event], "restore");
-    if result.is_ok() && let Some(boot) = resume { continue_restored(st, &entry.name, boot).await; }
     result
+}
+
+/// Em tarefa própria: os fatos esperam a lista e a adoção, e a sessão seguinte não espera por eles.
+fn continue_later(st: &Arc<crate::routes::AppState>, name: &str, boot: u64) {
+    let (st, name) = (st.clone(), name.to_owned());
+    tokio::spawn(async move { continue_restored(&st, &name, boot).await });
 }
 
 /// A cada `EVERY`: com outro servidor do multiplexador que o da fotografia (a subida depois do reboot, ou o
@@ -774,7 +781,8 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
                     let host = super::server::ServerHost::new(st.clone()).await;
                     for (key, entry) in &pending {
                         let resume = reboot_resume(&host, &st, key, entry, reboot);
-                        let result = restore_one(&host, &st, &program, key, entry, resume).await;
+                        let result = restore_one(&host, &st, &program, key, entry).await;
+                        if result.is_ok() && let Some(boot) = resume { continue_later(&st, &entry.name, boot); }
                         if result.as_ref().err().is_some_and(|code| code == AGENT_MISSING || code == MUX_SILENT) { waiting.push((entry.clone(), 0, resume)); }
                         results.push((key.clone(), result));
                     }
@@ -808,7 +816,7 @@ type LateAgent = (Entry, u32, Option<u64>);
 
 /// Reconfere quem abriu sem o agente: o que subiu vai ao diário como restaurada, perde o problema e continua o
 /// turno do reboot; o que esgotou as passadas vai como falha definitiva; o resto espera a próxima.
-async fn recheck(st: &crate::routes::AppState, program: &std::ffi::OsStr, waiting: Vec<LateAgent>) -> Vec<LateAgent> {
+async fn recheck(st: &Arc<crate::routes::AppState>, program: &std::ffi::OsStr, waiting: Vec<LateAgent>) -> Vec<LateAgent> {
     let mut left = Vec::new();
     for (entry, tries, resume) in waiting {
         let (event, code) = match agent_up(program, &entry.name, Duration::ZERO).await {
@@ -820,7 +828,7 @@ async fn recheck(st: &crate::routes::AppState, program: &std::ffi::OsStr, waitin
         crate::diag::record_blocking(crate::diag::diary_dir().as_deref(),
             &[json!({"evento": event, "nivel": nivel, "sessao": entry.name, "provider": entry.provider.name(), "codigo": code})], "restore");
         let Some(boot) = resume else { continue };
-        if event == "sessao.restaurada" { continue_restored(st, &entry.name, boot).await; }
+        if event == "sessao.restaurada" { continue_later(st, &entry.name, boot); }
         else { st.diag.report(CONTINUE_EVENT, &entry.name, "auto_continue_skipped:agent_never_started", "continuar depois do reboot: o agente não subiu"); }
     }
     left
@@ -969,6 +977,12 @@ mod tests {
         let error = format!("{}\n", json!({"type": "assistant", "isSidechain": false, "uuid": "e1", "isApiErrorMessage": true,
             "message": {"model": "<synthetic>", "content": []}}));
         assert!(!claude_turn_open(&format!("{tool}{error}"), Some("a1")), "o erro da API é da agenda da queda");
+        let synthetic_tool = line("assistant", "a3", json!({"model": "<synthetic>", "stop_reason": "stop_sequence",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}]}));
+        assert!(claude_turn_open(&format!("{result}{synthetic_tool}"), Some("u1")), "a chamada sintética do REPL não fecha o turno");
+        let no_response = line("assistant", "a4", json!({"model": "<synthetic>", "stop_reason": "stop_sequence",
+            "content": [{"type": "text", "text": "No response requested."}]}));
+        assert!(!claude_turn_open(&format!("{result}{no_response}"), Some("u1")), "a resposta sintética da interrupção fecha");
         assert!(!claude_turn_open("", None), "transcript vazio não prova turno aberto");
     }
 
