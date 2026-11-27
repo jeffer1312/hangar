@@ -4167,6 +4167,57 @@ provedor, grupos e recados. Faltavam quatro coisas, que entraram assim.
   (`AbovePrompt` do plugin); o pai pode ser Codex, Pi ou Kimi. A lista já traz estado, provedor,
   modelo e `last_reply` de cada filha (`SessionRow.linked_by`).
 
+## Filhas ligadas: pergunta ao pai, Parar em cascata e pai que fecha (27/11/2026)
+
+Origem: a comparação com o orchestration-v2 do T3 Code (`~/Projetos/t3code/apps/server/src/orchestration-v2/`):
+`DelegatedTaskQuestionReactor.ts` leva a pergunta da tarefa delegada à conversa do pai, e
+`ThreadManagementService.ts:1743-1810` (`stopDelegatedTasks`) para a árvore de filhas junto com o
+pai. Medição nas conversas desta máquina, 30 dias (scripts em `/tmp/analise-t3/`): 43 filhas ligadas
+contra 3 583 chamadas do subagente nativo (`Agent`); em 15 das 43 o pai esperou com `sleep` (68
+vezes); 15 de 29 filhas mandaram a resposta final por recado à mão, além da que já voltava sozinha;
+26 de 29 rodavam em `bypassPermissions`; `AskUserQuestion` apareceu em 4. A filha que travava numa
+pergunta ficava parada até o dono abrir a conversa dela, e parar ou fechar o pai não alcançava
+ninguém.
+
+- **Texto de quando delegar no pai, linha curta na filha.** O pai lê o texto (marca `Delegar:`,
+  `hangar_delegation::guidance::MARKER`) na descrição do `new_session`, no `help.txt` do
+  `hangar-send` e no bloco do `CLAUDE.md`; o teste confere só a marca, porque cada superfície quebra
+  linha de um jeito. A filha recebe `guidance::child_prefix` no começo do `initial_prompt`, em todo
+  provider. Não no `SessionStart`: o `link_child` grava o `linked_by` depois de o processo subir, e
+  o hook pode rodar antes. Sem `initial_prompt`, nada: um segundo turno quebraria o retorno (a última
+  mensagem do usuário deixaria de ser o pedido do pai). O resumo e o título tiram a linha
+  (`without_child_prefix`).
+- **`child_status` lê pela rota `/history`.** Devolve estado, pergunta aberta e a resposta final
+  inteira em páginas de `MAX_CHARS` (`offset`/`next_offset`), o mesmo turno que o retorno lê; o pai
+  deixa de esperar com `sleep`. `sessions` ganha `linked_by`, `question` e `orphaned_from`.
+- **Pergunta encaminhada uma vez por `interaction_id`; menu e permissão só avisam.** A vigia do
+  retorno (`groups/link_return.rs`) manda `[de: <filha>]` ao pai depois de 20 s de pergunta aberta,
+  com teto por filha em 10 min. Só `InteractionKind::Question` (o `AskUserQuestion`) traz "Responda com
+  child_answer"; a chave gravada (`asked_key`) é o ID, e um ID novo para a mesma pergunta vai de novo
+  porque o pai precisa dele. Menu da TUI, aprovação de plano (`plan:<id>`) e permissão são do dono: o
+  aviso não cita o ID e a chave é o texto, então não se repete, e o `child_answer` recusa com
+  `erro_permissao_do_dono`. No Claude com terminal todo menu é `Menu`, inclusive "Do you want to
+  proceed?". Interação resolvida com o aviso ainda na fila do pai tira a linha dela
+  (`asked_queue_id`). `[de: …]` e não `[painel: …]`: o painel diz "não responda".
+- **`child_answer` passa pela `/answer` com o `interaction_id` do aviso.** Codex com terminal não
+  informa quem resolveu: a resposta sai "enviada, sem confirmação" e não se tenta de novo.
+- **Parar só cascateia com `?cascade=1`.** Cancelar um cartão de pergunta também chama
+  `/interrupt`, e não pode parar as filhas. Mandam o parâmetro o botão Parar do nativo e do Expo e a
+  tool `interrupt`. A árvore sai de `cascade::plan`, em largura, até `MAX_DEPTH = 3` níveis e sem
+  voltar a quem já apareceu (vínculo em ciclo termina). Só conta como parada a resposta que confirma
+  que não há turno; a que não parou vai no `cascade.failed` da resposta, num aviso só, e no diário
+  (`rust.link_cascade_failed`).
+- **Fechar o pai interrompe as filhas e as mantém abertas (4B).** Só depois de a morte do pai ser
+  confirmada: com o kill falho, nada muda nelas. As descendentes são lidas antes da saída do grupo, que
+  apaga o `linked_by`, e interrompidas depois dela. Toda saída do grupo grava a marca em
+  `~/.hangar/link-orphans.json` (`hangar_delegation::orphans`): o DELETE do dono, a limpeza de
+  Pi/omp/Kimi e a varredura de membro morto, que é quem tira o pai que morreu sozinho. A linha leva
+  `orphaned_from`, e os clientes mostram "sem pai · era de <pai>". A marca sai quando a filha fecha, é
+  religada, some da lista ou nome reusado abre outra vida; rename a leva junto. Pela tela, fechar um
+  pai com filhas abertas pergunta "fechar também as N filhas?".
+- **Sem teto de recados pai↔filha.** Nenhum laço medido nos 30 dias; o `storm` do grupo e o teto do
+  retorno já seguram a tempestade.
+
 ## Aviso na tela só para ação que falhou ou bloqueio real (20/10/2026)
 
 (Branch `fix/session-recovery-and-alerts`, plano
