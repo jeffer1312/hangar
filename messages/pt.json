@@ -1736,6 +1736,7 @@
   "composer_steer_current_text": "Orientar o turno atual com o texto do campo",
   "composer_parar": "Parar",
   "chat_envio_incerto": "A conexão caiu durante o envio e a mensagem pode ter chegado. Confira a conversa antes de reenviar.",
+  "chat_envio_servidor_subindo": "O servidor ainda está subindo e a mensagem não saiu. Envie de novo em instantes.",
   "composer_enviar_fila_kimi": "Enviar (entra na fila)",
   "composer_shells_contagem": "{n} shells",
   "composer_shells_titulo": "{n} comando(s) rodando em segundo plano nesta sessão. Toque para ver quais.",

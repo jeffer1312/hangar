@@ -1305,6 +1305,10 @@ export async function submitConversationDraft(serverId: string, name: string, te
       const rejected = isInputRefusal(error);
       settle(rejected ? 'rejected' : 'unknown');
       if (!rejected && (error instanceof TypeError || isNoResponse(error))) throw new Error(m.chat_envio_incerto(), { cause: error });
+      // O porteiro da subida manda só o código; status e código seguem para quem decide pelo erro.
+      if (rejected && (error as { code?: unknown } | null)?.code === 'server_starting') {
+        throw Object.assign(new Error(m.chat_envio_servidor_subindo(), { cause: error }), { status: 503, code: 'server_starting' });
+      }
       throw error;
     }
     // Entregue: falha local aqui não pode virar "não enviado", senão a pessoa reenvia e duplica.

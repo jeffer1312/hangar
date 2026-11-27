@@ -135,10 +135,14 @@ fn posts(server: &FakeServer) -> usize {
 
 /// O POST para o recado e não responde antes do `API_TIMEOUT`; a conversa responde como `history`.
 fn cut_send(history: Route) -> (FakeServer, Outcome) {
+    cut_send_with_env("", history)
+}
+
+fn cut_send_with_env(env: &str, history: Route) -> (FakeServer, Outcome) {
     let mut post = Route::new("POST", "/api/sessions/", 200, r#"{"delivered": true}"#);
     post.replies[0].delay = 2.0;
     let server = FakeServer::start(vec![post, history]);
-    let home = Home::new(server.port, "");
+    let home = Home::new(server.port, env);
     let done = home.run(&["alvo", "oi"], &[("API_TIMEOUT", "0.5"), ("HANGAR_SEND_CHECK_SECONDS", "1")], &plain_host());
     (server, done)
 }
@@ -232,4 +236,59 @@ fn a_cut_send_to_another_server_checks_that_server() {
     assert!(!reads.is_empty(), "a conversa da outra máquina não foi lida");
     assert!(reads.iter().all(|request| request.header("authorization") == Some("Bearer tok-a")), "{reads:?}");
     assert!(local.requests().iter().all(|request| !request.path.contains("/history")), "a conferência foi à máquina errada");
+}
+
+fn not_seen(server: &FakeServer) -> String {
+    format!("erro: sem resposta de http://127.0.0.1:{} no prazo e o recado não apareceu na conversa em 1 s; o servidor pode ainda estar processando — confira com hangar-send --list antes de reenviar\n", server.port)
+}
+
+/// O mesmo texto vindo de outra sessão é outro recado: um "PRONTO" do árbitro não prova o do executor.
+#[test]
+fn the_same_text_from_another_sender_does_not_prove_arrival() {
+    let line = format!(r#"[{{"kind": "user_msg", "id": "queued-x", "text": "[de: arbitro] oi", "ts": {LATER}}}, {{"kind": "user_msg", "id": "u2", "text": "[de: casa::arbitro] oi", "ts": {LATER}}}]"#);
+    let (server, done) = cut_send_with_env("CP_SERVER_ID=casa\n", history(200, &line));
+    assert_eq!(done.code, 4, "{}", done.stderr);
+    assert_eq!(done.stdout, "");
+    assert_eq!(done.stderr, not_seen(&server));
+    assert_eq!(posts(&server), 1);
+}
+
+/// O servidor que recebe pode escrever o remetente com o próprio id na frente: continua sendo este recado.
+#[test]
+fn the_receiving_server_prefix_on_the_sender_still_proves_arrival() {
+    let line = format!(r#"[{{"kind": "user_msg", "id": "u1", "text": "[de: casa::cli] oi", "ts": {LATER}}}]"#);
+    let (server, done) = cut_send_with_env("CP_SERVER_ID=casa\n", history(200, &line));
+    assert_eq!(done.code, 0, "{}", done.stderr);
+    assert_eq!(done.stdout, "chegou -> alvo (conferido na conversa depois do corte)\n");
+    assert_eq!(posts(&server), 1);
+}
+
+/// Antes: qualquer linha igual da fila provava, e um "continua" antigo parado lá contava como o novo.
+#[test]
+fn an_old_identical_queued_line_does_not_prove_arrival() {
+    let line = format!(r#"[{{"kind": "user_msg", "id": "queued-x", "text": "[de: cli] oi", "ts": null, "queued_ts": {LONG_AGO}}}]"#);
+    let (server, done) = cut_send(history(200, &line));
+    assert_eq!(done.code, 4, "{}", done.stderr);
+    assert_eq!(done.stdout, "");
+    assert_eq!(done.stderr, not_seen(&server));
+    assert_eq!(posts(&server), 1);
+}
+
+/// A linha da fila vem com a hora da entrada em `queued_ts`: entrada depois do envio prova a chegada.
+#[test]
+fn a_queued_line_that_entered_after_the_send_proves_arrival() {
+    let line = format!(r#"[{{"kind": "user_msg", "id": "queued-x", "text": "[de: cli] oi", "ts": null, "queued_ts": {LATER}}}]"#);
+    let (server, done) = cut_send(history(200, &line));
+    assert_eq!(done.code, 0, "{}", done.stderr);
+    assert_eq!(done.stdout, "chegou -> alvo (conferido na conversa depois do corte)\n");
+    assert_eq!(posts(&server), 1);
+}
+
+/// Antes: com o servidor daqui fora, o recado a `servidor::sessao` saía 1 (recusa) e não 2 (nada saiu).
+#[test]
+fn a_send_to_another_server_with_this_server_down_is_code_two() {
+    let home = Home::new(common::dead_port(), "CP_SERVER_ID=casa\n");
+    let done = home.run(&["ana::s1", "oi"], &[], &plain_host());
+    assert_eq!(done.code, 2, "{}", done.stderr);
+    assert_eq!(done.stderr, "erro: não consegui consultar os pares externos (backend inacessível)\n");
 }

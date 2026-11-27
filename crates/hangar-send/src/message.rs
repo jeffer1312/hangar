@@ -66,7 +66,8 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
             Ok(body) => body,
             Err(status) => {
                 let _ = writeln!(err, "erro: não consegui consultar os pares externos ({status})");
-                return 1;
+                // Servidor daqui fora: nada saiu, e quem chama pode tentar de novo.
+                return if status == list::UNREACHABLE { 2 } else { 1 };
             }
         };
         if is_external_alias(&pairs, server) {
@@ -115,11 +116,13 @@ fn is_external_alias(body: &[u8], alias: &str) -> bool {
 fn deliver(cx: &Ctx, endpoint: &Endpoint, target: &str, session: &str, text: &str, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let body = json!({"text": text, "steer": true}).to_string();
     let path = format!("/api/sessions/{}/input", path_segment(session));
+    // Id do servidor que recebe o recado: lá, `[de: home::x]` e `[de: x]` são a mesma sessão.
+    let home = target.split_once("::").map_or(cx.settings.server_id.as_str(), |(server, _)| server);
     let started = unix_now();
     let fetched = cx.fetch(endpoint, "POST", &path, Some(&body));
     if matches!(fetched, Err(Failure::Cut)) {
         // Nunca um segundo POST: só a conversa do destino diz se o recado entrou.
-        return match check_arrival(cx, endpoint, session, text, started) {
+        return match check_arrival(cx, endpoint, home, session, text, started) {
             Arrival::Arrived => {
                 let _ = writeln!(out, "chegou -> {target} (conferido na conversa depois do corte)");
                 0
@@ -172,7 +175,7 @@ fn unix_now() -> f64 {
 
 /// Lê a conversa no mesmo servidor e com o mesmo token do envio, até a primeira prova ou o fim da
 /// janela. Nada daqui afirma "não chegou": o servidor pode gravar o recado depois dela.
-fn check_arrival(cx: &Ctx, endpoint: &Endpoint, session: &str, text: &str, started: f64) -> Arrival {
+fn check_arrival(cx: &Ctx, endpoint: &Endpoint, home: &str, session: &str, text: &str, started: f64) -> Arrival {
     let path = format!("/api/sessions/{}/history?limit=40", path_segment(session));
     let deadline = Instant::now() + Duration::from_secs_f64(cx.check_window());
     let (mut seen, mut doubtful) = (false, false);
@@ -183,7 +186,7 @@ fn check_arrival(cx: &Ctx, endpoint: &Endpoint, session: &str, text: &str, start
             break;
         }
         if let Ok((200, body)) = cx.fetch(&endpoint.with_total(left.min(5.0)), "GET", &path, None) {
-            match read_tail(&body, text, started) {
+            match read_tail(&body, text, home, started) {
                 Tail::Proof => return Arrival::Arrived,
                 Tail::Absent => seen = true,
                 Tail::Doubtful => doubtful = true,
@@ -199,9 +202,9 @@ fn check_arrival(cx: &Ctx, endpoint: &Endpoint, session: &str, text: &str, start
     if doubtful || !seen { Arrival::Unknown } else { Arrival::NotSeen }
 }
 
-/// Prova é a linha da fila (`queued-…`) ou o horário depois do envio (com folga para o relógio do
-/// outro lado). Fala igual sem horário pode ser um recado de antes: não prova nem nega.
-fn read_tail(body: &[u8], sent: &str, started: f64) -> Tail {
+/// Prova é o horário depois do envio (com folga para o relógio do outro lado), o da fala ou, na linha
+/// da fila (`queued-…`), o da entrada nela. Igual sem horário pode ser um recado de antes: não prova nem nega.
+fn read_tail(body: &[u8], sent: &str, home: &str, started: f64) -> Tail {
     let Some(Value::Array(events)) = parse(body) else { return Tail::Unreadable };
     if events.is_empty() {
         return Tail::Unreadable;
@@ -213,13 +216,11 @@ fn read_tail(body: &[u8], sent: &str, started: f64) -> Tail {
             continue;
         }
         let Some(said) = event.get("text").and_then(Value::as_str) else { continue };
-        if !same_recado(said, sent) {
+        if !same_message(said, sent, home) {
             continue;
         }
-        if event.get("id").and_then(Value::as_str).is_some_and(|id| id.starts_with("queued-")) {
-            return Tail::Proof;
-        }
-        match event.get("ts").and_then(Value::as_f64) {
+        let time = ["ts", "queued_ts"].into_iter().find_map(|key| event.get(key).and_then(Value::as_f64));
+        match time {
             Some(ts) if ts >= started - 30.0 => return Tail::Proof,
             Some(_) => {}
             None => untimed = true,
@@ -228,18 +229,29 @@ fn read_tail(body: &[u8], sent: &str, started: f64) -> Tail {
     if untimed { Tail::Doubtful } else { Tail::Absent }
 }
 
-/// O servidor pode escrever o remetente de outro jeito (`servidor::sessao` resolvido): vale o corpo.
-fn same_recado(event_text: &str, sent: &str) -> bool {
+/// O mesmo recado, inclusive com o remetente escrito com ou sem o `home::` do servidor que o recebeu.
+/// Outro remetente é outro recado, mesmo com o texto igual.
+fn same_message(event_text: &str, sent: &str, home: &str) -> bool {
     let (said, sent) = (event_text.trim(), sent.trim());
     if said == sent {
         return true;
     }
-    matches!((without_sender(said), without_sender(sent)), (Some(a), Some(b)) if a == b)
+    match (split_sender(said), split_sender(sent)) {
+        (Some((a, said_body)), Some((b, sent_body))) => said_body == sent_body && local_name(a, home) == local_name(b, home),
+        _ => false,
+    }
 }
 
-fn without_sender(text: &str) -> Option<&str> {
-    let (_, body) = text.strip_prefix("[de: ")?.split_once("] ")?;
-    Some(body.trim())
+fn split_sender(text: &str) -> Option<(&str, &str)> {
+    let (sender, body) = text.strip_prefix("[de: ")?.split_once("] ")?;
+    Some((sender.trim(), body.trim()))
+}
+
+fn local_name<'a>(sender: &'a str, home: &str) -> &'a str {
+    match sender.split_once("::") {
+        Some((server, name)) if !home.is_empty() && server == home => name,
+        _ => sender,
+    }
 }
 
 fn send_external(cx: &Ctx, target: &str, sender: &str, text: &str, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
@@ -252,7 +264,7 @@ fn send_external(cx: &Ctx, target: &str, sender: &str, text: &str, out: &mut dyn
         Ok(answer) => answer,
         Err(Failure::NoAnswer) => {
             let _ = writeln!(err, "erro: backend inacessível em {} (hangar rodando?)", endpoint.base);
-            return 1;
+            return 2;
         }
         // O par externo não tem leitura da conversa daqui: fica incerto, sem reenviar.
         Err(Failure::Cut) => {

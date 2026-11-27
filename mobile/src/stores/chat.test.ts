@@ -1658,10 +1658,12 @@ describe('send vai ao servidor da conversa', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  test('503 server_starting devolve o texto como recusado', async () => {
+  test('503 server_starting devolve o texto como recusado, dito em frase e sem o código cru', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{"detail":"server_starting"}', { status: 503 })));
     const chat = chatStore('srv1', 'sess');
-    await expect(chat.send('oi')).rejects.toMatchObject({ status: 503, code: 'server_starting' });
+    const err = await chat.send('oi').catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 503, code: 'server_starting', message: m.chat_envio_servidor_subindo() });
+    expect((err as Error).message).not.toContain('server_starting');
     expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'oi', submission: { status: 'rejected' } });
     expect(chat.use.getState().pending).toEqual([]);
   });

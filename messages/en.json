@@ -1736,6 +1736,7 @@
   "composer_steer_current_text": "Steer the current turn with the composer text",
   "composer_parar": "Stop",
   "chat_envio_incerto": "The connection dropped while sending and the message may have arrived. Check the conversation before resending.",
+  "chat_envio_servidor_subindo": "The server is still starting and the message did not go out. Send it again in a moment.",
   "composer_enviar_fila_kimi": "Send (goes into the queue)",
   "composer_shells_contagem": "{n} shells",
   "composer_shells_titulo": "{n} command(s) running in the background in this session. Tap to see which.",

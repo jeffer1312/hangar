@@ -1447,8 +1447,11 @@ regra, não de volume: por isso a chave de envio (idempotência) ficou de fora.
   `code` no erro (`failureWithCode`).
 - **`hangar-send` cortado confere na conversa do destino, nunca reenvia.** Lê
   `/history?limit=40` no mesmo servidor e token do envio, por `HANGAR_SEND_CHECK_SECONDS` (padrão
-  6 s): prova é a linha `queued-…` ou `ts >= início − 30 s`; fala igual sem `ts` não prova e deixa
-  incerto (4). Saída 0 "chegou" e 4 em todo o resto (não apareceu na janela, fala igual sem `ts`,
+  6 s): prova é a fala do mesmo remetente (com ou sem o `servidor::` de quem recebe) e mesmo texto
+  com hora `>= início − 30 s`, a `ts` da fala ou, na linha `queued-…`, a `queued_ts` da entrada
+  na fila; o mesmo texto de outro remetente é outro recado, e fala igual sem hora não prova e deixa
+  incerto (4). Servidor daqui fora antes de consultar os pares externos sai 2, como os outros
+  "nada saiu". Saída 0 "chegou" e 4 em todo o resto (não apareceu na janela, fala igual sem `ts`,
   conversa ilegível, par externo). Não há saída "não chegou": o corte vem depois de o pedido sair, e
   o servidor ocupado (ator, fila que abre, trava da sessão) pode gravar o recado depois da janela.
 
