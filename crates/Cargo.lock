@@ -2262,6 +2262,7 @@ dependencies = [
  "hangar-antigravity",
  "hangar-api",
  "hangar-auth",
+ "hangar-auto-continue",
  "hangar-boot",
  "hangar-browser-host",
  "hangar-cliproxy-setup",

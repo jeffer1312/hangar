@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc,Mutex};
 
 use futures_util::future::BoxFuture;
+use hangar_auto_continue::{Ledger,Source,StopKind};
 use serde_json::Value;
 
 use crate::routes::AppState;
@@ -236,7 +237,10 @@ pub fn decide(spec:&SessionSpec,current:&str,catalog:&Value,quotas:&[Value],spen
 }
 
 /// Vai à sessão pela fila, depois de reaberta: sem ele a conversa ficaria parada no aviso de limite.
-pub const CONTINUE:&str = "Continue de onde parou.";
+pub const CONTINUE:&str = hangar_auto_continue::text::LIMIT;
+
+/// O detalhe do `limit_switch_failed` quando o teto do registro barrou a reabertura.
+pub const CAPPED:&str = "auto_continue_capped";
 
 /// Janela sem reset conhecido fica gasta por cinco horas, a menor das janelas.
 const UNKNOWN_RESET_S:f64 = 5.0 * 3600.0;
@@ -302,6 +306,9 @@ struct Switcher {
     handled:Mutex<BTreeMap<String,UsageLimit>>,
     /// A última reabertura por login recusado, por sessão: conta e hora.
     retried:Mutex<BTreeMap<String,(String,f64)>>,
+    /// O registro de toda continuação automática, o mesmo da agenda das quedas: reabrir e mandar o
+    /// "continue" conta nos mesmos tetos. `None` só nos testes que não olham os tetos.
+    ledger:Option<Arc<Mutex<Ledger>>>,
 }
 
 enum Outcome { Switched { label:String, explicit:bool }, Stayed(&'static str), Failed(String), Busy(String) }
@@ -454,20 +461,47 @@ impl Switcher {
         None
     }
 
+    /// O recado para continuar e, saindo, a marca no registro: só a continuação feita entra nos tetos.
+    async fn continue_counted(&self,host:&dyn Host,name:&str,source:Source,key:&str) -> Option<String> {
+        let failed = Self::tell_to_continue(host,name).await;
+        if failed.is_none() && let Some(ledger) = &self.ledger {
+            ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner).record(name,source,key,StopKind::Other,host.now());
+        }
+        failed
+    }
+
+    /// O teto do registro, conferido antes de reabrir: barrada, nada reabre, nenhuma conta fica gasta e a
+    /// sessão não muda de conta.
+    fn capped(&self,host:&dyn Host,name:&str,source:Source,key:&str) -> bool {
+        let Some(ledger) = &self.ledger else { return false };
+        let allowed = ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner).allow(name,source,key,StopKind::Other,host.now());
+        let Err(cap) = allowed else { return false };
+        tracing::warn!(session=%name,cap=cap.code(),"continuação automática barrada pelo teto do registro; a sessão não reabre");
+        host.diary(name,&format!("auto_continue_capped:{}",cap.code()),"continuar sozinho: um teto do registro barrou a reabertura");
+        true
+    }
+
     async fn handle_auth(&self,host:&dyn Host,hit:AuthHit) {
+        // Cada recusa tem a sua chave: quem segura a recusa repetida é a corrente, não a chave.
+        let key = format!("login:{}:{}",hit.account.as_deref().unwrap_or_default(),host.now());
+        if self.capped(host,&hit.name,Source::LoginRetry,&key) {
+            host.release(&hit.name).await;
+            host.show_problem(&hit.name,LimitProblem::Failed { code:CAPPED.to_owned() }).await;
+            return;
+        }
         let outcome = self.recover_login(host,&hit).await;
         host.release(&hit.name).await;
         let report = |code:&str,reason:&'static str|host.diary(&hit.name,&super::input::diary_code(code),reason);
         let continued = match &outcome {
             None=>{
                 report("login_reopened","login recusado: a sessão reabriu na mesma conta para reler o login");
-                Some(Self::tell_to_continue(host,&hit.name).await)
+                Some(self.continue_counted(host,&hit.name,Source::LoginRetry,&key).await)
             }
             Some(Outcome::Switched { label,explicit })=>{
                 tracing::info!(session=%hit.name,code=%hit.code,to=%label,explicit,"login recusado: sessão reaberta em outra conta");
                 report("login_switched","login recusado: a sessão reabriu na conta logada de mais folga");
                 if *explicit { report("explicit_account","login recusado: a conta escolhida pela pessoa foi trocada"); }
-                Some(Self::tell_to_continue(host,&hit.name).await)
+                Some(self.continue_counted(host,&hit.name,Source::LoginRetry,&key).await)
             }
             Some(Outcome::Stayed(code))=>{ report(code,"login recusado: a sessão não mudou de conta"); None }
             Some(Outcome::Failed(code) | Outcome::Busy(code))=>{
@@ -486,9 +520,18 @@ impl Switcher {
     }
 
     async fn handle(&self,host:&dyn Host,hit:LimitHit) {
-        let outcome = if self.first_time(&hit.name,&hit.limit) { Some(self.switch(host,&hit).await) } else { None };
+        let first = self.first_time(&hit.name,&hit.limit);
+        let key = format!("limit:{}:{}:{:?}",hit.account.as_deref().unwrap_or_default(),hit.limit.window,hit.limit.resets_at);
+        let capped = first && self.capped(host,&hit.name,Source::LimitSwitch,&key);
+        let outcome = if first && !capped { Some(self.switch(host,&hit).await) } else { None };
         // Todo aviso segura a fila, inclusive o repetido: qualquer fim a solta.
         host.release(&hit.name).await;
+        if capped {
+            // Depois de uma resposta real, o mesmo aviso relido tenta de novo.
+            if let Ok(mut handled) = self.handled.lock() { handled.remove(&hit.name); }
+            host.show_problem(&hit.name,LimitProblem::Failed { code:CAPPED.to_owned() }).await;
+            return;
+        }
         let Some(outcome) = outcome else {
             host.diary(&hit.name,"limit_switch_repeated","limite de uso: o mesmo aviso já tratado chegou de novo e não troca outra vez");
             return;
@@ -516,7 +559,7 @@ impl Switcher {
                 report("switched","limite de uso: a sessão reabriu na conta de mais folga");
                 // O limite vence a conta escolhida pela pessoa, e isso fica registrado.
                 if *explicit { report("explicit_account","limite de uso: a conta escolhida pela pessoa foi trocada"); }
-                continue_failed = Self::tell_to_continue(host,&hit.name).await;
+                continue_failed = self.continue_counted(host,&hit.name,Source::LimitSwitch,&key).await;
             }
             Outcome::Stayed("limit_switch_no_room") => {
                 tracing::warn!(session=%hit.name,window=%hit.limit.window,"limite de uso: nenhuma conta com folga; a sessão fica parada");
@@ -553,11 +596,12 @@ impl Switcher {
 /// limite juntas não escolhem a mesma conta sem ver a outra gasta.
 pub fn spawn(st:Arc<AppState>) -> Option<tokio::task::JoinHandle<()>> {
     let runtime = st.state.runtime.get()?.clone();
+    let ledger = st.auto_continue.get().map(|auto|auto.ledger.clone());
     let (sink,mut hits) = tokio::sync::mpsc::unbounded_channel();
     runtime.set_limit_sink(sink);
     let (sink,mut refusals) = tokio::sync::mpsc::unbounded_channel();
     runtime.set_auth_sink(sink);
-    let switcher = Switcher { spent:Spent::at(st.accounts.quota_path().with_file_name("limit-spent.json")),..Switcher::default() };
+    let switcher = Switcher { spent:Spent::at(st.accounts.quota_path().with_file_name("limit-spent.json")),ledger,..Switcher::default() };
     let host = Native { st,runtime };
     Some(tokio::spawn(async move {
         loop {
@@ -963,13 +1007,15 @@ mod tests {
         no_login:Mutex<Vec<String>>,
         /// Uma troca de agente espera a sessão.
         handoff:std::sync::atomic::AtomicBool,
+        clock:Mutex<f64>,
     }
 
     impl Fake {
         fn new(dir:&str,quotas:Vec<Value>) -> Self {
             Fake { spec:Mutex::new(spec(claude(dir))),catalog:catalog(&["/a","/b","/c"]),quotas:Mutex::new(Ok(quotas)),
                 reopens:Mutex::new(Vec::new()),log:Mutex::new(Vec::new()),diary:Mutex::new(Vec::new()),problems:Mutex::new(Vec::new()),gone:Default::default(),
-                on_pause:Mutex::new(None),undelivered:Default::default(),continue_fails:Default::default(),screen:Mutex::new(String::new()),no_login:Mutex::new(Vec::new()),handoff:Default::default() }
+                on_pause:Mutex::new(None),undelivered:Default::default(),continue_fails:Default::default(),screen:Mutex::new(String::new()),no_login:Mutex::new(Vec::new()),handoff:Default::default(),
+                clock:Mutex::new(1000.0) }
         }
         fn log(&self) -> Vec<String> { self.log.lock().unwrap().clone() }
         fn diary(&self) -> Vec<String> { self.diary.lock().unwrap().clone() }
@@ -1011,7 +1057,7 @@ mod tests {
             Box::pin(async move { self.problems.lock().unwrap().push(problem); })
         }
         fn diary(&self,_:&str,code:&str,_:&'static str) { self.diary.lock().unwrap().push(code.to_owned()); }
-        fn now(&self) -> f64 { 1000.0 }
+        fn now(&self) -> f64 { *self.clock.lock().unwrap() }
         fn dismiss_limit_menu<'a>(&'a self,_:&'a str) -> BoxFuture<'a,Result<bool,String>> {
             Box::pin(async move {
                 let mut screen = self.screen.lock().unwrap();
@@ -1037,6 +1083,30 @@ mod tests {
     }
 
     fn refused(account:&str) -> AuthHit { AuthHit { name:"s".into(),account:Some(account.into()),code:"authentication_failed".into() } }
+
+    /// O laço de 13/11: o login recusado quatro vezes em poucos segundos. Duas continuações seguidas sem resposta
+    /// real e o teto barra antes de reabrir: nada recarrega, nada troca de conta e nenhuma conta fica gasta.
+    #[tokio::test]
+    async fn repeated_login_refusals_stop_continuing_after_the_chain() {
+        let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/b",60.0),quota("/c",20.0)]);
+        let home = tempfile::tempdir().unwrap();
+        let ledger = Arc::new(Mutex::new(Ledger::load(hangar_auto_continue::ledger::path(home.path()))));
+        let switcher = Switcher { ledger:Some(ledger),..Switcher::default() };
+        let moves = |fake:&Fake| fake.log().into_iter().filter(|line|line == "reload" || line.starts_with("reopen")).count();
+        let mut moved = Vec::new();
+        for (i,account) in ["/a","/a","/c","/c"].into_iter().enumerate() {
+            *fake.clock.lock().unwrap() = 1000.0 + 10.0 * i as f64;
+            switcher.handle_auth(&fake,refused(account)).await;
+            moved.push(moves(&fake));
+        }
+        assert_eq!(fake.log().iter().filter(|line|*line == "continue").count(),2,"{:?}",fake.log());
+        assert_eq!(moved,vec![1,2,2,2],"a terceira e a quarta recusa não recarregam nem reabrem");
+        assert_eq!(fake.diary().iter().filter(|code|*code == "auto_continue_capped:chain").count(),2,"{:?}",fake.diary());
+        assert!(!switcher.spent.is_spent("/c",1040.0),"a recusa barrada não marca a conta gasta");
+        assert_eq!(fake.spec.lock().unwrap().account,claude("/c"),"a sessão não muda de conta depois do teto");
+        assert_eq!(fake.problems.lock().unwrap().last(),Some(&LimitProblem::Failed { code:CAPPED.into() }));
+        assert_eq!(fake.log().iter().filter(|line|*line == "release").count(),4,"toda recusa solta a fila");
+    }
 
     /// Com login no disco, reabrir resolve o token velho da memória; a segunda recusa leva a outra conta.
     #[tokio::test]

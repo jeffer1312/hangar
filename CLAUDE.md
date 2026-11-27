@@ -398,7 +398,8 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 ### Harnesses — Claude, Codex, Pi, omp, Kimi, Antigravity → [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md)
 
 **Antes de mexer em** `backend/app/adapters/codex/`, `codex_*.py`, `crates/hangar-server/src/harness_setup/`,
-`crates/hangar-antigravity/`, `crates/hangar-server/src/runtime/` (atores Claude/Codex,
+`crates/hangar-antigravity/`, `crates/hangar-auto-continue/`, `crates/hangar-server/src/session_write/limit_switch.rs`,
+`crates/hangar-server/src/runtime/` (atores Claude/Codex,
 lançamento, relançamento e religação ao mesmo cano em `cano_reconnect.rs`), statusline/prévia, hooks de estado, ou em sessão sem terminal:
 **leia a seção "Regras vigentes" de `docs/decisoes/harnesses.md`**. Cada regra ali já custou um
 bug calado.

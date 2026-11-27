@@ -153,6 +153,9 @@ pub enum Effect {
     UsageLimit { limit: UsageLimit },
     /// A API recusou o login da conta no turno; vai ao diário com o estado da credencial.
     AuthFailed { code: String },
+    /// Fim de turno com o porquê (`hangar-auto-continue`): a parada passageira continua sozinha, a resposta
+    /// normal zera a corrente do registro. `line_id` é a linha (Claude) ou o turno (Codex); `at` em segundos.
+    TurnStopped { kind: hangar_auto_continue::StopKind, line_id: Option<String>, at: f64 },
 }
 
 /// Janela esgotada (`five_hour`, `seven_day`, …) e quando ela volta (epoch em segundos).

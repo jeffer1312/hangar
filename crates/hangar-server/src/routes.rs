@@ -166,6 +166,8 @@ pub struct AppState {
     pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
     /// WhatsApp: leitura e envio de rascunho aprovado (`hangar-whatsapp`); nasce com o roteador, pela pasta pessoal das contas.
     pub whatsapp: std::sync::OnceLock<Arc<hangar_whatsapp::WhatsApp>>,
+    /// Continuar sozinho depois de parada passageira: a agenda e o registro, ligados na subida com o runtime.
+    pub auto_continue: std::sync::OnceLock<Arc<crate::auto_continue::AutoContinue>>,
     /// Tela Status: hub do retrato e amostrador do processo; o teste troca a coleta.
     pub status: Arc<crate::status::Status>,
     /// Revisão do trabalho (`work_review/v1`) das sessões ligadas a um ticket.
@@ -344,6 +346,7 @@ impl AppState {
             mission_notify,
             ticket_actions: Default::default(),
             whatsapp: Default::default(),
+            auto_continue: Default::default(),
             status: Arc::default(),
             work_review,
             telemetry: None,
@@ -484,6 +487,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _push_watch: Vec<crate::AbortOnDrop> = crate::push::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
     // Assina as transições depois do vigia de avisos, que as publica.
     let _loop_watch: Vec<crate::AbortOnDrop> = crate::loops::watch::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
+    // Antes da troca de conta no limite: ela usa o mesmo registro de continuações.
+    let _auto_continue: Vec<crate::AbortOnDrop> = crate::auto_continue::spawn(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
     let _limit_switch = crate::session_write::limit_switch::spawn(state.clone()).map(crate::AbortOnDrop);
     // A varredura só revoga com ausência confirmada (ver `life::sweep`); o túnel religa já.
     let _share_sweep = state.share.clone().map(|share| crate::AbortOnDrop(tokio::spawn(

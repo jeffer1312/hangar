@@ -305,11 +305,17 @@ fn settled(c: &Check) -> bool {
 /// Eventos do fim da conversa que chegam até a última mensagem do usuário; `whole` = desde o começo.
 struct Turn { events: Vec<ChatEvent>, whole: bool }
 
+/// Mensagem do usuário escrita por alguém. O "continue" que o Hangar manda sozinho depois de uma queda não
+/// é pedido de ninguém: o turno é o da mensagem antes dele.
+fn user_request(e: &ChatEvent) -> bool {
+    e.kind == ChatKind::UserMsg && !hangar_auto_continue::text::is_auto_continue(e.text.as_deref().unwrap_or_default())
+}
+
 /// Lê para trás crescendo a janela até achar a última mensagem do usuário. `None` = não achada no teto.
 fn read_turn(mut read: impl FnMut(usize) -> io::Result<Vec<ChatEvent>>, file_len: u64) -> io::Result<Option<Turn>> {
     for limit in WINDOWS {
         let events = read(limit)?;
-        let has_user = events.iter().any(|e| e.kind == ChatKind::UserMsg);
+        let has_user = events.iter().any(user_request);
         // Menos eventos que o pedido: a leitura parou no começo do arquivo ou no teto de bytes.
         let exhausted = events.len() < limit;
         if has_user || exhausted {
@@ -323,7 +329,7 @@ fn read_turn(mut read: impl FnMut(usize) -> io::Result<Vec<ChatEvent>>, file_len
 /// Critério 4: a última mensagem do usuário veio do pai, ou é a primeira da conversa (o
 /// `initial_prompt`). Turno dado à mão na filha não volta.
 fn asked_by_parent(turn: &Turn, parent: &str, server: &str) -> bool {
-    let mut users = turn.events.iter().filter(|e| e.kind == ChatKind::UserMsg);
+    let mut users = turn.events.iter().filter(|e| user_request(e));
     let Some(last) = users.next_back() else { return false };
     let text = last.text.as_deref().unwrap_or_default().trim_start();
     let from_parent = text.starts_with(&format!("[de: {parent}]"))
@@ -594,6 +600,35 @@ mod tests {
         // Sem ler desde o começo, a primeira lida pode não ser a primeira da conversa.
         assert_eq!(decide(&c, &turn(first, false)), Err(Refusal::NotAsked));
         assert_eq!(decide(&c, &turn(vec![ev(ChatKind::AssistantMsg, "só resposta")], true)), Err(Refusal::NotAsked));
+    }
+
+    /// O pai pede, a rede cai, o Hangar manda o "continue" sozinho e a filha termina: a resposta volta ao pai.
+    #[test]
+    fn an_auto_continue_does_not_hide_the_parent_request() {
+        let c = check();
+        let error = || ev(ChatKind::AssistantMsg, "API Error: Unable to connect to API (EAI_AGAIN)");
+        let continued = |request: &str, again: &str| {
+            let mut events = asked(request);
+            events.truncate(3);
+            events.extend([error(), ev(ChatKind::UserMsg, again), ev(ChatKind::AssistantMsg, "feito")]);
+            events
+        };
+        for again in [hangar_auto_continue::text::TRANSIENT, hangar_auto_continue::text::LIMIT, hangar_auto_continue::text::REBOOT] {
+            assert_eq!(decide(&c, &turn(continued("[de: pai] x", again), false)).map(|(a, _)| a), Ok("feito"), "{again}");
+            // O "é a primeira da conversa" também pula o continue.
+            let first = vec![ev(ChatKind::UserMsg, "prompt inicial"), error(), ev(ChatKind::UserMsg, again), ev(ChatKind::AssistantMsg, "pronto")];
+            assert_eq!(decide(&c, &turn(first, true)).map(|(a, _)| a), Ok("pronto"), "{again}");
+        }
+        // O "continua" que a pessoa escreve na filha é turno dado à mão.
+        assert_eq!(decide(&c, &turn(continued("[de: pai] x", "continua"), true)), Err(Refusal::NotAsked));
+        // A janela cresce até a mensagem do pai, mesmo com o continue dentro da primeira.
+        let mut long = asked("[de: pai] x");
+        long.truncate(3);
+        long.extend(std::iter::repeat_n(ev(ChatKind::ToolResult, ""), 500));
+        long.extend([error(), ev(ChatKind::UserMsg, hangar_auto_continue::text::TRANSIENT), ev(ChatKind::AssistantMsg, "feito")]);
+        let read = |limit: usize| Ok(long[long.len().saturating_sub(limit)..].to_vec());
+        let found = read_turn(read, 1024).unwrap().unwrap();
+        assert_eq!(decide(&c, &found).map(|(a, _)| a), Ok("feito"));
     }
 
     #[test]
