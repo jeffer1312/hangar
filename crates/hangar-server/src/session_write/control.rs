@@ -19,7 +19,7 @@ use super::input::{
     Diary, MSG_CODEX_CONTROL, MSG_CONTROL_DEFERRED, MSG_CONTROL_UNCONFIRMED, MSG_STEER_REFUSED, MSG_STEER_UNKNOWN, answer, codex_control,
     control_failed, diary_code, json_content_type, payload_code, runtime_failed, sem_turno,
 };
-use super::{BODY_LIMIT, Ctx, Write, WriteRoute, admit, admit_reach, busy_body, detail_body, failed_status, invalid_body, json_response, route_write};
+use super::{Ctx, Write, WriteRoute, admit, busy_body, detail_body, failed_status, invalid_body, json_response, route_write};
 use crate::mods::state::random_hex;
 use crate::interactions::{ExpectedInteraction, InteractionError};
 use crate::routes::{AppState, cors};
@@ -458,55 +458,12 @@ pub async fn select_submit(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
 
 pub async fn interrupt(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let query = req.uri().query().map(str::to_owned);
-    // Só o Parar pede a cascata: cancelar o cartão de pergunta também chama esta rota e não para as filhas.
-    let asked = crate::auth::query_param(query.as_deref(), "cascade").as_deref() == Some("1");
-    let headers = req.headers().clone();
-    let (ctx, _) = match admit_reach(&st, peer, req, WriteRoute::Interrupt).await {
+    let (ctx, _) = match admit(&st, peer, req, WriteRoute::Interrupt).await {
         Ok(admitted) => admitted,
-        // O pai sem turno (adormecido, abrindo, sem agente) não segura as filhas: a pessoa pediu parar tudo.
-        // As outras recusas (orquestrador, runtime doente) chegam sem a raiz e não param nada.
-        Err((refused, Some(root))) if asked => {
-            // O corpo torto não para nada, como no caminho admitido.
-            if parse_clear(query.as_deref()).is_none() { return invalid_body(&headers); }
-            return refused_with_cascade(refused, cascade_from(&st, &root).await, &headers).await;
-        }
-        Err((refused, _)) => return refused,
+        Err(response) => return response,
     };
     let Some(clear) = parse_clear(query.as_deref()) else { return invalid_body(ctx.headers()) };
-    // O convidado alcança a sessão, não a árvore dela.
-    let cascade = ctx.owner && asked;
-    let own = interrupt_target(&ctx.name, &ctx.target, clear);
-    // O pai que falha na própria interrupção não segura as filhas: a pessoa pediu parar tudo.
-    let (result, cascaded) = if cascade { tokio::join!(own, cascade_from(&st, &ctx.name)) } else { (own.await, None) };
-    answer(&ctx, with_cascade(result, cascaded))
-}
-
-/// Junta à resposta do pai o que as descendentes fizeram. Pai sem turno (parado, adormecido, abrindo a
-/// conversa) não é falha do Parar que alcançou filhas: vira 200 com `interrupted: false`, senão a tela
-/// mostraria erro e jogaria fora o resultado delas. Sem descendente conhecida, a resposta de sempre.
-fn with_cascade((status, mut body): Answer, cascaded: Option<Value>) -> Answer {
-    let Some(cascaded) = cascaded else { return (status, body) };
-    let opening = status == StatusCode::CONFLICT && body["detail"]["code"].as_str()
-        .is_some_and(|code| code == crate::runtime::codex_relaunch::STARTING || code == "other_terminal_starting");
-    // Descendentes não lidas: nenhuma foi alcançada, e a resposta do pai fica como veio.
-    let reached = cascaded.get("unavailable").is_none();
-    if reached && !status.is_success() && (opening || cascade_outcome(&(status, body.clone())).is_ok()) {
-        return (StatusCode::OK, json!({"ok": true, "interrupted": false, "cascade": cascaded}));
-    }
-    if let Some(object) = body.as_object_mut() { object.insert("cascade".into(), cascaded); }
-    (status, body)
-}
-
-/// A recusa pronta do `admit` com a cascata junto, pelas mesmas regras de `with_cascade`.
-async fn refused_with_cascade(refused: Response, cascaded: Option<Value>, headers: &axum::http::HeaderMap) -> Response {
-    let Some(cascaded) = cascaded else { return refused };
-    let status = refused.status();
-    let bytes = axum::body::to_bytes(refused.into_body(), BODY_LIMIT).await.unwrap_or_default();
-    let body = serde_json::from_slice::<Value>(&bytes).unwrap_or_else(|_| json!({}));
-    let (status, body) = with_cascade((status, body), Some(cascaded));
-    let mut response = json_response(status, body);
-    cors(headers, response.headers_mut());
-    response
+    answer(&ctx, interrupt_target(&ctx.name, &ctx.target, clear).await)
 }
 
 /// Adormecida ou estacionada (Claude sem terminal sem ator, com o processo parado) não tem turno:
@@ -535,7 +492,7 @@ async fn interrupt_target(name: &str, target: &WriteTarget, clear: bool) -> Answ
     }
 }
 
-/// O `/interrupt` sem pedido HTTP, para a descendente que a cascata alcança: a mesma porta e a mesma entrada da rota.
+/// O `/interrupt` sem pedido HTTP, para a descendente que o fechamento do pai para: a mesma porta e a mesma entrada da rota.
 pub(crate) async fn interrupt_by_name(st: &AppState, name: &str) -> (StatusCode, Value) {
     let Some(runtime) = st.state.runtime.get() else {
         return (StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_unavailable", "o servidor está sem o registro de sessões", json!({})));
@@ -555,24 +512,11 @@ pub(crate) async fn interrupt_by_name(st: &AppState, name: &str) -> (StatusCode,
     }
 }
 
-/// Espera por descendente: o Parar responde mesmo com uma filha travada, e a interrupção dela segue à parte.
+/// Espera por descendente: o fechamento do pai responde mesmo com uma filha travada, e a interrupção dela segue à parte.
 const CASCADE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 const CASCADE_UNOWNED: &str = "session_unowned";
 const MSG_CASCADE_UNOWNED: &str = "nenhum agente do Hangar nesta sessão para interromper";
 const CASCADE_UNCONFIRMED: &str = "interrupt_unconfirmed";
-
-/// Para as descendentes ligadas de `root` ao mesmo tempo; `None` = leitura boa sem descendente. Arquivos de grupo
-/// ilegíveis voltam `unavailable`, sem nomes: quem pediu para parar a árvore fica sabendo que as filhas não foram conferidas.
-async fn cascade_from(st: &Arc<AppState>, root: &str) -> Option<Value> {
-    let Ok(targets) = cascade_targets(st, root).await else {
-        return Some(json!({"interrupted": [], "failed": [], "unavailable": CASCADE_GROUPS_UNAVAILABLE}));
-    };
-    if targets.is_empty() { return None; }
-    let (interrupted, failed) = interrupt_descendants(st, targets).await;
-    let failed: Vec<Value> = failed.into_iter().map(|(name, code)| json!({"name": name, "code": code})).collect();
-    Some(json!({"interrupted": interrupted, "failed": failed}))
-}
-
 const CASCADE_GROUPS_UNAVAILABLE: &str = "groups_unavailable";
 
 /// As descendentes ligadas de `root` pelos arquivos de grupo. `Err` = arquivos indisponíveis, já no diário. Sem
@@ -586,8 +530,8 @@ pub(crate) async fn cascade_targets(st: &AppState, root: &str) -> Result<Vec<Cas
     Ok(hangar_delegation::cascade::plan(&crate::groups::link_orphans::linked_parents(&all), root))
 }
 
-/// Interrompe cada uma ao mesmo tempo: (as que pararam, (nome, código) das que não). Cada falha vai ao diário.
-pub(crate) async fn interrupt_descendants(st: &Arc<AppState>, targets: Vec<CascadeTarget>) -> (Vec<String>, Vec<(String, String)>) {
+/// Interrompe cada uma ao mesmo tempo e devolve (nome, código) das que não pararam. Cada falha vai ao diário.
+pub(crate) async fn interrupt_descendants(st: &Arc<AppState>, targets: Vec<CascadeTarget>) -> Vec<(String, String)> {
     let runs = targets.into_iter().map(|target| {
         let (st, name) = (st.clone(), target.name);
         async move {
@@ -600,17 +544,14 @@ pub(crate) async fn interrupt_descendants(st: &Arc<AppState>, targets: Vec<Casca
             (name, outcome)
         }
     });
-    let (mut interrupted, mut failed) = (Vec::new(), Vec::new());
+    let mut failed = Vec::new();
     for (name, outcome) in futures_util::future::join_all(runs).await {
-        match outcome {
-            Ok(()) => interrupted.push(name),
-            Err(code) => {
-                st.diag.report("rust.link_cascade_failed", &name, &code, "a descendente ligada não parou junto com o pai");
-                failed.push((name, code));
-            }
+        if let Err(code) = outcome {
+            st.diag.report("rust.link_cascade_failed", &name, &code, "a descendente ligada não parou junto com o pai");
+            failed.push((name, code));
         }
     }
-    (interrupted, failed)
+    failed
 }
 
 /// Sem turno conta como parada: não havia o que interromper. Senão, o código da recusa.

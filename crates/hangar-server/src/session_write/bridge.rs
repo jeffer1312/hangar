@@ -162,7 +162,7 @@ async fn children_to_stop(st: &AppState, name: &str, owner: bool) -> Vec<hangar_
 /// pela saída do grupo. A que não parou vai no aviso `{sessao, erro}` (o diário já tem o `rust.link_cascade_failed`).
 async fn stop_children(st: &Arc<AppState>, targets: Vec<hangar_delegation::cascade::CascadeTarget>) -> Vec<Value> {
     if targets.is_empty() { return Vec::new(); }
-    let (_, failed) = crate::session_write::control::interrupt_descendants(st, targets).await;
+    let failed = crate::session_write::control::interrupt_descendants(st, targets).await;
     failed.into_iter().map(|(child, code)| json!({"sessao": child, "erro": child_not_stopped(&code)})).collect()
 }
 

@@ -1,23 +1,24 @@
 import { useMemo } from 'react';
-import { View } from 'react-native';
-import Animated, { FadeIn, LinearTransition, SlideOutLeft, useReducedMotion } from 'react-native-reanimated';
+import { Text, View } from 'react-native';
+import Animated, { FadeIn, FadeOut, LinearTransition, SlideOutLeft, useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
 import type { AggSession } from '@hangar/core';
 import { SessionRow } from '../sessions/SessionRow';
 import { SessionSectionCard, SessionSectionHeader } from '../sessions/SessionSection';
 import { buildSessionSections } from '../sessions/sessionSections';
+import { withAlpha } from '../config/colors';
 import { superficie } from '../../theme/superficie';
 import { useScriptStep } from './scriptStep';
 import * as m from '../../paraglide/messages';
 
-// Roteiro do `filhas-ligadas`: a conversa que abriu duas filhas trabalha com elas; o Parar dela para as três juntas;
-// fechada só ela, as filhas ficam abertas com a marca "sem pai" e o nome de quem as abriu.
-const CYCLE = 6.5;
-const STOP = 1.8;
-const CLOSE = 3.4;
-const STEPS = [STOP, CLOSE];
+// Roteiro do `filhas-ligadas`: a conversa que abriu duas filhas trabalha com elas; o Fechar dela pergunta se fecha
+// também as filhas; "Fechar só esta" tira só a principal, e as filhas param e ficam abertas com a marca "sem pai".
+const CYCLE = 7;
+const ASK = 1.3;
+const CLOSE = 3.9;
+const STEPS = [ASK, CLOSE];
 // Movimento reduzido: o fim, com as filhas abertas e a marca de quem as abriu.
-const STILL = 4.5;
+const STILL = 5;
 
 const noop = () => {};
 const NO_GROUPS = new Set<string>();
@@ -33,18 +34,30 @@ function sampleRows(): AggSession[] {
   ];
 }
 
+/** O alerta do Fechar como o iOS o desenha: título, a pergunta e as três ações empilhadas, Cancelar por último. */
+function CloseQuestion({ parent, n, width }: { parent: string; n: number; width: number }) {
+  return <View style={[styles.alert, { width }]}>
+    <View style={styles.alertText}>
+      <Text style={styles.alertTitle}>{m.sessao_excluir()}</Text>
+      <Text style={styles.alertMessage}>{m.session_close_children_question({ name: parent, n })}</Text>
+    </View>
+    <Text style={[styles.alertButton, styles.destructive]}>{m.session_close_only_this()}</Text>
+    <Text style={[styles.alertButton, styles.destructive]}>{m.session_close_with_children({ n })}</Text>
+    <Text style={[styles.alertButton, styles.cancel]}>{m.comum_cancelar()}</Text>
+  </View>;
+}
+
 export function LinkedChildrenAnimation({ width }: { width: number }) {
   const reduced = useReducedMotion();
   const t = useScriptStep(STEPS, CYCLE, STILL, reduced);
   const rows = useMemo(sampleRows, []);
   const parent = rows[0].name;
-  const stopped = t >= STOP;
+  const asking = t >= ASK && t < CLOSE;
   const closed = t >= CLOSE;
   const sections = useMemo(() => buildSessionSections(rows
     .filter((r) => !closed || r.name !== parent)
-    .map((r) => !stopped ? r
-      : closed ? { ...r, state: 'idle' as const, label: undefined, linked_by: undefined, orphaned_from: parent }
-        : { ...r, state: 'idle' as const, label: undefined }), 'expanded', 'none', '', NO_GROUPS), [rows, parent, stopped, closed]);
+    .map((r) => closed ? { ...r, state: 'idle' as const, label: undefined, linked_by: undefined, orphaned_from: parent } : r),
+  'expanded', 'none', '', NO_GROUPS), [rows, parent, closed]);
   const layout = reduced ? undefined : LinearTransition.duration(260);
   const enter = reduced ? undefined : FadeIn.duration(240);
   return <View style={[styles.stage, { width }]} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
@@ -53,20 +66,41 @@ export function LinkedChildrenAnimation({ width }: { width: number }) {
       {section.data.map((s, index) => <Animated.View key={`${section.id}::${s.name}`} layout={layout}
         exiting={reduced ? undefined : SlideOutLeft.duration(320)}>
         {/* A linha troca de quadro com um esmaecer curto: o trabalho que para, a marca que entra. */}
-        <Animated.View key={`${stopped}-${closed}`} entering={enter}>
+        <Animated.View key={String(closed)} entering={enter}>
           <SessionSectionCard index={index} total={section.data.length}>
             <SessionRow session={s} compact mostrarServidor={false} onPress={noop} />
           </SessionSectionCard>
         </Animated.View>
       </Animated.View>)}
     </Animated.View>)}
+    {asking ? <Animated.View style={styles.veil} entering={enter} exiting={reduced ? undefined : FadeOut.duration(150)}>
+      <CloseQuestion parent={parent} n={rows.length - 1} width={Math.min(width - 32, 270)} />
+    </Animated.View> : null}
   </View>;
 }
 
 const styles = StyleSheet.create(theme => ({
-  // Altura reservada para o quadro mais alto (as três linhas trabalhando): o cartão não pula entre os passos.
+  // Altura reservada para o quadro mais alto (o alerta sobre as três linhas): o cartão não pula entre os passos.
   stage: {
-    minHeight: 232, padding: theme.base.space[2], borderRadius: theme.base.radius.md, borderCurve: 'continuous',
+    minHeight: 248, padding: theme.base.space[2], borderRadius: theme.base.radius.md, borderCurve: 'continuous',
     borderWidth: 1, borderColor: theme.tokens.border.default, backgroundColor: superficie(theme, 0.6), overflow: 'hidden',
   },
+  veil: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: withAlpha(theme.tokens.bg.base, 0.55),
+  },
+  alert: {
+    borderRadius: theme.base.radius.lg, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: theme.tokens.bg.elevated,
+    borderWidth: 1, borderColor: theme.tokens.border.default,
+  },
+  alertText: { gap: theme.base.space[1], paddingHorizontal: theme.base.space[4], paddingVertical: theme.base.space[3] },
+  alertTitle: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold, color: theme.tokens.text.primary, textAlign: 'center' },
+  alertMessage: { fontSize: theme.base.text.xs, color: theme.tokens.text.secondary, textAlign: 'center' },
+  // 44 pt: a altura de cada ação no alerta do iOS.
+  alertButton: {
+    minHeight: 44, paddingHorizontal: theme.base.space[3], textAlign: 'center', textAlignVertical: 'center', lineHeight: 44,
+    fontSize: theme.base.text.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.tokens.border.default,
+  },
+  destructive: { color: theme.tokens.status.error },
+  cancel: { color: theme.tokens.accent.base, fontWeight: theme.base.weight.semibold },
 }));

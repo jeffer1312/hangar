@@ -1,4 +1,4 @@
-//! Quem parar junto quando o pai para: as filhas ligadas e as filhas delas, até `MAX_DEPTH` níveis.
+//! Quem interromper quando o pai fecha: as filhas ligadas e as filhas delas, até `MAX_DEPTH` níveis.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 

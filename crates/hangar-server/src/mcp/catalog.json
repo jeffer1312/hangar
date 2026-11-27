@@ -486,7 +486,7 @@
  },
  {
   "name": "interrupt",
-  "description": "Interrompe o turno atual de uma sessão filha que você abriu com `link` (como o Esc). Também para as filhas ligadas a ela, até 3 níveis abaixo; com descendentes, a resposta traz `cascade` com as que pararam e as que falharam. Só alcança filhas ligadas a você; qualquer outra é recusada com erro_interromper_nao_ligada.",
+  "description": "Interrompe o turno atual de uma sessão filha que você abriu com `link` (como o Esc). Para só ela: as filhas dela seguem trabalhando. Só alcança filhas ligadas a você; qualquer outra é recusada com erro_interromper_nao_ligada.",
   "inputSchema": {
    "properties": {
     "alvo": {
