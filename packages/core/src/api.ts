@@ -2949,10 +2949,11 @@ export async function putAutoReportEm(s: Server, value: boolean, fetcher?: typeo
 /** Telemetria anônima da máquina: `consent` `null` = não respondido; `disabled_by` = desligada pelo ambiente. */
 export interface TelemetrySetting { consent: boolean | null; disabled_by: 'env' | 'ci' | null }
 
-function telemetryView(res: { consent?: unknown; disabled_by?: unknown } | null | undefined): TelemetrySetting | undefined {
+// Corpo fora da forma é resposta inválida, nunca "sem telemetria": só 404/503 escondem a tela.
+function telemetryView(res: { consent?: unknown; disabled_by?: unknown } | null | undefined): TelemetrySetting {
   const raw = res?.consent;
-  const consent = typeof raw === 'boolean' ? raw : raw === null ? null : undefined;
-  if (consent === undefined) return undefined;
+  if (typeof raw !== 'boolean' && raw !== null) throw new Error(m.atualizar_resposta_invalida());
+  const consent = raw;
   const by = res?.disabled_by;
   return { consent, disabled_by: by === 'env' || by === 'ci' ? by : null };
 }
@@ -2976,9 +2977,7 @@ export async function getTelemetry(s: Server, fetcher?: typeof fetch): Promise<T
 export async function putTelemetry(s: Server, consent: boolean, fetcher?: typeof fetch): Promise<TelemetrySetting> {
   const res = await apiFetchForServer<{ consent?: unknown; disabled_by?: unknown }>(s, '/api/telemetry',
     { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ consent }) }, 8000, false, fetcher);
-  const view = telemetryView(res);
-  if (!view) throw new Error(m.atualizar_resposta_invalida());
-  return view;
+  return telemetryView(res);
 }
 
 export function getIdentificadorEm(s: Server, fetcher?: typeof fetch, timeoutMs = 8000): Promise<{ identificador: string; lan_url?: string }> {

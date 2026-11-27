@@ -11091,6 +11091,7 @@
   "telemetry_yes": "OK to send",
   "telemetry_no": "Don't send",
   "telemetry_what_is_sent": "What is sent",
+  "telemetry_doc_open_failed": "Could not open the list of what is sent.",
   "update_all_timeout": "The update exceeded the 30-minute limit.",
   "update_all_warnings": "Warnings",
   "update_all_summary_checking": "Checking {n} online machines…",

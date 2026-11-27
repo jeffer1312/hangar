@@ -4,6 +4,7 @@ import { getTelemetry, putTelemetry, registrarDiag, type Server, type TelemetryS
 import { Notice, useMachineAction } from './parts';
 import { MachineGroup, MachineRow } from './MachineRows';
 import { saveAll } from './AutoReportSetting';
+import { toast } from '../../ui/Toast';
 import * as m from '../../paraglide/messages';
 
 export const TELEMETRY_DOC_URL = 'https://github.com/jeffer1312/hangar/blob/main/docs/telemetria.md';
@@ -11,6 +12,7 @@ export const TELEMETRY_DOC_URL = 'https://github.com/jeffer1312/hangar/blob/main
 const openDoc = () => {
   Linking.openURL(TELEMETRY_DOC_URL).catch(() => {
     registrarDiag({ evento: 'telemetry.doc_open_failed', nivel: 'erro', codigo: 'telemetry_doc_open_failed' });
+    toast.erro(m.telemetry_doc_open_failed());
   });
 };
 

@@ -11091,6 +11091,7 @@
   "telemetry_yes": "Pode enviar",
   "telemetry_no": "Não enviar",
   "telemetry_what_is_sent": "O que é enviado",
+  "telemetry_doc_open_failed": "Não foi possível abrir a lista do que é enviado.",
   "update_all_timeout": "A atualização ultrapassou o limite de 30 minutos.",
   "update_all_warnings": "Avisos",
   "update_all_summary_checking": "Conferindo {n} máquinas no ar…",

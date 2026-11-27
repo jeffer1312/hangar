@@ -141,20 +141,21 @@ export default function Layout() {
   }, [ready, withoutServer]);
 
   // Relatório automático da atualização e telemetria: uma pergunta de cada, na abertura, para as
-  // máquinas próprias sem resposta. Uma depois da outra, para não empilhar dois avisos.
+  // máquinas próprias sem resposta. Uma depois da outra, para não empilhar dois avisos. A cadeia
+  // não é cortada quando ready/withoutServer mudam: o ref já impede repetir, e cortar perderia a telemetria.
   const autoReportAsked = useRef(false);
   useEffect(() => {
     if (!ready || withoutServer || autoReportAsked.current) return;
     autoReportAsked.current = true;
-    let alive = true;
     const telemetryPending = telemetryUnanswered(servers);
     void (async () => {
       const report = await autoReportUnanswered(servers);
-      if (alive && report.length) await askAutoReport(report);
+      if (report.length) await askAutoReport(report);
       const telemetry = await telemetryPending;
-      if (alive && telemetry.length) await askTelemetry(telemetry);
-    })();
-    return () => { alive = false; };
+      if (telemetry.length) await askTelemetry(telemetry);
+    })().catch((e) => {
+      registrarDiag({ evento: 'startup.questions_failed', nivel: 'erro', codigo: 'startup_questions_failed', detalhe: e instanceof Error ? e.message : String(e) });
+    });
   }, [ready, withoutServer]);
 
   useNotificationNavigation();

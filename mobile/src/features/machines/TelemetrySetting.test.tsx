@@ -43,6 +43,11 @@ describe('getTelemetry', () => {
     mocks.fetch.mockImplementation(async () => view(null, 'env'));
     await expect(getTelemetry(server)).resolves.toEqual({ consent: null, disabled_by: 'env' });
   });
+
+  it('200 com corpo fora da forma é resposta inválida, não "sem telemetria"', async () => {
+    mocks.fetch.mockImplementation(async () => json({ consent: 'yes', disabled_by: null }));
+    await expect(getTelemetry(server)).rejects.toThrow(m.atualizar_resposta_invalida());
+  });
 });
 
 describe('linha de telemetria', () => {
@@ -73,6 +78,14 @@ describe('linha de telemetria', () => {
     await render();
     await act(async () => (el.querySelector(`[aria-label="${m.telemetry_what_is_sent()}"]`) as HTMLButtonElement).click());
     expect(open).toHaveBeenCalledWith(TELEMETRY_DOC_URL);
+  });
+
+  it('falha ao abrir a lista avisa na tela', async () => {
+    vi.spyOn(Linking, 'openURL').mockRejectedValue(new Error('fixture-no-handler'));
+    mocks.fetch.mockImplementation(async () => view(false));
+    await render();
+    await act(async () => (el.querySelector(`[aria-label="${m.telemetry_what_is_sent()}"]`) as HTMLButtonElement).click());
+    expect(mocks.erro).toHaveBeenCalledWith(m.telemetry_doc_open_failed());
   });
 
   it.each([404, 503])('servidor sem telemetria (%i) não mostra a linha nem erro', async (status) => {
