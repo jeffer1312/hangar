@@ -9,25 +9,30 @@
 <link rel="stylesheet" href="/panel/assets/panel.css">
 </head>
 <body>
-<div class="glow"></div>
 <header class="top">
   <div class="top-in">
-    <svg class="logo" width="30" height="30" viewBox="0 0 200 200" aria-hidden="true"><rect width="200" height="200" rx="44" fill="#1b1d1f"/><g fill="none" stroke="#f5f5f0" stroke-linecap="round" stroke-width="17" transform="translate(0 16)"><path d="M 33.49 132.44 A 74 74 0 1 1 166.51 132.44"/><path d="M 56.96 109.15 A 44 44 0 1 1 143.04 109.15"/></g></svg>
-    <div><h1>Telemetria do Hangar</h1><div class="sub">Contagens anônimas, um pacote por máquina por dia (UTC)</div></div>
-    <div class="spacer"></div>
-    <div class="seg" role="group" aria-label="Período">
-      <button data-days="7">7 dias</button><button data-days="30">30 dias</button><button data-days="90">90 dias</button>
+    <div class="brand-line"><svg class="logo" width="30" height="30" viewBox="0 0 200 200" aria-hidden="true"><rect width="200" height="200" rx="44" fill="#1b1d1f"/><g fill="none" stroke="#f5f5f0" stroke-linecap="round" stroke-width="17" transform="translate(0 16)"><path d="M 33.49 132.44 A 74 74 0 1 1 166.51 132.44"/><path d="M 56.96 109.15 A 44 44 0 1 1 143.04 109.15"/></g></svg><div><h1>Telemetria do Hangar</h1><div class="sub" id="sub">dados anônimos, um pacote por máquina por dia</div></div></div>
+    <label class="search"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="q" type="search" placeholder="Buscar erro, evento, versão ou opção" aria-label="Buscar no painel" autocomplete="off"><kbd id="q-key">/</kbd><button id="q-clear" type="button" aria-label="Limpar busca" hidden><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></label>
+    <div class="seg" id="period" role="group" aria-label="Período">
+      <button data-days="7" type="button">7 dias</button><button data-days="30" type="button">30 dias</button><button data-days="90" type="button">90 dias</button>
     </div>
-    <span class="who" id="who"></span>
-    <button class="btn" id="invite" type="button">Convidar</button>
-    <button class="btn ghost" id="logout" type="button">Sair</button>
+    <details class="menu" id="menu">
+      <summary aria-label="Conta"><span id="avatar">?</span></summary>
+      <div class="menu-pop">
+        <div class="who" id="who"></div>
+        <button id="invite" type="button"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 21a8 8 0 0 1 13.29-6"/><circle cx="10" cy="8" r="5"/><path d="M19 16v6"/><path d="M22 19h-6"/></svg>Convidar alguém</button>
+        <button id="logout" type="button"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg><span>Sair</span></button>
+      </div>
+    </details>
   </div>
 </header>
+<nav class="chips" aria-label="Seções"><div class="chips-in" id="chips"></div></nav>
 <main class="wrap">
-  <div id="content"><div class="kpis"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></div>
+  <div class="notice" id="notice" hidden><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><span id="notice-text"></span><button class="btn ghost" id="notice-clear" type="button">Limpar busca</button></div>
+  <div id="content"><div class="skel-grid"><div class="kp"><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div></div><div class="skeleton" style="height:300px"></div></div></div>
 </main>
 <dialog id="invite-dialog">
-  <h3>Convidar para o painel</h3>
+  <h2>Convidar para o painel</h2>
   <p id="invite-text">Gerando o link…</p>
   <div class="link-box"><input id="invite-link" readonly aria-label="Link do convite"><button class="btn" id="copy" type="button">Copiar</button></div>
   <div class="dialog-actions"><button class="btn ghost" id="close" type="button">Fechar</button></div>
@@ -62,12 +67,73 @@ const EVENTS = {
   server_startup: ["Subida do servidor", "saude", "Do início do servidor até ele aceitar pedidos, depois de ligar, reiniciar ou atualizar."],
   log_dropped: ["Linhas de log que sobraram", "saude", "Linhas novas de aviso ou erro que não couberam no teto de 100 por dia."],
 };
+// Preferências do retrato diário (evento settings): [título, grupo, o que é].
+const SETTING_GROUPS = ["Aparência", "Conversa", "Barra e navegação", "Beta", "Servidor"];
+const SETTINGS = {
+  theme: ["Tema", "Aparência", "Claro, escuro, automático (segue o sistema) ou as cores do papel de parede."],
+  panels: ["Painéis", "Aparência", "Caixas coladas na janela ou soltas sobre o fundo (PC)."],
+  palette: ["Paleta", "Aparência", "Cores clássicas do Hangar ou neutras."],
+  background: ["Fundo", "Aparência", "O que fica atrás das caixas."],
+  background_effect: ["Efeito do fundo", "Aparência", "Efeito desenhado por cima da imagem de fundo."],
+  wallpaper: ["Papel de parede", "Aparência", "Com o fundo da área de trabalho: ver através da janela ou desenhar a foto dentro (PC)."],
+  surface_material: ["Material das caixas", "Aparência", "Vidro que deixa ver o fundo ou caixa opaca (PC)."],
+  reading: ["Leitura", "Aparência", "O que segura o texto da conversa sobre o fundo."],
+  font: ["Fonte da conversa", "Aparência", "Fonte do sistema, monoespaçada ou outra instalada (o nome dela não sai)."],
+  code_font: ["Fonte do código", "Aparência", "Fonte dos blocos de código (PC)."],
+  text_size: ["Tamanho do texto", "Aparência", "Texto da conversa menor, igual ou maior que o de fábrica."],
+  compact_style: ["Estilo compacto", "Aparência", "Se a aparência é exatamente a do atalho Estilo compacto (PC)."],
+  tool_look: ["Estilo da conversa", "Conversa", "Como as ferramentas do agente aparecem na conversa."],
+  thinking_tools: ["Ferramentas no pensamento", "Conversa", "Quais chamadas feitas no meio do raciocínio ficam dentro do bloco do pensamento."],
+  thinking_collapsed: ["Pensamento dobrado", "Conversa", "Pensamento terminado numa linha só, aberto no clique (PC)."],
+  task_list: ["Lista de tarefas", "Conversa", "Tarefas do agente como bloco de progresso na conversa."],
+  table_chart: ["Gráfico nas tabelas", "Conversa", "Botão de gráfico sobre tabelas numéricas."],
+  ask_highlight: ["Destaque da pergunta", "Conversa", "Cor da moldura quando o agente pergunta."],
+  delivery: ["Mensagem com o agente trabalhando", "Conversa", "O que acontece com a mensagem mandada enquanto a sessão trabalha."],
+  hands_free: ["Mãos livres", "Conversa", "Ditado que envia sozinho."],
+  navigation: ["Navegação", "Barra e navegação", "Onde ficam as sessões no PC."],
+  sidebar_compact: ["Barra compacta", "Barra e navegação", "Linhas mais baixas na barra de sessões (PC)."],
+  sidebar_height: ["Altura da barra", "Barra e navegação", "Barra da altura da janela ou do conteúdo (PC)."],
+  sidebar_group: ["Agrupar a barra", "Barra e navegação", "Como a barra do PC agrupa as sessões."],
+  tabs_full: ["Abas detalhadas", "Barra e navegação", "Abas com pasta e branch embaixo do nome (PC)."],
+  list_group: ["Agrupar a lista", "Barra e navegação", "Como a lista do celular agrupa as sessões."],
+  list_organize: ["Organizar a lista", "Barra e navegação", "Lista do celular por sessões ou por conversas."],
+  home_screen: ["Tela inicial", "Barra e navegação", "O que o celular abre primeiro."],
+  tablet_bar: ["Barra no tablet", "Barra e navegação", "Onde fica a barra de sessões no tablet."],
+  language: ["Idioma", "Barra e navegação", "Idioma do app."],
+  tips: ["Dicas", "Barra e navegação", "Dicas do app ligadas ou desligadas (PC)."],
+  tour: ["Tour", "Barra e navegação", "Se a pessoa terminou, pulou ou ainda não viu o tour (PC)."],
+  conversation_beta: ["Conversa nova", "Beta", "O desenho novo da conversa, da tela Beta."],
+  code_mode: ["Code Mode do Claude Code", "Beta", "Sessões do Claude abertas com o Code Mode."],
+  default_provider: ["Agente padrão", "Servidor", "O agente que abre quando o pedido não diz qual."],
+  default_effort: ["Esforço padrão", "Servidor", "O esforço salvo como padrão para o agente padrão."],
+  auto_report: ["Relatório automático", "Servidor", "Se a atualização que falha manda o relatório sozinha."],
+  dictation_org: ["Organizar o ditado", "Servidor", "Quem organiza o texto ditado depois da transcrição."],
+  dictation_provider: ["Transcrição", "Servidor", "O serviço que transforma a fala em texto."],
+  connect: ["Hangar Connect", "Servidor", "Máquina ligada ao Connect."],
+  computer_use: ["Computer Use", "Servidor", "Controle do desktop ligado para os agentes."],
+  whatsapp: ["WhatsApp", "Servidor", "Integração do WhatsApp instalada."],
+  jev: ["Jev", "Servidor", "Chave do Jev configurada."],
+};
+const SETTING_VALUES = { on: "ligado", off: "desligado", auto: "automático", light: "claro", dark: "escuro", desktop: "área de trabalho",
+  attached: "colados", floating: "soltos", classic: "clássico", neutral: "neutra", plain: "liso", texture: "textura", aurora: "luz no canto",
+  image: "imagem", none: "nenhum", dither: "pontilhado", ascii: "ASCII", halftone: "retícula", scanlines: "linhas de TV", window: "janela",
+  glass: "vidro", opaque: "opaco", text: "texto", sheet: "folha", system: "do sistema", mono: "monoespaçada", custom: "outra instalada",
+  jetbrains_mono: "JetBrains Mono", small: "menor", normal: "de fábrica", large: "maior", chips: "chips", tree: "árvore", terminal: "terminal",
+  claude_desktop: "Claude Desktop", search: "só buscas", all: "todas", accent: "cor de destaque", amber: "âmbar", queue: "fila",
+  direct: "direto", jev: "Jev escolhe", conversation: "na conversa", tabs: "abas em cima", bottom_tabs: "abas embaixo",
+  conversations: "conversas", sidebar: "barra lateral", full: "inteira", content: "do conteúdo", project: "projeto", machine: "máquina",
+  server: "servidor", sessions: "sessões", new_conversation: "conversa nova", left: "à esquerda", bottom: "embaixo", top: "em cima",
+  pt: "português", en: "inglês", done: "terminou", skipped: "pulou", unset: "sem padrão", minimal: "mínimo", low: "baixo", medium: "médio",
+  high: "alto", xhigh: "muito alto", max: "máximo", ultra: "ultra", unanswered: "sem resposta", harness: "pelo agente",
+  external_api: "por API externa", openai: "OpenAI (ou compatível)", groq: "Groq", elevenlabs: "ElevenLabs", whisper_cpp: "whisper.cpp local",
+  installed: "instalado", no: "não", configured: "configurado", other: "outro" };
+const AGENTS = { claude: "Claude", codex: "Codex", pi: "Pi", omp: "omp", kimi: "Kimi", antigravity: "Antigravity" };
 // Valores das dimensões em português; o que não está aqui aparece como veio.
 const VALUES = {
   provider: { claude: "Claude", codex: "Codex", pi: "Pi", omp: "omp", kimi: "Kimi", antigravity: "Antigravity", other: "outro agente" },
   surface: { terminal: "com terminal", headless: "sem terminal" },
   origin: { person: "pela pessoa", session: "por outra sessão", manual: "pelo botão", auto: "automática" },
-  client: { ios: "iPhone/iPad", android: "Android", pwa: "navegador", native: "app do PC", other: "outro app" },
+  client: { ios: "iPhone/iPad", android: "Android", pwa: "navegador", native: "app do PC", server: "servidor", other: "outro app" },
   kind: { lan: "rede local", tailscale: "Tailscale", connect: "Hangar Connect", public: "endereço público", disabled: "desligada",
     crash: "queda", update: "atualização", requested: "parada pedida" },
   cause: { package: "troca de versão", terminal_out_of_memory: "sem memória", terminal_died: "terminal fechou" },
@@ -156,144 +222,18 @@ function dimsLabel(dims) {
   return parts.length ? parts.join(" · ") : "todas";
 }
 
-// Lista de barras: nome, figura e barra alinhadas; o maior valor enche a trilha.
-function barList(items, opts = {}) {
-  const max = Math.max(1, ...items.map(i => i.value));
-  const box = el("div", { class: "rows" });
-  for (const it of items) {
-    const row = el("div", { class: "row" + (opts.bad ? " bad" : ""), tabindex: "0" },
-      el("div", { class: "lbl", text: it.label }),
-      el("div", { class: "num" }, fmt.format(it.value), it.machines != null ? el("small", { text: it.machines + " máq." }) : null),
-      el("div", { class: "track" }, el("div", { class: "fill", style: "width:" + (100 * it.value / max).toFixed(2) + "%" })));
-    withTip(row, it.label + ": " + fmt.format(it.value) + (it.machines != null ? " (" + it.machines + " máquina" + (it.machines === 1 ? "" : "s") + ")" : ""));
-    box.append(row);
-  }
-  return box;
-}
-
-function card(title, name, body, code) {
-  return el("section", { class: "card" }, el("h3", { text: title }), name ? el("div", { class: "name" + (code ? " code" : ""), text: name }) : null, body);
-}
-
-// Colunas por dia, uma série: o título diz o que é, sem legenda.
-function daysChart(daily, days, unit = ["máquina", "máquinas"], cls = "col", height = 200, width = 0) {
-  const byDay = new Map(daily.map(d => [d.day, d.machines]));
-  const end = new Date(); end.setUTCHours(0, 0, 0, 0);
-  const series = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(end.getTime() - i * 86400000).toISOString().slice(0, 10);
-    series.push({ day: d, value: byDay.get(d) || 0 });
-  }
-  // Na largura real do cartão: o texto dos eixos fica do mesmo tamanho no celular e no PC.
-  const W = width || Math.max(280, document.querySelector("main").clientWidth - 78), H = height, L = 36, B = 22, T = 8;
-  const max = Math.max(1, ...series.map(s => s.value));
-  const ticks = Math.min(4, max);
-  const step = Math.ceil(max / ticks);
-  const top = step * ticks;
-  const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Máquinas por dia" });
-  for (let i = 0; i <= ticks; i++) {
-    const y = T + (H - B - T) * (1 - i / ticks);
-    svg.append(svgEl("line", { x1: L, x2: W, y1: y, y2: y, class: i ? "gridline" : "base" }));
-    const t = svgEl("text", { x: L - 6, y: y + 4, "text-anchor": "end" }); t.textContent = fmt.format(step * i); svg.append(t);
-  }
-  const band = (W - L) / series.length;
-  const bw = Math.min(24, Math.max(2, band - 2));
-  series.forEach((s, i) => {
-    const x = L + i * band + (band - bw) / 2;
-    const h = (H - B - T) * s.value / top;
-    const y = H - B - h;
-    if (s.value > 0) {
-      const r = Math.min(4, bw / 2, h);
-      svg.append(svgEl("path", { class: cls, d: "M" + x + "," + (H - B) + "V" + (y + r) + "Q" + x + "," + y + " " + (x + r) + "," + y +
-        "H" + (x + bw - r) + "Q" + (x + bw) + "," + y + " " + (x + bw) + "," + (y + r) + "V" + (H - B) + "Z" }));
-    }
-    const hit = svgEl("rect", { class: "hit", x: L + i * band, y: T, width: band, height: H - B - T, tabindex: "0" });
-    withTip(hit, s.day.split("-").reverse().join("/") + ": " + fmt.format(s.value) + " " + unit[s.value === 1 ? 0 : 1]);
-    svg.append(hit);
-    const every = Math.ceil(series.length / Math.max(2, Math.floor((W - L) / 70)));
-    if (i === 0 || i === series.length - 1 || (i % every === 0 && series.length - 1 - i >= every / 2)) {
-      const edge = i === 0 ? "start" : i === series.length - 1 ? "end" : "middle";
-      const tx = edge === "start" ? L + i * band : edge === "end" ? L + (i + 1) * band : L + i * band + band / 2;
-      const t = svgEl("text", { x: tx, y: H - 6, "text-anchor": edge });
-      t.textContent = s.day.slice(8, 10) + "/" + s.day.slice(5, 7); svg.append(t);
-    }
-  });
-  return svg;
-}
-
-
-// O filtro do log sobrevive ao redesenho do resize.
-let logQuery = "", logLevel = "";
-const dayMonth = day => day.slice(8, 10) + "/" + day.slice(5, 7);
-
-function logRow(l) {
-  const [label, cls] = l.level === "error" ? ["erro", "error"] : ["aviso", "warn"];
-  return el("div", { class: "log-row" },
-    el("span", { class: "level " + cls, text: label }),
-    el("div", { class: "log-main" }, el("code", { class: "log-msg", text: l.message }), el("div", { class: "log-target", text: l.target })),
-    el("div", { class: "log-meta" },
-      el("span", { text: fmt.format(l.count) + (l.count === 1 ? " vez" : " vezes") }),
-      el("span", { text: l.machines + " máquina" + (l.machines === 1 ? "" : "s") }),
-      el("span", { text: "primeira vez " + dayMonth(l.first_day) }),
-      el("span", { text: "última vez " + dayMonth(l.last_day) }),
-      el("span", { text: (l.versions || []).join(", ") })));
-}
-
-function logCard(logs) {
-  if (!logs.length) return el("div", { class: "card empty good", text: "Nenhuma linha de erro no período." });
-  const search = el("input", { type: "search", class: "log-search", placeholder: "Buscar no texto", "aria-label": "Buscar no log de erros" });
-  search.value = logQuery;
-  const levels = el("div", { class: "seg", role: "group", "aria-label": "Nível" });
-  const list = el("div", { class: "log-list" }), shownCount = el("div", { class: "minor" });
-  const draw = () => {
-    const q = logQuery.trim().toLowerCase();
-    const shown = logs.filter(l => (!logLevel || l.level === logLevel) && (!q || (l.message + " " + l.target).toLowerCase().includes(q)));
-    list.replaceChildren(...shown.map(logRow));
-    if (!shown.length) list.append(el("div", { class: "empty", text: "Nenhuma linha com esse filtro." }));
-    shownCount.textContent = shown.length + " de " + logs.length + " linhas";
-  };
-  for (const [value, label] of [["", "Todos"], ["error", "Erros"], ["warn", "Avisos"]]) {
-    const button = el("button", { type: "button", "aria-pressed": String(value === logLevel), text: label });
-    button.addEventListener("click", () => {
-      logLevel = value;
-      levels.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === button)));
-      draw();
-    });
-    levels.append(button);
-  }
-  search.addEventListener("input", () => { logQuery = search.value; draw(); });
-  draw();
-  return el("div", { class: "card" }, el("div", { class: "log-tools" }, search, levels), list, shownCount);
-}
-
-function section(title, note) {
-  return el("div", { class: "section-title" }, el("h2", { text: title }), note ? el("span", { text: note }) : null);
-}
-
 // Série diária completa do período (dia sem pacote = 0), em UTC como os pacotes.
 function series(days, valueOf) {
   const end = new Date(); end.setUTCHours(0, 0, 0, 0);
   const out = [];
   for (let i = days - 1; i >= 0; i--) {
     const day = new Date(end.getTime() - i * 86400000).toISOString().slice(0, 10);
-    out.push({ day, machines: valueOf(day) });
+    out.push({ day, value: valueOf(day) });
   }
   return out;
 }
 
-// Minilinha do cartão: só a forma da tendência; o número exato está no cartão e no gráfico do dia.
-function sparkline(values) {
-  const W = 120, H = 32, max = Math.max(1, ...values);
-  const step = values.length > 1 ? W / (values.length - 1) : W;
-  const pts = values.map((v, i) => (i * step).toFixed(1) + "," + (H - 3 - (H - 6) * v / max).toFixed(1));
-  const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, class: "spark", "aria-hidden": "true" });
-  svg.append(svgEl("polyline", { points: pts.join(" "), fill: "none", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
-  return svg;
-}
 
-function help(text) {
-  return withTip(el("button", { class: "help", type: "button", "aria-label": text, text: "?" }), text);
-}
 
 // Faixas de tempo em frase: a faixa onde fica a metade das vezes e onde ficam 9 em cada 10.
 const UPPER = { lt100ms: "100 ms", lt300ms: "300 ms", lt1s: "1 s", lt3s: "3 s", lt10s: "10 s", lt30s: "30 s", ge30s: "mais de 30 s" };
@@ -317,9 +257,196 @@ function timeSentence(buckets) {
   return "Metade das vezes " + say(quantileBucket(buckets, 0.5)) + "; 9 em cada 10 " + say(quantileBucket(buckets, 0.9)) + ".";
 }
 
+
+const ICON = {"overview":"<rect x=\"3\" y=\"3\" width=\"7\" height=\"9\" rx=\"1\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"5\" rx=\"1\"/><rect x=\"14\" y=\"12\" width=\"7\" height=\"9\" rx=\"1\"/><rect x=\"3\" y=\"16\" width=\"7\" height=\"5\" rx=\"1\"/>","problems":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/>","log":"<path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"/><path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/><path d=\"M16 13H8\"/><path d=\"M16 17H8\"/><path d=\"M10 9H8\"/>","usage":"<path d=\"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z\"/>","speed":"<path d=\"m12 14 4-4\"/><path d=\"M3.34 19a10 10 0 1 1 17.32 0\"/>","machines":"<rect x=\"2\" y=\"3\" width=\"20\" height=\"14\" rx=\"2\"/><path d=\"M8 21h8\"/><path d=\"M12 17v4\"/>","config":"<path d=\"M20 7h-9\"/><path d=\"M14 17H5\"/><circle cx=\"17\" cy=\"17\" r=\"3\"/><circle cx=\"7\" cy=\"7\" r=\"3\"/>","search":"<circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/>","users":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"/><path d=\"M16 3.13a4 4 0 0 1 0 7.75\"/>","chevron":"<path d=\"m9 18 6-6-6-6\"/>","check":"<path d=\"M20 6 9 17l-5-5\"/>","invite":"<path d=\"M2 21a8 8 0 0 1 13.29-6\"/><circle cx=\"10\" cy=\"8\" r=\"5\"/><path d=\"M19 16v6\"/><path d=\"M22 19h-6\"/>","table":"<rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\"/><path d=\"M3 9h18\"/><path d=\"M3 15h18\"/><path d=\"M9 3v18\"/>","logout":"<path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\"/><path d=\"m16 17 5-5-5-5\"/><path d=\"M21 12H9\"/>","x":"<path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/>","heart":"<path d=\"M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z\"/><path d=\"M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27\"/>","calendar":"<path d=\"M8 2v4\"/><path d=\"M16 2v4\"/><rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\"/><path d=\"M3 10h18\"/>","alertCircle":"<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 8v4\"/><path d=\"M12 16h.01\"/>"};
+function icon(name) {
+  const s = svgEl("svg", { class: "ic", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.75",
+    "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" });
+  s.innerHTML = ICON[name];
+  return s;
+}
+// Cada seção tem cor e ícone próprios: o chip, o título e as barras dela usam a mesma cor.
+const SECTIONS = [
+  ["geral", "Visão geral", "#8b93f0", "overview", "Quantas máquinas e pessoas usam o Hangar, e o que mais falhou."],
+  ["problemas", "Problemas", "#f2766b", "problems", "O que deu errado para quem usa: ação que falhou, sessão que caiu, app que fechou."],
+  ["log", "Log de erros", "#f2a36b", "log", "Linhas de aviso e erro do servidor, limpas na máquina antes de sair."],
+  ["uso", "Como usam", "#45c2a8", "usage", "O que as pessoas fazem com o Hangar, dia a dia."],
+  ["velocidade", "Velocidade", "#5aaee8", "speed", "Quanto cada coisa demora. Cada barra é uma faixa de tempo; quanto maior, mais vezes caiu ali."],
+  ["maquinas", "Máquinas", "#b48cf0", "machines", "Versão, sistema e canal de cada máquina, e a saúde do servidor."],
+  ["config", "Como configuram", "#e88ab8", "config", "Quantas máquinas escolheram cada opção. Cada app manda o retrato uma vez por dia."],
+  ["dados", "Dados brutos", "#a9a0a4", "table", "Cada contador como chegou, para conferir um número."],
+];
+const HUE = Object.fromEntries(SECTIONS.map(s => [s[0], s[2]]));
+const animate = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Números rolam do valor anterior até o novo: trocar 7/30/90 dias mostra o quanto mudou.
+const lastShown = new Map();
+function countUp(node, key, value, format) {
+  const from = lastShown.has(key) ? lastShown.get(key) : 0;
+  lastShown.set(key, value);
+  if (!animate || from === value) { node.textContent = format(value); return node; }
+  const start = performance.now(), dur = 900;
+  const step = now => {
+    const t = Math.min(1, Math.max(0, (now - start) / dur)), e = 1 - Math.pow(2, -10 * t);
+    node.textContent = format(t === 1 ? value : from + (value - from) * e);
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+  return node;
+}
+const compactInt = v => compact.format(Math.round(v));
+
+function barList(items) {
+  const max = Math.max(1, ...items.map(i => i.value));
+  const box = el("div", { class: "rows" });
+  for (const it of items) {
+    const row = el("div", { class: "row", tabindex: "0", "data-q": it.label.toLowerCase() },
+      el("div", { class: "lbl", text: it.label }),
+      el("div", { class: "num" }, fmt.format(it.value), it.machines != null ? el("small", { text: it.machines + " máq." }) : null),
+      el("div", { class: "track" }, el("div", { class: "fill", style: "--w:" + (it.value / max).toFixed(4) })));
+    withTip(row, it.label + ": " + fmt.format(it.value) + (it.machines != null ? " (" + it.machines + " máquina" + (it.machines === 1 ? "" : "s") + ")" : ""));
+    box.append(row);
+  }
+  return box;
+}
+
+function card(title, explain, ...body) {
+  return el("section", { class: "card", "data-title": title.toLowerCase() },
+    el("h3", { text: title }), explain ? el("p", { class: "explain", text: explain }) : null, ...body);
+}
+
+// Linha com área, desenhada na largura real do cartão (o texto dos eixos fica do mesmo tamanho no celular e no PC).
+let chartId = 0;
+function lineChart(slot) {
+  const { rows, unit } = slot._chart;
+  const W = Math.max(240, slot.clientWidth), H = slot._chart.height || 200, L = 34, B = 22, T = 10, R = 6;
+  const max = Math.max(1, ...rows.map(s => s.value));
+  const ticks = Math.min(4, max), step = Math.ceil(max / ticks), top = step * ticks;
+  const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", height: H, role: "img",
+    "aria-label": slot._chart.label + ": " + rows.map(r => fmt.format(r.value)).join(", ") });
+  for (let i = 0; i <= ticks; i++) {
+    const y = T + (H - B - T) * (1 - i / ticks);
+    svg.append(svgEl("line", { x1: L, x2: W - R, y1: y, y2: y, class: i ? "gridline" : "base" }));
+    const t = svgEl("text", { x: L - 8, y: y + 4, "text-anchor": "end" }); t.textContent = compact.format(step * i); svg.append(t);
+  }
+  const band = (W - L - R) / Math.max(1, rows.length - 1);
+  const pts = rows.map((s, i) => [L + i * band, T + (H - B - T) * (1 - s.value / top)]);
+  const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join("");
+  const id = "g" + (++chartId);
+  const defs = svgEl("defs", {});
+  const grad = svgEl("linearGradient", { id, x1: 0, y1: 0, x2: 0, y2: 1 });
+  grad.append(svgEl("stop", { offset: "0", "stop-color": "var(--hue)", "stop-opacity": ".32" }), svgEl("stop", { offset: "1", "stop-color": "var(--hue)", "stop-opacity": "0" }));
+  defs.append(grad); svg.append(defs);
+  svg.append(svgEl("path", { class: "area", fill: "url(#" + id + ")", d: line + "L" + pts.at(-1)[0] + "," + (H - B) + "L" + L + "," + (H - B) + "Z" }));
+  svg.append(svgEl("path", { class: "line", d: line, pathLength: "1" }));
+  const cross = svgEl("line", { class: "cross", x1: 0, x2: 0, y1: T, y2: H - B });
+  const dot = svgEl("circle", { class: "dot", r: 4, cx: pts.at(-1)[0], cy: pts.at(-1)[1] });
+  svg.append(cross, dot);
+  const every = Math.ceil(rows.length / Math.max(2, Math.floor((W - L) / 72)));
+  rows.forEach((s, i) => {
+    if (i === 0 || i === rows.length - 1 || (i % every === 0 && rows.length - 1 - i >= every / 2)) {
+      const anchor = i === 0 ? "start" : i === rows.length - 1 ? "end" : "middle";
+      const t = svgEl("text", { x: pts[i][0], y: H - 4, "text-anchor": anchor }); t.textContent = dayMonth(s.day); svg.append(t);
+    }
+    const hit = svgEl("rect", { class: "hit", x: pts[i][0] - band / 2, y: T, width: Math.max(band, 4), height: H - B - T, tabindex: "0" });
+    const show = (x, y) => {
+      cross.setAttribute("x1", pts[i][0]); cross.setAttribute("x2", pts[i][0]); cross.style.opacity = 1;
+      dot.setAttribute("cx", pts[i][0]); dot.setAttribute("cy", pts[i][1]);
+      showTip(s.day.split("-").reverse().join("/") + ": " + fmt.format(s.value) + " " + unit[s.value === 1 ? 0 : 1], x, y);
+    };
+    const hide = () => { cross.style.opacity = 0; dot.setAttribute("cx", pts.at(-1)[0]); dot.setAttribute("cy", pts.at(-1)[1]); hideTip(); };
+    hit.addEventListener("pointermove", e => show(e.clientX, e.clientY));
+    hit.addEventListener("pointerleave", hide);
+    hit.addEventListener("focus", () => { const r = hit.getBoundingClientRect(); show(r.left, r.top); });
+    hit.addEventListener("blur", hide);
+    svg.append(hit);
+  });
+  slot.replaceChildren(svg);
+}
+const chartSlot = (label, rows, unit, height) => {
+  const slot = el("div", { class: "chart" });
+  slot._chart = { label, rows, unit, height };
+  return slot;
+};
+const chartCard = (title, explain, rows, unit, height) => card(title, explain, chartSlot(title, rows, unit, height));
+
+// O filtro do log sobrevive ao redesenho.
+let logLevel = "";
+const dayMonth = day => day.slice(8, 10) + "/" + day.slice(5, 7);
+
+function logRow(l) {
+  const [label, cls, ic] = l.level === "error" ? ["erro", "error", "alertCircle"] : ["aviso", "warn", "problems"];
+  return el("div", { class: "log-row", "data-q": (l.message + " " + l.target).toLowerCase() },
+    el("span", { class: "level " + cls }, icon(ic), label),
+    el("div", { class: "log-main" }, el("code", { class: "log-msg", text: l.message }), el("div", { class: "log-target", text: l.target })),
+    el("div", { class: "log-meta" },
+      el("span", {}, el("b", { text: fmt.format(l.count) }), l.count === 1 ? " vez" : " vezes"),
+      el("span", {}, el("b", { text: String(l.machines) }), " máquina" + (l.machines === 1 ? "" : "s")),
+      el("span", { text: "de " + dayMonth(l.first_day) + " a " + dayMonth(l.last_day) }),
+      el("span", { text: (l.versions || []).join(", ") })));
+}
+
+function logCard(logs) {
+  if (!logs.length) return el("div", { class: "card empty" }, icon("check"), "Nenhuma linha de erro no período.");
+  const levels = el("div", { class: "seg", role: "group", "aria-label": "Nível" });
+  const list = el("div", { class: "log-list" }), shownCount = el("div", { class: "minor" });
+  const draw = () => {
+    const shown = logs.filter(l => !logLevel || l.level === logLevel);
+    list.replaceChildren(...shown.map(logRow));
+    if (!shown.length) list.append(el("div", { class: "empty", text: "Nenhuma linha com esse filtro." }));
+    shownCount.textContent = shown.length + " de " + logs.length + " linhas";
+    applyFilter();
+  };
+  const errors = logs.filter(l => l.level === "error").length;
+  for (const [value, label] of [["", "Todos"], ["error", "Erros · " + errors], ["warn", "Avisos · " + (logs.length - errors)]]) {
+    const button = el("button", { type: "button", "aria-pressed": String(value === logLevel), text: label });
+    button.addEventListener("click", () => {
+      logLevel = value;
+      levels.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === button)));
+      draw();
+    });
+    levels.append(button);
+  }
+  draw();
+  return el("div", { class: "card", "data-title": "log de erros" }, el("div", { class: "log-tools" }, levels, shownCount), list);
+}
+
+function sectionBlock(id, big, bigNote, ...body) {
+  const [, name, hue, ic, explain] = SECTIONS.find(s => s[0] === id);
+  return el("section", { class: "sec", id: "s-" + id, style: "--hue:" + hue, "aria-labelledby": "h-" + id },
+    el("div", { class: "sec-head" }, el("span", { class: "tile" }, icon(ic)),
+      el("div", {}, el("h2", { id: "h-" + id, text: name }), el("p", { text: explain })),
+      big != null ? el("div", { class: "big" }, el("b", { text: big }), bigNote) : null),
+    ...body);
+}
+const groupTitle = (text, ic) => el("h3", { class: "group-title" }, ic ? icon(ic) : null, text);
+
+function settingsCards(rows) {
+  const bySetting = new Map();
+  for (const c of rows) {
+    const d = c.dims || {};
+    if (!bySetting.has(d.setting)) bySetting.set(d.setting, []);
+    bySetting.get(d.setting).push({ value: d.value, client: d.client, machines: c.machines });
+  }
+  const groups = new Map([...SETTING_GROUPS, "Outras"].map(g => [g, []]));
+  for (const key of Object.keys(SETTINGS).concat([...bySetting.keys()].filter(k => !Object.hasOwn(SETTINGS, k)).sort())) {
+    const items = bySetting.get(key);
+    if (!items) continue;
+    const [title, group, explain] = Object.hasOwn(SETTINGS, key) ? SETTINGS[key] : [key, "Outras", "Preferência nova, ainda sem descrição neste painel."];
+    const clients = new Set(items.map(i => i.client)).size;
+    const label = i => (key === "default_provider" ? AGENTS[i.value] : SETTING_VALUES[i.value]) || i.value;
+    // O mesmo valor em dois apps sai em duas barras: somar contaria duas vezes a máquina que tem os dois.
+    const bars = items.sort((x, y) => y.machines - x.machines).map(i => ({
+      label: clients > 1 ? label(i) + " · " + (VALUES.client[i.client] || i.client) : label(i), value: i.machines }));
+    groups.get(group).push(card(title, explain, barList(bars)));
+  }
+  const out = [];
+  for (const [group, cards] of groups) if (cards.length) out.push(groupTitle(group), el("div", { class: "grid" }, ...cards));
+  return { nodes: out, count: bySetting.size };
+}
+
 function render(data) {
   const root = document.getElementById("content");
-  root.replaceChildren();
   const a = data.active;
   const byEvent = new Map();
   const entry = event => byEvent.get(event) || byEvent.set(event, { dims: [], buckets: new Map() }).get(event);
@@ -340,117 +467,215 @@ function render(data) {
   failures.sort((x, y) => y.value - x.value);
   const failTotal = failures.reduce((s, f) => s + f.value, 0);
 
-  const perDay = (keep) => {
+  const perDay = keep => {
     const sums = new Map();
     for (const t of data.trend || []) if (keep(t.event, t.dims || {})) sums.set(t.day, (sums.get(t.day) || 0) + t.count);
     return series(data.days, day => sums.get(day) || 0);
   };
   const daily = event => perDay(e => e === event);
   const machinesDaily = series(data.days, day => (data.daily.find(d => d.day === day) || {}).machines || 0);
-  const failDaily = perDay(failed);
+  const logs = data.logs || [];
+  const settings = settingsCards(data.by_dims.filter(c => c.event === "settings"));
 
-  const kpi = (label, value, explain, spark, cls) => el("div", { class: "card kpi" + (cls ? " " + cls : "") },
-    el("div", { class: "label" }, label, help(explain)),
-    el("div", { class: "value", text: compact.format(value) }),
-    spark ? sparkline(spark.map(s => s.machines)) : null);
-  root.append(el("div", { class: "kpis" },
-    kpi("Máquinas ativas", a.machines_30d, "Máquinas que mandaram pelo menos um pacote nos últimos 30 dias. Nos últimos 7: " + a.machines_7d + ".", machinesDaily, "hero"),
-    kpi("Pessoas", a.owners_30d, "Pessoas que usam o Hangar, contadas uma vez mesmo com várias máquinas (cada instalação guarda um número aleatório do dono). Nos últimos 7 dias: " + a.owners_7d + "."),
-    kpi("Mensagens enviadas", total("message_sent"), EVENTS.message_sent[2], daily("message_sent")),
-    kpi("Respostas do agente", total("turn_finished"), EVENTS.turn_finished[2], daily("turn_finished")),
-    kpi("Falhas", failTotal, "Tudo o que deu errado para quem usa no período: sessão que não abriu, mensagem recusada, queda do app, ferramenta com erro, atualização que falhou.", failDaily, failTotal ? "bad" : "")));
-
-  if (!data.period.batches) {
-    root.append(el("div", { class: "card empty big" }, "Nenhum pacote chegou neste período. Cada máquina manda o dia depois que ele fecha em UTC (21h em Brasília)."));
-    return;
-  }
-
-  root.append(section("Erros", "o que falhou para quem usa"));
-  root.append(failures.length
-    ? el("div", { class: "card" }, barList(failures.slice(0, 15), { bad: true }),
-        failures.length > 15 ? el("div", { class: "minor", text: "+ " + (failures.length - 15) + " na tabela no fim" }) : null)
-    : el("div", { class: "card empty good", text: "Nenhuma falha registrada no período." }));
-
-  root.append(section("Log de erros", "linhas de aviso e erro do servidor, limpas na máquina antes de sair"), logCard(data.logs || []));
-
-  // Gráficos pequenos lado a lado, um por medida: cada um tem a própria escala e dispensa legenda.
-  const mainW = document.querySelector("main").clientWidth;
-  const cols = mainW >= 860 ? 2 : 1;
-  const chartW = Math.max(260, Math.floor((mainW - 12 * (cols - 1)) / cols) - 40);
-  const mini = (title, explain, rows, unit, cls) => el("section", { class: "card" },
-    el("h3", {}, title, help(explain)), el("div", { class: "chart" }, daysChart(rows, data.days, unit, cls, 150, chartW)));
-  root.append(section("Por dia", "dias em UTC"), el("div", { class: "grid two" },
-    mini("Máquinas ativas", "Quantas máquinas mandaram pacote em cada dia.", machinesDaily, ["máquina", "máquinas"], "col"),
-    mini("Mensagens enviadas", EVENTS.message_sent[2], daily("message_sent"), ["mensagem", "mensagens"], "col"),
-    mini("Respostas do agente", EVENTS.turn_finished[2], daily("turn_finished"), ["resposta", "respostas"], "col"),
-    mini("Falhas", "Soma das falhas de cada dia.", failDaily, ["falha", "falhas"], "col bad")));
-
-  // Tempos: a frase responde "isso está rápido?"; as barras mostram como as vezes se espalham.
   const times = [];
   for (const [event, e] of [...byEvent].sort()) {
     if (!e.buckets.size) continue;
     const [title, , explain] = Object.hasOwn(EVENTS, event) ? EVENTS[event] : [event, "", ""];
     const order = [...e.buckets.keys()].sort(byBucket);
-    times.push(el("section", { class: "card" },
-      el("h3", { text: title }), el("p", { class: "explain", text: explain }),
-      el("p", { class: "headline", text: timeSentence(e.buckets) }),
+    times.push(card(title, explain, el("p", { class: "headline", text: timeSentence(e.buckets) }),
       barList(order.map(b => ({ label: BUCKET_LABEL[b] || b, ...e.buckets.get(b) })))));
   }
-  if (times.length) root.append(section("Quanto demora", "cada barra é uma faixa de tempo; quanto maior, mais vezes caiu ali"), el("div", { class: "grid" }, ...times));
 
-  const sections = { uso: [], saude: [], outros: [] };
-  for (const [event, e] of [...byEvent].sort()) {
-    if (BAD.has(event)) continue;
-    const [title, group, explain] = Object.hasOwn(EVENTS, event) ? EVENTS[event] : [event, "outros", "Evento novo, ainda sem descrição neste painel."];
-    const items = [...e.dims].sort((x, y) => y.value - x.value);
-    const shown = items.slice(0, 12);
-    sections[group].push(el("section", { class: "card" },
-      el("h3", { text: title }), el("p", { class: "explain", text: explain }),
-      barList(shown),
-      items.length > shown.length ? el("div", { class: "minor", text: "+ " + (items.length - shown.length) + " na tabela no fim" }) : null));
+  const counts = { problemas: failTotal, log: logs.length, uso: total("message_sent"), velocidade: times.length,
+    maquinas: a.machines_30d, config: settings.count, dados: data.counters.length };
+  drawChips(counts, { problemas: failTotal > 0, log: logs.some(l => l.level === "error") });
+
+  const nodes = [];
+  const kpi = (sec, ic, label, key, value, note, bad) => {
+    const node = el("a", { class: "kpi" + (bad ? " bad" : ""), href: "#s-" + sec, style: "--hue:" + HUE[sec] },
+      el("div", { class: "label" }, icon(ic), label), el("div", { class: "value" }), el("div", { class: "note", text: note }));
+    countUp(node.querySelector(".value"), key, value, compactInt);
+    return node;
+  };
+
+  if (!data.period.batches) {
+    nodes.push(sectionBlock("geral", null, null, el("div", { class: "card empty big" }, icon("calendar"),
+      "Nenhum pacote chegou neste período.", el("span", { class: "minor", text: "Cada máquina manda o dia depois que ele fecha em UTC (21h em Brasília)." }))));
+    root.replaceChildren(...nodes);
+    return;
   }
-  if (sections.uso.length) root.append(section("Como usam", "o que as pessoas fazem com o Hangar"), el("div", { class: "grid" }, ...sections.uso));
 
-  root.append(section("Onde roda", "pelo último pacote de cada máquina"));
-  const envGrid = el("div", { class: "grid" });
-  for (const [key, title, explain] of [["version", "Versão do Hangar", "Versão instalada em cada máquina."],
+  const topFailures = failures.length
+    ? card("Falhas mais comuns", "O que mais deu errado no período.", barList(failures.slice(0, 5)),
+        el("a", { class: "more", href: "#s-problemas" }, "Ver as " + fmt.format(failTotal) + " falhas", icon("chevron")))
+    : el("div", { class: "card empty" }, icon("check"), "Nenhuma falha no período.");
+  topFailures.style.setProperty("--hue", HUE.problemas);
+  topFailures.style.setProperty("--hue-soft", "color-mix(in srgb, " + HUE.problemas + " 15%, transparent)");
+  nodes.push(sectionBlock("geral", null, null,
+    el("div", { class: "kpis" },
+      kpi("maquinas", "machines", "Máquinas ativas", "m", a.machines_30d, a.machines_7d + " nos últimos 7 dias"),
+      kpi("geral", "users", "Pessoas", "p", a.owners_30d, "cada pessoa conta uma vez"),
+      kpi("uso", "usage", "Mensagens enviadas", "msg", total("message_sent"), fmt.format(total("turn_finished")) + " respostas do agente"),
+      kpi("problemas", "problems", "Falhas", "f", failTotal, failTotal ? failures.length + " tipo" + (failures.length === 1 ? "" : "s") + " de falha" : "nenhuma no período", failTotal > 0)),
+    el("div", { class: "split" },
+      chartCard("Máquinas ativas por dia", "Quantas máquinas mandaram pacote em cada dia (UTC).", machinesDaily, ["máquina", "máquinas"], 240),
+      topFailures)));
+
+  nodes.push(sectionBlock("problemas", fmt.format(failTotal), "falhas no período",
+    failures.length
+      ? el("div", { class: "split" },
+          card("Todas as falhas", "Cada linha é uma falha com o motivo; a barra compara com a maior.", barList(failures.slice(0, 15)),
+            failures.length > 15 ? el("div", { class: "minor", text: "+ " + (failures.length - 15) + " em Dados brutos" }) : null),
+          chartCard("Falhas por dia", "Soma das falhas de cada dia.", perDay(failed), ["falha", "falhas"], 220))
+      : el("div", { class: "card empty" }, icon("check"), "Nenhuma falha registrada no período.")));
+
+  nodes.push(sectionBlock("log", fmt.format(logs.length), "linhas distintas", logCard(logs)));
+
+  const usage = [];
+  for (const [event, e] of [...byEvent].sort()) {
+    if (BAD.has(event) || event === "settings" || !e.dims.length) continue;
+    const [title, group, explain] = Object.hasOwn(EVENTS, event) ? EVENTS[event] : [event, "outros", "Evento novo, ainda sem descrição neste painel."];
+    if (group === "saude") continue;
+    const items = [...e.dims].sort((x, y) => y.value - x.value);
+    usage.push(card(title, explain, barList(items.slice(0, 8)),
+      items.length > 8 ? el("div", { class: "minor", text: "+ " + (items.length - 8) + " em Dados brutos" }) : null));
+  }
+  nodes.push(sectionBlock("uso", compactInt(total("message_sent")), "mensagens enviadas",
+    el("div", { class: "grid two" },
+      chartCard("Mensagens enviadas por dia", EVENTS.message_sent[2], daily("message_sent"), ["mensagem", "mensagens"], 180),
+      chartCard("Respostas do agente por dia", EVENTS.turn_finished[2], daily("turn_finished"), ["resposta", "respostas"], 180)),
+    usage.length ? groupTitle("Em detalhe") : null, usage.length ? el("div", { class: "grid" }, ...usage) : null));
+
+  if (times.length) nodes.push(sectionBlock("velocidade", null, null, el("div", { class: "grid" }, ...times)));
+
+  const envCards = [];
+  for (const [key, title, explain] of [["version", "Versão do Hangar", "Versão instalada em cada máquina, pelo último pacote dela."],
       ["os", "Sistema", "Sistema operacional de cada máquina."], ["channel", "Canal de atualização", "Estável recebe só versões publicadas; testes recebe antes."]]) {
     const items = data.env.filter(e => e.key === key).map(e => ({ label: key === "channel" ? (VALUES.channel[e.value] || e.value) : e.value, value: e.machines }));
-    envGrid.append(el("section", { class: "card" }, el("h3", { text: title }), el("p", { class: "explain", text: explain }),
-      items.length ? barList(items) : el("div", { class: "empty", text: "Sem dados." })));
+    envCards.push(card(title, explain, items.length ? barList(items) : el("div", { class: "empty", text: "Sem dados." })));
   }
-  envGrid.append(el("section", { class: "card" }, el("h3", { text: "Máquinas por pessoa" }),
-    el("p", { class: "explain", text: "Quantas pessoas usam o Hangar em 1, 2, 3… máquinas (últimos 30 dias)." }),
-    data.per_owner.length
-      ? barList(data.per_owner.map(p => ({ label: p.machines + " máquina" + (p.machines === 1 ? "" : "s"), value: p.owners })))
+  envCards.push(card("Máquinas por pessoa", "Quantas pessoas usam o Hangar em 1, 2, 3… máquinas (últimos 30 dias).",
+    data.per_owner.length ? barList(data.per_owner.map(p => ({ label: p.machines + " máquina" + (p.machines === 1 ? "" : "s"), value: p.owners })))
       : el("div", { class: "empty", text: "Sem dados." })));
-  root.append(envGrid);
+  const health = [];
+  for (const [event, e] of [...byEvent].sort()) {
+    if (BAD.has(event) || !Object.hasOwn(EVENTS, event) || EVENTS[event][1] !== "saude" || !e.dims.length) continue;
+    const items = [...e.dims].sort((x, y) => y.value - x.value);
+    health.push(card(EVENTS[event][0], EVENTS[event][2], barList(items.slice(0, 8)),
+      items.length > 8 ? el("div", { class: "minor", text: "+ " + (items.length - 8) + " em Dados brutos" }) : null));
+  }
+  nodes.push(sectionBlock("maquinas", fmt.format(a.machines_30d), "ativas em 30 dias",
+    el("div", { class: "grid" }, ...envCards),
+    health.length ? groupTitle("Saúde do servidor", "heart") : null, health.length ? el("div", { class: "grid" }, ...health) : null));
 
-  if (sections.saude.length) root.append(section("Saúde do servidor", "subidas, saídas e atualizações"), el("div", { class: "grid" }, ...sections.saude));
-  if (sections.outros.length) root.append(section("Outros eventos", "ainda sem descrição neste painel"), el("div", { class: "grid" }, ...sections.outros));
+  nodes.push(sectionBlock("config", null, null, ...(settings.nodes.length ? settings.nodes
+    : [el("div", { class: "card empty" }, icon("config"), "Nenhuma máquina mandou as preferências ainda: elas chegam a partir da versão que coleta esse retrato.")])));
 
-  const rows = data.counters.map(c => el("tr", {},
+  const rows = data.counters.map(c => el("tr", { "data-q": (c.event + " " + dimsLabel(c.dims)).toLowerCase() },
     el("td", {}, el("code", { text: c.event })), el("td", { text: dimsLabel(c.dims) }), el("td", { text: c.bucket ? (BUCKET_LABEL[c.bucket] || c.bucket) : "" }),
     el("td", { class: "n", text: fmt.format(c.count) }), el("td", { class: "n", text: String(c.machines) })));
-  root.append(section("Todos os contadores"), el("details", { class: "card table" },
-    el("summary", { text: data.counters.length + " linhas, como chegaram" }),
+  nodes.push(sectionBlock("dados", null, null, el("details", { class: "card table", "data-title": "dados brutos" },
+    el("summary", {}, icon("chevron"), data.counters.length + " linhas, como chegaram"),
     el("div", { class: "table-wrap" }, el("table", {},
       el("thead", {}, el("tr", {}, el("th", { text: "Evento" }), el("th", { text: "Detalhe" }), el("th", { text: "Duração" }),
         el("th", { class: "n", text: "Vezes" }), el("th", { class: "n", text: "Máquinas" }))),
-      el("tbody", {}, ...rows)))));
+      el("tbody", {}, ...rows))))));
+
+  root.replaceChildren(...nodes);
+  drawCharts();
+  watchCards();
+  applyFilter();
+  spy();
 }
 
+function drawCharts() { document.querySelectorAll(".chart").forEach(slot => slot._chart && lineChart(slot)); }
+
+// Barras crescem e linhas se desenham quando o cartão entra na tela.
+let cardObserver = null;
+function watchCards() {
+  if (!animate) return;
+  document.body.classList.add("anim");
+  cardObserver?.disconnect();
+  cardObserver = new IntersectionObserver(entries => {
+    for (const e of entries) if (e.isIntersecting) { e.target.classList.add("in"); cardObserver.unobserve(e.target); }
+  }, { rootMargin: "0px 0px -8% 0px" });
+  requestAnimationFrame(() => document.querySelectorAll("#content .card").forEach(c => cardObserver.observe(c)));
+}
+
+function drawChips(counts, hot) {
+  const box = document.getElementById("chips");
+  box.replaceChildren(...SECTIONS.map(([id, name, hue, ic]) => {
+    const n = counts[id];
+    return el("a", { class: "chip" + (hot[id] ? " hot" : ""), href: "#s-" + id, style: "--hue:" + hue, "data-sec": id },
+      icon(ic), name, n != null && n > 0 ? el("em", { text: compact.format(n) }) : null);
+  }));
+}
+
+// O chip da seção que está na tela fica aceso.
+let spyObserver = null;
+function spy() {
+  spyObserver?.disconnect();
+  const visible = new Map();
+  spyObserver = new IntersectionObserver(entries => {
+    for (const e of entries) visible.set(e.target.id, e.isIntersecting ? e.intersectionRatio : 0);
+    const best = [...document.querySelectorAll(".sec")].find(s => (visible.get(s.id) || 0) > 0);
+    document.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-current", String(!!best && "s-" + c.dataset.sec === best.id)));
+  }, { rootMargin: "-150px 0px -55% 0px", threshold: [0, .01] });
+  document.querySelectorAll(".sec").forEach(s => spyObserver.observe(s));
+}
+
+// Busca: mostra só as linhas, cartões e seções que têm o texto.
+const q = document.getElementById("q"), qClear = document.getElementById("q-clear"), qKey = document.getElementById("q-key");
+function applyFilter() {
+  const text = q.value.trim().toLowerCase();
+  qClear.hidden = !text; qKey.hidden = !!text;
+  let hits = 0;
+  for (const sec of document.querySelectorAll(".sec")) {
+    if (sec.id === "s-geral") { sec.hidden = !!text; continue; }
+    let secHits = 0;
+    for (const c of sec.querySelectorAll(".card")) {
+      const titleHit = !text || (c.dataset.title || "").includes(text);
+      let rowHits = 0;
+      for (const r of c.querySelectorAll("[data-q]")) {
+        const show = titleHit || r.dataset.q.includes(text);
+        r.hidden = !show; if (show && text) rowHits++;
+      }
+      const show = !text || titleHit || rowHits > 0;
+      c.hidden = !show;
+      if (show && text) { secHits++; hits += Math.max(1, rowHits); }
+      if (show && text && c.tagName === "DETAILS" && rowHits) c.open = true;
+    }
+    sec.hidden = !!text && !secHits;
+    sec.querySelectorAll(".group-title").forEach(g => { g.hidden = !!text && !(g.nextElementSibling && [...g.nextElementSibling.children].some(c => !c.hidden)); });
+  }
+  const notice = document.getElementById("notice");
+  notice.hidden = !text;
+  if (text) document.getElementById("notice-text").textContent = hits
+    ? hits + " resultado" + (hits === 1 ? "" : "s") + " para “" + q.value.trim() + "”"
+    : "Nada encontrado para “" + q.value.trim() + "”.";
+  document.querySelectorAll(".chip").forEach(c => { c.hidden = !!text && document.getElementById("s-" + c.dataset.sec)?.hidden; });
+}
+q.addEventListener("input", applyFilter);
+q.addEventListener("keydown", e => { if (e.key === "Escape") { q.value = ""; applyFilter(); q.blur(); } });
+const clearSearch = () => { q.value = ""; applyFilter(); q.focus(); };
+qClear.addEventListener("click", clearSearch);
+document.getElementById("notice-clear").addEventListener("click", clearSearch);
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && document.activeElement !== q && !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) { e.preventDefault(); q.focus(); }
+});
+
 let current = Number(new URLSearchParams(location.search).get("days")) || 30;
-let last = null;
-let request = 0;
-let resizing = 0;
-window.addEventListener("resize", () => { clearTimeout(resizing); resizing = setTimeout(() => last && render(last), 150); });
+let last = null, request = 0, resizing = 0;
+let lastWidth = innerWidth;
+window.addEventListener("resize", () => {
+  clearTimeout(resizing);
+  resizing = setTimeout(() => { if (innerWidth !== lastWidth) { lastWidth = innerWidth; drawCharts(); } }, 150);
+});
 async function load(days) {
   current = days;
-  last = null;
   const mine = ++request;
-  document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.days) === days)));
-  history.replaceState(null, "", "?days=" + days);
+  document.querySelectorAll("#period button").forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.days) === days)));
+  history.replaceState(null, "", "?days=" + days + location.hash);
   try {
     const res = await fetch("/panel/data?days=" + days, { cache: "no-store" });
     if (res.status === 401) { location.replace("/panel"); return; }
@@ -459,14 +684,24 @@ async function load(days) {
     if (mine !== request) return;
     last = data;
     render(data);
+    document.getElementById("sub").textContent = data.active.machines_30d + " máquinas · " + data.active.owners_30d + " pessoas · dados anônimos";
   } catch (err) {
     if (mine !== request) return;
-    document.getElementById("content").replaceChildren(el("div", { class: "error-box", text: "Não foi possível ler os dados (" + err.message + ")." }));
+    const retry = el("button", { class: "btn", type: "button", text: "Tentar de novo" });
+    retry.addEventListener("click", () => load(current));
+    document.getElementById("content").replaceChildren(el("div", { class: "error-box" }, icon("alertCircle"),
+      el("div", {}, el("b", { text: "Não foi possível ler os dados." }), el("div", { class: "minor", text: err.message })), retry));
   }
 }
-document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => load(Number(b.dataset.days))));
+document.querySelectorAll("#period button").forEach(b => b.addEventListener("click", () => load(Number(b.dataset.days))));
 
-fetch("/panel/api/me").then(r => r.ok ? r.json() : null).then(me => { if (me) document.getElementById("who").textContent = me.email; }).catch(() => {});
+const menu = document.getElementById("menu");
+document.addEventListener("click", e => { if (menu.open && !menu.contains(e.target)) menu.open = false; });
+fetch("/panel/api/me").then(r => r.ok ? r.json() : null).then(me => {
+  if (!me) return;
+  document.getElementById("who").textContent = me.email;
+  document.getElementById("avatar").textContent = (me.email[0] || "?").toUpperCase();
+}).catch(() => {});
 document.getElementById("logout").addEventListener("click", async () => {
   const button = document.getElementById("logout");
   try {
@@ -475,11 +710,12 @@ document.getElementById("logout").addEventListener("click", async () => {
     location.replace("/panel");
   } catch (err) {
     // A sessão continua aberta: dizer isso em vez de parecer que saiu.
-    button.textContent = "Não saiu (" + err.message + "), tentar de novo";
+    button.lastChild.textContent = "Não saiu (" + err.message + "), tentar de novo";
   }
 });
 const dialog = document.getElementById("invite-dialog"), link = document.getElementById("invite-link"), text = document.getElementById("invite-text");
 document.getElementById("invite").addEventListener("click", async () => {
+  menu.open = false;
   link.value = ""; text.textContent = "Gerando o link…";
   dialog.showModal();
   try {
