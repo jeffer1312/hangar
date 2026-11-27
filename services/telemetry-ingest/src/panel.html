@@ -143,7 +143,7 @@ function withTip(node, text) {
 
 function dimsLabel(dims) {
   const entries = Object.entries(dims || {});
-  if (!entries.length) return "total";
+  if (!entries.length) return "(sem dimensão)";
   if (entries.length === 1) return entries[0][1];
   return entries.map(([k, v]) => k + ": " + v).join(" · ");
 }
@@ -243,13 +243,14 @@ function render(data) {
 
   // Um cartão por evento: as combinações de dimensão somam as faixas; a duração vai num cartão à parte.
   const byEvent = new Map();
-  const entry = event => byEvent.get(event) || byEvent.set(event, { dims: new Map(), buckets: new Map() }).get(event);
-  for (const c of data.by_dims) entry(c.event).dims.set(dimsLabel(c.dims), { value: c.count, machines: c.machines });
+  const entry = event => byEvent.get(event) || byEvent.set(event, { dims: [], buckets: new Map() }).get(event);
+  // As linhas já vêm agrupadas pelo banco: uma por combinação, mesmo quando dois rótulos saem iguais.
+  for (const c of data.by_dims) entry(c.event).dims.push({ label: dimsLabel(c.dims), value: c.count, machines: c.machines });
   for (const c of data.by_bucket) entry(c.event).buckets.set(c.bucket, { value: c.count, machines: c.machines });
   const sections = { uso: [], saude: [], tempos: [], outros: [] };
   for (const [event, e] of [...byEvent].sort()) {
-    const [title, group] = EVENTS[event] || [event, "outros"];
-    const items = [...e.dims].map(([label, d]) => ({ label, ...d })).sort((x, y) => y.value - x.value);
+    const [title, group] = Object.hasOwn(EVENTS, event) ? EVENTS[event] : [event, "outros"];
+    const items = [...e.dims].sort((x, y) => y.value - x.value);
     const shown = items.slice(0, 12);
     const body = el("div", {}, barList(shown, { bad: BAD.has(event) }),
       items.length > shown.length ? el("div", { class: "minor", text: "+ " + (items.length - shown.length) + " na tabela abaixo" }) : null);
@@ -273,21 +274,26 @@ function render(data) {
     el("tbody", {}, ...rows))));
 }
 
-let current = Number(new URLSearchParams(location.search).get("dias")) || 30;
+let current = Number(new URLSearchParams(location.search).get("days")) || 30;
 let last = null;
+let request = 0;
 let resizing = 0;
 window.addEventListener("resize", () => { clearTimeout(resizing); resizing = setTimeout(() => last && render(last), 150); });
 async function load(days) {
   current = days;
+  last = null;
+  const mine = ++request;
   document.querySelectorAll(".range button").forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.days) === days)));
-  history.replaceState(null, "", "?dias=" + days);
+  history.replaceState(null, "", "?days=" + days);
   try {
-    const res = await fetch("/painel/dados?dias=" + days, { cache: "no-store" });
+    const res = await fetch("/panel/data?days=" + days, { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
-    if (days === current) { last = data; render(data); }
+    if (mine !== request) return;
+    last = data;
+    render(data);
   } catch (err) {
-    if (days !== current) return;
+    if (mine !== request) return;
     document.getElementById("content").replaceChildren(el("div", { class: "error", text: "Não foi possível ler os dados (" + err.message + ")." }));
   }
 }

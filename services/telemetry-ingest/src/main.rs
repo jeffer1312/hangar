@@ -172,14 +172,14 @@ mod tests {
 
     #[tokio::test]
     async fn panel_exists_only_with_a_password_and_asks_for_it() {
-        assert_eq!(get_panel(app_with_panel(offline(), None), "/painel", None).await.0, StatusCode::NOT_FOUND);
-        assert_eq!(get_panel(app_with_panel(offline(), Some(String::new())), "/painel", None).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(get_panel(app_with_panel(offline(), None), "/panel", None).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(get_panel(app_with_panel(offline(), Some(String::new())), "/panel", None).await.0, StatusCode::NOT_FOUND);
         let with = || app_with_panel(offline(), Some("segredo".into()));
-        assert_eq!(get_panel(with(), "/painel", None).await.0, StatusCode::UNAUTHORIZED);
-        assert_eq!(get_panel(with(), "/painel/dados", Some("errada")).await.0, StatusCode::UNAUTHORIZED);
-        let (status, page) = get_panel(with(), "/painel", Some("segredo")).await;
+        assert_eq!(get_panel(with(), "/panel", None).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(get_panel(with(), "/panel/data", Some("errada")).await.0, StatusCode::UNAUTHORIZED);
+        let (status, page) = get_panel(with(), "/panel", Some("segredo")).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(page.contains("/painel/dados"), "a página lê os dados da rota protegida");
+        assert!(page.contains("/panel/data"), "a página lê os dados da rota protegida");
     }
 
     #[tokio::test]
@@ -191,7 +191,7 @@ mod tests {
         for body in [&first, &second] {
             assert_eq!(post_json(pool.clone(), body).await.0, StatusCode::OK);
         }
-        let (status, text) = get_panel(app_with_panel(pool, Some("segredo".into())), "/painel/dados?dias=7", Some("segredo")).await;
+        let (status, text) = get_panel(app_with_panel(pool, Some("segredo".into())), "/panel/data?days=7", Some("segredo")).await;
         assert_eq!(status, StatusCode::OK);
         let data: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(data["days"], 7);

@@ -77,13 +77,15 @@ pub fn is_bad_value(error: &sqlx::Error) -> bool {
     matches!(error, sqlx::Error::Database(db) if db.code().is_some_and(|code| code.starts_with("22")))
 }
 
-/// Resumo do painel dos últimos `days` dias (UTC), tudo calculado no banco.
-/// Primeiro dia do período; `concat!` porque o sqlx só aceita SQL estático.
-macro_rules! since {
-    // Hoje e os `days - 1` dias antes dele: "7 dias" são 7 dias UTC.
-    () => { "(now() AT TIME ZONE 'utc')::date - $1::int + 1" };
+/// Hoje e os `days - 1` dias antes dele, em UTC; dia à frente (relógio adiantado) só conta quando chegar.
+/// `concat!` porque o sqlx só aceita SQL estático.
+macro_rules! in_period {
+    ($day:literal) => {
+        concat!($day, " BETWEEN (now() AT TIME ZONE 'utc')::date - $1::int + 1 AND (now() AT TIME ZONE 'utc')::date")
+    };
 }
 
+/// Resumo do painel dos últimos `days` dias (UTC), tudo calculado no banco.
 pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx::Error> {
     // Uma foto só do banco: um pacote que chega no meio não descasa os números entre si.
     let mut tx = pool.begin().await?;
@@ -93,19 +95,19 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
         .fetch_one(&mut *pool)
         .await?;
     let (batches, machines): (i64, i64) =
-        sqlx::query_as(concat!("SELECT count(*), count(DISTINCT machine_id) FROM batches WHERE day >= ", since!()))
+        sqlx::query_as(concat!("SELECT count(*), count(DISTINCT machine_id) FROM batches WHERE ", in_period!("day")))
             .bind(days)
             .fetch_one(&mut *pool)
             .await?;
     let daily: Vec<(String, i64)> = sqlx::query_as(concat!(
-        "SELECT to_char(day, 'YYYY-MM-DD'), count(DISTINCT machine_id) FROM batches WHERE day >= ", since!(), " GROUP BY day ORDER BY day"
+        "SELECT to_char(day, 'YYYY-MM-DD'), count(DISTINCT machine_id) FROM batches WHERE ", in_period!("day"), " GROUP BY day ORDER BY day"
     ))
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
     // Versão, sistema e canal de cada máquina pelo último pacote dela no período.
     let env: Vec<(String, String, i64)> = sqlx::query_as(concat!(
-        "WITH last AS (SELECT DISTINCT ON (machine_id) version, os, channel FROM batches WHERE day >= ", since!(), "
+        "WITH last AS (SELECT DISTINCT ON (machine_id) version, os, channel FROM batches WHERE ", in_period!("day"), "
                        ORDER BY machine_id, day DESC, received_at DESC)
          SELECT k, v, count(*) FROM last, LATERAL (VALUES ('version', version), ('os', os), ('channel', channel)) AS x(k, v)
          GROUP BY k, v ORDER BY k, 3 DESC, v"
@@ -118,7 +120,7 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     let counters: Vec<(String, Json<serde_json::Value>, Option<String>, i64, i64)> = sqlx::query_as(concat!(
         "SELECT c.event, c.dims, c.bucket, sum(c.count)::bigint, count(DISTINCT b.machine_id)
          FROM counters c JOIN batches b ON b.batch_id = c.batch_id
-         WHERE b.day >= ", since!(), "
+         WHERE ", in_period!("b.day"), "
          GROUP BY c.event, c.dims, c.bucket ORDER BY c.event, 4 DESC"
     ))
     .bind(days)
@@ -128,7 +130,7 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     let by_dims: Vec<(String, Json<serde_json::Value>, i64, i64)> = sqlx::query_as(concat!(
         "SELECT c.event, c.dims, sum(c.count)::bigint, count(DISTINCT b.machine_id)
          FROM counters c JOIN batches b ON b.batch_id = c.batch_id
-         WHERE b.day >= ", since!(), "
+         WHERE ", in_period!("b.day"), "
          GROUP BY c.event, c.dims ORDER BY c.event, 3 DESC"
     ))
     .bind(days)
@@ -137,7 +139,7 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     let by_bucket: Vec<(String, String, i64, i64)> = sqlx::query_as(concat!(
         "SELECT c.event, c.bucket, sum(c.count)::bigint, count(DISTINCT b.machine_id)
          FROM counters c JOIN batches b ON b.batch_id = c.batch_id
-         WHERE b.day >= ", since!(), " AND c.bucket IS NOT NULL
+         WHERE ", in_period!("b.day"), " AND c.bucket IS NOT NULL
          GROUP BY c.event, c.bucket ORDER BY c.event"
     ))
     .bind(days)

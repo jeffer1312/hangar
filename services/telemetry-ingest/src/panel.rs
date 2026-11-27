@@ -1,4 +1,4 @@
-//! Painel do dono: `/painel` (a página) e `/painel/dados` (o resumo em JSON), atrás da senha `PANEL_PASSWORD`.
+//! Painel do dono: `/panel` (a página) e `/panel/data` (o resumo em JSON), atrás da senha `PANEL_PASSWORD`.
 //! Sem a senha no ambiente o painel não existe (404): nada fica aberto por esquecimento.
 use axum::Router;
 use axum::extract::{Query, Request, State};
@@ -23,15 +23,15 @@ struct Panel {
 
 #[derive(serde::Deserialize)]
 struct Period {
-    dias: Option<i32>,
+    days: Option<i32>,
 }
 
 pub fn router(pool: PgPool, password: Option<String>) -> Router {
     let Some(password) = password.filter(|p| !p.is_empty()) else { return Router::new() };
     let panel = Panel { pool, password };
     Router::new()
-        .route("/painel", get(|| async { Html(PAGE) }))
-        .route("/painel/dados", get(data))
+        .route("/panel", get(|| async { Html(PAGE) }))
+        .route("/panel/data", get(data))
         .layer(middleware::from_fn_with_state(panel.clone(), guard))
         .with_state(panel)
 }
@@ -60,7 +60,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 }
 
 async fn data(State(panel): State<Panel>, Query(period): Query<Period>) -> Response {
-    let days = period.dias.unwrap_or(DEFAULT_DAYS).clamp(1, 400);
+    let days = period.days.unwrap_or(DEFAULT_DAYS).clamp(1, 400);
     match store::summary(&panel.pool, days).await {
         Ok(summary) => ([(header::CACHE_CONTROL, "no-store")], axum::Json(summary)).into_response(),
         Err(error) => {
