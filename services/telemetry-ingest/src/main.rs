@@ -256,6 +256,19 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn a_password_changed_during_login_opens_no_session() {
+        let pool = online().await;
+        let email = format!("troca-{}@example.test", fresh_id());
+        accounts::set_user(&pool, &email, &accounts::hash_password("senha-antiga-1")).await.unwrap();
+        let (id, old_hash) = accounts::login(&pool, &email, "senha-antiga-1").await.unwrap().unwrap();
+        accounts::set_user(&pool, &email, &accounts::hash_password("senha-nova-22")).await.unwrap();
+        assert_eq!(accounts::create_session(&pool, id, &old_hash).await.unwrap(), None);
+        let (id, hash) = accounts::login(&pool, &email, "senha-nova-22").await.unwrap().unwrap();
+        assert!(accounts::create_session(&pool, id, &hash).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
     async fn panel_data_sums_the_counters_of_the_period() {
         let pool = online().await;
         let today = utc_day(&pool, 0).await;

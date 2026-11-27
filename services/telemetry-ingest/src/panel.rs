@@ -215,11 +215,16 @@ async fn login(State(panel): State<Panel>, headers: HeaderMap, body: axum::Json<
     let Ok(Ok(_slot)) = tokio::time::timeout(ARGON_WAIT, limiter.argon.acquire()).await else {
         return error(StatusCode::TOO_MANY_REQUESTS, "busy");
     };
+    // De novo depois da fila: outro pedido do mesmo e-mail pode ter completado os erros enquanto este esperava.
+    if limiter.locked(&email, limiter.now()) {
+        return error(StatusCode::TOO_MANY_REQUESTS, "too_many");
+    }
     match accounts::login(&panel.pool, &email, &body.password).await {
-        Ok(Some(id)) => {
+        Ok(Some((id, hash))) => {
             limiter.succeeded(&email);
-            match accounts::create_session(&panel.pool, id).await {
-                Ok(token) => with_session(StatusCode::NO_CONTENT.into_response(), &token),
+            match accounts::create_session(&panel.pool, id, &hash).await {
+                Ok(Some(token)) => with_session(StatusCode::NO_CONTENT.into_response(), &token),
+                Ok(None) => error(StatusCode::UNAUTHORIZED, "login"),
                 Err(e) => unavailable("session", &e),
             }
         }
@@ -283,8 +288,9 @@ async fn join(State(panel): State<Panel>, headers: HeaderMap, body: axum::Json<J
         accounts::hash_off_thread(body.password.clone()).await
     };
     match accounts::join(&panel.pool, invite, &email, &hash).await {
-        Ok(accounts::Join::Created(id)) => match accounts::create_session(&panel.pool, id).await {
-            Ok(token) => with_session(StatusCode::NO_CONTENT.into_response(), &token),
+        Ok(accounts::Join::Created(id)) => match accounts::create_session(&panel.pool, id, &hash).await {
+            Ok(Some(token)) => with_session(StatusCode::NO_CONTENT.into_response(), &token),
+            Ok(None) => error(StatusCode::CONFLICT, "changed"),
             Err(e) => unavailable("session", &e),
         },
         // Gasto entre a conferência e a gravação por outro pedido com o mesmo convite.

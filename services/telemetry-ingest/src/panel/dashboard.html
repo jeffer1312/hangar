@@ -292,8 +292,15 @@ document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click"
 
 fetch("/panel/api/me").then(r => r.ok ? r.json() : null).then(me => { if (me) document.getElementById("who").textContent = me.email; }).catch(() => {});
 document.getElementById("logout").addEventListener("click", async () => {
-  await fetch("/panel/api/logout", { method: "POST" }).catch(() => {});
-  location.replace("/panel");
+  const button = document.getElementById("logout");
+  try {
+    const res = await fetch("/panel/api/logout", { method: "POST" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    location.replace("/panel");
+  } catch (err) {
+    // A sessão continua aberta: dizer isso em vez de parecer que saiu.
+    button.textContent = "Não saiu (" + err.message + "), tentar de novo";
+  }
 });
 const dialog = document.getElementById("invite-dialog"), link = document.getElementById("invite-link"), text = document.getElementById("invite-text");
 document.getElementById("invite").addEventListener("click", async () => {

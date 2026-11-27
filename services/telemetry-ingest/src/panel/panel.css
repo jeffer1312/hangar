@@ -83,7 +83,7 @@ main.wrap { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; p
 .kpi .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
 .kpi.bad .value { color: var(--text); }
 .kpi.bad { border-color: rgba(255,69,58,.35); background: linear-gradient(140deg, rgba(255,69,58,.14), var(--card) 60%); }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(330px, 100%), 1fr)); gap: 12px; }
 .card h3 { font-size: 14px; font-weight: 600; margin: 0; }
 .card .name { color: var(--muted); font-size: 12px; margin: 2px 0 14px; }
 .card .name.code { font-family: var(--mono); }

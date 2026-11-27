@@ -25,7 +25,7 @@ fn verify(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash).is_ok_and(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
 }
 
-/// argon2 leva dezenas de milissegundos: fora do executor do tokio.
+/// argon2 é caro em CPU: fora do executor do tokio.
 pub async fn hash_off_thread(password: String) -> String {
     tokio::task::spawn_blocking(move || hash_password(&password)).await.expect("hash da senha")
 }
@@ -53,7 +53,8 @@ static DECOY: LazyLock<String> = LazyLock::new(|| hash_password("decoy-que-nunca
 /// Calcula o hash de engano na subida: a primeira resposta a e-mail desconhecido não fica mais lenta que as outras.
 pub fn warm() { LazyLock::force(&DECOY); }
 
-pub async fn login(pool: &PgPool, email: &str, password: &str) -> Result<Option<i64>, sqlx::Error> {
+/// Conta e o hash que a senha conferiu; a sessão só nasce se o hash ainda for esse (`create_session`).
+pub async fn login(pool: &PgPool, email: &str, password: &str) -> Result<Option<(i64, String)>, sqlx::Error> {
     let row: Option<(i64, String)> = sqlx::query_as("SELECT id, password_hash FROM panel_users WHERE email = $1")
         .bind(email)
         .fetch_optional(pool)
@@ -62,23 +63,30 @@ pub async fn login(pool: &PgPool, email: &str, password: &str) -> Result<Option<
         Some((id, hash)) => (Some(id), hash),
         None => (None, DECOY.clone()),
     };
-    let password = password.to_owned();
+    let (password, checked) = (password.to_owned(), hash.clone());
     // Falha da tarefa é erro do servidor (503), nunca "senha errada".
-    let ok = tokio::task::spawn_blocking(move || verify(&password, &hash))
+    let ok = tokio::task::spawn_blocking(move || verify(&password, &checked))
         .await
         .map_err(|e| sqlx::Error::Protocol(format!("argon2: {e}")))?;
-    Ok(id.filter(|_| ok))
+    Ok(id.filter(|_| ok).map(|id| (id, hash)))
 }
 
-pub async fn create_session(pool: &PgPool, user_id: i64) -> Result<String, sqlx::Error> {
+/// Sessão nova só se a senha ainda é a que foi conferida: uma troca de senha no meio da conferência
+/// não deixa a antiga abrir sessão.
+pub async fn create_session(pool: &PgPool, user_id: i64, password_hash: &str) -> Result<Option<String>, sqlx::Error> {
     let token = new_token();
-    sqlx::query("INSERT INTO panel_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + make_interval(days => $3))")
-        .bind(digest(&token))
-        .bind(user_id)
-        .bind(SESSION_DAYS)
-        .execute(pool)
-        .await?;
-    Ok(token)
+    let created = sqlx::query(
+        "INSERT INTO panel_sessions (token_hash, user_id, expires_at)
+         SELECT $1, id, now() + make_interval(days => $3) FROM panel_users WHERE id = $2 AND password_hash = $4",
+    )
+    .bind(digest(&token))
+    .bind(user_id)
+    .bind(SESSION_DAYS)
+    .bind(password_hash)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok((created == 1).then_some(token))
 }
 
 pub async fn session_user(pool: &PgPool, token: &str) -> Result<Option<(i64, String)>, sqlx::Error> {
@@ -149,20 +157,21 @@ pub async fn join(pool: &PgPool, invite: &str, email: &str, password_hash: &str)
 
 /// Conta criada ou senha trocada pela linha de comando do servidor (a primeira conta nasce assim).
 pub async fn set_user(pool: &PgPool, email: &str, password_hash: &str) -> Result<(), sqlx::Error> {
+    // Senha nova e sessões antigas derrubadas juntas: nunca a senha trocada com as sessões da antiga vivas.
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO panel_users (email, password_hash) VALUES ($1, $2)
          ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash",
     )
     .bind(email)
     .bind(password_hash)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    // Senha nova derruba as sessões abertas com a antiga.
     sqlx::query("DELETE FROM panel_sessions WHERE user_id = (SELECT id FROM panel_users WHERE email = $1)")
         .bind(email)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-    Ok(())
+    tx.commit().await
 }
 
 pub async fn prune(pool: &PgPool) -> Result<(), sqlx::Error> {
