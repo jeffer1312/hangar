@@ -240,6 +240,9 @@ pub struct SessionRow {
     /// Troca de agente pedida e ainda não concluída; só existe no Rust.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<Handoff>,
+    /// O dono desligou o continuar sozinho nesta sessão (marca do spec); só existe no Rust.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_continue_off: bool,
     /// Portas TCP em LISTEN dos processos da sessão, por porta; só a lista do dono as leva.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<PortEntry>,

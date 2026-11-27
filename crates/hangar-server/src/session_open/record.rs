@@ -153,6 +153,7 @@ pub fn claude_live(home: &Path, meta: &Value, name: &str) -> io::Result<SessionS
     spec.created_at = recorded.created_at;
     (spec.name_auto, spec.rename_suggestion, spec.rename_weak_at, spec.rename_dismissed) =
         (recorded.name_auto, recorded.rename_suggestion, recorded.rename_weak_at, recorded.rename_dismissed);
+    spec.auto_continue_off = recorded.auto_continue_off;
     Ok(spec)
 }
 
@@ -181,6 +182,7 @@ pub fn claude_from_meta(meta: &Value, name: &str, created_at: f64) -> io::Result
         name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
         // O sidecar guarda o settings da conversa: a sessão sem hooks continua sem hooks reconstruída por ele.
         hooks_off: meta["claude_settings"]["disableAllHooks"] == true,
+        auto_continue_off: false,
     })
 }
 
@@ -217,6 +219,7 @@ pub fn from_sidecars(home: &Path, name: &str) -> io::Result<Option<SessionSpec>>
         subagent_model: None, customizations: None, jev: meta["jev"] == true, code_mode: false, read_only: meta["read_only"] == true,
         worktree: None, creator: None, created_at: created(&codex_path), conversation: text(&meta, "thread_id"),
         name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
+        auto_continue_off: false,
     }))
 }
 

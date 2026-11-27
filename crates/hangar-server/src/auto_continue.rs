@@ -1,20 +1,30 @@
 //! Liga o `hangar-auto-continue` ao servidor: a agenda das paradas passageiras recebe o fim de turno do
 //! runtime, lê os fatos da sessão pela lista interna e pela fila, manda o "continue" pelo `/input` e escreve
-//! a nota pela fila. O registro é o mesmo da troca de conta no limite.
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+//! a nota pela fila. O registro é o mesmo da troca de conta no limite. O interruptor da sessão mora no spec
+//! (`PUT`/`DELETE /api/sessions/{name}/auto-continue`, só do dono) e chega à linha da lista.
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
+use axum::extract::{ConnectInfo, Request, State};
+use axum::http::{Method, StatusCode};
+use axum::response::{IntoResponse, Response};
 use hangar_api::session::SessionRow;
 use hangar_auto_continue::scheduler::BoxFuture;
 use hangar_auto_continue::{Command, Facts, Host, Ledger, StopHit, ledger, text};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
 use crate::list::hub::InternalSubscription;
-use crate::routes::AppState;
+use crate::list::mux::Mux;
+use crate::routes::{AppState, cors, gate};
 use crate::runtime::gateway::RuntimeRegistry;
+use crate::session_open::{SessionSpec, record};
+use crate::session_write::{BODY_LIMIT, detail_body, json_response, session_name};
 
 const EVENT: &str = "session.auto_continue";
 /// De quanto em quanto se confere se alguém ainda precisa da lista produzindo sem cliente aberto.
@@ -41,6 +51,13 @@ impl AutoContinue {
 
     pub fn cancel(&self, name: &str, why: &'static str) {
         let _ = self.commands.send(Command::Cancel { name: name.to_owned(), why });
+    }
+
+    /// O Cancelar da nota, respondido depois de a nota trocar. `false`: a sessão não esperava a rede.
+    pub async fn cancel_waiting(&self, name: &str) -> bool {
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        if self.commands.send(Command::CancelAnswered { name: name.to_owned(), answer }).is_err() { return false; }
+        answered.await.unwrap_or(false)
     }
 
     pub fn forget(&self, name: &str) {
@@ -151,8 +168,7 @@ fn from_someone(entry: &Value) -> bool {
 fn facts_of(row: &SessionRow, rows: &[SessionRow], queue: &[Value], stopped_at: Option<f64>, handoff: bool) -> Facts {
     Facts {
         life: row.lifecycle_id.clone().unwrap_or_default(),
-        // O interruptor por sessão mora no spec e entra com a rota dele.
-        off: false,
+        off: row.auto_continue_off,
         state: row.state.clone(),
         queue_pending: queue.iter().any(|entry| entry["delivered"] == false && from_someone(entry)),
         question_open: row.pending_questions > 0 || row.question.is_some() || row.ask_form.is_some(),
@@ -218,6 +234,118 @@ impl Host for Native {
     fn hhmm(&self, at: f64) -> String { crate::runtime::local_policy::local_hhmm(at.floor() as i64).unwrap_or_default() }
 }
 
+/// As chaves de registro com o interruptor desligado, por casa: a lista não relê os registros a cada rodada.
+/// Lidas uma vez, na primeira consulta da casa; a rota mantém o índice.
+static OFF: LazyLock<Mutex<HashMap<PathBuf, HashSet<String>>>> = LazyLock::new(Mutex::default);
+const OFF_MARK: &[u8] = b"auto_continue_off";
+
+fn with_off<R>(home: &Path, change: impl FnOnce(&mut HashSet<String>) -> R) -> R {
+    let mut all = OFF.lock().unwrap_or_else(PoisonError::into_inner);
+    change(all.entry(home.to_owned()).or_insert_with(|| scan_off(&record::dir(home))))
+}
+
+fn scan_off(dir: &Path) -> HashSet<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return HashSet::new() };
+    entries.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "json")).filter_map(|entry| {
+        let bytes = crate::runtime::queue::read_replaced(&entry.path()).ok()?;
+        if !bytes.windows(OFF_MARK.len()).any(|w| w == OFF_MARK) { return None; }
+        let spec: SessionSpec = serde_json::from_slice(&bytes).ok()?;
+        spec.auto_continue_off.then_some(spec.key)
+    }).collect()
+}
+
+/// O interruptor de cada linha, pelo spec. A chave vem da vida `k:`; a sessão com terminal sem ela pergunta
+/// a `CP_SESSION_KEY` ao pane só quando alguma sessão está desligada.
+pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow]) {
+    for row in rows.iter_mut() { row.auto_continue_off = false; }
+    let at = home.to_owned();
+    let off = tokio::task::spawn_blocking(move || with_off(&at, |off| off.clone())).await.unwrap_or_default();
+    if off.is_empty() { return; }
+    for row in rows.iter_mut() {
+        let key = match crate::list::links::runtime_key(row.lifecycle_id.as_deref()) {
+            Some(key) => Some(key.to_owned()),
+            None if !row.headless => crate::session_visibility::fill::pane_key(mux, row).await,
+            None => None,
+        };
+        row.auto_continue_off = key.is_some_and(|key| off.contains(&key));
+    }
+}
+
+fn refuse(status: StatusCode, code: &str, msg: &str) -> Response { json_response(status, detail_body(code, msg, json!({}))) }
+
+/// `PUT` `{"enabled": bool}`: o interruptor da sessão. `DELETE`: o Cancelar da nota de espera.
+pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let admitted = gate(&st, peer, &req).await;
+    let mut response = match admitted {
+        Err(e) => crate::auth::unavailable(e),
+        Ok((_, false)) => refuse(StatusCode::FORBIDDEN, "erro_so_dono", "só o dono liga, desliga ou cancela o continuar sozinho"),
+        Ok((_, true)) => owner_route(&st, req).await,
+    };
+    cors(&headers, response.headers_mut());
+    response
+}
+
+async fn owner_route(st: &AppState, req: Request) -> Response {
+    let Some(name) = session_name(req.uri().path()) else { return StatusCode::NOT_FOUND.into_response() };
+    if req.method() == Method::DELETE {
+        let cancelled = match st.auto_continue.get() { Some(auto) => auto.cancel_waiting(&name).await, None => false };
+        return json_response(StatusCode::OK, json!({"cancelled": cancelled}));
+    }
+    let enabled = axum::body::to_bytes(req.into_body(), BODY_LIMIT).await.ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|body| body["enabled"].as_bool());
+    match enabled {
+        Some(enabled) => switch(st, &name, enabled).await,
+        None => refuse(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", "o corpo precisa de {\"enabled\": true ou false}"),
+    }
+}
+
+async fn switch(st: &AppState, name: &str, enabled: bool) -> Response {
+    let Some(home) = st.list.env().dirs.as_ref().map(|dirs| dirs.home.clone()) else {
+        return refuse(StatusCode::SERVICE_UNAVAILABLE, "list_dirs_missing", "as pastas das sessões não foram configuradas");
+    };
+    let rows = match st.list.discover(Some(crate::state::monitor::wall_now())).await {
+        Ok(rows) => rows,
+        Err(e) => return refuse(StatusCode::SERVICE_UNAVAILABLE, e.code, e.detail),
+    };
+    let Some(row) = rows.iter().find(|row| row.name == name) else {
+        return refuse(StatusCode::NOT_FOUND, "session_not_found", "a sessão não existe");
+    };
+    let no_spec = || refuse(StatusCode::CONFLICT, "auto_continue_no_spec", "esta sessão não tem registro onde guardar o interruptor");
+    let Some(key) = crate::dictation::rename_suggestion::key_of(st, name, row.lifecycle_id.as_deref()).await else { return no_spec() };
+    match crate::groups::link_state::blocking(move || store_off(&home, &key, !enabled)).await {
+        Ok(true) => {
+            // Desligar durante a espera troca a nota pelo desfecho na hora, sem esperar o tique.
+            if !enabled && let Some(auto) = st.auto_continue.get() { auto.cancel(name, "off"); }
+            st.list.invalidate();
+            json_response(StatusCode::OK, json!({"enabled": enabled}))
+        }
+        Ok(false) => no_spec(),
+        Err(error) => {
+            tracing::warn!(session = %name, %error, "interruptor do continuar sozinho não gravado");
+            st.diag.report(EVENT, name, "auto_continue_store_failed", "interruptor do continuar sozinho nao gravado");
+            refuse(StatusCode::INTERNAL_SERVER_ERROR, "auto_continue_store_failed", "não foi possível guardar o interruptor")
+        }
+    }
+}
+
+/// Relê o registro na hora da gravação. `false`: a sessão não tem registro.
+fn store_off(home: &Path, key: &str, off: bool) -> io::Result<bool> {
+    let spec = match record::read(home, key) {
+        // Chave fora do formato do registro (pane antigo) é "sem registro".
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => None,
+        other => other?,
+    };
+    let Some(mut spec) = spec else { return Ok(false) };
+    if spec.auto_continue_off != off {
+        spec.auto_continue_off = off;
+        record::write(home, &spec)?;
+    }
+    with_off(home, |keys| if off { keys.insert(key.to_owned()); } else { keys.remove(key); });
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +384,30 @@ mod tests {
         let asking = row(json!({"name": "s", "pending_questions": 1}));
         assert!(facts_of(&asking, &[], &[], None, false).question_open);
         assert!(facts_of(&asking, &[], &[], None, true).handoff);
+        assert!(!facts.off && facts_of(&row(json!({"name": "s", "auto_continue_off": true})), &[], &[], None, false).off, "o interruptor vem da linha");
+    }
+
+    #[tokio::test]
+    async fn the_row_says_when_the_switch_is_off() {
+        let home = tempfile::tempdir().unwrap();
+        let (off, on) = ("a".repeat(32), "b".repeat(32));
+        let spec = |key: &str, extra: Value| -> SessionSpec {
+            let mut spec = json!({"version": 1, "key": key, "name": "s", "cwd": "/w", "provider": "claude", "surface": "headless",
+                "account": {"kind": "default"}, "account_source": "default", "jev": false, "read_only": false, "created_at": 1.0});
+            spec.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(spec).unwrap()
+        };
+        record::write(home.path(), &spec(off.as_str(), json!({"auto_continue_off": true}))).unwrap();
+        record::write(home.path(), &spec(on.as_str(), json!({}))).unwrap();
+        let mux = Mux::with_program("hangar-mux-ausente", Duration::from_secs(1));
+        let mut rows = vec![row(json!({"name": "s", "headless": true, "lifecycle_id": format!("k:{off}")})),
+            row(json!({"name": "t", "headless": true, "lifecycle_id": format!("k:{on}")}))];
+        fill_rows(home.path(), &mux, &mut rows).await;
+        assert!(rows[0].auto_continue_off && !rows[1].auto_continue_off);
+        assert!(store_off(home.path(), &off, false).unwrap(), "religar pela rota");
+        fill_rows(home.path(), &mux, &mut rows).await;
+        assert!(!rows[0].auto_continue_off, "o índice segue a rota sem reler os registros");
+        assert!(!record::read(home.path(), &off).unwrap().unwrap().auto_continue_off);
+        assert!(!store_off(home.path(), &"c".repeat(32), true).unwrap(), "sem registro não há onde guardar");
     }
 }

@@ -1093,6 +1093,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/plugins/{id}/disable", axum::routing::post(crate::plugins::disable))
         // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
         .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
+        // Continuar sozinho depois de queda: interruptor e Cancelar, só do dono (o Python não tem a rota).
+        .route("/api/sessions/{name}/auto-continue", axum::routing::put(crate::auto_continue::route).delete(crate::auto_continue::route))
         .route("/api/peers", axum::routing::any(crate::machine_peers::handle))
         .route("/api/peers/{*path}", axum::routing::any(crate::machine_peers::handle))
         .route("/api/alcance", axum::routing::any(crate::machine_peers::handle))

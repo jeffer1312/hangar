@@ -324,6 +324,27 @@ async fn cancel_during_the_jitter_sends_nothing() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn the_route_cancel_answers_after_the_note_changed() {
+    let fake = Fake::new();
+    *fake.down.lock().unwrap() = true;
+    let run = start(&fake);
+    run.send(Command::Stop(hit("s", "line-1", StopKind::Network, fake.clock())));
+    settle().await;
+    assert_eq!(fake.last_note().meta["state"], "waiting");
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    run.send(Command::CancelAnswered { name: "s".into(), answer });
+    assert!(answered.await.unwrap(), "a sessão esperava a rede");
+    let note = fake.last_note();
+    assert_eq!(note.meta["state"], "cancelled");
+    assert_eq!(note.call, "autocont:line-1:cancelled");
+    assert!(run.ledger.lock().unwrap().parked().is_empty(), "a espera sai do registro");
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    run.send(Command::CancelAnswered { name: "s".into(), answer });
+    assert!(!answered.await.unwrap(), "sem espera, nada a cancelar");
+    assert_eq!(fake.notes().len(), 2, "a segunda não escreve nota");
+}
+
+#[tokio::test(start_paused = true)]
 async fn no_probe_without_a_parked_session() {
     let fake = Fake::new();
     let run = start(&fake);

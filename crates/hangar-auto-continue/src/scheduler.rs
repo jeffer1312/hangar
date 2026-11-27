@@ -78,10 +78,12 @@ pub trait Host: Send + Sync {
     fn hhmm(&self, at: f64) -> String;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum Command {
     Stop(StopHit),
     Cancel { name: String, why: &'static str },
+    /// O Cancelar da nota pela rota: `answer` sai depois de a nota trocar, com `true` quando a sessão esperava.
+    CancelAnswered { name: String, answer: tokio::sync::oneshot::Sender<bool> },
     Forget(String),
     Rename { old: String, new: String },
 }
@@ -199,6 +201,14 @@ impl<H: Host, P: Probe> Scheduler<H, P> {
                     let end = if why == CANCELLED { End::Cancelled } else { End::Skipped(why.to_owned()) };
                     self.finish(&name, parked, end).await;
                 }
+            }
+            Command::CancelAnswered { name, answer } => {
+                let parked = self.parked.remove(&name);
+                let waiting = parked.is_some();
+                if let Some(parked) = parked {
+                    self.finish(&name, parked, End::Cancelled).await;
+                }
+                let _ = answer.send(waiting);
             }
             Command::Forget(name) => {
                 // A sessão fechou: a nota vai junto com a conversa.
