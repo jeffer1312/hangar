@@ -8,6 +8,7 @@ import { configureApi, getTelemetry, putTelemetry, telemetryUnanswered } from '@
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), erro: vi.fn(), saved: vi.fn() }));
 vi.mock('../../net/diag', () => ({ onTelemetrySaved: mocks.saved }));
+vi.mock('../../stores/servers', () => ({ useServers: { getState: () => ({ servers: [server, { ...other, label: server.label }] }) } }));
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
@@ -66,16 +67,34 @@ describe('getTelemetry', () => {
 
 describe('linha de telemetria', () => {
   const revoke = () => el.querySelector(`[aria-label="${m.telemetry_revoke()}"]`) as HTMLButtonElement | null;
-  it('sem resposta mostra "Não respondido" e o toque liga nesta máquina', async () => {
+  it('reabre o mesmo aviso depois de fechar e só liga ao confirmar', async () => {
+    const alert = vi.spyOn(Alert, 'alert');
     mocks.fetch.mockImplementation(async (_url, init) => init?.method === 'PUT' ? view(JSON.parse(init.body).consent) : view(null));
     await render();
     expect(row()?.textContent).toContain(m.auto_report_value_unanswered());
     await act(async () => row()!.click());
+    const body = m.telemetry_question_body({ machines: 'fixture-a (https://tel-a.test)' });
+    expect(alert.mock.calls[0][1]).toBe(body);
+    expect(puts()).toHaveLength(0);
+    await act(async () => alert.mock.calls[0][3]!.onDismiss!());
+    expect(puts()).toHaveLength(0);
+    expect(row()?.textContent).toContain(m.auto_report_value_unanswered());
+    await act(async () => row()!.click());
+    expect(alert.mock.calls[1][1]).toBe(body);
+    await act(async () => alert.mock.calls[1][2]!.find((button) => button.text === m.telemetry_yes())!.onPress!());
     expect(puts()).toHaveLength(1);
     expect(puts()[0][0]).toBe(`${server.baseUrl}/api/telemetry`);
     expect(JSON.parse(puts()[0][1].body)).toEqual({ consent: true, consent_scope: 2 });
     expect(row()?.textContent).toContain(m.auto_report_on());
     expect(mocks.saved).toHaveBeenCalledWith(server, expect.objectContaining({ consent: true, consent_scope: 2, enabled: true }));
+  });
+
+  it('mostra bloqueio do ambiente antes de escolha ainda não respondida', async () => {
+    mocks.fetch.mockImplementation(async () => json({ consent: null, disabled_by: 'env' }));
+    await render();
+    expect(row()?.textContent).toContain(m.auto_report_off());
+    expect(row()?.textContent).not.toContain(m.auto_report_value_unanswered());
+    expect(row()?.disabled).toBe(true);
   });
 
   it('mostra desligada pelo ambiente e permite revogar o aceite que ficou salvo', async () => {
@@ -130,7 +149,7 @@ describe('aviso da abertura', () => {
 
   it('fechar sem tocar não grava nada', async () => {
     const alert = vi.spyOn(Alert, 'alert');
-    const asked = askTelemetry(pending);
+    const asked = askTelemetry(pending, pending);
     expect(alert).toHaveBeenCalledTimes(1);
     expect(alert.mock.calls[0][1]).toContain('fixture-a, fixture-b');
     alert.mock.calls[0][3]!.onDismiss!();
@@ -143,7 +162,7 @@ describe('aviso da abertura', () => {
     const open = vi.spyOn(Linking, 'openURL');
     mocks.fetch.mockImplementation(async (url) => String(url).startsWith(other.baseUrl)
       ? refused(503, 'telemetry_unavailable') : view(true));
-    const asked = askTelemetry(pending);
+    const asked = askTelemetry(pending, pending);
     const press = (text: string) => alert.mock.calls.at(-1)![2]!.find((button) => button.text === text)!.onPress!();
     press(m.telemetry_what_is_sent());
     expect(open).toHaveBeenCalledWith(TELEMETRY_DOC_URL);
@@ -158,7 +177,7 @@ describe('aviso da abertura', () => {
     ]);
   });
 
-  it('só propõe o aviso reconhecido e distingue nomes iguais pelo endereço', async () => {
+  it('só propõe aviso reconhecido e distingue nome igual de máquina já respondida', async () => {
     const duplicate = { ...other, label: server.label };
     const future = { ...other, id: 'tel-c', label: 'fixture-c', baseUrl: 'https://tel-c.test' };
     const legacy = { ...other, id: 'tel-d', label: 'fixture-d', baseUrl: 'https://tel-d.test' };
@@ -166,18 +185,19 @@ describe('aviso da abertura', () => {
     mocks.fetch.mockImplementation(async (url, init) => {
       if (String(url).startsWith(legacy.baseUrl)) return json({ consent: null, disabled_by: null });
       if (String(url).startsWith(future.baseUrl)) return json({ consent: null, consent_scope: 3 });
+      if (String(url).startsWith(duplicate.baseUrl)) return view(true);
       return view(init?.method === 'PUT' ? true : null);
     });
-    const offered = await telemetryUnanswered([server, legacy, future, duplicate]);
-    expect(offered).toEqual([server, duplicate]);
-    const asked = askTelemetry(offered);
+    const registered = [server, legacy, future, duplicate];
+    const offered = await telemetryUnanswered(registered);
+    expect(offered).toEqual([server]);
+    const asked = askTelemetry(offered, registered);
     expect(alert).toHaveBeenCalledTimes(1);
-    expect(alert.mock.calls[0][1]).toBe(m.telemetry_question_body({ machines: 'fixture-a (https://tel-a.test), fixture-a (https://tel-b.test)' }));
+    expect(alert.mock.calls[0][1]).toBe(m.telemetry_question_body({ machines: 'fixture-a (https://tel-a.test)' }));
     alert.mock.calls[0][2]!.find((button) => button.text === m.telemetry_yes())!.onPress!();
     await asked;
     expect(puts().map(([url, init]) => [url, JSON.parse(init.body)])).toEqual([
       [`${server.baseUrl}/api/telemetry`, { consent: true, consent_scope: 2 }],
-      [`${other.baseUrl}/api/telemetry`, { consent: true, consent_scope: 2 }],
     ]);
   });
 });

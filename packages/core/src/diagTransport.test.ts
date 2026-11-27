@@ -71,6 +71,25 @@ it('relê prova e credencial antes do segundo POST de uma fila 50+1', async () =
   expect(JSON.parse(init!.body as string)).toEqual({ eventos: [{ evento: 'fixture', seq: 50 }] });
 });
 
+it('prazo vencido sem rota espera a próxima rodada sem repetir em zero ms', async () => {
+  const key = 'https://fixture.test';
+  let available = true;
+  const resolve = vi.fn(() => available ? { baseUrl: key, token: 'fixture' } : null);
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('fixture-offline')).mockImplementation(aceitar);
+  const diario = criarTransporteDiag(resolve);
+  diario.registrar(key, { evento: 'fixture' });
+  await diario.enviar();
+  available = false;
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(resolve).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(9999);
+  expect(resolve).toHaveBeenCalledTimes(2);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  available = true;
+  await vi.advanceTimersByTimeAsync(1);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
 it('envio em voo não duplica nem apaga eventos que chegaram depois', async () => {
   let concluir!: (r: Response) => void;
   const fetchMock = vi.spyOn(globalThis, 'fetch')

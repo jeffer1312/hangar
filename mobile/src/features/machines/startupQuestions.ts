@@ -40,19 +40,27 @@ export async function saveTelemetryChoice(server: Server, value: boolean, scope:
   return saved;
 }
 
-/** Só recebe máquinas cujo GET anunciou o aviso do escopo 2. Fechar sem escolher não grava. */
-export function askTelemetry(servers: readonly Server[]): Promise<void> {
-  const name = (server: Server) => servers.some((other) => other !== server && other.label === server.label)
+export function telemetryTarget(server: Server, registered: readonly Server[]): string {
+  return registered.some((other) => other.id !== server.id && other.label === server.label)
     ? `${server.label} (${server.baseUrl})` : server.label;
-  const body = m.telemetry_question_body({ machines: servers.map(name).join(', ') });
-  const answer = (value: boolean) => saveAll(servers, (server) => saveTelemetryChoice(server, value, SETTINGS_CONSENT_SCOPE), name);
+}
+
+export function showTelemetryNotice(machines: string): Promise<boolean | undefined> {
+  const body = m.telemetry_question_body({ machines });
   return new Promise((done) => {
     const show = () => Alert.alert(m.telemetry_question_title(), body, [
       // Abrir a lista fecha o aviso; ele volta para a resposta.
       { text: m.telemetry_what_is_sent(), onPress: () => { openTelemetryDoc(); show(); } },
-      { text: m.telemetry_no(), style: 'cancel', onPress: () => { answer(false); done(); } },
-      { text: m.telemetry_yes(), onPress: () => { answer(true); done(); } },
-    ], { cancelable: true, onDismiss: () => done() });
+      { text: m.telemetry_no(), style: 'cancel', onPress: () => done(false) },
+      { text: m.telemetry_yes(), onPress: () => done(true) },
+    ], { cancelable: true, onDismiss: () => done(undefined) });
     show();
   });
+}
+
+/** Só recebe máquinas cujo GET anunciou o aviso do escopo 2. Fechar sem escolher não grava. */
+export async function askTelemetry(servers: readonly Server[], registered: readonly Server[]): Promise<void> {
+  const name = (server: Server) => telemetryTarget(server, registered);
+  const answer = await showTelemetryNotice(servers.map(name).join(', '));
+  if (answer !== undefined) saveAll(servers, (server) => saveTelemetryChoice(server, answer, SETTINGS_CONSENT_SCOPE), name);
 }

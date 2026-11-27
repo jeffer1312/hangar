@@ -336,6 +336,7 @@ mod tests {
             day: "2026-11-25".into(),
             batch_id: None,
             counters: vec![crate::wire::Counter { event: "Bad".into(), dims: Default::default(), bucket: None, count: 1 }],
+            snapshot_keys: Default::default(),
             logs: Vec::new(),
         };
         queue::write_day(fx.home.path(), &bad).unwrap();

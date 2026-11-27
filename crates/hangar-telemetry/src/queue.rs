@@ -1,5 +1,6 @@
 //! A fila em disco: um arquivo por dia (UTC) em `~/.hangar/telemetry-scope-2/queue/<dia>.json`, e as marcas
 //! de `once`.
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,9 @@ pub(crate) struct DayFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) batch_id: Option<String>,
     pub(crate) counters: Vec<Counter>,
+    /// Confirmações do app, gravadas com os contadores e nunca copiadas ao pacote.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) snapshot_keys: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) logs: Vec<LogLine>,
 }
@@ -109,7 +113,7 @@ mod tests {
     fn fifteen_days_keep_fourteen() {
         let home = tempfile::tempdir().unwrap();
         for n in 1..=15 {
-            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), logs: Vec::new() }).unwrap();
+            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), snapshot_keys: Default::default(), logs: Vec::new() }).unwrap();
         }
         assert_eq!(cap(home.path()).unwrap(), 1);
         let days = days(home.path()).unwrap();

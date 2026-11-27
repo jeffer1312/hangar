@@ -1,6 +1,6 @@
 //! O motor: contadores do dia (UTC) em memória, na forma de fio, gravados na fila pela tarefa de
 //! fundo. `count` só segura uma trava curta em memória; disco e rede ficam com a tarefa.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -68,10 +68,11 @@ struct Day {
     day: String,
     counters: BTreeMap<Key, u64>,
     logs: BTreeMap<LogKey, u64>,
+    snapshot_keys: BTreeSet<String>,
 }
 
 impl Day {
-    fn new(day: String) -> Day { Day { day, counters: BTreeMap::new(), logs: BTreeMap::new() } }
+    fn new(day: String) -> Day { Day { day, counters: BTreeMap::new(), logs: BTreeMap::new(), snapshot_keys: BTreeSet::new() } }
 
     /// `false` quando a linha é nova e o dia já tem `MAX_LOG_LINES` distintas: o pacote não passa do teto.
     fn add_log(&mut self, line: LogLine) -> bool {
@@ -103,6 +104,7 @@ impl Day {
         let mut day = Day::new(file.day);
         file.counters.into_iter().for_each(|counter| day.add(counter));
         file.logs.into_iter().for_each(|line| { day.add_log(line); });
+        day.snapshot_keys = file.snapshot_keys;
         day
     }
 
@@ -112,7 +114,10 @@ impl Day {
             .collect()
     }
 
-    fn file(&self) -> DayFile { DayFile { day: self.day.clone(), batch_id: None, counters: self.to_counters(), logs: self.to_logs() } }
+    fn file(&self) -> DayFile {
+        DayFile { day: self.day.clone(), batch_id: None, counters: self.to_counters(),
+            snapshot_keys: self.snapshot_keys.clone(), logs: self.to_logs() }
+    }
 }
 
 struct Live {
@@ -234,21 +239,27 @@ impl Telemetry {
     /// Confirma o retrato inteiro ou nada. Entrega repetida no mesmo período também é confirmada.
     ///
     /// # Errors
-    /// Falha de trava ou de leitura/gravação da marca.
+    /// Falha de trava ou de gravação do arquivo do dia.
     pub fn record_snapshot(&self, period: &str, captured: DateTime<Utc>, key: &str, counters: Vec<Counter>) -> io::Result<bool> {
         let _io = lock(&self.io)?;
-        let mut live = lock(&self.live)?;
-        let now = (self.clock)();
-        let day = day_of(now);
-        // Um minuto admite pequena diferença de relógio sem admitir capturas de outro dia.
-        if !self.enabled() || live.snapshot_period.as_deref() != Some(period) || live.current.day > day
-            || captured.date_naive() != now.date_naive() || captured - now > chrono::TimeDelta::minutes(1)
         {
-            return Ok(false);
+            let mut live = lock(&self.live)?;
+            let now = (self.clock)();
+            let day = day_of(now);
+            // Um minuto admite pequena diferença de relógio sem admitir capturas de outro dia.
+            if !self.enabled() || live.snapshot_period.as_deref() != Some(period) || live.current.day > day
+                || captured.date_naive() != now.date_naive() || captured - now > chrono::TimeDelta::minutes(1)
+            {
+                return Ok(false);
+            }
+            live.roll(day);
+            if live.current.snapshot_keys.insert(key.to_owned()) {
+                for counter in counters { live.current.add(counter); }
+                live.dirty = true;
+            }
         }
-        if self.mark_once(&format!("{key}:{day}"), now.date_naive())? {
-            live.add_snapshot(day, counters);
-        }
+        // A repetição não soma, mas ainda precisa completar a gravação que pode ter falhado.
+        self.save_held()?;
         Ok(true)
     }
 
@@ -641,7 +652,7 @@ pub(crate) mod tests {
         let mut stored = serde_json::json!({"consent": true, "machine_id": "1".repeat(32),
             "owner_id": "2".repeat(32), "owner_created": 123});
         queue::write_day(fx.home.path(), &DayFile { day: "2026-11-26".into(), batch_id: None,
-            counters: vec![Counter::new(Event::MessageSent, message(), None, 7)], logs: vec![] }).unwrap();
+            counters: vec![Counter::new(Event::MessageSent, message(), None, 7)], snapshot_keys: Default::default(), logs: vec![] }).unwrap();
         let legacy = fx.home.path().join(".hangar/telemetry/queue/2026-11-26.json");
         std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
         std::fs::copy(fx.queue().join("2026-11-26.json"), &legacy).unwrap();
@@ -680,7 +691,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_whole_snapshot_uses_one_clock_read_under_the_mark_lock() {
+    fn a_whole_snapshot_survives_midnight_during_the_flush() {
         use std::sync::atomic::AtomicUsize;
         let fx = Fixture::new();
         let before = Utc.with_ymd_and_hms(2026, 11, 27, 23, 59, 59).unwrap();
@@ -697,9 +708,11 @@ pub(crate) mod tests {
         inspecting.store(true, Ordering::SeqCst);
         let counters = vec![Counter::new(Event::Peers, Dims::new(), None, 3), Counter::new(Event::MessageSent, message(), None, 4)];
         assert!(telemetry.record_snapshot(&period, before, "fixture", counters).unwrap());
-        assert_eq!(reads.load(Ordering::SeqCst), 1);
-        assert_eq!(telemetry.counters().len(), 2);
-        assert_eq!(queue::read_once(fx.home.path()).unwrap(), ["fixture:2026-11-27"]);
+        assert!(telemetry.counters().is_empty(), "o dia novo não recebe parte do retrato");
+        let file = queue::read_day(fx.home.path(), "2026-11-27").unwrap().unwrap();
+        assert_eq!(file.counters.len(), 2);
+        assert_eq!(file.snapshot_keys, BTreeSet::from(["fixture".to_owned()]));
+        assert!(queue::read_once(fx.home.path()).unwrap().is_empty());
     }
 
     #[test]
@@ -1062,7 +1075,7 @@ pub(crate) mod tests {
         telemetry.save().unwrap();
         assert!(!fx.queue().exists(), "sem contagem nada é gravado");
         for n in 12..=25 {
-            queue::write_day(fx.home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), logs: Vec::new() }).unwrap();
+            queue::write_day(fx.home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), snapshot_keys: Default::default(), logs: Vec::new() }).unwrap();
         }
         telemetry.count(Event::MessageSent, message(), 1);
         telemetry.save().unwrap();

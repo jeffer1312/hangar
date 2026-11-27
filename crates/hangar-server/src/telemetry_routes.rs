@@ -644,7 +644,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_post_rejects_old_period_and_only_confirms_after_marking() {
+    async fn snapshot_post_confirms_only_after_saving_and_deduplicates_after_restart() {
         let home = tempfile::tempdir().unwrap();
         let ts = "2026-11-27T12:00:00Z";
         let clock = chrono::DateTime::parse_from_rfc3339(ts).unwrap().to_utc();
@@ -666,16 +666,25 @@ mod tests {
         for bad in [body(&first["snapshot_period"], ts), body(&Value::Null, ts), body(&new["snapshot_period"], "2026-11-27T12:01:01Z")] {
             assert_eq!(request(&st, Method::POST, &bad, false).await.0, StatusCode::CONFLICT);
         }
-        let marks = home.path().join(".hangar/telemetry-scope-2/once.json");
-        assert!(!marks.exists());
-        std::fs::create_dir_all(&marks).unwrap();
+        let day = home.path().join(".hangar/telemetry-scope-2/queue/2026-11-27.json");
+        assert!(!day.exists());
+        std::fs::create_dir_all(&day).unwrap();
         assert_eq!(request(&st, Method::POST, &current, false).await.0, StatusCode::SERVICE_UNAVAILABLE);
-        assert!(telemetry.counters().is_empty());
-        std::fs::remove_dir(&marks).unwrap();
-        for _ in 0..2 {
-            assert_eq!(request(&st, Method::POST, &current, false).await, (StatusCode::OK, json!({"snapshot_period": new["snapshot_period"]})));
-        }
-        assert_eq!(telemetry.counters().iter().map(|c| (c.dims["setting"].as_str(), c.count)).collect::<Vec<_>>(), [("palette", 1), ("theme", 1)]);
+        assert!(day.is_dir(), "sem arquivo confirmado, o cliente ainda pode repetir");
+        std::fs::remove_dir(&day).unwrap();
+        assert_eq!(request(&st, Method::POST, &current, false).await, (StatusCode::OK, json!({"snapshot_period": new["snapshot_period"]})));
+        assert!(day.is_file(), "a confirmação já implica gravação");
+        drop(telemetry);
+
+        let restarted = Arc::new(Telemetry::for_test(home.path(), Arc::new(move || clock)));
+        Arc::get_mut(&mut st).unwrap().telemetry = Some(restarted.clone());
+        let (_, after_restart) = request(&st, Method::GET, "", false).await;
+        assert_eq!(request(&st, Method::POST, &current, false).await.0, StatusCode::CONFLICT);
+        let retry = body(&after_restart["snapshot_period"], ts);
+        assert_eq!(request(&st, Method::POST, &retry, false).await,
+            (StatusCode::OK, json!({"snapshot_period": after_restart["snapshot_period"]})));
+        assert_eq!(restarted.counters().iter().map(|c| (c.dims["setting"].as_str(), c.count)).collect::<Vec<_>>(), [("palette", 1), ("theme", 1)]);
+        assert!(!home.path().join(".hangar/telemetry-scope-2/once.json").exists());
     }
 
     /// Uma máquina do dono que responde `status` com `body` em `/api/telemetry/owner`.

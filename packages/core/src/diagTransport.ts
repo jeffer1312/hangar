@@ -27,7 +27,7 @@ export function criarTransporteDiag(addressFor: (destino: string) => string | { 
     const now = Date.now();
     return Math.min(...fila.map(({ destino }) => {
       const wait = unreachable.get(destino);
-      return wait ? Math.max(0, wait.retryAt - now) : RESEND_DELAY_MS;
+      return wait && wait.retryAt > now ? wait.retryAt - now : RESEND_DELAY_MS;
     }));
   }
 
