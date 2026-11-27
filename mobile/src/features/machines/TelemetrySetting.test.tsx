@@ -7,7 +7,7 @@ import { configureApi, getTelemetry, putTelemetry, telemetryUnanswered } from '@
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), erro: vi.fn(), saved: vi.fn() }));
-vi.mock('../../net/diag', () => ({ onTelemetrySaved: mocks.saved }));
+vi.mock('../../net/telemetrySaved', () => ({ onTelemetrySaved: mocks.saved }));
 vi.mock('../../stores/servers', () => ({ useServers: { getState: () => ({ servers: [server, { ...other, label: server.label }] }) } }));
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
