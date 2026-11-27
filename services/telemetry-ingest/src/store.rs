@@ -77,6 +77,92 @@ pub fn is_bad_value(error: &sqlx::Error) -> bool {
     matches!(error, sqlx::Error::Database(db) if db.code().is_some_and(|code| code.starts_with("22")))
 }
 
+/// Hoje e os `days - 1` dias antes dele, em UTC; dia à frente (relógio adiantado) só conta quando chegar.
+/// `concat!` porque o sqlx só aceita SQL estático.
+macro_rules! in_period {
+    ($day:literal) => {
+        concat!($day, " BETWEEN (now() AT TIME ZONE 'utc')::date - $1::int + 1 AND (now() AT TIME ZONE 'utc')::date")
+    };
+}
+
+/// Resumo do painel dos últimos `days` dias (UTC), tudo calculado no banco.
+pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx::Error> {
+    // Uma foto só do banco: um pacote que chega no meio não descasa os números entre si.
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *tx).await?;
+    let pool = &mut *tx;
+    let active: (i64, i64, i64, i64) = sqlx::query_as("SELECT machines_7d, machines_30d, owners_7d, owners_30d FROM v_active")
+        .fetch_one(&mut *pool)
+        .await?;
+    let (batches, machines): (i64, i64) =
+        sqlx::query_as(concat!("SELECT count(*), count(DISTINCT machine_id) FROM batches WHERE ", in_period!("day")))
+            .bind(days)
+            .fetch_one(&mut *pool)
+            .await?;
+    let daily: Vec<(String, i64)> = sqlx::query_as(concat!(
+        "SELECT to_char(day, 'YYYY-MM-DD'), count(DISTINCT machine_id) FROM batches WHERE ", in_period!("day"), " GROUP BY day ORDER BY day"
+    ))
+    .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
+    // Versão, sistema e canal de cada máquina pelo último pacote dela no período.
+    let env: Vec<(String, String, i64)> = sqlx::query_as(concat!(
+        "WITH last AS (SELECT DISTINCT ON (machine_id) version, os, channel FROM batches WHERE ", in_period!("day"), "
+                       ORDER BY machine_id, day DESC, received_at DESC)
+         SELECT k, v, count(*) FROM last, LATERAL (VALUES ('version', version), ('os', os), ('channel', channel)) AS x(k, v)
+         GROUP BY k, v ORDER BY k, 3 DESC, v"
+    ))
+    .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
+    let per_owner: Vec<(i64, i64)> =
+        sqlx::query_as("SELECT machines, count(*) FROM v_machines_per_owner GROUP BY machines ORDER BY machines").fetch_all(&mut *pool).await?;
+    let counters: Vec<(String, Json<serde_json::Value>, Option<String>, i64, i64)> = sqlx::query_as(concat!(
+        "SELECT c.event, c.dims, c.bucket, sum(c.count)::bigint, count(DISTINCT b.machine_id)
+         FROM counters c JOIN batches b ON b.batch_id = c.batch_id
+         WHERE ", in_period!("b.day"), "
+         GROUP BY c.event, c.dims, c.bucket ORDER BY c.event, 4 DESC"
+    ))
+    .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
+    // Máquinas distintas por combinação e por faixa: somar as linhas contaria a mesma máquina de novo.
+    let by_dims: Vec<(String, Json<serde_json::Value>, i64, i64)> = sqlx::query_as(concat!(
+        "SELECT c.event, c.dims, sum(c.count)::bigint, count(DISTINCT b.machine_id)
+         FROM counters c JOIN batches b ON b.batch_id = c.batch_id
+         WHERE ", in_period!("b.day"), "
+         GROUP BY c.event, c.dims ORDER BY c.event, 3 DESC"
+    ))
+    .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
+    let by_bucket: Vec<(String, String, i64, i64)> = sqlx::query_as(concat!(
+        "SELECT c.event, c.bucket, sum(c.count)::bigint, count(DISTINCT b.machine_id)
+         FROM counters c JOIN batches b ON b.batch_id = c.batch_id
+         WHERE ", in_period!("b.day"), " AND c.bucket IS NOT NULL
+         GROUP BY c.event, c.bucket ORDER BY c.event"
+    ))
+    .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
+    tx.commit().await?;
+    use serde_json::json;
+    Ok(json!({
+        "days": days,
+        "active": {"machines_7d": active.0, "machines_30d": active.1, "owners_7d": active.2, "owners_30d": active.3},
+        "period": {"batches": batches, "machines": machines},
+        "daily": daily.into_iter().map(|(day, machines)| json!({"day": day, "machines": machines})).collect::<Vec<_>>(),
+        "env": env.into_iter().map(|(key, value, machines)| json!({"key": key, "value": value, "machines": machines})).collect::<Vec<_>>(),
+        "per_owner": per_owner.into_iter().map(|(machines, owners)| json!({"machines": machines, "owners": owners})).collect::<Vec<_>>(),
+        "by_dims": by_dims.into_iter().map(|(event, dims, count, machines)|
+            json!({"event": event, "dims": dims.0, "count": count, "machines": machines})).collect::<Vec<_>>(),
+        "by_bucket": by_bucket.into_iter().map(|(event, bucket, count, machines)|
+            json!({"event": event, "bucket": bucket, "count": count, "machines": machines})).collect::<Vec<_>>(),
+        "counters": counters.into_iter().map(|(event, dims, bucket, count, machines)|
+            json!({"event": event, "dims": dims.0, "bucket": bucket, "count": count, "machines": machines})).collect::<Vec<_>>(),
+    }))
+}
+
 pub async fn prune(pool: &PgPool) -> Result<u64, sqlx::Error> {
     let result = sqlx::query("DELETE FROM batches WHERE day < (now() AT TIME ZONE 'utc')::date - $1")
         .bind(RETENTION_DAYS)

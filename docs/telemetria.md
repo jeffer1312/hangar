@@ -142,4 +142,5 @@ máquina de outra pessoa no `peers.json`, as duas passam a contar como um dono s
 `https://telemetry.hangar.dev.br/v1/batch`, atrás do proxy da Cloudflare. O receptor é código aberto,
 em [`services/telemetry-ingest`](../services/telemetry-ingest): grava o pacote num Postgres, não lê
 IP, recusa só pacote malformado (até 64 KB) e guarda evento ou valor que ainda não conhece em vez de
-recusar. Os dados ficam 400 dias.
+recusar. Os dados ficam 400 dias. Só o mantenedor do Hangar vê o resumo, na página `/panel` do
+mesmo receptor, protegida por senha.
