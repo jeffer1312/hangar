@@ -40,7 +40,8 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
             .child(cover).into_any_element();
     }
     stage.p(px(14.))
-        .child(app::settings_box().child(app::consent_row(Consent::Telemetry, false, Some(choice), false, false, false, toggle)))
+        .child(app::settings_box().child(app::consent_row(Consent::Telemetry, false, Some(choice), false, false, false, toggle))
+            .child(app::telemetry_doc_row(false)))
         .child(cover).into_any_element()
 }
 

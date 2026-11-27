@@ -498,6 +498,13 @@ pub(crate) fn consent_row(kind: Consent, live: bool, choice: Option<ConsentChoic
     setting_row(live, icon, title, div().whitespace_normal().child(status), enabled, toggle.into_any_element())
 }
 
+/// "O que é enviado" abaixo da linha das contagens anônimas, como no Expo. `tab_stop` falso na miniatura só leitura.
+pub(crate) fn telemetry_doc_row(tab_stop: bool) -> Div {
+    div().mt(px(-1.)).border_t_1().border_color(theme::border()).px_4().py(px(10.))
+        .child(Button::new("machines-telemetry-what").ghost().small().tab_stop(tab_stop).label(tr_shared("telemetry_what_is_sent", &[]))
+            .on_click(|_, _, cx| cx.open_url(TELEMETRY_DOC)))
+}
+
 fn consent_body(kind: Consent, on: bool) -> Value {
     let mut body = serde_json::Map::new();
     body.insert(kind.key().to_owned(), Value::Bool(on));
@@ -1143,6 +1150,7 @@ impl Hangar {
         let row = consent_row(kind, self.settings_ui.live, choice, setting.remote.loading, setting.saving, read_error.is_some(), toggle);
         let mark = match kind { Consent::AutoReport => "auto_report_title", Consent::Telemetry => "telemetry_setting" };
         Some(settings_box().child(self.mark(row, mark))
+            .when(matches!(kind, Consent::Telemetry), |el| el.child(telemetry_doc_row(true)))
             .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
                 .child(alert(ids.load_error, error))
                 .child(Button::new(ids.retry).outline().small().label(tr("server_retry"))
