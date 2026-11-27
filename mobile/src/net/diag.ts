@@ -17,9 +17,11 @@ export function withMachineRequestDiagnostics(fetcher: typeof fetch): typeof fet
     if (!/^\/api\/(peers(?:\/.*)?|sessions)$/.test(url.pathname)) return fetcher(input, init);
     const started = Date.now();
     const own = useServers.getState().servers.filter(isOwnMachine);
-    const server = own.find((s) => url.href.startsWith(`${baseOf(s)}/api/`)) ?? own[0];
+    const source = own.find((s) => url.href.startsWith(`${baseOf(s).replace(/\/+$/, '')}/api/`));
+    const server = source ?? own[0];
     const report = (code: string) => server && registrarDiag({
       evento: 'machines.request_failed', nivel: 'aviso', codigo: code, ms: Date.now() - started,
+      local_only: !source,
       operacao: url.host,
       detalhe: `${init?.method ?? 'GET'} ${url.pathname}`,
     }, baseOf(server));
@@ -37,8 +39,7 @@ export function withMachineRequestDiagnostics(fetcher: typeof fetch): typeof fet
   };
 }
 
-/** `settings`: o retrato das preferências do aparelho, mandado uma vez por dia (UTC) ao servidor ativo. */
-export function iniciarDiag(settings?: () => Pick<EventoDiag, 'valores' | 'aparelho'>): void {
+export function iniciarDiag(): void {
   if (iniciado) return;
   iniciado = true;
   // O core resume a falha no resultado; registra aqui antes de perder o motivo do cancelamento.
@@ -92,30 +93,26 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'valores' | 'apare
   let visibleSince: number | null = (AppState.currentState ?? 'active') === 'active' ? Date.now() : null;
   // Só minutos inteiros saem: o servidor arredonda cada evento, e idas curtas ao fundo somariam zero.
   let visibleRest = 0;
+  let restSince: number | null = null;
   const visibleTime = () => {
     if (visibleSince === null) return;
     const now = Date.now();
-    visibleRest = Math.min(visibleRest + now - visibleSince, VISIBLE_EVERY_MS);
+    const elapsed = Math.max(0, now - visibleSince);
+    const started = restSince ?? visibleSince;
+    visibleRest = Math.min(visibleRest + elapsed, VISIBLE_EVERY_MS);
     visibleSince = now;
     const ms = visibleRest - (visibleRest % 60_000);
     visibleRest -= ms;
-    if (ms > 0) registrar({ evento: 'app.visible_time', ms });
+    restSince = visibleRest === 0 ? null : visibleRest <= elapsed ? now - visibleRest : started;
+    if (ms > 0) registrar({ evento: 'app.visible_time', ms, started_at: new Date(started).toISOString() });
   };
-  // A fila do transporte reenvia até o servidor gravar: o dia fica marcado quando o retrato entra nela.
-  let settingsDay = '';
-  const settingsSnapshot = () => {
-    const today = new Date().toISOString().slice(0, 10);
-    if (!settings || settingsDay === today || !ativaPropria()) return;
-    settingsDay = today;
-    registrar({ evento: 'settings.snapshot', ...settings() });
-  };
-  setInterval(() => { visibleTime(); settingsSnapshot(); void transporte.enviar(); }, VISIBLE_EVERY_MS);
-  useServers.subscribe(() => { settingsSnapshot(); void transporte.enviar(); replay(); });
+  // Preferências não passam pela fila legada do diário; precisam do POST de escopo próprio.
+  setInterval(() => { visibleTime(); void transporte.enviar(); }, VISIBLE_EVERY_MS);
+  useServers.subscribe(() => { void transporte.enviar(); replay(); });
   AppState.addEventListener('change', (estado) => {
     if (estado === 'active') { if (visibleSince === null) visibleSince = Date.now(); }
     else { visibleTime(); visibleSince = null; }
     registrar({ evento: estado === 'active' ? 'app.visivel' : 'app.oculto' });
-    if (estado === 'active') settingsSnapshot();
     void transporte.enviar();
     if (estado === 'active') replay();
   });

@@ -23,7 +23,7 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks();
 it('instala sink uma vez, grava plataforma e eventos no destino capturado', async () => {
   vi.useFakeTimers();
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"gravadas":2}'));
-  iniciarDiag(() => ({ valores: { theme: 'dark' }, aparelho: 'dev-1' })); iniciarDiag();
+  iniciarDiag(); iniciarDiag();
   expect(estado.appState).toHaveBeenCalledTimes(1);
   const req = novoReqDiag();
   expect(req).not.toBe('');
@@ -46,15 +46,10 @@ it('instala sink uma vez, grava plataforma e eventos no destino capturado', asyn
   await vi.advanceTimersByTimeAsync(300_000 - 4000);
   const visibleTime = fetchMock.mock.calls.flatMap(([url, init]) => JSON.parse(init!.body as string).eventos
     .filter((e: { evento: string }) => e.evento === 'app.visible_time').map((e: object) => [url, e]));
-  expect(visibleTime).toEqual([['https://a.test/api/diag', expect.objectContaining({ ms: 300_000, cliente: 'android' })]]);
+  expect(visibleTime).toEqual([['https://a.test/api/diag', expect.objectContaining({ ms: 300_000, cliente: 'android', started_at: expect.any(String) })]]);
 
-  // O retrato das preferências sai uma vez por dia, ao servidor ativo.
-  const snapshots = () => fetchMock.mock.calls.flatMap(([, init]) => JSON.parse(init!.body as string).eventos
-    .filter((e: { evento: string }) => e.evento === 'settings.snapshot'));
-  expect(snapshots()).toEqual([expect.objectContaining({ valores: { theme: 'dark' }, aparelho: 'dev-1', cliente: 'android' })]);
-  fetchMock.mockClear();
-  await vi.advanceTimersByTimeAsync(300_000);
-  expect(snapshots()).toEqual([]);
+  // O retrato das preferências não passa pela fila do diário.
+  expect(fetchMock.mock.calls.some(([, init]) => (init!.body as string).includes('settings.snapshot'))).toBe(false);
 });
 
 it.each(['401', 'timeout', 'network', 'cancelled'] as const)('registra falha %s do pedido sem token, corpo ou query', async (kind) => {

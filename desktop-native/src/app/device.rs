@@ -1369,6 +1369,9 @@ fn settings_values(a: &appearance::Appearance, seen: &crate::tour::state::Seen) 
 /// Um evento no lote do diário, com o tipo do cliente.
 fn telemetry_batch(mut event: Value) -> Value {
     event["cliente"] = Value::from("native");
+    if matches!(event["evento"].as_str(), Some("settings.snapshot" | "chat.opened")) {
+        event["ts"] = Value::from(chrono::Utc::now().to_rfc3339());
+    }
     serde_json::json!({"eventos": [event]})
 }
 
@@ -1401,7 +1404,7 @@ impl Hangar {
         self.client_telemetry.shown(Instant::now());
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(VISIBLE_EVERY).await;
-            if this.update(cx, |this, _| { this.send_visible_time(); this.send_settings_snapshot(); }).is_err() { break; }
+            if this.update(cx, |this, _| this.send_visible_time()).is_err() { break; }
         }).detach();
     }
 
@@ -1413,17 +1416,6 @@ impl Hangar {
             let body = telemetry_batch(serde_json::json!({"evento": "app.visible_time", "ms": ms}));
             send_telemetry(&self.runtime, api, body, self.client_telemetry.unsent.clone(), move |u| { u.ms.fetch_add(ms, Ordering::SeqCst); });
         }
-    }
-
-    /// O retrato das preferências, uma vez por dia (UTC), à máquina ativa e nunca a convite, como o tempo à vista.
-    fn send_settings_snapshot(&mut self) {
-        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
-        if !self.client_telemetry.take_settings_day(&chrono::Utc::now().format("%Y-%m-%d").to_string()) { return; }
-        let mut event = serde_json::json!({"evento": "settings.snapshot", "valores": settings_values(&appearance::get(), &self.tour.seen)});
-        // O servidor conta um retrato por aparelho e dia; o id fica na máquina dele, fora do pacote.
-        if let Some(device) = crate::update::confirm::device_id() { event["aparelho"] = Value::from(device); }
-        send_telemetry(&self.runtime, api, telemetry_batch(event), self.client_telemetry.unsent.clone(),
-            |u| u.settings_day.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear());
     }
 
     pub(super) fn send_crash_telemetry(&mut self) {
