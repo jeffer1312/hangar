@@ -225,15 +225,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     if (!r.ok && !model.resumeCandidates) flash(m.sessao_flash_retomar({ n: r.erro }));   // erro do botão da linha -> toast
   }
 
-  // Sessão que o sistema derrubou: Reabrir pelo servidor dela; Dispensar só tira a linha.
-  async function handleReopen(name: string, serverId: string, e: MouseEvent) {
+  async function handleReopen(name: string, serverId: string, lifecycleId: string | null | undefined, e: MouseEvent) {
     e.stopPropagation();
-    const erro = await model.reopen(name, serverId);
+    const erro = await model.reopen(name, serverId, lifecycleId);
     if (erro) flash(`${m.session_reopen()}: ${erro}`);
   }
-  async function handleDismiss(name: string, serverId: string, e: MouseEvent) {
+  async function handleDismiss(name: string, serverId: string, lifecycleId: string | null | undefined, e: MouseEvent) {
     e.stopPropagation();
-    const r = await model.dismiss(name, serverId);
+    const r = await model.dismiss(name, serverId, lifecycleId);
     if (r.erro !== '') flash(m.sessao_flash_excluir({ n: r.erro }));
   }
 
@@ -1056,7 +1055,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               {#if isFallenSession(s)}
                 <button
                   class="sess-resume"
-                  onclick={(e) => handleReopen(s.name, s.serverId, e)}
+                  onclick={(e) => handleReopen(s.name, s.serverId, s.lifecycle_id, e)}
                   disabled={model.isReopening(s.name, s.serverId)}
                   aria-label={`${m.session_reopen()} ${s.name}`}
                   title={m.session_reopen()}
@@ -1068,7 +1067,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 </button>
                 <button
                   class="sess-resume sess-dismiss"
-                  onclick={(e) => handleDismiss(s.name, s.serverId, e)}
+                  onclick={(e) => handleDismiss(s.name, s.serverId, s.lifecycle_id, e)}
                   disabled={model.isReopening(s.name, s.serverId)}
                   aria-label={`${m.session_dismiss()} ${s.name}`}
                   title={m.session_dismiss()}

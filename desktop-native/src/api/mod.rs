@@ -897,9 +897,14 @@ impl Api {
     /// Pedido na rota da sessão com método e consulta próprios; o `act` é o caso `POST`/`DELETE` sem consulta.
     pub async fn request(&self, name: &str, method: Method, path: &[&str], query: Option<(&str, &str)>, body: Option<Value>, seconds: u64)
         -> Result<Value, Failure> {
+        self.request_query(name, method, path, query.as_slice(), body, seconds).await
+    }
+
+    pub async fn request_query(&self, name: &str, method: Method, path: &[&str], query: &[(&str, &str)], body: Option<Value>, seconds: u64)
+        -> Result<Value, Failure> {
         let mut url = self.endpoint(Some(name), None);
         url.path_segments_mut().expect("validated HTTP base").extend(path);
-        if let Some((key, value)) = query { url.query_pairs_mut().append_pair(key, value); }
+        if !query.is_empty() { url.query_pairs_mut().extend_pairs(query); }
         let label = method.clone();
         let mut req = self.client.request(method, url);
         if let Some(body) = body { req = req.json(&body); }

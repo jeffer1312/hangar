@@ -126,7 +126,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, Provider { label: String, request: hangar_api::session::ClaudeProviderSwitch }, DismissRename, AnotherRename, Hide, Show, Reopen { continue_turn: bool }, AutoContinue(bool), Dismiss }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, Provider { label: String, request: hangar_api::session::ClaudeProviderSwitch }, DismissRename, AnotherRename, Hide, Show, Reopen { continue_turn: bool, lifecycle: Option<String> }, AutoContinue(bool), Dismiss(Option<String>) }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -1078,18 +1078,20 @@ impl Hangar {
 
     /// Reabre a sessão que o sistema derrubou, com o mesmo nome e a mesma conversa; a linha volta viva pela lista.
     /// `continue_turn`: o "Reabrir e continuar", que manda o turno cortado seguir, uma vez por queda (o servidor confere).
-    pub(super) fn reopen_with(&mut self, target: Target, continue_turn: bool, cx: &mut Context<Self>) {
+    /// `lifecycle`: a vida que a linha mostrava; o servidor recusa outra.
+    pub(super) fn reopen_with(&mut self, target: Target, continue_turn: bool, lifecycle: Option<String>, cx: &mut Context<Self>) {
         if !self.sidebar.reopening.insert(target.clone()) { return; }
-        self.write(target, Write::Reopen { continue_turn }, cx);
+        self.write(target, Write::Reopen { continue_turn, lifecycle }, cx);
     }
 
-    /// Tira a caída da lista pela rota própria: se o nome já voltou vivo (menu aberto sobre a linha velha), o
-    /// servidor recusa em vez de fechar a sessão. Durante a reabertura da mesma sessão, não manda nada.
-    pub(super) fn dismiss_target(&mut self, target: Target, cx: &mut Context<Self>) {
+    /// A rota própria não dispensa uma vida diferente da que a linha mostrava.
+    pub(super) fn dismiss_target(&mut self, target: Target, lifecycle: Option<String>, cx: &mut Context<Self>) {
         if self.sidebar.reopening.contains(&target) { return; }
-        self.sidebar.deleting.insert(target.clone());
-        self.sidebar.dismissing.insert(target.clone());
-        self.write(target, Write::Dismiss, cx);
+        if lifecycle.is_none() {
+            self.sidebar.deleting.insert(target.clone());
+            self.sidebar.dismissing.insert(target.clone());
+        }
+        self.write(target, Write::Dismiss(lifecycle), cx);
     }
 
     fn write(&mut self, target: Target, what: Write, cx: &mut Context<Self>) {
@@ -1117,13 +1119,16 @@ impl Hangar {
                 Write::Show => api.server_send(reqwest::Method::DELETE, &["sessions", name.as_str(), "hidden"], None, 15).await,
                 Write::Mode(terminal) => api.act(name, &["modo-execucao"], Some(json!({"terminal": terminal})), false, crate::api::REOPEN_SECONDS).await,
                 Write::Reload => api.act(name, &["recarregar"], None, false, crate::api::REOPEN_SECONDS).await,
-                Write::Reopen { continue_turn: false } => api.act(name, &["reopen"], None, false, crate::api::REOPEN_SECONDS).await,
-                Write::Reopen { continue_turn: true } =>
-                    api.request(name, reqwest::Method::POST, &["reopen"], Some(("continue", "1")), None, crate::api::REOPEN_SECONDS).await,
+                Write::Reopen { continue_turn, lifecycle } => {
+                    let mut query: Vec<(&str, &str)> = Vec::new();
+                    if let Some(id) = lifecycle.as_deref() { query.push(("lifecycle_id", id)); }
+                    if *continue_turn { query.push(("continue", "1")); }
+                    api.request_query(name, reqwest::Method::POST, &["reopen"], &query, None, crate::api::REOPEN_SECONDS).await
+                }
                 // A linha muda quando a lista seguinte trouxer o `auto_continue_off` novo.
                 Write::AutoContinue(enabled) => api.server_send(reqwest::Method::PUT, &["sessions", name.as_str(), "auto-continue"],
                     Some(json!({"enabled": enabled})), 15).await,
-                Write::Dismiss => api.act(name, &["dismiss"], None, false, 15).await,
+                Write::Dismiss(life) => api.request(name, reqwest::Method::POST, &["dismiss"], life.as_deref().map(|id| ("lifecycle_id", id)), None, 15).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
                 Write::Provider { request, .. } => api.act(name, &["engine", "provider"], Some(json!(request)), false, crate::api::REOPEN_SECONDS).await,
             };
@@ -1659,7 +1664,7 @@ impl Hangar {
                         self.sidebar.deleting.remove(&target);
                         Some(Notification::error(failed("sidebar_close_failed", &error)))
                     }
-                    (Write::Reopen { continue_turn }, result) => {
+                    (Write::Reopen { continue_turn, .. }, result) => {
                         self.sidebar.reopening.remove(&target);
                         let label = if *continue_turn { tr_shared("session_reopen_continue", &[]) } else { tr("session_reopen") };
                         match result {
@@ -1671,8 +1676,8 @@ impl Hangar {
                     (Write::AutoContinue(_), Ok(_)) => None,
                     (Write::AutoContinue(_), Err(error)) =>
                         Some(Notification::error(tr_shared("auto_continue_toggle_failed", &[("why", &Self::fetch_failure(&error))]))),
-                    (Write::Dismiss, Ok(_)) => None,
-                    (Write::Dismiss, Err(error)) => {
+                    (Write::Dismiss(_), Ok(_)) => None,
+                    (Write::Dismiss(_), Err(error)) => {
                         self.sidebar.deleting.remove(&target);
                         self.sidebar.dismissing.remove(&target);
                         Some(Notification::error(format!("{}: {}", tr("session_dismiss"), Self::fetch_failure(&error))))
@@ -1924,19 +1929,18 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
     // No convite o item de fechar vira "Parar de acompanhar": sai só deste aparelho, nunca fecha a sessão do dono. Com o convite
     // como servidor ativo ele não sai daqui (a troca de ativo é das configurações).
     let label = exit_label(session, invite);
-    // A caída não tem processo a fechar: Dispensar só tira a linha, sem a confirmação do Fechar.
     let fell = !invite && fallen(session);
     let busy = fell && hangar.upgrade().is_some_and(|e| e.read(cx).sidebar.reopening.contains(target));
     let close = {
-        let (hangar, target) = (hangar.clone(), target.clone());
+        let (hangar, target, life) = (hangar.clone(), target.clone(), session.lifecycle_id.clone());
         PopupMenuItem::element(move |_, _| div().text_color(theme::danger()).child(label.clone())).disabled((invite && access.active) || busy)
-            .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| if fell { this.dismiss_target(target.clone(), cx) } else { this.close_target(target.clone(), window, cx) }); })
+            .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| if fell { this.dismiss_target(target.clone(), life.clone(), cx) } else { this.close_target(target.clone(), window, cx) }); })
     };
     let reopens: Vec<PopupMenuItem> = if invite { &[][..] } else { reopen_choices(session) }.iter().map(|choice| {
         let label = if busy { format!("{}…", choice.label()) } else { choice.label() };
-        let (hangar, target, continue_turn) = (hangar.clone(), target.clone(), choice.continues());
+        let (hangar, target, continue_turn, life) = (hangar.clone(), target.clone(), choice.continues(), session.lifecycle_id.clone());
         PopupMenuItem::new(label).disabled(busy)
-            .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.reopen_with(target.clone(), continue_turn, cx)); })
+            .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.reopen_with(target.clone(), continue_turn, life.clone(), cx)); })
     }).collect();
     // O ✓ é o que vale na sessão; o clique grava o contrário e a linha seguinte da lista traz a marca nova.
     let auto_continue = (!fell && auto_continue_offered(session)).then(|| {

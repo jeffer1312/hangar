@@ -125,11 +125,20 @@ fn headless_lives(map: &Value) -> HashMap<String, AgentLife> {
 /// sinal do plugin (null sem sinal); Kimi e Pi dizem sozinhos que acabaram (`finished`).
 fn decorate(a: &mut Map<String, Value>, life: Option<&AgentLife>, blocked: Option<&str>, problem: Option<&str>) {
     let instant = |t: Option<&str>| t.and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok());
-    // O `running` do plugin não tem fim quando o agente é interrompido: a interrupção do arquivo, se for mais nova, vence.
-    let interrupted_after = |life: &AgentLife| life.state == AgentState::Running && a.get("state").and_then(Value::as_str) == Some("failed")
-        && instant(a.get("endedAt").and_then(Value::as_str)).zip(instant(life.since.as_deref())).is_some_and(|(ended, since)| ended > since);
+    let file_state = a.get("state").and_then(Value::as_str);
+    let file_ended = instant(a.get("endedAt").and_then(Value::as_str));
+    let file_end_wins = |life: &AgentLife| {
+        if life.state != AgentState::Running { return false; }
+        let times = file_ended.zip(instant(life.since.as_deref()));
+        match file_state {
+            Some("failed") => times.is_some_and(|(ended, since)| ended > since),
+            Some("finished") => times.is_none_or(|(ended, since)| ended >= since),
+            _ => false,
+        }
+    };
     let (state, ended) = match (life, a.get("finished").and_then(Value::as_bool)) {
-        (Some(life), _) if interrupted_after(life) => (json!("failed"), a.get("endedAt").cloned().unwrap_or(Value::Null)),
+        (Some(life), _) if file_end_wins(life) =>
+            (json!(file_state), a.get("endedAt").cloned().unwrap_or(Value::Null)),
         (Some(life), _) => (json!(life.state), json!(life.ended_at)),
         (None, Some(true)) => (json!("finished"), a.get("updatedAt").filter(|v| v.as_str().is_some_and(|t| !t.is_empty())).cloned().unwrap_or(Value::Null)),
         (None, Some(false)) => (json!("running"), Value::Null),
@@ -190,10 +199,19 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
             blocked = Some(STATE_UNAVAILABLE);
         }
     }
+    let mut resumed_at = HashMap::new();
     // Claude sem terminal: o stream-json do runtime diz o ciclo de vida e vence o sinal do plugin.
     if provider == "claude" && let Some(runtime) = st.state.runtime.get() {
         match runtime.claude_subagents(&name).await {
-            Some(Ok(map)) => lives.extend(headless_lives(&map)),
+            Some(Ok(map)) => {
+                for (id, life) in headless_lives(&map) {
+                    if life.state == AgentState::Running && life.since.is_none()
+                        && let Some(since) = lives.get(&id).and_then(|previous| previous.since.clone()) {
+                        resumed_at.insert(id.clone(), since);
+                    }
+                    lives.insert(id, life);
+                }
+            }
             Some(Err(e)) => { warn_once(&name, "runtime_subagents_unavailable"); tracing::debug!(session = %name, ?e, "subagentes do runtime"); problem = Some("runtime_subagents_unavailable".into()); }
             None => {}
         }
@@ -244,8 +262,14 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
     let problem = problem.map(|_| STATE_UNAVAILABLE);
     let done = tokio::task::spawn_blocking(move || {
         let mut fill = |mut a: Map<String, Value>| {
-            let life = a.get("agentId").and_then(Value::as_str).and_then(|id| lives.get(id));
-            decorate(&mut a, life, blocked, problem);
+            let id = a.get("agentId").and_then(Value::as_str);
+            let life = id.and_then(|id| lives.get(id));
+            // Um horário antigo do plugin não pode transformar um Running do runtime em falha.
+            let resumed = if a.get("state").and_then(Value::as_str) == Some("finished") {
+                life.zip(id.and_then(|id| resumed_at.get(id)))
+                    .map(|(life, since)| AgentLife { since: Some(since.clone()), ..life.clone() })
+            } else { None };
+            decorate(&mut a, resumed.as_ref().or(life), blocked, problem);
             if provider == "codex" {
                 let status = a.get("agentId").and_then(Value::as_str).map(|id| &codex_status[id]);
                 let can_message = status.is_some_and(|status| status["can_message"] == true);
@@ -729,9 +753,23 @@ fn parse_agent_claude(f: &Path, tail: usize) -> Option<Map<String, Value>> {
     if let Some(ended) = interrupted {
         m.insert("state".into(), json!("failed"));
         m.insert("endedAt".into(), json!(ended));
+    } else if let Some(ended) = finished_in_meta(f, meta.as_ref()) {
+        m.insert("state".into(), json!("finished"));
+        m.insert("endedAt".into(), json!(ended));
     }
     if let Some(model) = model { m.insert("model".into(), Value::String(model)); }
     Some(m)
+}
+
+/// O Claude Code regrava o `.meta.json` com `finished` no fim de cada execução, e o agente lançado de dentro de
+/// um script não avisa o fim ao plugin nem ao runtime. Escrita do agente depois disso é retomada.
+fn finished_in_meta(f: &Path, meta: Option<&Value>) -> Option<String> {
+    if meta?.get("finished") != Some(&Value::Bool(true)) { return None; }
+    let done = f.with_extension("meta.json").metadata().and_then(|m| m.modified()).ok()?;
+    let wrote = f.metadata().and_then(|m| m.modified()).ok()?;
+    // A última linha do agente chega ao disco logo depois do `.meta.json`.
+    (wrote <= done + Duration::from_secs(2))
+        .then(|| chrono::DateTime::<chrono::Utc>::from(done).to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 // ── Kimi ──────────────────────────────────────────────────────────────────────
@@ -1212,9 +1250,10 @@ mod tests {
         let foreign = dir.path().join("foreign.jsonl");
         write(&own, &[json!({"type": "user"})]);
         claude_agent(dir.path(), "own", "mine", "meu");
-        std::thread::sleep(Duration::from_millis(20));
         write(&foreign, &[json!({"type": "user"})]);
         claude_agent(dir.path(), "foreign", "theirs", "deles");
+        let newer = own.metadata().unwrap().modified().unwrap() + Duration::from_secs(60);
+        std::fs::File::options().write(true).open(&foreign).unwrap().set_modified(newer).unwrap();
 
         let tracked = row(json!({"name": "s", "provider": "claude", "jsonl": own, "tracked": true}));
         let (provider, jsonl) = conversation(&tracked, None).unwrap();
@@ -1273,6 +1312,47 @@ mod tests {
         let mut a = list_subagents("claude", &own).remove(0);
         decorate(&mut a, None, None, None);
         assert_eq!(a["state"], Value::Null);
+    }
+
+    /// O Claude Code regrava o `.meta.json` com `finished` no fim de cada execução; agente lançado de dentro de
+    /// script nunca manda o fim ao plugin nem ao runtime, e o `running` deles ficava para sempre.
+    #[test]
+    fn claude_agent_finished_in_its_meta_is_reported_ended_until_it_writes_again() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let dir = tempfile::tempdir().unwrap();
+        let own = dir.path().join("c.jsonl");
+        claude_agent(dir.path(), "c", "a1", "faz X");
+        let f = dir.path().join("c/subagents/agent-a1.jsonl");
+        let meta = f.with_extension("meta.json");
+        std::fs::write(&meta, r#"{"agentType":"Explore","finished":true}"#).unwrap();
+        let at = |p: &Path, t| std::fs::File::options().write(true).open(p).unwrap().set_modified(t).unwrap();
+        let done = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        at(&meta, done);
+        at(&f, done + Duration::from_millis(50));
+        let running = AgentLife { state: AgentState::Running, ended_at: None, since: None };
+        let mut a = list_subagents("claude", &own).remove(0);
+        decorate(&mut a, Some(&running), None, None);
+        assert_eq!((a["state"].clone(), a["endedAt"].clone()), (json!("finished"), json!("2027-01-15T08:00:00.000Z")));
+
+        let resumed = AgentLife {
+            state: AgentState::Running,
+            ended_at: None,
+            since: Some("2027-01-15T08:00:00.100Z".into()),
+        };
+        let mut a = list_subagents("claude", &own).remove(0);
+        decorate(&mut a, Some(&resumed), None, None);
+        assert_eq!((a["state"].clone(), a["endedAt"].clone()), (json!("running"), Value::Null));
+
+        at(&meta, done + Duration::from_secs(1));
+        let mut a = list_subagents("claude", &own).remove(0);
+        decorate(&mut a, Some(&resumed), None, None);
+        assert_eq!((a["state"].clone(), a["endedAt"].clone()), (json!("finished"), json!("2027-01-15T08:00:01.000Z")));
+
+        // Uma escrita bem depois do fim indica retomada mesmo sem sinal do plugin.
+        at(&f, done + Duration::from_secs(60));
+        let mut a = list_subagents("claude", &own).remove(0);
+        decorate(&mut a, Some(&running), None, None);
+        assert_eq!(a["state"], "running");
     }
 
     /// O modelo que respondeu, não o apelido do Agent do pai: num motor "opus" vira o modelo do motor.
@@ -1363,6 +1443,7 @@ mod tests {
         let life = AgentLife { state: AgentState::Finished, ended_at: Some("2026-10-13T10:00:09.000Z".into()), since: None };
         decorate(&mut a, Some(&life), Some(NO_PLUGIN), None);
         assert_eq!(pick(&a), json!(["finished", "2026-10-13T10:00:09.000Z", false, NO_PLUGIN]));
+        let mut a = item(json!({}));
         decorate(&mut a, Some(&AgentLife { state: AgentState::Running, ended_at: None, since: None }), None, None);
         assert_eq!(pick(&a), json!(["running", null, true, null]));
 

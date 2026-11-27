@@ -275,7 +275,7 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
 async fn open_agy_terminal(st: &Arc<AppState>, home: &std::path::Path, key: &str, name: &str, conversation: &str) -> Result<(), RuntimeError> {
     let host = crate::session_open::server::ServerHost::new(st.clone()).await;
     let entry = crate::session_open::restore::Entry { name: name.to_owned(), provider: crate::session_open::AgentProvider::Antigravity,
-        conversation: Some(conversation.to_owned()), permission_mode: None, missing_since: None, unit: None, turn_open: false, last_line: None };
+        conversation: Some(conversation.to_owned()), transcript: None, permission_mode: None, missing_since: None, unit: None, turn_open: false, last_line: None };
     let projects = st.accounts.env.claude_base.join("projects");
     match crate::session_open::restore::resolved_for(home, &projects, key, &entry) {
         Ok(resolved) => crate::session_open::open::open_session(&host, resolved, &crate::session_open::OpenCaller::Owner).await

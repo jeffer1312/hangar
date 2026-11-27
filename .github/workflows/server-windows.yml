@@ -16,6 +16,11 @@ on:
       - ".github/workflows/server-windows.yml"
       - ".github/workflows/server-jobs.yml"
   workflow_dispatch:
+    inputs:
+      psmux_probe:
+        description: Prova isolada de recuperação do psmux
+        type: boolean
+        default: false
 
 # Na main e no canal cada run tem o próprio grupo: quem cancela o run que um push novo substituiu são os jobs de
 # teste e de build (concorrência por job, no server-jobs.yml); o `publish` nunca é cancelado no meio do upload.
@@ -25,7 +30,63 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' && github.ref_name != 'beta' }}
 
 jobs:
+  psmux-probe:
+    if: github.event_name == 'workflow_dispatch' && inputs.psmux_probe
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: crates
+    steps:
+      # Pedido fora da branch da prova falha à vista: pulado, o job contaria como sucesso sem provar nada.
+      - name: Recusar prova fora da branch permitida
+        if: github.ref_name != 'fix/subagentes-branch-orfaos-psmux'
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: throw "A prova do psmux só roda na branch fix/subagentes-branch-orfaos-psmux"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target/debug
+          key: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
+      - name: Preparar psmux isolado
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'hangar-psmux-proof'
+          New-Item -ItemType Directory $root | Out-Null
+          gh release download psmux-latest --repo $env:GITHUB_REPOSITORY --pattern 'psmux-conpty-windows-x86_64.zip' --dir $root
+          if ($LASTEXITCODE -ne 0) { throw 'Não foi possível baixar o psmux' }
+          $zip = Join-Path $root 'psmux-conpty-windows-x86_64.zip'
+          $expected = '8c79c6efcba47386ceba9a22850e4ff72422975c3924d283493749de1f776656'
+          if ((Get-FileHash -Algorithm SHA256 $zip).Hash -ne $expected) { throw 'SHA-256 do psmux diverge' }
+          $bin = Join-Path $root 'bin'
+          Expand-Archive $zip -DestinationPath $bin
+          $registry = Join-Path $root 'registry'
+          New-Item -ItemType Directory $registry | Out-Null
+          "PSMUX_DATA_DIR=$registry" >> $env:GITHUB_ENV
+          "HANGAR_TEST_PSMUX=$(Join-Path $bin 'psmux.exe')" >> $env:GITHUB_ENV
+      - name: Conferir vínculo e encerramento no psmux real
+        shell: pwsh
+        run: |
+          cargo test --locked -p hangar-server --lib session_open::orphans::windows_test::a_real_psmux_orphan_can_be_recovered_and_dismissed -- --exact --ignored --nocapture 2>&1 | Tee-Object -Variable output
+          if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') {
+            throw 'O teste real do psmux não passou'
+          }
   server:
+    if: github.event_name != 'workflow_dispatch' || !inputs.psmux_probe
     uses: ./.github/workflows/server-jobs.yml
     permissions:
       contents: write

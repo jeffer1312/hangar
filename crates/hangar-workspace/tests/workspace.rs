@@ -282,6 +282,17 @@ fn undoing_a_worktree_deletes_only_the_branch_it_created() {
     assert!(!local("nova"));
 }
 
+/// Branch nova com nome já usado (o nome da sessão, por padrão) não trava a criação: ganha o sufixo da pasta.
+#[test]
+fn a_new_branch_whose_name_is_taken_gets_a_suffix() {
+    use hangar_workspace::git::create_branch_worktree;
+    let (_base, root, repo, worktrees) = failing_add_repo();
+    git(&repo, &["branch", "agente"]);
+    let made = create_branch_worktree(&repo, "agente", "agente", &root, true, None, &worktrees).unwrap();
+    assert_eq!(std::path::Path::new(&made.path), worktrees.join("repo/agente-2"));
+    assert!(made.branch == "agente-2" && made.branch_created && local_branch(&repo, "agente-2"), "{made:?}");
+}
+
 fn failing_add_repo() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
     let base = tempfile::tempdir().unwrap();
     let root = hangar_workspace::simplify(base.path().canonicalize().unwrap());
@@ -298,15 +309,15 @@ fn local_branch(repo: &std::path::Path, name: &str) -> bool {
         .status().unwrap().success()
 }
 
-/// A branch que divide o nome com uma tag sai como `heads/x` na lista e passa pela checagem; o `-b` falha, e a
-/// limpeza da falha não pode apagar a branch que já era do usuário.
+/// A branch que divide o nome com uma tag continua do usuário: a nova nasce com sufixo e nada apaga a dele.
 #[test]
 fn a_failed_worktree_add_keeps_a_branch_that_already_existed() {
     use hangar_workspace::git::create_branch_worktree;
     let (_base, root, repo, worktrees) = failing_add_repo();
     git(&repo, &["branch", "v1"]);
     git(&repo, &["tag", "v1"]);
-    assert!(create_branch_worktree(&repo, "v1", "v1", &root, true, None, &worktrees).is_err());
+    let made = create_branch_worktree(&repo, "v1", "v1", &root, true, None, &worktrees).unwrap();
+    assert_eq!(made.branch, "v1-2");
     assert!(local_branch(&repo, "v1"), "a branch do usuário fica");
 }
 

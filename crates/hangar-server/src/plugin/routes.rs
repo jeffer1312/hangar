@@ -114,7 +114,7 @@ struct Suggest { texto: String, mostrada: bool }
 struct AgentEvent { agent_id: String, estado: AgentState, at: Option<i64> }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AgentSent { id: String, is_delivered: bool, reason: Option<String> }
+struct AgentSent { id: String, is_delivered: bool, reason: Option<String>, attempted_at: Option<i64> }
 #[derive(Deserialize)]
 struct Rate { tokens: u64, seconds: f64, session_id: String }
 
@@ -344,8 +344,8 @@ async fn agent(State(st): State<Arc<RouteState>>, Json(body): Json<Envelope<Agen
 /// Resposta do `$.session.send` a um texto que o `/pull` entregou.
 async fn agent_sent(State(st): State<Arc<RouteState>>, Json(body): Json<Envelope<AgentSent>>) -> Response {
     let identity = match admit(&st, &body).await { Ok(identity) => identity, Err(error) => return fail(error) };
-    let AgentSent { id, is_delivered, reason } = body.body;
-    match st.store.agent_sent(&identity.binding, &id, is_delivered, reason) { Ok(()) => ok(), Err(error) => fail(error) }
+    let AgentSent { id, is_delivered, reason, attempted_at } = body.body;
+    match st.store.agent_sent(&identity.binding, &id, is_delivered, reason, attempted_at) { Ok(()) => ok(), Err(error) => fail(error) }
 }
 async fn rate(State(st): State<Arc<RouteState>>, Json(body): Json<Envelope<Rate>>) -> Response {
     if body.body.tokens == 0 || body.body.tokens > 1_000_000 || !body.body.seconds.is_finite() || body.body.seconds <= 0.0 || body.body.seconds > 3600.0 {

@@ -4051,7 +4051,11 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   `terminal_died` para o resto), com Reabrir (`POST /api/sessions/{name}/reopen`, pelo spec, como o
   restore) e Dispensar (`POST /api/sessions/{name}/dismiss`, que só age se o nome ainda está caído: a
   linha velha no app não fecha a sessão que acabou de reabrir). `/exit` e kill pedido não deixam `Failed with result`: é a pessoa
-  saindo, sem linha (decisão do usuário). Sem journal (Windows/psmux) não há registro. A linha caída
+  saindo, sem linha (decisão do usuário). Sem journal (Windows/psmux) não há registro pela queda; lá a
+  linha vem do servidor do psmux vivo que perdeu a ficha em `~/.psmux` (`<nome>.port`): o `ls` não o vê, e
+  ele seguia com o agente e segurando o nome. A busca roda a cada tique do restore (`session_open/orphans.rs`,
+  processo com mais de 60 s). O nome conta como ocupado, mas a linha só é acionável se a própria instância
+  estiver ligada ao registro da sessão, como define [Windows](windows.md#regras-vigentes). A linha caída
   fica fora do push e da varredura de grupos. O build roda em escopo próprio com teto: o `cargo-pinned`
   abre o dele (`MemoryHigh` pela memória livre) e o `verificar-local` roda inteiro no `scripts/memory-scope`
   (só `MemoryMax`: com `MemoryHigh` o Node tira o heap do teto menor e o `svelte-check` estoura). Falta de
