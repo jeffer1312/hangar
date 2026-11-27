@@ -3644,9 +3644,11 @@ impl Hangar {
             cx.notify();
             return false;
         };
-        if !self.delivery.begin(key.clone(), text.clone(), known) { cx.notify(); return false; }
-        // O `/steer` do Claude com terminal ignora o texto; `/input` orienta somente a entrada deste envio.
         let selected = self.selected_key().as_ref() == Some(&key);
+        // Só a conversa aberta tem o painel "Na fila" à vista; a de fora vai sem histórico conhecido.
+        let queued: Vec<String> = if selected { self.chat.queue_panel().entries.iter().map(|e| e.text.clone()).collect() } else { Vec::new() };
+        if !self.delivery.begin_beside(key.clone(), text.clone(), known, &queued) { cx.notify(); return false; }
+        // O `/steer` do Claude com terminal ignora o texto; `/input` orienta somente a entrada deste envio.
         let kind = self.sessions_of(&key.server).iter().find(|s| s.name == key.name).map(|s| (s.provider == "claude", s.headless))
             .or_else(|| selected.then(|| { let (provider, headless) = self.provider(); (provider == "claude", headless) }));
         let terminal_claude = steer == SendTiming::Direct && kind == Some((true, false));

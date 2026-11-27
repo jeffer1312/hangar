@@ -1436,7 +1436,8 @@ regra, não de volume: por isso a chave de envio (idempotência) ficou de fora.
   do que estava na tela no Enter, que não começa com `queued-` (a linha da fila não prova entrega),
   com o mesmo texto (`matches_real` no nativo, `sameMessage` no Expo) e `ts >= Enter − 30 s` (folga
   para relógio adiantado). Sem `ts` (fala comum do Claude), só vale quando o histórico já estava
-  carregado no Enter. No nativo (`desktop-native/src/delivery.rs`) o texto que voltou ao campo sai
+  carregado no Enter e não havia outra mensagem igual a caminho nem no painel "Na fila" (salvo no
+  reenvio do próprio incerto). No nativo (`desktop-native/src/delivery.rs`) o texto que voltou ao campo sai
   dele só se ninguém o mexeu, como no Expo (`mobile/src/stores/chat.ts`).
 - **Expo: queda de rede continua incerta.** O `fetch` do React Native não separa conexão recusada
   de corte no meio; só o 503 com código passou a ser recusa, e só no `/input`: o 503 do `/steer`
