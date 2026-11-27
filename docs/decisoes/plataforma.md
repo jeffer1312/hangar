@@ -5910,3 +5910,14 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   lista sai `other`. O servidor conta um retrato por dia por app e aparelho, pelo id das novidades
   da atualização, que fica só no `once.json`. O painel mostra máquinas, não vezes. O canal de
   atualização não entrou: já vai no `env` do pacote.
+- **Opção B, escopo 3 (27/11/2026).** O escopo 2 fica reservado ao retrato de preferências. O
+  `GET /api/telemetry` anuncia o escopo; o sim precisa citar exatamente o do aviso, e o não antigo
+  continua válido. A escolha de B é separada do booleano legado (gravado como `false`) e a pasta
+  `telemetry-v3` nunca é lida por uma versão revertida. Lotes antigos não são importados.
+  O servidor marca a linha de tela só depois de autenticar o dono, preservando o horário original;
+  HTTP usa rota registrada e autenticação verificada, MCP exige chave da sessão e confirmação de
+  propriedade e de que não está compartilhada. Campos saem de listas fechadas, não de texto raspado
+  dos logs. Parcial horário e final UTC substituem o mesmo lote no receptor; o servidor grava ID e
+  projeção antes de enviar, congela o final no disco e limita os bytes entregues a 2 MiB. A revogação
+  impede novos envios, não apaga os já recebidos (retenção atual: 400 dias). A opção B ainda não foi
+  publicada.
