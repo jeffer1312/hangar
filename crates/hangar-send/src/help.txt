@@ -101,10 +101,19 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  --link liga a sessão nova a esta: entra no grupo desta sem aviso,
                                  aparece na linha de subagentes, pode ser interrompida por esta e
                                  a resposta final da tarefa volta sozinha como [de: <filha>] (só
-                                 filhas Claude, Codex e Antigravity; Pi/omp/Kimi não devolvem). A filha não
-                                 manda a resposta final por recado. Só nesta máquina (servidor::nome
-                                 recusa) e não combina com --resume. Com o backend em modo python,
-                                 volta 422. Sessão aberta sem a ligação = linha "erro:" e saída 1.
+                                 filhas Claude, Codex e Antigravity; Pi/omp/Kimi não devolvem). O
+                                 --prompt dessas filhas chega aberto por uma linha dizendo isso, e
+                                 elas não mandam a resposta final por recado. Só nesta máquina
+                                 (servidor::nome recusa) e não combina com --resume. Com o backend
+                                 em modo python, volta 422. Sessão aberta sem a ligação = linha
+                                 "erro:" e saída 1.
+                                 Delegar: filha ligada para subtarefa longa e independente que pede
+                                 sessão própria (outro repositório, outro agente, trabalho que você
+                                 acompanha enquanto segue); busca ou leitura curta vai no subagente
+                                 nativo. Dê a tarefa inteira no --prompt. Não espere com sleep nem
+                                 peça a resposta por recado: o estado e a resposta inteira saem da
+                                 tool child_status do MCP hangar, e a pergunta que a filha fizer
+                                 chega a você e se responde pela tool child_answer.
   hangar-send --whoami               imprime o nome desta sessão (a identidade que assina os recados)
   hangar-send --help                esta ajuda (o cabeçalho deste arquivo).
 

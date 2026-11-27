@@ -189,6 +189,9 @@ pub struct SessionRow {
     /// Sessão que abriu esta como filha ligada; só vale se ela ainda está no grupo (`pair_peers`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_by: Option<String>,
+    /// Pai que esta filha ligada perdeu (fechou ou morreu); ela segue aberta. Só sem `linked_by`. Só existe no Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphaned_from: Option<String>,
     /// Sessão que formou o grupo (`lead` do sidecar), a principal da aba no app; só vale se é esta
     /// ou se ainda está em `pair_peers`. Só existe no Rust.
     #[serde(default, skip_serializing_if = "Option::is_none")]

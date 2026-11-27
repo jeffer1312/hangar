@@ -1111,11 +1111,18 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
 - **Sessão filha ligada: `link` na abertura, vínculo no arquivo de grupo da filha.** Só o dono liga
   (`erro_link_convidado`), só local (`erro_link_remoto`), nunca em grupo `orq`. O vínculo é
   `linked_by` no sidecar da filha e vale só com o pai entre os `peers`; o pai sair o apaga. Ligar
-  não injeta protocolo de grupo, nem no `SessionStart`. `interrupt` (MCP) só alcança filha ligada a
-  quem chama. A resposta final de turno pedido pelo pai volta sozinha como `[de: <filha>]` (só
-  Claude e Codex), por uma assinatura interna da lista que não conta como app aberto; sem esperar
-  bloqueante. Os clientes calculam a linha "N subagentes" da lista. Motivo em
-  [plataforma.md](docs/decisoes/plataforma.md#sessão-filha-ligada-a-quem-a-abriu).
+  não injeta protocolo de grupo, nem no `SessionStart`: a filha recebe uma linha curta no começo do
+  `initial_prompt` (sem ele, nada). `interrupt`, `child_status` e `child_answer` (MCP) só alcançam
+  filha ligada a quem chama. A resposta final de turno pedido pelo pai volta sozinha como
+  `[de: <filha>]` (só Claude e Codex), por uma assinatura interna da lista que não conta como app
+  aberto; sem esperar bloqueante. A pergunta (`AskUserQuestion`) da filha chega ao pai uma vez por
+  `interaction_id` e é respondida por `child_answer`; menu e permissão só avisam. Parar com
+  `cascade=1` (botão Parar e tool `interrupt`) para as descendentes até 3 níveis; cancelar cartão
+  de pergunta não cascateia. Fechar o pai pelo dono, com a morte confirmada, interrompe as filhas
+  (pelo convidado, não) e as mantém abertas; toda saída do grupo grava `orphaned_from` nelas. Os clientes calculam a linha
+  "N subagentes" da lista. Motivo em
+  [plataforma.md](docs/decisoes/plataforma.md#sessão-filha-ligada-a-quem-a-abriu) e
+  [plataforma.md](docs/decisoes/plataforma.md#filhas-ligadas-pergunta-ao-pai-parar-em-cascata-e-pai-que-fecha-27112026).
 - **A porta privada de loopback do Rust mora no mesmo processo**, anunciada na saúde somente como
   endereço; o segredo é gerado na subida e nunca sai dele. Uma captura canônica
   por rodada, sem grade auxiliar: quem captura o pane de Claude com terminal para o

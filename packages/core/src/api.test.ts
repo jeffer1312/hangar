@@ -18,11 +18,12 @@ import { mensagemDeErro, formataErro } from './errosApi';
 import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer, getNewChatCommandsForServer } from './api';
 import { fetchSessionsForServer, getSessions, openSessionsStream, probeServerResponse } from './api';
 import { scanDir, scanDirForServer, listClaudeConfigs, listClaudeConfigsForServer } from './api';
-import { answerQuestions, closePluginPane, inputPluginField, interrupt, isInputRefusal, openEventStreamForServer, pressPluginButton, selectOption, selectOptionForServer, sendInputForServer, showPluginPane, skipQuestion, submitSelected, submitSelectedForServer } from './api';
+import { answerQuestions, closePluginPane, inputPluginField, interrupt, interruptCascadeFailed, interruptCascadeUnchecked, isInputRefusal, openEventStreamForServer, pressPluginButton, selectOption, selectOptionForServer, sendInputForServer, showPluginPane, skipQuestion, submitSelected, submitSelectedForServer } from './api';
 import type { AskQuestionPayload, StateEvent } from './types';
 import { discardFile, fileAuthHeader, fileUrlNative, getPairContract, getPlans, listFiles, pathDiff, readFile, searchFiles, setPlanPin, unpairSession, writeFile } from './api';
 import type { Server } from './servers';
 import { createShare, exportShortcuts, sendSubagentMessage } from './api';
+import { deleteSession, deleteSessionForServer } from './api';
 import { cancelQueuedMessage, editQueuedMessage, reorderQueuedMessage, steerQueuedMessage, terminateCodexCommand } from './api';
 import { fileUrl, uploadUrl, uploadUrlNative } from './api';
 import { relimparDitado, transcribePiece } from './api';
@@ -575,6 +576,30 @@ describe('contratos de conversa com servidor explícito', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(error);
     await expect(run(target)).rejects.toBe(error);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('interrupt leva cascade=1 só quando pedido', async () => {
+    const reply = '{"ok":true,"cascade":{"interrupted":["filha-a"],"failed":[{"name":"filha-b","code":"cascade_timeout"}]}}';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(reply));
+    await interrupt('sessao', false, target);
+    await interrupt('sessao', true, target);
+    await interrupt('sessao', true, target, { cascade: true });
+    const result = await interrupt('sessao', false, target, { cascade: true });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://b.test/api/sessions/sessao/interrupt',
+      'https://b.test/api/sessions/sessao/interrupt?clear=true',
+      'https://b.test/api/sessions/sessao/interrupt?clear=true&cascade=1',
+      'https://b.test/api/sessions/sessao/interrupt?cascade=1',
+    ]);
+    expect(interruptCascadeFailed(result)).toEqual(['filha-b']);
+    expect(interruptCascadeFailed({ ok: true })).toEqual([]);
+    expect(interruptCascadeFailed(undefined)).toEqual([]);
+    // Filhas não conferidas: sem nomes, mas não é "todas pararam".
+    const unchecked = { ok: true, cascade: { interrupted: [], failed: [], unavailable: 'groups_unavailable' } };
+    expect(interruptCascadeUnchecked(unchecked)).toBe(true);
+    expect(interruptCascadeFailed(unchecked)).toEqual([]);
+    expect(interruptCascadeUnchecked(result)).toBe(false);
+    expect(interruptCascadeUnchecked(undefined)).toBe(false);
   });
 
   it('chamada antiga de interrupção conserva clear=false e tratamento de 401', async () => {
@@ -1369,6 +1394,21 @@ describe('pairSession', () => {
     await pairSession('sessao', ['outra'], 'tarefa', true);
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(init?.body as string)).toEqual({ peers: ['outra'], task: 'tarefa', replace_task: true });
+  });
+});
+
+describe('fechar sessão com servidor explícito', () => {
+  const target = { id: 'b', label: 'Servidor B', baseUrl: 'https://b.test', token: 'token-b' };
+
+  it('deleteSessionForServer fecha em B e o deleteSession continua no ativo', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{"ok":true,"warning":null}'));
+    await expect(deleteSessionForServer(target, 'pai filha')).resolves.toEqual({ ok: true, warning: null });
+    await deleteSession('pai filha');
+    expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ['https://b.test/api/sessions/pai%20filha', 'DELETE'],
+      ['https://a.test/api/sessions/pai%20filha', 'DELETE'],
+    ]);
+    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({ Authorization: 'Bearer token-b' });
   });
 });
 

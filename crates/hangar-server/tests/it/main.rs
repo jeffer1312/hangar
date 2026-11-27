@@ -27,6 +27,7 @@ mod json_large_input;
 mod login_guests;
 mod harness_routes;
 mod groups_text;
+mod delegation_guidance;
 mod session_defaults;
 mod notice_ignores;
 mod tags;

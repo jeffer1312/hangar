@@ -271,9 +271,13 @@ impl DeliveryTracker {
     /// Texto digitado agora no terminal que a conversa ainda não mostrou: é o que a interrupção devolve.
     /// O que foi para a fila durável (`Queued`) não está no campo do terminal e segue entregue por ela.
     pub fn take_unconfirmed(&mut self, key: &SessionKey) -> Option<String> {
-        let record = self.records.get(key)?;
-        if record.pending || !matches!(record.outcome, Some(SendOutcome::Delivered)) { return None; }
+        if !self.has_unconfirmed(key) { return None; }
         self.records.remove(key).map(|record| record.text)
+    }
+
+    /// Há o que `take_unconfirmed` devolveria, sem tirar: o Parar só o devolve depois do Esc confirmado.
+    pub fn has_unconfirmed(&self, key: &SessionKey) -> bool {
+        self.records.get(key).is_some_and(|record| !record.pending && matches!(record.outcome, Some(SendOutcome::Delivered)))
     }
 }
 

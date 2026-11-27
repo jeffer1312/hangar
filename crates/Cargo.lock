@@ -1852,6 +1852,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-delegation"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-deploy"
 version = "0.1.0"
 dependencies = [
@@ -2275,6 +2285,7 @@ dependencies = [
  "hangar-connectors",
  "hangar-conversation-transfer",
  "hangar-core",
+ "hangar-delegation",
  "hangar-deploy",
  "hangar-desktop-theme",
  "hangar-docs",

@@ -468,7 +468,9 @@ enum Payload {
     History(u64, usize, Result<api::History, Failure>),
     // Mensagem entregue e o texto do campo que a originou (com anexo os dois diferem).
     Sent(SessionKey, String, String, Result<Delivery, Failure>),
-    Interrupted(SessionKey, Result<(), Failure>),
+    /// As descendentes ligadas que não pararam junto com o Parar.
+    /// `bool`: o pedido levou `clear` (havia texto a devolver ao campo).
+    Interrupted(SessionKey, bool, Result<api::Interrupted, Failure>),
     Acted(SessionKey, Action, String, Result<serde_json::Value, Failure>),
     Files(SessionKey, Option<SessionOwner>, u64, Vec<Result<Picked, String>>),
     // `None` marca o início do envio daquele anexo.
@@ -2209,8 +2211,8 @@ impl Hangar {
                 cx.notify();
                 return;
             }
-            Payload::Interrupted(key, result) => {
-                self.receive_interrupted(key, result);
+            Payload::Interrupted(key, clear, result) => {
+                self.receive_interrupted(key, clear, result, window, cx);
                 cx.notify();
                 return;
             }
@@ -2831,9 +2833,22 @@ impl Hangar {
         }
     }
 
-    fn receive_interrupted(&mut self, key: SessionKey, result: Result<(), Failure>) {
+    fn receive_interrupted(&mut self, key: SessionKey, clear: bool, result: Result<api::Interrupted, Failure>, window: &mut Window, cx: &mut Context<Self>) {
         self.stopping.remove(&key);
-        let note = match result { Ok(()) => (tr("stop_requested"), false), Err(error) => (Self::failure(&error), true) };
+        let note = match result {
+            Ok(done) => {
+                // Só com o Esc confirmado a mensagem sai do registro e volta ao campo: pai sem turno ou falha a deixam
+                // onde estava, e no campo ela iria em dobro.
+                if done.parent && clear && let Some(text) = self.delivery.take_unconfirmed(&key) {
+                    let current = self.selected_key().as_ref() == Some(&key);
+                    self.return_to_field(&key, vec![text], current, window, cx);
+                    if current { self.composer.update(cx, |input, cx| input.focus(window, cx)); }
+                    self.action_feedback.insert(key.clone(), (tr("stop_returned"), false));
+                }
+                interrupted_note(&done)
+            }
+            Err(error) => (Self::failure(&error), true),
+        };
         self.stop_feedback.insert(key, note);
     }
 
@@ -4174,31 +4189,25 @@ impl Hangar {
         cx.notify();
     }
 
-    // Mensagem aceita que a conversa ainda não mostrou volta ao campo, e só então o backend limpa a entrada do terminal.
+    // Com mensagem aceita que a conversa ainda não mostrou, o backend limpa a entrada do terminal; ela volta ao campo
+    // na resposta, só com o Esc confirmado.
     fn interrupt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.confirm = None;
         if self.connection_dialog || !self.can_interrupt() { cx.notify(); return; }
         let (Some(api), Some(session)) = (self.session_api(), self.selected.as_ref()) else { return; };
         let Some(key) = self.selected_key() else { return; };
         if self.stopping.contains(&key) { return; }
-        let returned = self.delivery.take_unconfirmed(&key);
-        if let Some(text) = &returned {
-            let current = self.composer.read(cx).value().to_string();
-            let merged = if current.trim().is_empty() { text.clone() } else { format!("{text}\n{current}") };
-            self.composer.update(cx, |input, cx| { input.set_value(merged, window, cx); input.focus(window, cx); });
-        }
+        let clear = self.delivery.has_unconfirmed(&key);
         self.stopping.insert(key.clone());
         self.error = None;
         self.stop_feedback.remove(&key);
         let name = session.name.clone();
-        let clear = returned.is_some();
         let (connection, selection) = (self.connection, self.selection);
         let tx = self.tx.clone();
         self.runtime.spawn(async move {
-            let result = api.interrupt(&name, clear).await;
-            let _ = tx.send(Envelope { connection, selection: Some(selection), payload: Payload::Interrupted(key, result) }).await;
+            let result = api.interrupt(&name, clear, true).await;
+            let _ = tx.send(Envelope { connection, selection: Some(selection), payload: Payload::Interrupted(key, clear, result) }).await;
         });
-        if clear { self.action_feedback.insert(self.selected_key().expect("selected"), (tr("stop_returned"), false)); }
         cx.notify();
     }
 
@@ -4394,7 +4403,8 @@ impl Hangar {
         let (connection, selection, tx) = (self.connection, self.selection, self.tx.clone());
         self.runtime.spawn(async move {
             let result = match &action {
-                Action::Cancel => api.interrupt(&session.name, false).await.map(|_| Value::Null),
+                // Cancelar o cartão de pergunta não para as filhas: só o Parar cascateia.
+                Action::Cancel => api.interrupt(&session.name, false, false).await.map(|_| Value::Null),
                 _ => api.request(&session.name, action.method(), &action.path(), action.query(), body, action.seconds()).await,
             };
             let _ = tx.send(Envelope { connection, selection: Some(selection), payload: Payload::Acted(key, action, snapshot, result) }).await;
@@ -7460,6 +7470,7 @@ impl Hangar {
         let state = conversation_row_state(&session, outcome, queued);
         let mut status_label = tr(&format!("sidebar_state_{state}"));
         if session.asleep { status_label.push_str(&format!(" · {}", tr_shared("session_asleep_badge", &[]))); }
+        if let Some(parent) = &session.orphaned_from { status_label.push_str(&format!(" · {}", orphan_label(parent))); }
         let label = self.session_number_label(&target,
             match folder_name(&session) { Some(folder) => format!("{name} · {folder} · {status_label}"), None => format!("{name} · {status_label}") });
         let branch = shown_branch(&session).filter(|_| !compact);
@@ -7501,6 +7512,7 @@ impl Hangar {
                 .child(format!("? {}", session.pending_questions))))
             .when(session.tracked == Some(false), |el| el.child(badge(tr("untracked_badge"), theme::muted())))
             .when(session.asleep, |el| el.child(badge(tr_shared("session_asleep_badge", &[]), theme::muted())))
+            .when_some(session.orphaned_from.as_deref(), |el, parent| el.child(badge(orphan_label(parent), theme::muted())))
             .when(session.orq(), |el| el.child(badge(tr_shared("orq_row_badge", &[]), theme::muted())))
             .when_some(session.owner.clone(), |el, owner| el.child(badge(format!("👤 {owner}"), theme::muted())))
             .children(pair_badges(&session))
@@ -7640,6 +7652,7 @@ impl Hangar {
                     .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("create_mode_headless")).build(window, cx))
                     .child(chrome::no_terminal_mark(12., theme::muted()))))
                 .when(session.asleep, |el| el.child(badge(tr_shared("session_asleep_badge", &[]), theme::muted())))
+                .when_some(session.orphaned_from.as_deref(), |el, parent| el.child(badge(orphan_label(parent), theme::muted())))
                 .when(session.orq(), |el| el.child(badge(tr_shared("orq_row_badge", &[]), theme::muted())))
                 .when(session.shared, |el| el.child(div().id(SharedString::from(format!("row-shared-{row_key}"))).flex_shrink_0().flex()
                     .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr_shared("sessao_compartilhada", &[])).build(window, cx))
@@ -7657,6 +7670,7 @@ impl Hangar {
         if let Some(label) = &agent_label { spoken.push(label.clone()); }
         spoken.push(state_label);
         if session.asleep { spoken.push(tr_shared("session_asleep_badge", &[])); }
+        if let Some(parent) = &session.orphaned_from { spoken.push(orphan_label(parent)); }
         if session.headless { spoken.push(tr("create_mode_headless")); }
         if let Some((text, _)) = self.work_review_badge(&target.server, &session.name) { spoken.push(text); }
         session_row_frame(SharedString::from(row_id), selected)
@@ -8190,6 +8204,22 @@ pub(crate) fn working_line(mark: AnyElement, verb: String) -> Div {
 /// Rótulo de cima da linha que não é bolha nem resposta (aviso, erro), onde ele é informação.
 pub(crate) fn message_label(label: String, error: bool) -> Div {
     div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::muted() }).child(label)
+}
+
+/// A marca da filha cujo pai fechou ou morreu: ela segue aberta, sem pai.
+fn orphan_label(parent: &str) -> String { tr_shared("session_orphaned_from", &[("name", parent)]) }
+
+/// Um aviso só para as filhas que o Parar não alcançou.
+fn cascade_failed_note(failed: &[String]) -> String {
+    tr_shared("interrupt_cascade_failed", &[("names", &failed.join(", "))])
+}
+
+/// A linha do Parar: falha das filhas antes de tudo; pai sem turno não é "interrupção solicitada".
+fn interrupted_note(done: &api::Interrupted) -> (String, bool) {
+    if !done.failed.is_empty() { return (cascade_failed_note(&done.failed), true); }
+    if done.unchecked { return (tr_shared("interrupt_cascade_unchecked", &[]), true); }
+    if !done.parent { return (tr("stop_no_turn"), false); }
+    (tr("stop_requested"), false)
 }
 
 /// O verbo do spinner do terminal ("Sketching… (6s · esc to interrupt)" → "Sketching…"); rótulo sem ele, "Trabalhando…".
@@ -9751,6 +9781,19 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
+    /// Pai sem turno não aparece como "interrupção solicitada", e filha que falhou ou não foi conferida é aviso.
+    #[test]
+    fn the_stop_note_says_what_the_stop_did() {
+        use crate::api::Interrupted;
+        use crate::i18n::{tr, tr_shared};
+        let note = |parent, failed: &[&str], unchecked| super::interrupted_note(&Interrupted { parent, failed: failed.iter().map(|n| (*n).to_owned()).collect(), unchecked });
+        assert_eq!(note(true, &[], false), (tr("stop_requested"), false));
+        assert_eq!(note(false, &[], false), (tr("stop_no_turn"), false));
+        assert_eq!(note(false, &["kid"], false), (tr_shared("interrupt_cascade_failed", &[("names", "kid")]), true));
+        assert_eq!(note(true, &[], true), (tr_shared("interrupt_cascade_unchecked", &[]), true));
+        assert_ne!(tr("stop_no_turn"), "stop_no_turn", "a frase existe no messages");
+    }
+
     #[test]
     fn cancelled_download_brings_back_the_card_it_replaced() {
         use super::FileCard;

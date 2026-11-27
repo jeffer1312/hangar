@@ -4244,6 +4244,84 @@ provedor, grupos e recados. Faltavam quatro coisas, que entraram assim.
   (`AbovePrompt` do plugin); o pai pode ser Codex, Pi ou Kimi. A lista já traz estado, provedor,
   modelo e `last_reply` de cada filha (`SessionRow.linked_by`).
 
+## Filhas ligadas: pergunta ao pai, Parar em cascata e pai que fecha (27/11/2026)
+
+Origem: a comparação com o orchestration-v2 do T3 Code (`~/Projetos/t3code/apps/server/src/orchestration-v2/`):
+`DelegatedTaskQuestionReactor.ts` leva a pergunta da tarefa delegada à conversa do pai, e
+`ThreadManagementService.ts:1743-1810` (`stopDelegatedTasks`) para a árvore de filhas junto com o
+pai. Medição nas conversas desta máquina, 30 dias (scripts em `/tmp/analise-t3/`): 43 filhas ligadas
+contra 3 583 chamadas do subagente nativo (`Agent`); em 15 das 43 o pai esperou com `sleep` (68
+vezes); 15 de 29 filhas mandaram a resposta final por recado à mão, além da que já voltava sozinha;
+26 de 29 rodavam em `bypassPermissions`; `AskUserQuestion` apareceu em 4. A filha que travava numa
+pergunta ficava parada até o dono abrir a conversa dela, e parar ou fechar o pai não alcançava
+ninguém.
+
+- **Texto de quando delegar no pai, linha curta na filha.** O pai lê o texto (marca `Delegar:`,
+  `hangar_delegation::guidance::MARKER`) na descrição do `new_session`, no `help.txt` do
+  `hangar-send` e no bloco do `CLAUDE.md`; o teste confere só a marca, porque cada superfície quebra
+  linha de um jeito. A filha recebe `guidance::child_prefix` no começo do `initial_prompt` só nos
+  provedores com retorno automático (`link_return::returnable`: Claude, Codex e Antigravity). Pi, omp e
+  Kimi ficam sem a linha: ela manda não responder por recado, e nada voltaria sozinho ao pai. Não no `SessionStart`: o `link_child` grava o `linked_by` depois de o processo subir, e
+  o hook pode rodar antes. Sem `initial_prompt`, nada: um segundo turno quebraria o retorno (a última
+  mensagem do usuário deixaria de ser o pedido do pai). O resumo e o título tiram a linha
+  (`without_child_prefix`).
+- **`child_status` lê pela rota `/history`.** Devolve estado, pergunta aberta e a resposta final
+  inteira em páginas de `MAX_CHARS` (`offset`/`next_offset`), o mesmo turno que o retorno lê; o pai
+  deixa de esperar com `sleep`. A página leva `answer_key`, a identidade da resposta: pedida com ela
+  depois de a filha responder outra coisa, volta `child_status_cursor_expired` em vez de juntar pedaços
+  de duas respostas. `returned` só conta o texto: o aviso de que a resposta não voltou (limite, turno
+  sem texto) grava a mesma chave com `returned_notice`. O `interaction_id` é o de `open_interaction`,
+  o mesmo do aviso e do `/answer`. `sessions` ganha `linked_by`, `question` e `orphaned_from`; chamada
+  de sessão de convidado com login lista só as sessões que ele alcança, sem nome das outras.
+- **Pergunta encaminhada uma vez por `interaction_id`; menu e permissão só avisam.** A vigia do
+  retorno (`groups/link_return.rs`) manda `[de: <filha>]` ao pai depois de 20 s de pergunta aberta,
+  com teto por filha em 10 min. Só `InteractionKind::Question` (o `AskUserQuestion`) traz "Responda com
+  child_answer"; a chave gravada (`asked_key`) é o ID, e um ID novo para a mesma pergunta vai de novo
+  porque o pai precisa dele. Menu da TUI, aprovação de plano (`plan:<id>`) e permissão são do dono: o
+  aviso não cita o ID e a chave é o texto, então não se repete, e o `child_answer` recusa com
+  `erro_permissao_do_dono`. No Claude com terminal todo menu é `Menu`, inclusive "Do you want to
+  proceed?". Interação resolvida com o aviso ainda na fila do pai tira a linha dela
+  (`asked_queue_id`); pai ocupado ou acordando mantém a linha registrada e tenta de novo em 30 s.
+  Gravação do registro que falha guarda a linha na memória da vigia, para o cancelamento ainda achá-la.
+  Interação fechada leva junto o `asked_key`: senão, depois de um reinício, o próximo pedido de mesmo
+  texto seria dado como já avisado.
+  Tipo ilegível (vínculo da conversa ainda por ligar logo ao subir) espera mais `KIND_GRACE` (60 s)
+  antes de virar aviso ao dono: o aviso não se refaz como pergunta depois. `[de: …]` e não
+  `[painel: …]`: o painel diz "não responda".
+- **`child_answer` passa pela `/answer` com o `interaction_id` do aviso.** Codex com terminal não
+  informa quem resolveu: a resposta sai "enviada, sem confirmação" e não se tenta de novo.
+- **Parar só cascateia com `?cascade=1`.** Cancelar um cartão de pergunta também chama
+  `/interrupt`, e não pode parar as filhas. Mandam o parâmetro o botão Parar do nativo e do Expo e a
+  tool `interrupt`. A árvore sai de `cascade::plan`, em largura, até `MAX_DEPTH = 3` níveis e sem
+  voltar a quem já apareceu (vínculo em ciclo termina). Só conta como parada a resposta que confirma
+  que não há turno; a que não parou vai no `cascade.failed` da resposta, num aviso só, e no diário
+  (`rust.link_cascade_failed`). Arquivos de grupo ilegíveis: a resposta do pai fica como veio e leva
+  `cascade.unavailable` (sem nomes), e a tela diz que as filhas não foram conferidas, porque a pessoa
+  pediu para parar a árvore e elas podem seguir trabalhando. Sem serviço de grupos não há filha ligada
+  e nada vem. O nativo e o Expo só devolvem ao campo a mensagem ainda não mostrada depois do Esc
+  confirmado: com `interrupted: false` ou falha ela segue onde estava.
+  O pai sem turno é o caso normal depois de delegar: adormecido ou estacionado responde sem turno sem
+  acordar, e a recusa da admissão (sem turno, abrindo) não segura a cascata. Com descendente
+  conhecida, pai sem turno ou abrindo vira 200 `{"interrupted": false, "cascade": …}`; senão a tela
+  mostraria erro e jogaria fora o resultado das filhas.
+- **Fechar o pai interrompe as filhas e as mantém abertas (4B).** Só no fechamento do dono: o
+  convidado alcança a sessão, não a árvore dela, como no `/interrupt`. Só depois de a morte do pai ser
+  confirmada: com o kill falho, nada muda nelas. As descendentes são lidas antes do fechamento (o de
+  Pi/omp/Kimi sai do grupo por dentro, e a saída apaga o `linked_by`) e interrompidas depois dele; o
+  Pi/omp/Kimi que some sozinho só marca, como a varredura. A filha que não parou volta no `warning` do
+  fechamento (`linked_child_not_stopped`), em todo agente do pai: é o campo que os clientes leem. Toda saída do grupo grava a marca em
+  `~/.hangar/link-orphans.json` (`hangar_delegation::orphans`): o DELETE (dono ou convidado), a
+  limpeza de Pi/omp/Kimi, o `DELETE /pair` e a varredura de membro morto, que é quem tira o pai que
+  morreu sozinho. A saída que falha depois de valer (o contrato que não foi para o arquivo) marca as
+  filhas que já perderam o vínculo; a desfeita não marca nenhuma. A marca é só o rótulo da linha: a
+  falha ao gravá-la ou tirá-la vai ao diário (`rust.link_orphan_failed`), nunca ao aviso da tela. A linha leva
+  `orphaned_from`, e os clientes mostram "sem pai · era de <pai>" em toda lista e barra (linha, trilho, abas, bandeja, busca;
+  no Expo, a linha, o chip e o trilho do tablet). A marca sai quando a filha fecha, é
+  religada, some da lista ou nome reusado abre outra vida; rename a leva junto. Pela tela, fechar um
+  pai com filhas abertas pergunta "fechar também as N filhas?".
+- **Sem teto de recados pai↔filha.** Nenhum laço medido nos 30 dias; o `storm` do grupo e o teto do
+  retorno já seguram a tempestade.
+
 ## Aviso na tela só para ação que falhou ou bloqueio real (20/10/2026)
 
 (Branch `fix/session-recovery-and-alerts`, plano

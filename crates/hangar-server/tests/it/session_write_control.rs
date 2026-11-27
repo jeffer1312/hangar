@@ -742,3 +742,184 @@ async fn stop_task_on_a_name_without_rust_owner_is_409_only_claude_not_python() 
     let (status, body) = send(server, "POST", "shell-cru/tasks/bserqfwvd/stop", "").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_parar_so_claude")), "{body}");
 }
+
+/// Pai `p` e filhas ligadas `a` (sem terminal, parada) e `b` (nenhuma sessão com esse nome), pelos arquivos de grupo.
+/// Volta também o diário do servidor, para esperar as gravações dele.
+async fn linked_family(registry: Arc<RuntimeRegistry>, dir: &Path) -> (Arc<Fake>, std::net::SocketAddr, hangar_server::diag::DiagClient) {
+    linked_family_of(registry, dir, "p", |_| {}).await
+}
+
+/// As filhas `a` e `b` ligadas a `parent`; `tweak` ajusta o estado antes de servir.
+async fn linked_family_of(registry: Arc<RuntimeRegistry>, dir: &Path, parent: &str, tweak: impl FnOnce(&mut AppState))
+    -> (Arc<Fake>, std::net::SocketAddr, hangar_server::diag::DiagClient) {
+    use hangar_server::groups::{orq::OrqVault, service::GroupService, store::PairDir};
+    let pair = dir.join("pair");
+    std::fs::create_dir_all(&pair).unwrap();
+    for child in ["a", "b"] {
+        let sidecar = json!({"peers": [parent], "task": "", "gid": "g1", "harness": {child: "claude", parent: "claude"}, "linked_by": parent});
+        std::fs::write(pair.join(format!("{child}.json")), sidecar.to_string()).unwrap();
+    }
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
+    tweak(&mut state);
+    state.write_gate_wait = Duration::from_secs(5);
+    state.diag = python.bind_diary(state.diag.clone());
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair, dir.join("arquivo")), Arc::new(OrqVault::from_state(&state)), "casa".into())));
+    assert!(state.state.runtime.set(registry).is_ok());
+    let diag = state.diag.clone();
+    let addr = spawn_state_for(&python, state).await;
+    (python, addr, diag)
+}
+
+fn cascade_failures(python: &Fake) -> Vec<Value> {
+    python.diag().into_iter().filter(|d| d["evento"] == "rust.link_cascade_failed").collect()
+}
+
+#[tokio::test]
+async fn interrupting_a_parent_interrupts_its_linked_children_and_reports_each() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "p").await;
+    let child = open_headless(&registry, dir.path(), "a").await;
+    let (python, server, diag) = linked_family(registry, dir.path()).await;
+    let (status, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
+    // O pai sem turno não é falha do Parar que alcançou as filhas: a tela não descarta o resultado delas.
+    assert_eq!((status, &body["ok"], &body["interrupted"]), (200, &json!(true), &json!(false)), "{body}");
+    assert_eq!(body["cascade"]["interrupted"], json!(["a"]), "filha parada sem turno conta como interrompida: {body}");
+    let failed = body["cascade"]["failed"].as_array().expect("lista das que falharam");
+    assert_eq!(failed.len(), 1, "{body}");
+    assert_eq!(failed[0]["name"], "b", "{body}");
+    let code = failed[0]["code"].as_str().filter(|c| !c.is_empty()).expect("a falha leva o código");
+    assert!(!child.lock().unwrap().iter().any(|e| e.to_string().contains("interrupt")), "sem turno nada vai ao cano da filha");
+    diag.flush().await;
+    let diary = cascade_failures(&python);
+    assert!(diary.iter().any(|d| d["sessao"] == "b" && d["codigo"] == code), "a falha vai ao diário com o código: {diary:?}");
+}
+
+/// Filha Claude sem terminal estacionada (só o arquivo dela, sem processo nem entrada aqui): sem turno, conta
+/// como parada, e o Parar do pai não sobe um processo novo só para mandar o Esc.
+#[tokio::test]
+async fn a_parked_child_counts_as_stopped_without_launching_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecars = dir.path().join(".hangar/claude-headless");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    let parked = json!({"name": "a", "key": "ab".repeat(16), "cwd": dir.path(), "session_id": "sid-a", "headless": true, "permission_mode": "manual"});
+    std::fs::write(sidecars.join("a.json"), parked.to_string()).unwrap();
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), dir.path().to_string_lossy().into_owned())].into());
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(env));
+    open_headless(&registry, dir.path(), "p").await;
+    let (_python, server, _diag) = linked_family(registry.clone(), dir.path()).await;
+    let (_, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
+    assert_eq!(body["cascade"]["interrupted"], json!(["a"]), "a estacionada não tinha turno: {body}");
+    assert!(registry.writable("a").await.is_none(), "a estacionada não subiu só para o Esc");
+}
+
+/// Pai Claude sem terminal estacionado (só o arquivo dele): a recusa sem turno vem antes da entrada, e o
+/// Parar com `cascade=1` ainda alcança as filhas, sem subir o pai só para o Esc.
+#[tokio::test]
+async fn a_parked_parent_still_stops_its_children() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecars = dir.path().join(".hangar/claude-headless");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    let parked = json!({"name": "p", "key": "cd".repeat(16), "cwd": dir.path(), "session_id": "sid-p", "headless": true, "permission_mode": "manual"});
+    std::fs::write(sidecars.join("p.json"), parked.to_string()).unwrap();
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), dir.path().to_string_lossy().into_owned())].into());
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(env));
+    open_headless(&registry, dir.path(), "a").await;
+    let (_python, server, _diag) = linked_family(registry.clone(), dir.path()).await;
+    let (status, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
+    assert_eq!((status, &body["interrupted"]), (200, &json!(false)), "{body}");
+    assert_eq!(body["cascade"]["interrupted"], json!(["a"]), "{body}");
+    assert_eq!(body["cascade"]["failed"][0]["name"], "b", "{body}");
+    assert!(registry.writable("p").await.is_none(), "o pai estacionado não subiu só para o Esc");
+    // Sem `cascade=1` a recusa sem turno é a de sempre.
+    let (status, body) = send(server, "POST", "p/interrupt", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
+    assert!(body.get("cascade").is_none(), "{body}");
+}
+
+#[tokio::test]
+async fn a_plain_interrupt_does_not_cascade() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "p").await;
+    open_headless(&registry, dir.path(), "a").await;
+    let (python, server, diag) = linked_family(registry, dir.path()).await;
+    // Cancelar o cartão de pergunta chama a mesma rota sem o parâmetro: só o pai.
+    let (status, body) = send(server, "POST", "p/interrupt", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
+    assert!(body.get("cascade").is_none(), "sem `cascade=1` a resposta é a de sempre: {body}");
+    diag.flush().await;
+    assert!(cascade_failures(&python).is_empty(), "a filha que não existe nem foi procurada");
+}
+
+/// O pai que o guarda recusa (`p-orq` com as execuções ilegíveis) não é "sem turno": o Parar com
+/// `cascade=1` responde a recusa dele e não alcança filha nenhuma.
+#[tokio::test]
+async fn a_guard_refused_parent_does_not_cascade() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    let child = open_headless(&registry, dir.path(), "a").await;
+    let home = dir.path().join("home");
+    let runs = hangar_server::orchestration::runs::root(&home);
+    std::fs::create_dir_all(runs.parent().unwrap()).unwrap();
+    std::fs::write(&runs, "não é pasta").unwrap();
+    let (home, base) = (home.to_string_lossy().into_owned(), dir.path().join("conta").to_string_lossy().into_owned());
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home), ("CLAUDE_CONFIG_DIR".to_owned(), base)].into());
+    let (python, server, diag) = linked_family_of(registry, dir.path(), "p-orq",
+        |state| state.accounts = hangar_server::accounts::AccountService::new(env)).await;
+    let (status, body) = send(server, "POST", "p-orq/interrupt?cascade=1", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("orq_runs_unavailable")), "{body}");
+    assert!(body.get("cascade").is_none(), "a recusa do guarda segura a árvore: {body}");
+    assert!(!child.lock().unwrap().iter().any(|e| e.to_string().contains("interrupt")), "nada foi à filha");
+    diag.flush().await;
+    assert!(cascade_failures(&python).is_empty(), "a filha que não existe nem foi procurada");
+}
+
+/// Arquivos de grupo ilegíveis: a resposta do pai fica como veio e leva `cascade.unavailable`, sem nomes, para a tela
+/// dizer que as filhas não foram conferidas; a falha vai também ao diário. Sem serviço de grupos não há filha ligada.
+#[tokio::test]
+async fn unreadable_groups_say_the_children_were_not_checked() {
+    use hangar_server::groups::{orq::OrqVault, service::GroupService, store::PairDir};
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "p").await;
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
+    state.write_gate_wait = Duration::from_secs(5);
+    state.diag = python.bind_diary(state.diag.clone());
+    // A pasta dos grupos é um arquivo: a leitura falha.
+    let pair = dir.path().join("pair");
+    std::fs::write(&pair, "não é pasta").unwrap();
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair, dir.path().join("arquivo")), Arc::new(OrqVault::from_state(&state)), "casa".into())));
+    assert!(state.state.runtime.set(registry.clone()).is_ok());
+    let diag = state.diag.clone();
+    let server = spawn_state_for(&python, state).await;
+    let (status, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
+    assert_eq!(body["cascade"], json!({"interrupted": [], "failed": [], "unavailable": "groups_unavailable"}), "{body}");
+    diag.flush().await;
+    assert!(cascade_failures(&python).iter().any(|d| d["sessao"] == "p" && d["codigo"] == "groups_unavailable"), "{:?}", python.diag());
+
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
+    state.write_gate_wait = Duration::from_secs(5);
+    state.groups = None;
+    assert!(state.state.runtime.set(registry).is_ok());
+    let server = spawn_state_for(&python, state).await;
+    let (_, body) = send(server, "POST", "p/interrupt?cascade=1", "").await;
+    assert!(body.get("cascade").is_none(), "sem grupos não há filha a conferir: {body}");
+}
+
+/// `clear` torto com o pai sem turno é recusado como no caminho admitido, e nenhuma filha para.
+#[tokio::test]
+async fn a_bad_clear_with_a_parent_without_turn_stops_nothing() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "p").await;
+    let child = open_headless(&registry, dir.path(), "a").await;
+    let (python, server, diag) = linked_family(registry, dir.path()).await;
+    let (status, body) = send(server, "POST", "p/interrupt?cascade=1&clear=talvez", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}");
+    assert!(!child.lock().unwrap().iter().any(|e| e.to_string().contains("interrupt")), "nada foi à filha");
+    diag.flush().await;
+    assert!(cascade_failures(&python).is_empty(), "a árvore nem foi lida");
+}

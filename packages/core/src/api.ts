@@ -2187,6 +2187,14 @@ export async function deleteSession(name: string): Promise<{ ok: boolean; warnin
   });
 }
 
+// Fechar em sequência (o pai com as filhas) não pode seguir o servidor ativo: ele pode mudar no meio, e o
+// DELETE seguinte iria a outra máquina. O teto cobre o fechamento que espera o processo morrer.
+export function deleteSessionForServer(s: Server, name: string): Promise<{ ok: boolean; warning: unknown | null }> {
+  return apiFetchForServer<{ ok: boolean; warning: unknown | null }>(s, `/api/sessions/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  }, 60_000);
+}
+
 // Renomeia a sessao do tmux. Devolve o nome final (sanitizado pelo backend).
 export async function renameSession(name: string, newName: string, server?: Server | null): Promise<{ ok: boolean; name: string }> {
   return sessionFetch<{ ok: boolean; name: string }>(server, `/api/sessions/${encodeURIComponent(name)}/rename`, {
@@ -3827,16 +3835,42 @@ export async function skipQuestion(name: string, requestId: string, interactionI
   return res.json() as Promise<{ ok: boolean }>;
 }
 
+/** `cascade` só vem com `cascade=1` e descendente ligada conhecida, ou com `unavailable` quando o servidor não
+ *  conseguiu ler quais são as filhas. `interrupted: false` = o pai não tinha turno e só as descendentes foram
+ *  paradas (com `cascade=1`, sem turno não é erro). */
+export interface InterruptResult {
+  ok: boolean;
+  interrupted?: boolean;
+  cascade?: { interrupted: string[]; failed: { name: string; code: string }[]; unavailable?: string };
+}
+
 // clear=true tambem limpa o input do terminal (2o Esc no backend). So passar quando havia msg pendente.
-export async function interrupt(name: string, clear = false, server?: Server): Promise<void> {
-  const q = clear ? '?clear=true' : '';
+// `cascade` só no botão Parar: cancelar o cartão de pergunta usa a mesma rota e não pode parar as filhas.
+export async function interrupt(name: string, clear = false, server?: Server, opts?: { cascade?: boolean }): Promise<InterruptResult> {
+  const params = new URLSearchParams();
+  if (clear) params.set('clear', 'true');
+  if (opts?.cascade) params.set('cascade', '1');
+  const qs = params.toString();
+  const q = qs ? `?${qs}` : '';
   const path = `/api/sessions/${encodeURIComponent(name)}/interrupt${q}`;
   const init = {
     method: 'POST',
     body: JSON.stringify({}),
   };
-  await (server ? apiFetchForServer<{ ok: boolean }>(server, path, init)
-                : apiFetch<{ ok: boolean }>(path, init));
+  return server ? apiFetchForServer<InterruptResult>(server, path, init)
+                : apiFetch<InterruptResult>(path, init);
+}
+
+/** As filhas ligadas não foram conferidas: podem seguir trabalhando, e a tela avisa. */
+export function interruptCascadeUnchecked(result: InterruptResult | null | undefined): boolean {
+  const unavailable = result?.cascade?.unavailable;
+  return typeof unavailable === 'string' && unavailable.length > 0;
+}
+
+/** As descendentes que não pararam junto; resposta sem `cascade` (servidor antigo, sem filhas) é lista vazia. */
+export function interruptCascadeFailed(result: InterruptResult | null | undefined): string[] {
+  const failed = result?.cascade?.failed;
+  return Array.isArray(failed) ? failed.map((f) => f?.name).filter((n): n is string => typeof n === 'string' && n.length > 0) : [];
 }
 
 /** Clique num botão que um mod desenhou na faixa ou num painel. `copied` e `opened` são o que o mod
