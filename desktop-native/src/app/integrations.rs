@@ -1261,7 +1261,8 @@ impl IntegrationsPage {
         let glow = self.fresh.as_ref().filter(|(fresh, _)| *fresh == id).map(|(_, at)| {
             let t = (at.elapsed().as_secs_f32() / FRESH_GLOW.as_secs_f32()).min(1.);
             if t < 1. { motion::request_frame(window, cx); }
-            if cx.reduce_motion() { if t < 1. { 1. } else { 0. } } else { 1. - motion::ease_out(t) }
+            // Aceso por inteiro no primeiro terço, para a pessoa achar o card; depois apaga.
+            if t >= 1. { 0. } else if cx.reduce_motion() || t < 0.45 { 1. } else { let x = (t - 0.45) / 0.55; 1. - x * x }
         });
         let scroll = self.hangar.upgrade().map(|hangar| hangar.read(cx).settings_ui.scroll.clone());
         let reveal = (self.fresh.as_ref().is_some_and(|(fresh, _)| *fresh == id)).then(|| self.reveal.clone()).zip(scroll);
@@ -1280,7 +1281,7 @@ impl IntegrationsPage {
             .items_start()
             .gap(px(14.))
             .when_some(glow.filter(|g| *g > 0.), |el, g| {
-                el.bg(theme::accent().opacity(0.18 * g))
+                el.bg(theme::accent().opacity(0.24 * g))
                     .child(div().absolute().inset_0().border_2().border_color(theme::accent().opacity(g)))
             })
             .when_some(reveal, |el, (reveal, scroll)| el.child(super::settings::reveal_here(scroll, reveal)))
