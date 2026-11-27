@@ -40,9 +40,10 @@ impl Reservations {
     }
 }
 
-/// O contexto da abertura em `cwd` (cru do pedido; `None` = pasta pessoal). `branch` pedida vence a da
-/// pasta. `Err` com código quando a lista ou o git não respondem: sem saber, quem chama não balanceia.
-pub async fn build(st: &AppState, reservations: &Reservations, cwd: Option<&str>, branch: Option<&str>, agent: bool)
+/// O contexto da abertura em `cwd` (cru do pedido; `None` = pasta pessoal). `branch` é a da pasta: a pedida vai
+/// no próprio pedido, e a da pasta é a base da branch nova lá. `Err` com código quando a lista ou o git não
+/// respondem: sem saber, quem chama não balanceia.
+pub async fn build(st: &AppState, reservations: &Reservations, cwd: Option<&str>, agent: bool)
     -> Result<OpenContext, &'static str> {
     let rows = st.list.discover(None).await.map_err(|_| "placement_sessions_unavailable")?;
     let env = &st.accounts.env;
@@ -54,7 +55,7 @@ pub async fn build(st: &AppState, reservations: &Reservations, cwd: Option<&str>
         .map(PathBuf::from).collect();
     let scan = tokio::task::spawn_blocking(move || scan(&cwd, &home, &dirs, folder_state::read)).await
         .map_err(|_| "placement_folder_unreadable")??;
-    Ok(context(scan, &st.current_server_id(), reservations, branch, agent))
+    Ok(context(scan, &st.current_server_id(), reservations, agent))
 }
 
 /// O que a pasta do pedido é nesta máquina.
@@ -82,15 +83,18 @@ fn scan(cwd: &Path, home: &Path, rows: &[PathBuf], read: impl Fn(&Path) -> hanga
     Ok(Scan { folder: Some(folder), plain_not_home: false, local_match })
 }
 
-fn context(scan: Scan, local_id: &str, reservations: &Reservations, branch: Option<&str>, agent: bool) -> OpenContext {
+fn context(scan: Scan, local_id: &str, reservations: &Reservations, agent: bool) -> OpenContext {
     let Scan { folder, plain_not_home, local_match } = scan;
     let cwd_root = folder.as_ref().map(|f| f.root.to_string_lossy().into_owned());
     let same_folder_server = if local_match { Some(local_id.to_owned()) } else { cwd_root.as_deref().and_then(|r| reservations.lookup(r)) };
+    // Só pelo `origin`: projeto `dir:` juntaria pastas de nome igual em máquinas diferentes.
+    let cwd_project = folder.as_ref().and_then(|f| f.origin.as_deref()).and_then(ProjectId::from_origin);
     OpenContext {
         local_id: local_id.to_owned(),
-        // Só pelo `origin`: projeto `dir:` juntaria pastas de nome igual em máquinas diferentes.
-        cwd_project: folder.as_ref().and_then(|f| f.origin.as_deref()).and_then(ProjectId::from_origin),
-        branch: branch.map(str::to_owned).or_else(|| folder.as_ref().and_then(|f| f.branch.clone())),
+        // Repositório sem projeto só existe aqui, como a pasta sem git.
+        plain_dir_not_home: plain_not_home || (folder.is_some() && cwd_project.is_none()),
+        cwd_project,
+        branch: folder.as_ref().and_then(|f| f.branch.clone()),
         unpublished: folder.as_ref().and_then(|f| f.pending).map(|p| match p {
             Pending::Dirty => Unpublished::Dirty,
             Pending::Ahead => Unpublished::Ahead,
@@ -98,7 +102,6 @@ fn context(scan: Scan, local_id: &str, reservations: &Reservations, branch: Opti
         }),
         cwd_root,
         same_folder_server,
-        plain_dir_not_home: plain_not_home,
         agent,
     }
 }
@@ -139,7 +142,7 @@ mod tests {
         assert!(s.local_match);
         let s = scan(&d.repo, &d.home, &[d.repo.join("src")], clean).unwrap();
         assert!(s.local_match);
-        let ctx = context(s, "pc", &Reservations::default(), None, false);
+        let ctx = context(s, "pc", &Reservations::default(), false);
         assert_eq!(ctx.same_folder_server.as_deref(), Some("pc"));
         assert_eq!(ctx.cwd_project, ProjectId::from_origin("https://github.com/jeffer1312/hangar"));
         assert_eq!(ctx.branch.as_deref(), Some("main"));
@@ -164,7 +167,7 @@ mod tests {
         std::fs::create_dir_all(d.home.join(".git")).unwrap();
         let s = scan(&d.home.join("plain"), &d.home, &[d.home.clone()], clean).unwrap();
         assert_eq!(s, Scan { folder: None, plain_not_home: true, local_match: false });
-        let ctx = context(s, "pc", &Reservations::default(), None, false);
+        let ctx = context(s, "pc", &Reservations::default(), false);
         assert!(ctx.plain_dir_not_home && ctx.cwd_root.is_none() && ctx.same_folder_server.is_none());
     }
 
@@ -172,23 +175,21 @@ mod tests {
     fn unpublished_work_and_a_git_failure_come_through() {
         let d = dirs();
         let s = scan(&d.repo, &d.home, &[], |r| Ok(folder(r, Some(Pending::Ahead)))).unwrap();
-        assert_eq!(context(s, "pc", &Reservations::default(), None, true).unpublished, Some(Unpublished::Ahead));
+        assert_eq!(context(s, "pc", &Reservations::default(), true).unpublished, Some(Unpublished::Ahead));
         let failed = scan(&d.repo, &d.home, &[], |_| Err(hangar_workspace::unavailable("git")));
         assert_eq!(failed, Err("placement_folder_unreadable"));
     }
 
     #[test]
-    fn a_folder_without_origin_has_no_project() {
+    fn a_repo_without_origin_has_no_project_and_stays_here() {
         let d = dirs();
         let s = scan(&d.repo, &d.home, &[], |r| Ok(GitFolder { origin: None, ..folder(r, None) })).unwrap();
-        assert_eq!(context(s, "pc", &Reservations::default(), Some("feat"), false).cwd_project, None);
-    }
-
-    #[test]
-    fn the_requested_branch_wins_over_the_folder_one() {
-        let d = dirs();
-        let s = scan(&d.repo, &d.home, &[], clean).unwrap();
-        assert_eq!(context(s, "pc", &Reservations::default(), Some("feat"), false).branch.as_deref(), Some("feat"));
+        let ctx = context(s, "pc", &Reservations::default(), false);
+        assert_eq!(ctx.cwd_project, None);
+        assert!(ctx.plain_dir_not_home && ctx.cwd_root.is_some(), "{ctx:?}");
+        // Origin que não é de projeto (pasta local) também não sai daqui.
+        let s = scan(&d.repo, &d.home, &[], |r| Ok(GitFolder { origin: Some("/srv/remote.git".into()), ..folder(r, None) })).unwrap();
+        assert!(context(s, "pc", &Reservations::default(), false).plain_dir_not_home);
     }
 
     #[test]
@@ -196,10 +197,10 @@ mod tests {
         let d = dirs();
         let r = Reservations::default();
         r.reserve(&d.repo.to_string_lossy(), "nb");
-        let ctx = context(scan(&d.repo, &d.home, &[], clean).unwrap(), "pc", &r, None, false);
+        let ctx = context(scan(&d.repo, &d.home, &[], clean).unwrap(), "pc", &r, false);
         assert_eq!(ctx.same_folder_server.as_deref(), Some("nb"));
         // Sessão daqui na mesma raiz vence a reserva.
-        let ctx = context(scan(&d.repo, &d.home, &[d.repo.clone()], clean).unwrap(), "pc", &r, None, false);
+        let ctx = context(scan(&d.repo, &d.home, &[d.repo.clone()], clean).unwrap(), "pc", &r, false);
         assert_eq!(ctx.same_folder_server.as_deref(), Some("pc"));
     }
 

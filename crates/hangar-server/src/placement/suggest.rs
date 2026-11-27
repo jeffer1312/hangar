@@ -14,7 +14,7 @@ use hangar_placement::{AgentMode, Exclusion, KnownRepo, MachineFacts, OpenContex
 use super::{clone, context, facts, forward};
 use crate::groups::peers::PeerError;
 use crate::routes::{AppState, owner_gate};
-use crate::session_open::{AgentProvider, OpenCaller, OpenError, SessionOpenRequest, Surface};
+use crate::session_open::{AgentProvider, OpenCaller, OpenError, SessionOpenRequest, SessionSpec, Surface};
 use crate::session_write::{detail_body, json_response};
 
 /// O valor de `machine` que pede a escolha.
@@ -41,6 +41,11 @@ pub async fn step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &Ope
     if !auto && machine == local { return Step::Here(None) }
     let kept = local_only(st, request, caller).await;
     let here = |why: &str| Step::Here(Some(wire(&not_balanced(&local, why))));
+    // O nome fora do `peers.json` não chega a ser consultado: sem ele não há como saber se a máquina existe.
+    if !auto && kept.is_none() && !st.peers.addressable().await.contains(machine) {
+        return Step::Refused(OpenError::new(400, "placement_machine_unknown",
+            format!("a máquina '{machine}' não está no peers.json (ou sem base_url/token)")).with_params(json!({"server": machine})));
+    }
     match (auto, kept) {
         (true, Some(why)) => return here(why),
         (false, Some(why)) => return Step::Refused(OpenError::new(400, "placement_not_here",
@@ -54,31 +59,40 @@ pub async fn step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &Ope
             Err(code) => { skipped(st, code); return here(code) }
         }
     } else { PlacementConfig::default() };
-    let ctx = match context::build(st, &st.placement_reservations, Some(&request.cwd), request.branch.as_deref(), true).await {
+    let ctx = match context::build(st, &st.placement_reservations, Some(&request.cwd), true).await {
         Ok(ctx) => ctx,
         Err(code) if auto => { skipped(st, code); return here(code) }
         Err(code) => return Step::Refused(OpenError::new(503, "placement_context_unavailable",
             "não consegui ler a pasta pedida nesta máquina para abri-la na outra").with_params(json!({"detalhe": code}))),
     };
+    // Repositório sem `origin` de projeto só existe nesta pasta: lá não há o que abrir nem clonar. No `auto` ele
+    // já ficou aqui.
+    if !auto && ctx.cwd_root.is_some() && ctx.cwd_project.is_none() {
+        return Step::Refused(OpenError::new(409, "placement_repo_unpublished", format!("a pasta é um repositório sem `origin` \
+            publicado: ele só existe nesta máquina e não abre em {machine}")).with_params(json!({"server": machine})));
+    }
     let (placement, dest) = if auto {
         let (placement, facts) = place(st, &ctx, &config).await;
         if matches!(placement.reason, ReasonCode::NotBalanced { .. }) { return Step::Here(Some(wire(&placement))) }
-        if config.agent_mode == AgentMode::Ask { return Step::Refused(ask(&placement)) }
+        // Também no Ask: a pessoa costuma confirmar a sugestão, e a segunda abertura na pasta não se separa dela.
         if let Some(root) = &ctx.cwd_root { st.placement_reservations.reserve(root, &placement.server); }
+        if config.agent_mode == AgentMode::Ask { return Step::Refused(ask(&placement)) }
         if placement.server == ctx.local_id { return Step::Here(Some(wire(&placement))) }
-        let dest = facts.into_iter().find(|f| f.server_id == placement.server);
+        let dest = facts.into_iter().find(|(_, f)| f.server_id == placement.server);
         (Some(placement), dest)
     } else {
         (None, peer_facts(st, machine.to_owned(), &facts_path(ctx.cwd_project.as_ref())).await)
     };
-    let server = placement.as_ref().map_or(machine, |p| p.server.as_str()).to_owned();
-    let mut dest = match dest {
-        Some(dest) if dest.capable => dest,
-        Some(_) => return Step::Refused(OpenError::new(409, "placement_peer_old",
+    // `server` é a chave do `peers.json`, que alcança a máquina; `dest.server_id`, o id que ela informou.
+    let fallback = placement.as_ref().map_or(machine, |p| p.server.as_str()).to_owned();
+    let (server, mut dest) = match dest {
+        Some((key, dest)) if dest.capable => (key, dest),
+        Some((server, _)) => return Step::Refused(OpenError::new(409, "placement_peer_old",
             format!("{server} está numa versão sem a escolha de máquina: abra com `{server}::<nome>`")).with_params(json!({"server": server}))),
         None => return Step::Refused(OpenError::new(503, "placement_peer_unavailable",
-            format!("{server} não respondeu aos fatos do balanceamento; confira se ela está ligada")).with_params(json!({"server": server}))),
+            format!("{fallback} não respondeu aos fatos do balanceamento; confira se ela está ligada")).with_params(json!({"server": fallback}))),
     };
+    if placement.is_none() && let Some(root) = &ctx.cwd_root { st.placement_reservations.reserve(root, &dest.server_id); }
     let inherited = match inherited(st, request).await {
         Ok(inherited) => inherited,
         Err(error) => return Step::Refused(error),
@@ -86,7 +100,7 @@ pub async fn step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &Ope
     let mut warnings = Vec::new();
     let missing = ctx.cwd_project.as_ref().filter(|p| !dest.repos.iter().any(|r| &r.project == *p));
     if let Some(project) = missing {
-        let root = match clone_there(st, &ctx, &dest, placement.as_ref()).await {
+        let root = match clone_there(st, &server, &ctx, &dest, placement.as_ref()).await {
             Ok(root) => root,
             Err(error) => return Step::Refused(error),
         };
@@ -107,11 +121,11 @@ pub async fn step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &Ope
 
 /// Clona em `dest` o repositório da pasta do pedido e devolve a raiz lá. A pasta é a da escolha; com a
 /// máquina pedida, a da tela para ela, senão a que ela calcula.
-async fn clone_there(st: &AppState, ctx: &OpenContext, dest: &MachineFacts, placement: Option<&Placement>) -> Result<String, OpenError> {
-    let server = &dest.server_id;
+async fn clone_there(st: &AppState, server: &str, ctx: &OpenContext, dest: &MachineFacts, placement: Option<&Placement>)
+    -> Result<String, OpenError> {
     let dir = match placement.and_then(|p| p.clone.as_ref()) {
         Some(target) => Some(target.dir.clone()),
-        None => load_config(st).await.ok().and_then(|c| c.clone_dirs.get(server).cloned()).or_else(|| dest.clone_dir.clone()),
+        None => load_config(st).await.ok().and_then(|c| c.clone_dirs.get(&dest.server_id).cloned()).or_else(|| dest.clone_dir.clone()),
     };
     let root_here = ctx.cwd_root.clone();
     let origin = tokio::task::spawn_blocking(move || root_here.and_then(|r| hangar_workspace::worktrees::origin_url(&r))).await.ok().flatten();
@@ -138,56 +152,63 @@ async fn suggestion(st: &Arc<AppState>, request: &SessionOpenRequest) -> Placeme
         Ok(config) => config,
         Err(code) => { skipped(st, code); return not_balanced(&local, code) }
     };
-    match context::build(st, &st.placement_reservations, Some(&request.cwd), request.branch.as_deref(), false).await {
+    match context::build(st, &st.placement_reservations, Some(&request.cwd), false).await {
         Ok(ctx) => place(st, &ctx, &config).await.0,
         Err(code) => { skipped(st, code); not_balanced(&local, code) }
     }
 }
 
 /// A escolha com os fatos desta máquina e, só se ela passou do limite ou uma regra aponta outra, os das
-/// outras, em paralelo. Sem os fatos daqui não balanceia.
-async fn place(st: &Arc<AppState>, ctx: &OpenContext, config: &PlacementConfig) -> (Placement, Vec<MachineFacts>) {
+/// outras, em paralelo. Sem os fatos daqui não balanceia. Cada fato vai com a chave do `peers.json` que alcança
+/// a máquina (a daqui, com o id daqui).
+async fn place(st: &Arc<AppState>, ctx: &OpenContext, config: &PlacementConfig) -> (Placement, Vec<(String, MachineFacts)>) {
     let now = Utc::now();
     // Mesma pasta, trabalho não publicado e pasta sem git decidem sem fato nenhum.
     let pinned = choose(ctx, &[], config, now);
     let is_pinned = matches!(pinned.reason, ReasonCode::SameFolder | ReasonCode::Unpublished { .. } | ReasonCode::PlainDir);
     if is_pinned && pinned.server == ctx.local_id { return (pinned, Vec::new()) }
-    let mut facts = match facts::local(st, ctx.cwd_project.as_ref()).await {
-        Ok(local) => vec![local],
+    // A escolha não olha os repositórios daqui: a pasta do pedido é desta máquina.
+    let mut seen = match facts::local(st, None, false).await {
+        Ok(local) => vec![(ctx.local_id.clone(), local)],
         Err(code) => { skipped(st, code); return (not_balanced(&ctx.local_id, code), Vec::new()) }
     };
+    let only = |seen: &[(String, MachineFacts)]| seen.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>();
     if !is_pinned {
-        let first = choose(ctx, &facts, config, now);
-        if first.server == ctx.local_id && first.warnings.is_empty() { return (first, facts) }
+        let first = choose(ctx, &only(&seen), config, now);
+        if first.server == ctx.local_id && first.warnings.is_empty() { return (first, seen) }
     }
-    facts.extend(gather(st, ctx.cwd_project.as_ref(), &ctx.local_id).await);
-    (choose(ctx, &facts, config, now), facts)
+    seen.extend(gather(st, ctx.cwd_project.as_ref(), &ctx.local_id).await);
+    (choose(ctx, &only(&seen), config, now), seen)
 }
 
-/// Os fatos das máquinas ligadas do `peers.json`; a que não responde em 2 s fica fora.
-async fn gather(st: &Arc<AppState>, project: Option<&ProjectId>, local: &str) -> Vec<MachineFacts> {
+/// Os fatos das máquinas ligadas do `peers.json`; a que não responde em 2 s fica fora, e a que se diz esta também.
+async fn gather(st: &Arc<AppState>, project: Option<&ProjectId>, local: &str) -> Vec<(String, MachineFacts)> {
     let peers = st.peers.clone();
-    let ids = tokio::task::spawn_blocking(move || peers.enabled_ids()).await.unwrap_or_default();
+    let keys = tokio::task::spawn_blocking(move || peers.enabled_ids()).await.unwrap_or_default();
     let path = facts_path(project);
-    join_all(ids.into_iter().filter(|id| id != local).map(|id| peer_facts(st, id, &path))).await.into_iter().flatten().collect()
+    join_all(keys.into_iter().filter(|key| key != local).map(|key| peer_facts(st, key, &path))).await.into_iter().flatten()
+        .filter(|(_, f)| f.server_id != local).collect()
 }
 
-async fn peer_facts(st: &AppState, id: String, path: &str) -> Option<MachineFacts> {
-    let answer = tokio::time::timeout(FACTS_WAIT, st.peers.call(&id, Method::GET, path, None)).await.ok()?;
-    read_facts(id, answer)
+async fn peer_facts(st: &AppState, key: String, path: &str) -> Option<(String, MachineFacts)> {
+    let answer = tokio::time::timeout(FACTS_WAIT, st.peers.call(&key, Method::GET, path, None)).await.ok()?;
+    read_facts(key, answer)
 }
 
-/// A resposta de uma máquina à rota de fatos, pelo id do `peers.json` (o endereço que alcança ela). A rota
-/// inexistente lá (404 sem código) é versão sem a escolha: entra como incapaz, para o aviso dizer isso.
-fn read_facts(id: String, answer: Result<Option<Value>, PeerError>) -> Option<MachineFacts> {
-    match answer {
-        Ok(Some(value)) => serde_json::from_value::<MachineFacts>(value).ok().map(|f| MachineFacts { server_id: id, ..f }),
-        Err(PeerError::Refused { status: 404, detail }) if detail.get("code").is_none() => Some(MachineFacts {
-            server_id: id, version: String::new(), capable: false, mem_total: 0, mem_available: 0, working: 0, cpu_pct: None,
+/// A resposta de uma máquina à rota de fatos, com a chave do `peers.json` que a alcança. O id que vale nas
+/// regras, nas reservas e no `machine` encaminhado é o que ela informa (o `CP_SERVER_ID` de lá); sem ele, a
+/// chave. A rota inexistente lá (404 sem código) é versão sem a escolha: entra como incapaz, para o aviso dizer isso.
+fn read_facts(key: String, answer: Result<Option<Value>, PeerError>) -> Option<(String, MachineFacts)> {
+    let facts = match answer {
+        Ok(Some(value)) => serde_json::from_value::<MachineFacts>(value).ok()
+            .map(|f| if f.server_id.is_empty() { MachineFacts { server_id: key.clone(), ..f } } else { f })?,
+        Err(PeerError::Refused { status: 404, detail }) if detail.get("code").is_none() => MachineFacts {
+            server_id: key.clone(), version: String::new(), capable: false, mem_total: 0, mem_available: 0, working: 0, cpu_pct: None,
             repos: Vec::new(), clone_dir: None,
-        }),
-        _ => None,
-    }
+        },
+        _ => return None,
+    };
+    Some((key, facts))
 }
 
 fn facts_path(project: Option<&ProjectId>) -> String {
@@ -207,12 +228,31 @@ async fn local_only(st: &AppState, request: &SessionOpenRequest, caller: &OpenCa
         Ok(_) => {}
         Err(_) => return Some("guests_unreadable"),
     }
+    // O árbitro abre executor e revisor antes de juntá-los ao grupo `orq`: quem conduz uma execução viva fica aqui.
+    match orchestrates(st, creator).await {
+        Ok(true) => return Some("orq"),
+        Ok(false) => {}
+        Err(()) => return Some("orq_unreadable"),
+    }
     // O grupo `orq` recusa membro de fora: a orquestração abre sempre aqui.
     match st.groups.as_ref()?.link(creator).await {
         Ok(Some(sidecar)) if sidecar.orq => Some("orq"),
         Ok(_) => None,
         Err(_) => Some("groups_unreadable"),
     }
+}
+
+/// `creator` é o condutor (`<gid>-orq`) ou o árbitro de uma orquestração viva, pela mesma leitura de
+/// `groups::orq::is_orchestrator`.
+async fn orchestrates(st: &AppState, creator: &str) -> Result<bool, ()> {
+    use crate::orchestration::runs;
+    let (home, creator) = (st.accounts.env.home.clone(), creator.to_owned());
+    tokio::task::spawn_blocking(move || runs::active(&home, runs::now()).map(|rows| leads(&rows, &creator)))
+        .await.map_err(|_| ())?.map_err(|_| ())
+}
+
+fn leads(rows: &[Value], name: &str) -> bool {
+    rows.iter().any(|row| row["name"] == name || row["arbiter"] == name)
 }
 
 fn kept_by_request(request: &SessionOpenRequest, caller: &OpenCaller) -> Option<&'static str> {
@@ -237,20 +277,29 @@ async fn load_config(st: &AppState) -> Result<PlacementConfig, &'static str> {
     }
 }
 
-/// O que viria da criadora, resolvido aqui pela mesma resolução da abertura: lá ela não existe.
+/// O que viria da criadora, resolvido aqui pela mesma resolução da abertura: lá ela não existe. Vai só o que
+/// veio dela; o que veio do padrão salvo daqui fica de fora, e lá vale o padrão salvo de lá.
 async fn inherited(st: &Arc<AppState>, request: &SessionOpenRequest) -> Result<forward::Inherited, OpenError> {
     if request.creator.is_none() || request.inherit == Some(false) { return Ok(forward::Inherited::default()) }
-    let spec = crate::session_open::server::resolve_here(st, request).await?.spec;
+    let (resolved, creator) = crate::session_open::server::resolve_here(st, request).await?;
+    Ok(from_creator(request, &resolved.spec, resolved.provider_source, creator.map(|c| c.headless)))
+}
+
+/// `creator_headless`: a superfície da criadora encontrada aqui.
+fn from_creator(request: &SessionOpenRequest, spec: &SessionSpec, provider_source: Option<&str>, creator_headless: Option<bool>)
+    -> forward::Inherited {
+    // Com `inherit: true` a criadora vem antes do padrão salvo; sem ele, modelo, esforço e modo são do padrão.
+    let asked = request.inherit == Some(true);
     // O Codex com terminal recusa modo pedido: lá ele fica com o padrão de lá.
     let terminal_codex = spec.provider == AgentProvider::Codex && spec.surface == Surface::Terminal;
     let surfaces = matches!(spec.provider, AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity);
-    Ok(forward::Inherited {
-        provider: Some(spec.provider.name().to_owned()),
-        model: spec.model,
-        effort: spec.effort,
-        permission_mode: spec.permission_mode.filter(|_| !terminal_codex).map(|mode| mode.name().to_owned()),
-        headless: surfaces.then_some(spec.surface == Surface::Headless),
-    })
+    forward::Inherited {
+        provider: (provider_source == Some("inherited")).then(|| spec.provider.name().to_owned()),
+        model: spec.model.clone().filter(|_| asked),
+        effort: spec.effort.clone().filter(|_| asked),
+        permission_mode: spec.permission_mode.filter(|_| asked && !terminal_codex).map(|mode| mode.name().to_owned()),
+        headless: creator_headless.filter(|_| request.headless.is_none() && surfaces && !request.read_only),
+    }
 }
 
 /// Leitura que falhou tira o pedido do balanceamento: vai ao diário, a sessão abre aqui.
@@ -289,7 +338,7 @@ pub fn text(p: &Placement) -> String {
             Unpublished::Dirty => "mudança não commitada",
             Unpublished::NoUpstream => "branch sem upstream",
         }),
-        ReasonCode::PlainDir => "pasta sem git que só existe nesta máquina".to_owned(),
+        ReasonCode::PlainDir => "pasta sem git (ou sem origin) que só existe nesta máquina".to_owned(),
         ReasonCode::ProjectRule { project } => format!("a regra do projeto {} manda para {}", project.0, p.server),
         ReasonCode::LocalWithinLimits => "esta máquina está dentro dos limites".to_owned(),
         ReasonCode::LeastLoaded { local_out } => format!("esta máquina saiu da escolha ({}); {} tem menos sessões trabalhando",
@@ -364,14 +413,64 @@ mod tests {
 
     #[test]
     fn an_old_machine_is_incapable_and_a_silent_one_is_out() {
-        let old = read_facts("vm".into(), Err(PeerError::Refused { status: 404, detail: json!("Not Found") })).unwrap();
-        assert!(!old.capable && old.server_id == "vm");
+        let (key, old) = read_facts("vm".into(), Err(PeerError::Refused { status: 404, detail: json!("Not Found") })).unwrap();
+        assert!(!old.capable && old.server_id == "vm" && key == "vm");
         // 404 com código é recusa da rota de lá, não versão antiga.
         assert_eq!(read_facts("vm".into(), Err(PeerError::Refused { status: 404, detail: json!({"code": "x"}) })), None);
         assert_eq!(read_facts("vm".into(), Err(PeerError::Transport("prazo".into()))), None);
-        let facts = json!({"server_id": "outro-nome", "version": "1", "capable": true, "mem_total": 1, "mem_available": 1,
+    }
+
+    #[test]
+    fn the_id_is_the_one_the_machine_reports_and_the_key_still_reaches_it() {
+        let facts = |id: &str| json!({"server_id": id, "version": "1", "capable": true, "mem_total": 1, "mem_available": 1,
             "working": 0, "cpu_pct": null, "repos": [], "clone_dir": null});
-        assert_eq!(read_facts("nb".into(), Ok(Some(facts))).unwrap().server_id, "nb", "vale o id que alcança a máquina");
+        let (key, nb) = read_facts("notebook".into(), Ok(Some(facts("nb")))).unwrap();
+        assert_eq!((key.as_str(), nb.server_id.as_str()), ("notebook", "nb"));
+        // Sem `CP_SERVER_ID` lá, a chave.
+        assert_eq!(read_facts("notebook".into(), Ok(Some(facts("")))).unwrap().1.server_id, "notebook");
+    }
+
+    #[test]
+    fn the_conductor_and_the_arbiter_of_a_live_run_stay_here() {
+        let rows = [json!({"name": "g1-orq", "gid": "g1", "arbiter": "arb"})];
+        assert!(leads(&rows, "g1-orq") && leads(&rows, "arb"));
+        assert!(!leads(&rows, "executor") && !leads(&[], "arb"));
+    }
+
+    fn spec(provider: AgentProvider, surface: Surface) -> SessionSpec {
+        use crate::session_open::{Account, AccountSource, PermissionMode, SPEC_VERSION};
+        SessionSpec { version: SPEC_VERSION, key: "k".into(), name: "s".into(), cwd: "/w".into(), provider, surface,
+            account: Account::Default, account_source: AccountSource::Default, model: Some("opus".into()), effort: Some("high".into()),
+            service_tier: None, permission_mode: Some(PermissionMode::BypassPermissions), subagent_model: None, customizations: None,
+            jev: false, code_mode: false, read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
+            name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false }
+    }
+
+    #[test]
+    fn only_what_came_from_the_creator_goes_explicit() {
+        let asked = SessionOpenRequest { creator: Some("pai".into()), ..Default::default() };
+        let claude = spec(AgentProvider::Claude, Surface::Headless);
+        // Sem `inherit: true`, modelo, esforço e modo vieram do padrão salvo daqui: lá vale o de lá.
+        let plain = from_creator(&asked, &claude, Some("inherited"), Some(true));
+        assert_eq!(plain, forward::Inherited { provider: Some("claude".into()), headless: Some(true), ..Default::default() });
+        let with = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked.clone() }, &claude, Some("inherited"), Some(true));
+        assert_eq!((with.model.as_deref(), with.effort.as_deref(), with.permission_mode.as_deref()),
+            (Some("opus"), Some("high"), Some("bypassPermissions")));
+        // Provedor do padrão daqui, criadora não achada ou superfície pedida: nada disso vai.
+        let none = from_creator(&SessionOpenRequest { headless: Some(false), ..asked.clone() }, &claude, Some("default"), Some(true));
+        assert_eq!(none, forward::Inherited::default());
+        assert_eq!(from_creator(&asked, &claude, Some("remembered"), None), forward::Inherited::default());
+        // Codex com terminal: lá fica com o modo de lá.
+        let codex = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked }, &spec(AgentProvider::Codex, Surface::Terminal),
+            Some("inherited"), Some(false));
+        assert_eq!((codex.permission_mode, codex.headless), (None, Some(false)));
+    }
+
+    #[test]
+    fn the_mcp_and_cli_wait_longer_than_the_worst_open_elsewhere() {
+        use crate::groups::peers::{CLONE_TIMEOUT, OPEN_TIMEOUT};
+        let worst = FACTS_WAIT * 2 + CLONE_TIMEOUT + OPEN_TIMEOUT;
+        assert!(Duration::from_secs(hangar_registration::mcp_register::TOOL_TIMEOUT_S) > worst);
     }
 
     #[test]

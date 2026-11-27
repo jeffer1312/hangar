@@ -14,8 +14,9 @@ use crate::{Invocation, files};
 
 const START: &str = "# >>> hangar: mcp";
 const END: &str = "# <<< hangar: mcp";
-/// A tool do cofre espera o dono por até 10 min; sem isso o Claude e o Codex cortam a chamada em 60 s.
-const TOOL_TIMEOUT_S: u64 = 660;
+/// A tool do cofre espera o dono por até 10 min, e o `new_session` noutra máquina espera o clone lá e a abertura
+/// (`placement` no servidor confere); sem isso o Claude e o Codex cortam a chamada em 60 s.
+pub const TOOL_TIMEOUT_S: u64 = 900;
 /// Só as ferramentas de recado: `Bash(hangar-send:*)` ou `mcp__hangar__*` liberariam também criar
 /// sessão em bypass, e uma sessão que pede aprovação escaparia por ela.
 const PERMISSIONS: [&str; 4] = ["mcp__hangar__send", "mcp__hangar__group", "mcp__hangar__sessions", "mcp__hangar__who_am_i"];

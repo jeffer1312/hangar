@@ -20,7 +20,7 @@ pub async fn facts(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connec
     let project = form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
         .find(|(key, _)| key == "project")
         .map(|(_, value)| ProjectId(value.into_owned()));
-    match local(&state, project.as_ref()).await {
+    match local(&state, project.as_ref(), true).await {
         Ok(facts) => json_response(StatusCode::OK, json!(facts)),
         Err(code) => {
             state.diag.report("rust.placement_facts_failed", "", code, "fatos do balanceamento indisponíveis");
@@ -30,8 +30,9 @@ pub async fn facts(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connec
     }
 }
 
-/// Os fatos desta máquina; `project` deixa em `repos` só as raízes desse projeto.
-pub(crate) async fn local(st: &Arc<AppState>, project: Option<&ProjectId>) -> Result<MachineFacts, &'static str> {
+/// Os fatos desta máquina; `project` deixa em `repos` só as raízes desse projeto. Sem `repos` (a escolha feita
+/// aqui, que não olha os repositórios daqui) pula a varredura: `repos` e `clone_dir` vêm vazios.
+pub(crate) async fn local(st: &Arc<AppState>, project: Option<&ProjectId>, with_repos: bool) -> Result<MachineFacts, &'static str> {
     let rows = async {
         // Assina só pela leitura: com lista aberta a resposta é a já publicada, sem rodada nova.
         let sub = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
@@ -44,7 +45,7 @@ pub(crate) async fn local(st: &Arc<AppState>, project: Option<&ProjectId>) -> Re
     };
     let scan = {
         let st = st.clone();
-        tokio::task::spawn_blocking(move || scan(&st))
+        tokio::task::spawn_blocking(move || if with_repos { scan(&st) } else { Ok((Vec::new(), None, hangar_status::host::placement_load())) })
     };
     let (rows, scan) = tokio::join!(rows, scan);
     let rows = rows.ok_or("placement_facts_list_unavailable")?;
@@ -52,7 +53,7 @@ pub(crate) async fn local(st: &Arc<AppState>, project: Option<&ProjectId>) -> Re
     let working = u32::try_from(rows.iter().filter(|row| row.state == "working").count()).unwrap_or(u32::MAX);
     let folders = rows.iter().filter_map(|row| row.git_cwd.clone().filter(|c| !c.is_empty()).or_else(|| row.cwd.clone())).collect::<Vec<_>>();
     let project = project.cloned();
-    let repos = tokio::task::spawn_blocking(move || {
+    let repos = if !with_repos { Vec::new() } else { tokio::task::spawn_blocking(move || {
         roots.extend(worktrees::main_repos(folders.iter().map(String::as_str)));
         roots.sort();
         roots.dedup();
@@ -60,7 +61,7 @@ pub(crate) async fn local(st: &Arc<AppState>, project: Option<&ProjectId>) -> Re
             .filter_map(|root| Some(KnownRepo { project: ProjectId::from_origin(&worktrees::origin_url(&root)?)?, root }))
             .filter(|repo| project.as_ref().is_none_or(|p| &repo.project == p))
             .collect::<Vec<_>>()
-    }).await.map_err(|_| "placement_facts_unavailable")?;
+    }).await.map_err(|_| "placement_facts_unavailable")? };
     let version = crate::update::running_package().map_or_else(|| env!("CARGO_PKG_VERSION").to_owned(), |p| p.version.clone());
     Ok(MachineFacts {
         server_id: st.current_server_id(), version, capable: true,

@@ -8,7 +8,8 @@ use crate::{Ctx, identity, msys_drive_path, parse, text, truthy};
 
 const USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--forcar-conta] [--machine <id|auto>] [--resume <id da conversa>]";
 /// Preparar conta e worktree passa dos 30 s; desistir antes dizia "inacessível" com a sessão nascendo.
-const CREATE_TIMEOUT: f64 = 120.0;
+/// Acima do pior caminho do servidor ao abrir noutra máquina: fatos, clone lá e abertura.
+const CREATE_TIMEOUT: f64 = 900.0;
 
 #[derive(Default)]
 struct Options {

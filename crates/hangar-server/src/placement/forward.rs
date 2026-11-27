@@ -1,13 +1,19 @@
 //! Abrir noutra máquina pela API de lá. O pedido vai pronto: com a máquina fixada (lá não se escolhe de
 //! novo, nem volta para cá), sem criadora (lá ela não existe) e com a pasta de lá.
+use std::time::Duration;
+
 use reqwest::Method;
 use serde_json::{Value, json};
+use tokio::time::Instant;
 
 use hangar_placement::{MachineFacts, OpenContext};
 
-use crate::groups::peers::{PeerClient, PeerError};
+use crate::groups::peers::{OPEN_TIMEOUT, PeerClient, PeerError};
 use crate::session_open::SessionOpenRequest;
 use crate::session_write::detail_body;
+
+/// A parte do prazo da abertura que a busca no remoto pode gastar: o resto é da criação lá.
+const FETCH_SHARE: Duration = Duration::from_secs(60);
 
 /// O que viria da criadora, resolvido nesta máquina: lá nada herda.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -20,15 +26,18 @@ pub struct Inherited {
 }
 
 /// O corpo do `POST /api/sessions` em `dest`. A pasta vira a raiz do mesmo projeto lá, na branch da
-/// daqui; sem projeto, a home de lá. `None`: `dest` não tem o projeto (precisa de clone).
+/// daqui; sem projeto, a home de lá. A branch nova parte da base pedida ou da branch daqui. `None`: `dest`
+/// não tem o projeto (precisa de clone), ou a pasta é um repositório sem projeto, que só existe aqui.
 pub fn body(request: &SessionOpenRequest, ctx: &OpenContext, dest: &MachineFacts, inherited: &Inherited) -> Option<Value> {
     let mut out = request.clone();
     out.cwd = match &ctx.cwd_project {
         Some(project) => {
             let root = dest.repos.iter().find(|r| &r.project == project)?.root.clone();
+            if out.new_branch { out.base = out.base.or_else(|| ctx.branch.clone()); }
             out.branch = out.branch.or_else(|| ctx.branch.clone());
             root
         }
+        None if ctx.cwd_root.is_some() => return None,
         // Pasta sem git (só na máquina pedida explicitamente): pode ser a de lá, vai como veio.
         None if ctx.plain_dir_not_home => out.cwd,
         None => "~".into(),
@@ -46,15 +55,25 @@ pub fn body(request: &SessionOpenRequest, ctx: &OpenContext, dest: &MachineFacts
 }
 
 /// `POST /api/sessions` lá. `fetch`: antes, busca no remoto da raiz de lá, para a branch daqui existir
-/// lá; a busca que falha só vira aviso, e a abertura diz se a branch faltou.
+/// lá; a busca que falha só vira aviso, e a abertura diz se a branch faltou. Busca e abertura dividem um prazo
+/// só (`OPEN_TIMEOUT`), e a busca nunca leva a parte da abertura.
 pub async fn open(peers: &PeerClient, server: &str, body: &Value, fetch: bool) -> Result<Value, PeerError> {
+    let deadline = Instant::now() + OPEN_TIMEOUT;
     let root = body["cwd"].as_str().filter(|cwd| fetch && *cwd != "~" && body.get("branch").is_some());
     let mut warning = None;
-    if let Some(root) = root
-        && let Err(error) = peers.call_opening(server, Method::POST, "/api/worktrees/fetch", Some(&json!({"repo": root}))).await {
-        warning = Some(format!("a busca no remoto em {server} falhou ({}); a branch pode estar desatualizada lá", error.text(server)));
+    if let Some(root) = root {
+        let fetched = tokio::time::timeout(FETCH_SHARE,
+            peers.call_opening(server, Method::POST, "/api/worktrees/fetch", Some(&json!({"repo": root})))).await;
+        let failed = match fetched {
+            Ok(Ok(_)) => None,
+            Ok(Err(error)) => Some(error.text(server)),
+            Err(_) => Some(format!("passou de {} s", FETCH_SHARE.as_secs())),
+        };
+        warning = failed.map(|why| format!("a busca no remoto em {server} falhou ({why}); a branch pode estar desatualizada lá"));
     }
-    let mut info = peers.call_opening(server, Method::POST, "/api/sessions", Some(body)).await?.unwrap_or(Value::Null);
+    let opened = tokio::time::timeout_at(deadline, peers.call_opening(server, Method::POST, "/api/sessions", Some(body))).await
+        .map_err(|_| PeerError::Transport(format!("{server} não terminou a abertura em {} s", OPEN_TIMEOUT.as_secs())))?;
+    let mut info = opened?.unwrap_or(Value::Null);
     if let Some(warning) = warning && let Some(fields) = info.as_object_mut() {
         let warnings = fields.entry("avisos").or_insert_with(|| json!([]));
         if let Some(list) = warnings.as_array_mut() { list.push(json!(warning)); }
@@ -116,11 +135,23 @@ mod tests {
     fn a_requested_branch_stays_and_without_project_it_is_the_home_there() {
         let ctx = OpenContext { local_id: "pc".into(), cwd_project: Some(hangar()), branch: Some("feat".into()), ..Default::default() };
         let asked = SessionOpenRequest { branch: Some("nova".into()), new_branch: true, ..request("/x") };
-        assert_eq!(body(&asked, &ctx, &nb(), &Inherited::default()).unwrap()["branch"], "nova");
+        let sent = body(&asked, &ctx, &nb(), &Inherited::default()).unwrap();
+        // A branch nova lá parte da daqui; a base pedida vence.
+        assert_eq!((&sent["branch"], &sent["base"]), (&json!("nova"), &json!("feat")));
+        let based = SessionOpenRequest { base: Some("main".into()), ..asked.clone() };
+        assert_eq!(body(&based, &ctx, &nb(), &Inherited::default()).unwrap()["base"], "main");
+        // Branch que já existe não leva base.
+        assert!(body(&request("/x"), &ctx, &nb(), &Inherited::default()).unwrap().get("base").is_none());
         let home = OpenContext { local_id: "pc".into(), ..Default::default() };
         let body = body(&request("/home/j"), &home, &nb(), &Inherited::default()).unwrap();
         assert_eq!(body["cwd"], "~");
         assert!(body.get("branch").is_none());
+    }
+
+    #[test]
+    fn a_repo_without_project_never_becomes_the_home_there() {
+        let ctx = OpenContext { local_id: "pc".into(), cwd_root: Some("/home/j/solo".into()), plain_dir_not_home: true, ..Default::default() };
+        assert_eq!(body(&request("/home/j/solo"), &ctx, &nb(), &Inherited::default()), None);
     }
 
     #[test]

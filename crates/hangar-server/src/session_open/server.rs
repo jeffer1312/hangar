@@ -536,11 +536,15 @@ pub(crate) fn reply(error: &OpenError) -> Response {
 }
 
 /// A resolução daqui, sem abrir: o que viria da criadora para a abertura noutra máquina, onde ela não existe.
-pub(crate) async fn resolve_here(st: &Arc<AppState>, request: &SessionOpenRequest) -> Result<super::Resolved, OpenError> {
+/// Com a criadora como ela foi encontrada aqui (`None`: sem criadora ou não achada).
+pub(crate) async fn resolve_here(st: &Arc<AppState>, request: &SessionOpenRequest)
+    -> Result<(super::Resolved, Option<super::resolve::CreatorFacts>), OpenError> {
     let (request, accounts, runtime) = (request.clone(), st.accounts.clone(), tokio::runtime::Handle::current());
     tokio::task::spawn_blocking(move || {
+        use super::OpenFacts;
         let facts = super::facts::LocalFacts::shared(accounts.env.clone(), &accounts, runtime);
-        super::resolve_open(&request, &OpenCaller::Owner, &facts)
+        let creator = match request.creator.as_deref() { Some(name) => facts.creator(name)?, None => None };
+        Ok((super::resolve_open(&request, &OpenCaller::Owner, &facts)?, creator))
     }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou")))
 }
 
