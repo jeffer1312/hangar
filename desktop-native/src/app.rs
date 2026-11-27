@@ -398,6 +398,9 @@ fn problem_banner(state: &SessionState, panel_stalled: bool) -> Option<String> {
     // O painel "Na fila" já mostra a entrega parada, com o Reabrir.
     if panel_stalled && state.problema.as_deref() == Some(STALLED) { return None; }
     let code = state.problema.as_deref().filter(|code| !code.trim().is_empty());
+    if code == Some("limit_switch_failed") && let Some(text) = state.problema_detalhe.as_deref().and_then(auto_continue_capped_text) {
+        return Some(text);
+    }
     match code.and_then(problem_text) {
         Some(text) => Some(match state.problema_detalhe.as_deref().and_then(|d| d.lines().next()).filter(|d| !d.trim().is_empty()) {
             Some(detail) => format!("{text} — {detail}"),
@@ -409,6 +412,13 @@ fn problem_banner(state: &SessionState, panel_stalled: bool) -> Option<String> {
 
 /// A frase do web para o código de problema, se houver.
 fn problem_text(code: &str) -> Option<String> { crate::i18n::tr_web(&format!("problema_{code}"), &HashMap::new()) }
+
+/// Um teto do continuar sozinho barrou (`auto_continue_capped`, ou com `:<teto>`): a frase do teto, nunca o código cru.
+/// Teto sem frase própria fica com a geral.
+fn auto_continue_capped_text(detail: &str) -> Option<String> {
+    let cap = detail.trim().strip_prefix("auto_continue_capped").filter(|cap| cap.is_empty() || cap.starts_with(':'))?;
+    problem_text(&format!("auto_continue_capped{}", cap.replace(':', "_"))).or_else(|| problem_text("auto_continue_capped"))
+}
 
 /// O `list_error` da lista sobre o erro mostrado: aviso só sem linha nenhuma na tela. Com a lista anterior de pé,
 /// uma rodada que falhou é diagnóstico (a próxima costuma voltar) e vai ao log (o `native.log`: lançado pelo
@@ -8439,11 +8449,16 @@ impl Hangar {
                 // Sem transcript não há stream nem faixa de problema: a frase vem da linha da lista, com o Reabrir.
                 let target = sidebar::Target::new(&self.open_server(), &selected.name);
                 let busy = self.sidebar.reopening.contains(&target);
-                let label = if busy { format!("{}…", tr("session_reopen")) } else { tr("session_reopen") };
+                let buttons: Vec<Button> = sidebar::reopen_choices(selected).iter().map(|choice| {
+                    let (target, continue_turn) = (target.clone(), choice.continues());
+                    let label = if busy { format!("{}…", choice.label()) } else { choice.label() };
+                    Button::new(if continue_turn { "fallen-reopen-continue" } else { "fallen-reopen" }).small().when(continue_turn, |b| b.outline())
+                        .label(label).disabled(busy)
+                        .on_click(cx.listener(move |this, _, _, cx| this.reopen_with(target.clone(), continue_turn, cx)))
+                }).collect();
                 content = content.child(div().flex_1().p_6().flex().flex_col().items_start().gap_3().text_sm().text_color(theme::warning())
                     .child(selected.problema.as_deref().and_then(problem_text).unwrap_or_default())
-                    .child(Button::new("fallen-reopen").small().label(label).disabled(busy)
-                        .on_click(cx.listener(move |this, _, _, cx| this.reopen_target(target.clone(), cx)))));
+                    .child(div().flex().items_center().gap_2().children(buttons)));
             } else if let Some(card) = prethread {
                 content = content.child(card);
             } else if selected.waiting_for_first_input() {
@@ -10061,6 +10076,21 @@ mod tests {
         assert_eq!(problem_banner(&state, false).unwrap(), "codigo_sem_frase");
         state.problema = None;
         assert!(problem_banner(&state, false).is_none());
+    }
+
+    #[test]
+    fn problem_banner_auto_continue_capped_uses_the_text_of_the_cap() {
+        use super::{problem_banner, SessionState};
+        crate::i18n::english_in_this_thread(false);
+        let capped = |detail: &str| SessionState { problema: Some("limit_switch_failed".into()), problema_detalhe: Some(detail.into()), ..Default::default() };
+        assert_eq!(problem_banner(&capped("auto_continue_capped"), false).unwrap(),
+            "Continuei sozinho 2 vezes seguidas sem resposta e parei para não virar laço. Mande uma mensagem para seguir.");
+        assert_eq!(problem_banner(&capped("auto_continue_capped:hourly"), false).unwrap(),
+            "Já continuei sozinho 3 vezes na última hora e parei para não virar laço. Mande uma mensagem para seguir.");
+        assert_eq!(problem_banner(&capped("auto_continue_capped:server_5xx"), false), problem_banner(&capped("auto_continue_capped"), false),
+            "teto sem frase própria fica com a geral");
+        let other = problem_banner(&capped("reopen_failed"), false).unwrap();
+        assert!(other.ends_with(" — reopen_failed"), "outra falha da troca segue com o detalhe: {other}");
     }
 
     #[test]

@@ -3084,3 +3084,35 @@ fn hook_reapproval_without_answer_shows_the_failure_when_it_expires() {
     assert!(frames(&again).is_empty());
     assert_eq!(hook_notices(&again).len(),1);
 }
+
+// --- Continuar depois da queda: o fim do turno do Codex diz por que parou ---
+
+fn stops(effects:&[Effect]) -> Vec<(hangar_auto_continue::StopKind,Option<String>,f64)> {
+    effects.iter().filter_map(|e|match e { Effect::TurnStopped { kind,line_id,at }=>Some((*kind,line_id.clone(),*at)),_=>None }).collect()
+}
+
+fn connected_terminal() -> Engine {
+    Engine::new(json!({"name":"session","thread_id":"thread-1","headless":false,"initialized":true,"connected":true}),1,clock(10.0))
+}
+
+#[test]
+fn a_turn_failed_by_a_lost_stream_emits_one_stop() {
+    // Com e sem terminal: as tentativas do próprio Codex (`willRetry`) não são parada, só o turno que falhou.
+    for mut engine in [engine(),connected_terminal()] {
+        line(&mut engine,json!({"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1"}}}),10.0);
+        let effects:Vec<Effect> = include_str!("fixtures/auto_continue/codex_stream_lost.jsonl").lines()
+            .flat_map(|l|line(&mut engine,serde_json::from_str(l).unwrap(),11.0)).collect();
+        assert_eq!(stops(&effects),vec![(hangar_auto_continue::StopKind::StreamLost,Some("turn-1".into()),1_800_000_011.0)]);
+    }
+}
+
+#[test]
+fn a_completed_or_interrupted_turn_emits_its_stop() {
+    use hangar_auto_continue::StopKind;
+    for (status,want) in [("completed",StopKind::Normal),("interrupted",StopKind::Other)] {
+        let mut engine = engine();
+        line(&mut engine,json!({"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1"}}}),10.0);
+        let effects = line(&mut engine,json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":status,"items":[]}}}),12.0);
+        assert_eq!(stops(&effects),vec![(want,Some("turn-1".into()),1_800_000_012.0)],"{status}");
+    }
+}

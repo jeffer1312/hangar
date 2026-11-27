@@ -2202,9 +2202,36 @@ export function isFallenSession(s: { state?: string | null; problema?: string | 
   return s.state === 'dead' && (FALLEN_PROBLEMS as readonly string[]).includes(s.problema ?? '');
 }
 
-// Reabre a sessão caída pelo spec dela, na mesma conversa.
-export async function reopenFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
-  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/reopen`, { method: 'POST' });
+// Reabre a sessão caída pelo spec dela, na mesma conversa. `continue`: o "Reabrir e continuar", que manda o
+// turno cortado seguir; `continued: false` com `code` diz por que o continue não saiu (a sessão reabriu).
+export async function reopenFallenSession(
+  name: string,
+  server?: Server | null,
+  opts?: { continue?: boolean },
+): Promise<{ ok: boolean; continued?: boolean; code?: string }> {
+  const query = opts?.continue ? '?continue=1' : '';
+  return sessionFetch<{ ok: boolean; continued?: boolean; code?: string }>(
+    server,
+    `/api/sessions/${encodeURIComponent(name)}/reopen${query}`,
+    { method: 'POST' },
+  );
+}
+
+const autoContinuePath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/auto-continue`;
+
+// Interruptor do continuar sozinho da sessão; a linha muda quando a lista seguinte trouxer o `auto_continue_off` novo.
+export async function setSessionAutoContinue(name: string, enabled: boolean, server?: Server | null): Promise<void> {
+  await sessionFetch<unknown>(server, autoContinuePath(name), {
+    method: 'PUT', body: JSON.stringify({ enabled }), signal: AbortSignal.timeout(15_000),
+  });
+}
+
+// Cancelar da nota que espera a rede. `false`: nada esperava (o desfecho já saiu e a nota chega trocada).
+export async function cancelSessionAutoContinue(name: string, server?: Server | null): Promise<boolean> {
+  const reply = await sessionFetch<{ cancelled?: boolean }>(server, autoContinuePath(name), {
+    method: 'DELETE', signal: AbortSignal.timeout(15_000),
+  });
+  return reply?.cancelled === true;
 }
 
 // Tira a caída da lista; recusa (404) se o nome já voltou vivo, em vez de fechar a sessão reaberta.
