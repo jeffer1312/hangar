@@ -96,6 +96,31 @@ fn link_is_decided_before_opening() {
 }
 
 #[test]
+fn a_linked_child_gets_the_child_line_in_the_first_prompt() {
+    use hangar_delegation::guidance::child_prefix;
+    let owner = resolve::OpenCaller::Owner;
+    let first_prompt = |body: String| {
+        let mut request = SessionOpenRequest::parse(body.as_bytes()).unwrap();
+        let link = request.link_plan(&owner).unwrap();
+        request.prefix_child_line(&link);
+        request.initial_prompt
+    };
+    for provider in ["claude", "codex", "antigravity", "pi", "omp", "kimi"] {
+        let linked = first_prompt(format!(r#"{{"name":"f","cwd":"/x","provider":"{provider}","creator":"pai","link":true,"initial_prompt":"faz a busca"}}"#))
+            .unwrap_or_else(|| panic!("{provider}: o prompt sumiu"));
+        assert!(linked.starts_with(&child_prefix("pai")), "{provider}: {linked}");
+        assert!(linked.ends_with("faz a busca"), "{provider}: o pedido continua inteiro: {linked}");
+        assert_eq!(linked.matches(&child_prefix("pai")).count(), 1, "{provider}: a linha vai uma vez");
+        let plain = first_prompt(format!(r#"{{"name":"f","cwd":"/x","provider":"{provider}","creator":"pai","initial_prompt":"faz a busca"}}"#));
+        assert_eq!(plain.as_deref(), Some("faz a busca"), "{provider}: sem link o prompt não muda");
+        let silent = first_prompt(format!(r#"{{"name":"f","cwd":"/x","provider":"{provider}","creator":"pai","link":true}}"#));
+        assert_eq!(silent, None, "{provider}: sem initial_prompt a filha não ganha um prompt");
+    }
+    let orphan = first_prompt(r#"{"name":"f","cwd":"/x","link":true,"initial_prompt":"faz a busca"}"#.to_owned());
+    assert_eq!(orphan.as_deref(), Some("faz a busca"), "sem criadora não há pai a nomear");
+}
+
+#[test]
 fn modes_and_providers_round_trip_by_name() {
     for provider in AgentProvider::ALL { assert_eq!(AgentProvider::parse(provider.name()), Some(provider)); }
     assert_eq!(AgentProvider::parse("gemini"), None);

@@ -531,6 +531,14 @@ mod tests {
     }
 
     #[test]
+    fn the_child_line_keeps_the_first_message_returnable() {
+        let first = format!("{} faz a busca", hangar_delegation::guidance::child_prefix("pai"));
+        let whole = turn(vec![ev(ChatKind::UserMsg, &first), ev(ChatKind::AssistantMsg, "achei")], true);
+        assert!(asked_by_parent(&whole, "pai", "casa"), "a primeira da conversa continua sendo do pai");
+        assert_eq!(decide(&check(), &whole).map(|(a, _)| a), Ok("achei"));
+    }
+
+    #[test]
     fn needs_a_reply() {
         assert!(!settled(&Check { last_reply_at: None, ..check() }));
         assert!(settled(&check()));

@@ -375,7 +375,7 @@ pub(crate) async fn open_owned(st: &Arc<AppState>, request: SessionOpenRequest) 
 /// `decide` numa tarefa própria: cliente que desconecta no meio não interrompe a criação (a worktree
 /// criada sem o pane ficaria para trás) nem o registro do convidado (`claim`), como o
 /// `complete_on_cancel` do Python.
-async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller: OpenCaller, claim: Option<LoginGuest>, ingress: Option<Arc<crate::runtime::ingress::IngressPass>>) -> Decision {
+async fn decide_detached(st: &Arc<AppState>, mut request: SessionOpenRequest, caller: OpenCaller, claim: Option<LoginGuest>, ingress: Option<Arc<crate::runtime::ingress::IngressPass>>) -> Decision {
     let st = st.clone();
     tokio::spawn(async move {
         let _ingress = ingress;
@@ -393,6 +393,7 @@ async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller
             Ok(link) => link,
             Err(error) => return Decision::Refused(error),
         };
+        request.prefix_child_line(&link);
         let decision = match (decide(&st, &host, request, caller).await, claim) {
             (Decision::Opened(opened), Some(guest)) => match host.claim(opened, &guest).await {
                 Ok(opened) => Decision::Opened(opened),

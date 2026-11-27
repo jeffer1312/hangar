@@ -299,6 +299,17 @@ impl SessionOpenRequest {
             None => LinkPlan::Unlinked("erro_link_sem_criador", "sem sessão criadora, a sessão abriu sem ligação"),
         })
     }
+
+    /// A filha ligada recebe a linha dela no começo do primeiro prompt, em todo provedor; sem prompt
+    /// não ganha um, porque a linha sozinha abriria um turno que ninguém pediu. Vai no prompt, não no
+    /// `SessionStart`: o vínculo só é gravado depois de o processo subir.
+    pub fn prefix_child_line(&mut self, link: &LinkPlan) {
+        let LinkPlan::Join(parent) = link else { return };
+        if let Some(prompt) = self.initial_prompt.as_mut().filter(|p| !p.is_empty()) {
+            // Espaço, não quebra de linha: o prompt de uma linha continua de uma linha no pane.
+            *prompt = format!("{} {prompt}", hangar_delegation::guidance::child_prefix(parent));
+        }
+    }
 }
 
 /// O que fazer com o vínculo depois de abrir: nada, entrar no grupo da criadora, ou só avisar

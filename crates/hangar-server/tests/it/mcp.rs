@@ -245,9 +245,9 @@ async fn catalog_is_the_python_one_with_the_whole_open_request() {
         .filter(|t| t["name"].as_str().is_some_and(|n| known.iter().any(|k| k == n))).cloned().collect();
     assert_eq!(names(&listed), names(&python), "as 14 tools do Python, na mesma ordem");
     for (rust, python) in listed.iter().zip(&python) {
-        // O texto destas mudou depois do Python (grupo entre máquinas; alvos e esperas do navegador); os parâmetros
-        // continuam os do Python.
-        if matches!(python["name"].as_str(), Some("sessions" | "group" | "pair" | "browser" | "browser_open")) {
+        // O texto destas mudou depois do Python (grupo entre máquinas; alvos e esperas do navegador; filhas que
+        // ficam ao fechar o pai); os parâmetros continuam os do Python.
+        if matches!(python["name"].as_str(), Some("sessions" | "group" | "pair" | "close_session" | "browser" | "browser_open")) {
             assert_eq!((&rust["inputSchema"], &rust["outputSchema"]), (&python["inputSchema"], &python["outputSchema"]), "{}", python["name"]);
             continue;
         }
