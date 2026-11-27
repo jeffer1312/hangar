@@ -2066,8 +2066,10 @@ impl Hangar {
         cx.notify();
     }
 
-    /// Instala o histórico que esperava o stream assentar; sem nada guardado, não faz nada.
+    /// Instala o histórico que esperava o stream assentar; sem nada guardado, não faz nada. Depois do prazo ou da queda
+    /// a espera acabou: o stream conta como assentado, senão a mesma guarda reteria o histórico de novo.
     fn release_held_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.stream_caught_up = true;
         if let Some(envelope) = self.held_history.take() {
             api::open_trace(|| "history released".into());
             self.receive(envelope, window, cx);
