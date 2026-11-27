@@ -5921,10 +5921,13 @@ antigo, preso num servidor tmux que ninguém mais alcançava.
   para um mapa por id de conversa; com dois arquivos do mesmo id, valia o último da iteração de um
   `HashMap` novo a cada tique. Um dizia `busy`, o outro `idle`.
 - **Regras.** A lista guarda todos os registros da conversa e só usa o nativo quando há um vivo; com
-  dois vivos, vale o marcador do hook. O restore procura o processo do servidor da fotografia (mesmo
-  nascimento): vivo e sem servidor no socket, manda `SIGUSR1` e não reabre nada; vivo com outro
-  servidor no socket, não reabre por cima. Antes de cada `--resume`, um agente vivo da conversa fora
-  do servidor de agora é encerrado (ninguém o alcança); dentro dele, ou com pid cuja linha de comando
-  não cita a conversa, a restauração recua (`restore_conversation_open`/`restore_conversation_running`).
+  dois vivos, vale o marcador do hook. A fotografia guarda o pid do servidor tmux (`mux_pid`); a
+  antiga, sem ele, o acha pelo nascimento perto do `#{start_time}`, nunca contando o servidor de
+  agora. Antigo vivo e nada no socket: `SIGUSR1` (até 3 vezes), sem reabrir nada. Antigo vivo com
+  outro no socket, ou dúvida sobre qual é: nada reaberto por cima, e o servidor de agora passa a ser o
+  da fotografia, para as sessões novas seguirem guardadas. Antes de cada `--resume`, só sai o agente
+  `claude` da conversa cujo servidor tmux (a variável `TMUX` dele) já acabou, com `SIGTERM` e,
+  passado o prazo, `SIGKILL`; dentro do servidor de agora ou fora do tmux, a restauração recua
+  (`restore_conversation_open`). Pid reaproveitado por outro programa não conta.
 - **Não confirmado:** por que o servidor tmux parou de atender naquela janela. A memória da máquina
   estava sob pressão, e os comandos ao tmux já falhavam por tempo antes da restauração.
