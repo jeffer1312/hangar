@@ -123,9 +123,14 @@ export function IntegrationEditorSheet({
   );
   const [envText, setEnvText] = useState('');
 
-  const [authKind, setAuthKind] = useState<AuthKind>(
-    editing?.auth.kind ?? defaultAuthForPreset(preset),
-  );
+  // Cloudflare criada antes do preset público, ainda na URL padrão: a edição já propõe "Sem autenticação".
+  const [authKind, setAuthKind] = useState<AuthKind>(() => {
+    if (!editing) return defaultAuthForPreset(preset);
+    const publicDefault = preset?.auth_kind === 'none'
+      && editing.transport.kind === 'remote_http'
+      && editing.transport.url === preset.url;
+    return publicDefault && editing.auth.kind === 'oauth_dcr' ? 'none' : editing.auth.kind;
+  });
   const [clientId, setClientId] = useState(
     editing?.auth.kind === 'oauth_manual_client' ? editing.auth.client_id : '',
   );

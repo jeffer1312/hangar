@@ -495,9 +495,21 @@ impl IntegrationsPage {
         self.open_tools.retain(|id| alive.contains(id));
         let open_ids: Vec<String> = self.open_tools.iter().cloned().collect();
         self.items = Some(Ok(list));
+        self.settle_pending_logins();
         for id in open_ids {
             self.load_tools(&id, window, cx);
         }
+    }
+
+    /// Login concluído (Conectada) ou recusado (Erro): a nota de andamento sai de vez, para não voltar quando o token vencer.
+    fn settle_pending_logins(&mut self) {
+        let Some(Ok(list)) = self.items.as_ref() else { return };
+        let settled: HashSet<String> = list
+            .iter()
+            .filter(|it| matches!(it.status, IntegrationStatus::Ready | IntegrationStatus::Error))
+            .map(|it| it.id.clone())
+            .collect();
+        self.feedback.retain(|id, fb| !(matches!(fb, Feedback::Pending(_)) && settled.contains(id)));
     }
 
     fn reload_items(&mut self, reconcile_tools: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -520,7 +532,10 @@ impl IntegrationsPage {
                             .map_err(|_| tr("invalid_response"))
                     }) {
                     Ok(list) if reconcile_tools => this.reconcile_loaded_items(list, window, cx),
-                    Ok(list) => this.items = Some(Ok(list)),
+                    Ok(list) => {
+                        this.items = Some(Ok(list));
+                        this.settle_pending_logins();
+                    }
                     Err(msg) if this.items.is_none() => this.items = Some(Err(msg)),
                     Err(_) => {}
                 }
@@ -1169,10 +1184,7 @@ impl IntegrationsPage {
             Some(Feedback::Error(err)) => Some(err.clone()),
             _ => item.last_error.clone().filter(|err| !err.is_empty() && item.status != IntegrationStatus::Ready),
         };
-        let waiting_login = matches!(
-            item.status,
-            IntegrationStatus::AuthRequired | IntegrationStatus::AuthExpired | IntegrationStatus::Error
-        );
+        let waiting_login = matches!(item.status, IntegrationStatus::AuthRequired | IntegrationStatus::AuthExpired);
         let info = match feedback {
             Some(Feedback::Info(text)) => Some(text),
             Some(Feedback::Pending(text)) if waiting_login => Some(text),
@@ -1717,7 +1729,13 @@ impl InitialFormValues {
                             )
                         }
                     };
+                // Cloudflare criada antes do preset público, ainda na URL padrão: a edição já propõe "Sem autenticação".
+                let public_default = preset_meta.as_ref().is_some_and(|p| {
+                    p.auth_kind == PresetAuthKind::None
+                        && matches!(&item.transport, Transport::RemoteHttp { url, .. } if *url == p.url)
+                });
                 let (auth_kind, client_id, scopes) = match &item.auth {
+                    AuthConfig::OAuthDcr if public_default => (AuthKindChoice::None, String::new(), String::new()),
                     AuthConfig::None => (AuthKindChoice::None, String::new(), String::new()),
                     AuthConfig::Bearer => (AuthKindChoice::Bearer, String::new(), String::new()),
                     AuthConfig::OAuthDcr => (AuthKindChoice::OAuthDcr, String::new(), String::new()),
