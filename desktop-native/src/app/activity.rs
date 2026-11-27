@@ -140,6 +140,7 @@ fn wall_seconds(at: &str) -> Option<f64> {
 
 fn parse_sub(item: &Value) -> Option<SubRun> {
     let text = |item: &Value, key: &str| item.get(key).and_then(Value::as_str).map(str::to_owned);
+    let prompt = text(item, "prompt");
     Some(SubRun {
         state: text(item, "state").filter(|s| !s.is_empty()),
         ended: text(item, "endedAt").as_deref().and_then(wall_seconds),
@@ -152,8 +153,8 @@ fn parse_sub(item: &Value) -> Option<SubRun> {
         agent_path: text(item, "agentPath"),
         nickname: text(item, "nickname"),
         agent_type: text(item, "agentType").filter(|t| !t.is_empty()),
-        prompt: text(item, "prompt"),
-        prompt_key: text(item, "prompt").as_deref().map(prompt_key),
+        prompt_key: prompt.as_deref().map(prompt_key),
+        prompt,
         calls: item.get("toolCalls").and_then(Value::as_u64).unwrap_or(0),
         last_tool: item.get("recent").and_then(Value::as_array).and_then(|recent| recent.last()).and_then(|last| text(last, "name")),
         finished: item.get("finished").and_then(Value::as_bool).unwrap_or(false),
@@ -214,7 +215,6 @@ fn interval(seconds: f64) -> String {
 }
 
 fn now_seconds() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.) }
-
 
 /// O subagente do disco de um Agent: prompt normalizado inteiro, senão os 400 primeiros caracteres (o mais recente
 /// vence, e a lista já vem do mais recém-escrito).

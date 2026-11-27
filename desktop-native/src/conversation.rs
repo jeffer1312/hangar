@@ -278,9 +278,9 @@ fn agent_run(event: &ChatEvent, call: usize, id: &str) -> AgentRun {
     } else { desc };
     let prompt = text(if codex { "message" } else { "prompt" })
         .filter(|prompt| !codex || !prompt.starts_with("gAAAA"));
-    let prompt_key = prompt.as_deref().map(prompt_key);
+    let key = prompt.as_deref().map(prompt_key);
     AgentRun { call, id: id.to_owned(), description, subagent_type: text(if codex { "agent_type" } else { "subagent_type" }),
-        model: text("model"), prompt, prompt_key, running: false, waiting: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None,
+        model: text("model"), prompt, prompt_key: key, running: false, waiting: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None,
         background: event.tool_input.as_ref().and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) }
 }
 
