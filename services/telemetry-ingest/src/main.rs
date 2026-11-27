@@ -485,22 +485,6 @@ mod tests {
         let pool = online().await;
         let id = fresh_id();
         let event = format!("falha.{}", &fresh_id()[..8]);
-        let mut body = batch_body(&id, &utc_day(&pool, 0).await);
-        body["partial"] = json!(true);
-        body["counters"] = json!([{"event": "peers", "count": 3}]);
-        body["logs"] = json!([{"level": "error", "target": "hangar_server::list", "message": "x", "count": 1}]);
-        body["records"] = json!([record(&event, "error", "erro_pasta", 1, "10:00:00", "10:00:00", "a")]);
-        body["trail"] = json!([step("10:00:00", "app.visivel", "ok"), step("10:00:05", &event, "error")]);
-        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
-
-        // O envio final do dia: mais passos, contagens maiores, sem log.
-        body["partial"] = json!(false);
-        body["counters"] = json!([{"event": "peers", "count": 5}]);
-        body["logs"] = json!([]);
-        body["records"] = json!([record(&event, "error", "erro_pasta", 4, "10:00:00", "12:00:00", "b")]);
-        body["trail"] = json!([step("10:00:00", "app.visivel", "ok"), step("10:00:05", &event, "error"), step("12:00:00", "app.oculto", "ok")]);
-        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
-
         let stored = |pool: PgPool, id: String| async move {
             let one = |sql: &'static str| { let (pool, id) = (pool.clone(), id.clone()); async move {
                 sqlx::query_scalar::<_, i64>(sql).bind(id).fetch_one(&pool).await.unwrap() } };
@@ -512,12 +496,31 @@ mod tests {
                 one("SELECT count(*) FILTER (WHERE partial) FROM batches WHERE batch_id = $1").await,
             )
         };
+        let mut body = batch_body(&id, &utc_day(&pool, 0).await);
+        body["partial"] = json!(true);
+        body["counters"] = json!([{"event": "peers", "count": 3}]);
+        body["logs"] = json!([{"level": "error", "target": "hangar_server::list", "message": "x", "count": 1}]);
+        body["records"] = json!([record(&event, "error", "erro_pasta", 1, "10:00:00", "10:00:00", "a")]);
+        body["trail"] = json!([step("10:00:00", "app.visivel", "ok"), step("10:00:05", &event, "error")]);
+        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+        let delayed = body.clone();
+
+        body["counters"][0]["count"] = json!(4);
+        body["records"][0]["count"] = json!(3);
+        body["trail"] = json!([step("11:00:00", &event, "error")]);
+        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+        assert_eq!(stored(pool.clone(), id.clone()).await, (4, 1, 3, 1, 1), "outro parcial também troca, não soma");
+
+        // O final omite partial, como os lotes antigos.
+        body.as_object_mut().unwrap().remove("partial");
+        body["counters"][0]["count"] = json!(5);
+        body["logs"] = json!([]);
+        body["records"] = json!([record(&event, "error", "erro_pasta", 4, "10:00:00", "12:00:00", "b")]);
+        body["trail"] = json!([step("10:00:00", "app.visivel", "ok"), step("10:00:05", &event, "error"), step("12:00:00", "app.oculto", "ok")]);
+        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
         assert_eq!(stored(pool.clone(), id.clone()).await, (5, 0, 4, 3, 0), "o final troca o retrato, não soma");
 
-        // Um retrato atrasado (repetição de antes do final) não desfaz o final.
-        body["partial"] = json!(true);
-        body["counters"] = json!([{"event": "peers", "count": 1}]);
-        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+        assert_eq!(post_json(pool.clone(), &delayed).await.0, StatusCode::OK);
         assert_eq!(stored(pool.clone(), id.clone()).await, (5, 0, 4, 3, 0));
         forget(&pool, &[id]).await;
     }
@@ -527,33 +530,50 @@ mod tests {
     async fn failure_records_of_two_machines_become_one_row_per_signature() {
         let pool = online().await;
         let (yesterday, today) = (utc_day(&pool, -1).await, utc_day(&pool, 0).await);
+        let (linux, windows) = (fresh_id(), fresh_id());
         let event = format!("sessao.abrir_{}", &fresh_id()[..8]);
         let mut ids = Vec::new();
-        for (day, version, os, level, count, first, last, detalhe) in [
-            (&yesterday, "0.42.0", "linux", "warn", 2, "10:00:00", "11:00:00", "antes"),
-            (&today, "0.43.0", "windows", "error", 3, "08:00:00", "09:00:00", "depois"),
+        for (day, machine, version, os, level, count, first, last, detail) in [
+            (&yesterday, &linux, "0.42.0", "linux", "warn", 2, "10:00:00", "11:00:00", "antes"),
+            (&today, &linux, "0.42.0", "linux", "error", 2, "08:00:00", "13:00:00", "ultima_ocorrencia"),
+            (&today, &windows, "0.43.0", "windows", "warn", 3, "09:30:00", "10:00:00", "amostra"),
         ] {
             let id = fresh_id();
             let mut body = batch_body(&id, day);
+            body["machine_id"] = json!(machine);
             body["env"]["version"] = json!(version);
             body["env"]["os"] = json!(os);
-            // A outra assinatura também em duas máquinas: o teste do corte divide o banco e só tem uma por assinatura.
-            body["records"] = json!([record(&event, level, "erro_pasta", count, first, last, detalhe),
-                                     record(&event, "warn", "erro_outro", 1, first, last, "x")]);
+            let mut legacy = record(&event, level, "erro_pasta", count, first, last, detail);
+            if machine == &windows {
+                legacy["trail"] = json!(["app.visivel", "busca.abrir"]);
+            }
+            let mut open = record(&event, level, "erro_pasta", count, first, last, "amostra da abertura");
+            open["fields"]["action"] = json!("browser_open");
+            let mut close = record(&event, level, "erro_pasta", count + 2, first, last, "amostra do fechamento");
+            close["fields"]["action"] = json!("browser_close");
+            // Todas as assinaturas têm duas máquinas para disputar o corte com os outros testes.
+            body["records"] = json!([legacy, open, close, record(&event, "warn", "erro_outro", 1, first, last, "x")]);
             assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
             ids.push(id);
         }
         let data = store::summary(&pool, 7).await.unwrap();
         let rows: Vec<&Value> = data["records"].as_array().unwrap().iter().filter(|r| r["event"] == json!(event)).collect();
-        assert_eq!(rows.len(), 2, "{rows:?}");
-        let row = rows.iter().find(|r| r["codigo"] == json!("erro_pasta")).unwrap();
+        assert_eq!(rows.len(), 4, "{rows:?}");
+        let row = rows.iter().find(|r| r["codigo"] == json!("erro_pasta") && r["action"].is_null()).unwrap();
         assert_eq!(**row, json!({
-            "level": "error", "event": event, "codigo": "erro_pasta", "etapa": "abrir", "erro_tipo": null,
-            "count": 5, "machines": 2, "versions": ["0.42.0", "0.43.0"], "os": ["linux", "windows"],
-            "first": format!("{yesterday} 10:00:00"), "last": format!("{today} 09:00:00"),
-            "fields": {"codigo": "erro_pasta", "etapa": "abrir", "detalhe": "depois"}, "trail": ["app.visivel", "sessao.nova"],
+            "level": "error", "event": event, "codigo": "erro_pasta", "etapa": "abrir", "erro_tipo": null, "action": null,
+            "count": 7, "machines": 2, "versions": ["0.42.0", "0.43.0"], "os": ["linux", "windows"],
+            "first": format!("{yesterday} 10:00:00"), "last": format!("{today} 13:00:00"),
+            "sample_at": format!("{today} 09:30:00"),
+            "fields": {"codigo": "erro_pasta", "etapa": "abrir", "detalhe": "amostra"}, "trail": ["app.visivel", "busca.abrir"],
         }));
-        assert!(data["records_total"].as_i64().unwrap() >= 2);
+        for (action, count, detail) in [("browser_open", 7, "amostra da abertura"), ("browser_close", 13, "amostra do fechamento")] {
+            let row = rows.iter().find(|r| r["action"] == json!(action)).unwrap();
+            assert_eq!(row["count"], json!(count));
+            assert_eq!(row["fields"]["action"], json!(action));
+            assert_eq!(row["fields"]["detalhe"], json!(detail));
+        }
+        assert!(data["records_total"].as_i64().unwrap() >= 4);
         forget(&pool, &ids).await;
     }
 
@@ -590,8 +610,12 @@ mod tests {
         let mut machine = String::new();
         for trail in [first, vec![step("09:00:00", &a, "ok"), step("09:00:01", &b, "warn")]] {
             let id = fresh_id();
-            let body = { let mut body = batch_body(&id, &today); body["trail"] = json!(trail); body };
-            if machine.is_empty() { machine = body["machine_id"].as_str().unwrap().to_owned(); }
+            let mut body = batch_body(&id, &today);
+            body["trail"] = json!(trail);
+            if machine.is_empty() {
+                machine = body["machine_id"].as_str().unwrap().to_owned();
+                body["partial"] = json!(true);
+            }
             assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
             ids.push(id);
         }
@@ -601,6 +625,17 @@ mod tests {
         assert_eq!(find(&b, &c).map(|t| t["count"].clone()), Some(json!(1)));
         let day = data["trail_days"].as_array().unwrap().iter().find(|d| d["machine"] == json!(machine)).unwrap();
         assert_eq!(*day, json!({"machine": machine, "label": &machine[..8], "day": today, "os": "linux", "version": "0.42.0", "steps": 401, "problems": 1}));
+        assert!(data["period"]["partial_batches"].as_i64().unwrap() >= 1);
+        assert!(data["transitions_total"].as_i64().unwrap() >= 3);
+        assert!(data["trail_days_total"].as_i64().unwrap() >= 2);
+
+        // Novo lote da mesma máquina após novo aceite; o relógio recua no segundo passo.
+        let id = fresh_id();
+        let mut restarted = batch_body(&id, &today);
+        restarted["machine_id"] = json!(machine);
+        restarted["trail"] = json!([step("12:00:00", "demo.lote_novo", "ok"), step("08:00:00", "demo.relogio_recuou", "ok")]);
+        assert_eq!(post_json(pool.clone(), &restarted).await.0, StatusCode::OK);
+        ids.push(id);
 
         let cookie = logged_in(&pool).await;
         let app = || app_with_panel(pool.clone());
@@ -609,15 +644,21 @@ mod tests {
         assert_eq!(call(app(), "GET", "/panel/trail?machine=x", None, None).await.0, StatusCode::UNAUTHORIZED, "sem sessão nem diz o que está torto");
         let (status, _, text) = call(app(), "GET", &path, Some(&cookie), None).await;
         assert_eq!(status, StatusCode::OK);
-        let steps = serde_json::from_str::<Value>(&text).unwrap()["steps"].as_array().unwrap().clone();
-        assert_eq!(steps.len(), 401);
+        let trail: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(trail["partial"], json!(true));
+        let steps = trail["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 403);
         assert_eq!(steps[0], json!({"t": "10:00:00", "event": a, "level": "ok", "screen": "chat", "count": 1}));
         assert_eq!(steps[400], json!({"t": "11:00:00", "event": c, "level": "error", "screen": null, "count": 2}));
+        assert_eq!(steps[401], step("12:00:00", "demo.lote_novo", "ok"));
+        assert_eq!(steps[402], step("08:00:00", "demo.relogio_recuou", "ok"));
         for bad in ["/panel/trail?machine=NOT-HEX&day=2026-11-27", "/panel/trail?day=2026-11-27", &format!("/panel/trail?machine={machine}&day=2026-02-31")] {
             assert_eq!(call(app(), "GET", bad, Some(&cookie), None).await.0, StatusCode::BAD_REQUEST, "{bad}");
         }
         let (_, _, empty) = call(app(), "GET", &format!("/panel/trail?machine={}&day={today}", fresh_id()), Some(&cookie), None).await;
-        assert_eq!(serde_json::from_str::<Value>(&empty).unwrap()["steps"], json!([]));
+        let empty: Value = serde_json::from_str(&empty).unwrap();
+        assert_eq!(empty["steps"], json!([]));
+        assert_eq!(empty["partial"], json!(false));
         forget(&pool, &ids).await;
     }
 }

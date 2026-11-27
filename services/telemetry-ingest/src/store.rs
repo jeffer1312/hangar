@@ -161,10 +161,10 @@ pub fn is_bad_value(error: &sqlx::Error) -> bool {
 }
 
 /// Assinatura de falha agregada: nível, evento, codigo, etapa, erro_tipo, vezes, máquinas, versões,
-/// sistemas, primeira e última vez, campos e passos da amostra, total de assinaturas antes do corte.
+/// sistemas, primeira e última vez, horário/campos/passos da amostra, ação e total de assinaturas antes do corte.
 type RecordRow = (
     String, String, Option<String>, Option<String>, Option<String>, i64, i64, Vec<String>, Vec<String>, String, String,
-    Json<serde_json::Value>, Json<serde_json::Value>, i64,
+    Json<serde_json::Value>, Option<String>, i64,
 );
 
 /// Hoje e os `days - 1` dias antes dele, em UTC; dia à frente (relógio adiantado) só conta quando chegar.
@@ -185,11 +185,12 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     let active: (i64, i64, i64, i64) = sqlx::query_as("SELECT machines_7d, machines_30d, owners_7d, owners_30d FROM v_active")
         .fetch_one(&mut *pool)
         .await?;
-    let (batches, machines): (i64, i64) =
-        sqlx::query_as(concat!("SELECT count(*), count(DISTINCT machine_id) FROM batches WHERE ", in_period!("day")))
-            .bind(days)
-            .fetch_one(&mut *pool)
-            .await?;
+    let (batches, machines, partial_batches): (i64, i64, i64) = sqlx::query_as(concat!(
+        "SELECT count(*), count(DISTINCT machine_id), count(*) FILTER (WHERE partial) FROM batches WHERE ", in_period!("day")
+    ))
+    .bind(days)
+    .fetch_one(&mut *pool)
+    .await?;
     let daily: Vec<(String, i64)> = sqlx::query_as(concat!(
         "SELECT to_char(day, 'YYYY-MM-DD'), count(DISTINCT machine_id) FROM batches WHERE ", in_period!("day"), " GROUP BY day ORDER BY day"
     ))
@@ -257,10 +258,10 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
-    // Falhas do diário de todas as máquinas, uma linha por assinatura; a amostra é a vez mais recente.
+    // Os campos e os passos vêm da primeira ocorrência de cada lote, não da última.
     let records: Vec<RecordRow> = sqlx::query_as(concat!(
         "WITH r AS (
-             SELECT r.level, r.event, r.count, r.fields, r.trail, b.machine_id, b.version, b.os,
+             SELECT r.level, r.event, r.count, r.fields, r.trail, b.machine_id, b.version, b.os, b.batch_id,
                     b.day + r.first_at AS first_ts, b.day + r.last_at AS last_ts
              FROM records r JOIN batches b ON b.batch_id = r.batch_id
              WHERE ", in_period!("b.day"), ")
@@ -269,56 +270,61 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
                 LEAST(sum(count), 9223372036854775807)::bigint, count(DISTINCT machine_id),
                 array_agg(DISTINCT version ORDER BY version), array_agg(DISTINCT os ORDER BY os),
                 to_char(min(first_ts), 'YYYY-MM-DD HH24:MI:SS'), to_char(max(last_ts), 'YYYY-MM-DD HH24:MI:SS'),
-                (array_agg(fields ORDER BY last_ts DESC))[1], (array_agg(trail ORDER BY last_ts DESC))[1],
-                count(*) OVER ()
-         FROM r GROUP BY event, fields->>'codigo', fields->>'etapa', fields->>'erro_tipo'
-         ORDER BY 7 DESC, 6 DESC, event LIMIT 300"
+                (array_agg(jsonb_build_object('at', to_char(first_ts, 'YYYY-MM-DD HH24:MI:SS'), 'fields', fields, 'trail', trail)
+                    ORDER BY first_ts DESC, batch_id, fields, trail))[1], fields->>'action', count(*) OVER ()
+         FROM r GROUP BY event, fields->>'codigo', fields->>'etapa', fields->>'erro_tipo', fields->>'action'
+         ORDER BY 7 DESC, 6 DESC, event, fields->>'action' LIMIT 300"
     ))
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
     let records_total = records.first().map_or(0, |r| r.13);
     // Passagens de um passo ao seguinte dentro do dia de cada máquina.
-    let transitions: Vec<(String, String, i64, i64)> = sqlx::query_as(concat!(
+    let transitions: Vec<(String, String, i64, i64, i64)> = sqlx::query_as(concat!(
         "WITH s AS (
              SELECT b.machine_id, t.event, lag(t.event) OVER (PARTITION BY t.batch_id ORDER BY t.seq) AS prev
              FROM trail_steps t JOIN batches b ON b.batch_id = t.batch_id
              WHERE ", in_period!("b.day"), ")
-         SELECT prev, event, count(*), count(DISTINCT machine_id) FROM s
+         SELECT prev, event, count(*), count(DISTINCT machine_id), count(*) OVER () FROM s
          WHERE prev IS NOT NULL AND prev <> event
          GROUP BY prev, event ORDER BY 3 DESC, 4 DESC, prev, event LIMIT 50"
     ))
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
+    let transitions_total = transitions.first().map_or(0, |t| t.4);
     // Os dias de cada máquina que têm caminho, para o painel escolher um e pedir `trail`.
-    let trail_days: Vec<(String, String, String, String, i64, i64)> = sqlx::query_as(concat!(
+    let trail_days: Vec<(String, String, String, String, i64, i64, i64)> = sqlx::query_as(concat!(
         "SELECT b.machine_id, to_char(b.day, 'YYYY-MM-DD'), (array_agg(b.os ORDER BY b.received_at DESC))[1],
-                (array_agg(b.version ORDER BY b.received_at DESC))[1], count(*), count(*) FILTER (WHERE t.level <> 'ok')
+                (array_agg(b.version ORDER BY b.received_at DESC))[1], count(*), count(*) FILTER (WHERE t.level <> 'ok'), count(*) OVER ()
          FROM trail_steps t JOIN batches b ON b.batch_id = t.batch_id
          WHERE ", in_period!("b.day"), "
-         GROUP BY b.machine_id, b.day ORDER BY b.day DESC, 5 DESC LIMIT 500"
+         GROUP BY b.machine_id, b.day ORDER BY b.day DESC, 5 DESC, b.machine_id LIMIT 500"
     ))
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
+    let trail_days_total = trail_days.first().map_or(0, |d| d.6);
     tx.commit().await?;
     use serde_json::json;
     Ok(json!({
         "records": records.into_iter().map(|r| json!({
-            "level": r.0, "event": r.1, "codigo": r.2, "etapa": r.3, "erro_tipo": r.4, "count": r.5, "machines": r.6,
-            "versions": r.7, "os": r.8, "first": r.9, "last": r.10, "fields": r.11.0, "trail": r.12.0,
+            "level": r.0, "event": r.1, "codigo": r.2, "etapa": r.3, "erro_tipo": r.4, "action": r.12, "count": r.5, "machines": r.6,
+            "versions": r.7, "os": r.8, "first": r.9, "last": r.10,
+            "sample_at": r.11.0["at"], "fields": r.11.0["fields"], "trail": r.11.0["trail"],
         })).collect::<Vec<_>>(),
         "records_total": records_total,
-        "transitions": transitions.into_iter().map(|(from, to, count, machines)|
+        "transitions": transitions.into_iter().map(|(from, to, count, machines, _)|
             json!({"from": from, "to": to, "count": count, "machines": machines})).collect::<Vec<_>>(),
-        "trail_days": trail_days.into_iter().map(|(machine, day, os, version, steps, problems)| json!({
+        "transitions_total": transitions_total,
+        "trail_days": trail_days.into_iter().map(|(machine, day, os, version, steps, problems, _)| json!({
             "machine": machine, "label": machine.get(..8).unwrap_or(&machine).to_owned(), "day": day, "os": os, "version": version,
             "steps": steps, "problems": problems,
         })).collect::<Vec<_>>(),
+        "trail_days_total": trail_days_total,
         "days": days,
         "active": {"machines_7d": active.0, "machines_30d": active.1, "owners_7d": active.2, "owners_30d": active.3},
-        "period": {"batches": batches, "machines": machines},
+        "period": {"batches": batches, "machines": machines, "partial_batches": partial_batches},
         "daily": daily.into_iter().map(|(day, machines)| json!({"day": day, "machines": machines})).collect::<Vec<_>>(),
         "env": env.into_iter().map(|(key, value, machines)| json!({"key": key, "value": value, "machines": machines})).collect::<Vec<_>>(),
         "per_owner": per_owner.into_iter().map(|(machines, owners)| json!({"machines": machines, "owners": owners})).collect::<Vec<_>>(),
@@ -338,21 +344,25 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
 
 /// Os passos de uma máquina num dia, na ordem; dia sem caminho é lista vazia.
 pub async fn trail(pool: &PgPool, machine: &str, day: &str) -> Result<serde_json::Value, sqlx::Error> {
-    let steps: Vec<(String, String, String, Option<String>, i64)> = sqlx::query_as(
-        "SELECT to_char(t.t, 'HH24:MI:SS'), t.event, t.level, t.screen, t.count
-         FROM trail_steps t JOIN batches b ON b.batch_id = t.batch_id
-         WHERE b.machine_id = $1 AND b.day = $2::date
-         ORDER BY t.t, b.batch_id, t.seq",
+    // O relógio pode recuar entre dois passos; dentro do lote vale a sequência recebida.
+    let (partial, steps): (bool, Json<serde_json::Value>) = sqlx::query_as(
+        "WITH ordered AS (
+             SELECT b.batch_id, b.partial, t.seq, t.t, t.event, t.level, t.screen, t.count,
+                    first_value(t.t) OVER (PARTITION BY b.batch_id ORDER BY t.seq) AS batch_start
+             FROM batches b LEFT JOIN trail_steps t ON b.batch_id = t.batch_id
+             WHERE b.machine_id = $1 AND b.day = $2::date
+         )
+         SELECT coalesce(bool_or(partial), false),
+                coalesce(jsonb_agg(jsonb_build_object('t', to_char(t, 'HH24:MI:SS'), 'event', event,
+                    'level', level, 'screen', screen, 'count', count) ORDER BY batch_start, batch_id, seq)
+                    FILTER (WHERE seq IS NOT NULL), '[]'::jsonb)
+         FROM ordered",
     )
     .bind(machine)
     .bind(day)
-    .fetch_all(pool)
+    .fetch_one(pool)
     .await?;
-    Ok(serde_json::json!({
-        "machine": machine, "day": day,
-        "steps": steps.into_iter().map(|(t, event, level, screen, count)|
-            serde_json::json!({"t": t, "event": event, "level": level, "screen": screen, "count": count})).collect::<Vec<_>>(),
-    }))
+    Ok(serde_json::json!({"machine": machine, "day": day, "partial": partial, "steps": steps.0}))
 }
 
 pub async fn prune(pool: &PgPool) -> Result<u64, sqlx::Error> {
