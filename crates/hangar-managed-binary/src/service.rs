@@ -333,6 +333,40 @@ async fn launchd_stop(home: &Path, id: &ServiceId, launchctl: &str) -> Result<()
     }
 }
 
+/// Liga ou desliga a subida do serviço no logon, sem tirá-lo nem mexer no programa que roda. Desligado, nem o
+/// gerenciador nem o logon o sobem; [`start`] e [`register`] só depois de ligar de novo.
+///
+/// # Errors
+///
+/// O gerenciador recusou. Serviço sem unit, plist ou tarefa não é erro: não há o que subir no logon.
+pub async fn set_autostart(home: &Path, id: &ServiceId, on: bool) -> Result<(), Error> {
+    if cfg!(target_os = "macos") {
+        let plist = launchd_plist_path(home, id);
+        if !plist.is_file() {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        let uid = { use std::os::unix::fs::MetadataExt; std::fs::metadata(home).map(|m| m.uid()).unwrap_or_default() };
+        #[cfg(not(unix))]
+        let uid = 0;
+        let target = format!("gui/{uid}/{}", id.launchd_label);
+        return run("launchctl enable", "launchctl", &[if on { "enable" } else { "disable" }, &target]).await;
+    }
+    if cfg!(windows) {
+        let verb = if on { "Enable-ScheduledTask" } else { "Disable-ScheduledTask" };
+        return powershell(verb, &format!("$ErrorActionPreference = 'Stop'\n{verb} -TaskName {} | Out-Null\n", ps_quote(id.task))).await;
+    }
+    systemd_autostart(home, id, on, "systemctl").await
+}
+
+async fn systemd_autostart(home: &Path, id: &ServiceId, on: bool, systemctl: &str) -> Result<(), Error> {
+    if !systemd_unit_path(home, id).is_file() {
+        return Ok(());
+    }
+    let verb = if on { "enable" } else { "disable" };
+    run(&format!("systemctl {verb}"), systemctl, &["--user", verb, id.unit]).await
+}
+
 /// Grava o serviço apontando para `s.executable` e o (re)inicia: serve para instalar e para atualizar.
 pub async fn register(home: &Path, managed_dir: &Path, s: &Service) -> Result<(), Error> {
     // No Windows, registrar e ligar vão num script só: uma chamada ao PowerShell em vez de duas.
@@ -645,6 +679,27 @@ mod tests {
         assert_eq!(launchd_stop(home.path(), &WHATSAPP, &unloaded).await, Ok(()));
         let loaded = fake("loaded", "echo '{ \"PID\" = 7; };'");
         assert_eq!(launchd_stop(home.path(), &WHATSAPP, &loaded).await.unwrap_err().step, "launchctl unload");
+    }
+
+    /// Desligar a subida no logon é `disable` sem `--now`; sem a unit no disco não se pergunta ao `systemctl`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn turning_autostart_off_and_on_keeps_the_unit() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(systemd_autostart(home.path(), &WHATSAPP, false, "/nao/existe/systemctl").await, Ok(()), "sem unit");
+        let unit = systemd_unit_path(home.path(), &WHATSAPP);
+        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        std::fs::write(&unit, "[Unit]\n").unwrap();
+        let seen = home.path().join("seen");
+        let fake = home.path().join("systemctl");
+        std::fs::write(&fake, format!("#!/bin/sh\necho \"$@\" >> {}\n", seen.display())).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let fake = fake.display().to_string();
+        systemd_autostart(home.path(), &WHATSAPP, false, &fake).await.unwrap();
+        systemd_autostart(home.path(), &WHATSAPP, true, &fake).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "--user disable hangar-whatsapp.service\n--user enable hangar-whatsapp.service\n");
+        assert_eq!(systemd_autostart(home.path(), &WHATSAPP, false, "false").await.unwrap_err().step, "systemctl disable");
     }
 
     /// Sem a unit no disco não se pergunta ao `systemctl`; o que sai com erro é erro.

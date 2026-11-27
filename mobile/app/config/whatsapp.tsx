@@ -79,6 +79,7 @@ const JOB_ERR: Record<string, () => string> = {
   update_no_rollback: m.native_whatsapp_job_err_update_no_rollback,
   update_data_migrated: m.native_whatsapp_job_err_update_data_migrated,
   update_restored: m.native_whatsapp_job_err_update_restored,
+  restore_pending: m.native_whatsapp_job_err_restore_pending,
   backup_failed: m.native_whatsapp_job_err_backup_failed,
   record_failed: m.native_whatsapp_job_err_record_failed,
   accept_write_failed: m.native_whatsapp_job_err_accept_write_failed,

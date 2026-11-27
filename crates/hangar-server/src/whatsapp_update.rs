@@ -64,6 +64,7 @@ fn diary_line(update: Option<&AutoUpdate>) -> Option<Value> {
     let AutoUpdate { from, to, result } = update?;
     match result {
         Ok(Outcome::Updated) => Some(json!({"evento": "whatsapp.atualizado", "nivel": "info", "de": from, "para": to})),
+        Ok(Outcome::Restored) => Some(json!({"evento": "whatsapp.recuperado", "nivel": "info", "versao": to})),
         Ok(_) => None,
         Err(failure) => Some(json!({"evento": GATE.event, "nivel": "erro", "codigo": failure.code, "de": from, "para": to})),
     }
@@ -105,6 +106,13 @@ mod tests {
         let failed = update(Err(Failure::new("whatsapp_update_restored", "saída do binário")));
         assert_eq!(diary_line(Some(&failed)), Some(json!({"evento": "whatsapp.atualizar", "nivel": "erro",
             "codigo": "whatsapp_update_restored", "de": "v0.1.1", "para": "v0.2.0"})));
+    }
+
+    /// Os arquivos de uma volta anterior que voltaram ao lugar vão ao diário, sem aviso na tela.
+    #[test]
+    fn files_back_in_place_go_to_the_diary() {
+        assert_eq!(diary_line(Some(&update(Ok(Outcome::Restored)))),
+            Some(json!({"evento": "whatsapp.recuperado", "nivel": "info", "versao": "v0.2.0"})));
     }
 
     /// Sem troca (em dia, à espera do dono ou tag que já falhou) só o log de depuração.

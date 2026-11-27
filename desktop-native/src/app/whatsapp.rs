@@ -1156,7 +1156,7 @@ mod tests {
             crate::i18n::english_in_this_thread(english);
             let generic = crate::i18n::tr("whatsapp_job_err_unknown");
             let generic = generic.split('{').next().unwrap_or_default();
-            for code in ["update_restored", "update_data_migrated", "backup_failed", "not_started", "update_no_rollback"] {
+            for code in ["update_restored", "update_data_migrated", "backup_failed", "not_started", "update_no_rollback", "restore_pending"] {
                 let text = code_text("whatsapp_job_err_", &format!("whatsapp_{code}"));
                 assert!(!text.starts_with(generic), "{code} (english={english}) caiu na frase genérica: {text}");
             }

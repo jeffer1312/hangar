@@ -87,6 +87,9 @@ pub enum Outcome {
     NeedsConfirm,
     /// O relógio já sabe que esta tag espera confirmação ou falhou: nem baixou.
     Skipped,
+    /// Os arquivos que uma volta deixou fora do lugar voltaram e o serviço subiu ([`recover`]); a troca fica para a
+    /// próxima passada.
+    Restored,
 }
 
 /// Quem pediu a atualização, e o que ela pode fazer sem perguntar.
@@ -167,6 +170,11 @@ impl Paths {
     pub fn update_check(&self) -> PathBuf {
         self.service.join("update-check.json")
     }
+
+    /// Os arquivos do banco que uma volta da cópia deixou fora do lugar ([`recover`]).
+    pub fn restore_pending(&self) -> PathBuf {
+        self.service.join("restore-pending.json")
+    }
 }
 
 impl Context {
@@ -207,6 +215,7 @@ impl jobs::Outcome for Outcome {
             Self::AlreadyLatest => "already_latest",
             Self::NeedsConfirm => "needs_confirm",
             Self::Skipped => "skipped",
+            Self::Restored => "restored",
         }
     }
 }
@@ -289,6 +298,7 @@ pub fn accept(paths: &Paths) -> Result<(), Failure> {
 ///
 /// Falha do download, da conferência do `--version`, do registro do serviço ou da subida.
 pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
+    recover(ctx).await?;
     let client = Client::new(ctx.paths.data.clone());
     // De pé só com um status assinado: pid vivo no `control.json` pode ser outro processo.
     if current(&ctx.paths).is_some() && client.status().await.is_ok() {
@@ -372,6 +382,12 @@ pub fn write_update_check(paths: &Paths, check: &UpdateCheck) -> Result<(), Fail
 /// [`AutoPlan::Switch`]. A procura que responde fica em `update-check.json`.
 pub async fn auto_wants(ctx: &Context) -> AutoPlan {
     let Some(old) = current(&ctx.paths) else { return AutoPlan::NotInstalled };
+    // Arquivos de uma volta fora do lugar vêm antes de procurar versão: sem eles, subir criaria um banco vazio.
+    match recover(ctx).await {
+        Ok(false) => {}
+        Ok(true) => return AutoPlan::Done(AutoUpdate { from: old.tag.clone(), to: old.tag, result: Ok(Outcome::Restored) }),
+        Err(failure) => return AutoPlan::Done(AutoUpdate { from: old.tag.clone(), to: old.tag, result: Err(failure) }),
+    }
     let latest = match release::latest(&ctx.github).await {
         Ok(latest) => latest,
         Err(failure) => return AutoPlan::Done(AutoUpdate { to: old.tag.clone(), from: old.tag, result: Err(failure) }),
@@ -408,6 +424,7 @@ pub async fn auto_wants(ctx: &Context) -> AutoPlan {
 /// registrada.
 pub async fn update(ctx: &Context, mode: Mode, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
     current(&ctx.paths).ok_or_else(not_installed)?;
+    recover(ctx).await?;
     progress(Step::Download);
     let latest = release::latest(&ctx.github).await?;
     update_to(ctx, mode, &latest, progress).await
@@ -636,10 +653,13 @@ pub async fn uninstall(ctx: &Context) -> Result<(), Failure> {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(gone(&bin, e)),
         _ => {}
     }
-    match std::fs::remove_file(ctx.paths.record()) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(gone(&ctx.paths.record(), e)),
-        _ => Ok(()),
+    for file in [ctx.paths.restore_pending(), ctx.paths.record()] {
+        match std::fs::remove_file(&file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(gone(&file, e)),
+            _ => {}
+        }
     }
+    Ok(())
 }
 
 /// Uma troca de versão em curso: a nova grava a cópia `messages.db.schema<v>.bak` antes de migrar, e só grava o
@@ -808,10 +828,11 @@ async fn restore(ctx: &Context, old: &Installed, new: &Installed, schema: u32, f
         return keep_new(&ctx.paths, new, not_restored(why));
     }
     let data = ctx.paths.data.clone();
-    let swapped = tokio::task::spawn_blocking(move || restore_backup(&data, schema)).await
-        .unwrap_or_else(|e| Err(NotRestored { why: format!("a troca dos arquivos parou no meio: {e}"), in_place: false }));
+    let swapped = tokio::task::spawn_blocking(move || restore_backup(&data, schema, &mut || std::thread::sleep(UNDO_PAUSE))).await
+        .unwrap_or_else(|e| Err(NotRestored { why: format!("a troca dos arquivos parou no meio: {e}"), stuck: Vec::new(), interrupted: true }));
     if let Err(failed) = swapped {
-        let why = after_restore_failed(failed, || service::start(&ctx.paths.home, &SERVICE)).await;
+        let why = after_restore_failed(&ctx.paths, failed, || service::start(&ctx.paths.home, &SERVICE),
+            || service::set_autostart(&ctx.paths.home, &SERVICE, false)).await;
         return keep_new(&ctx.paths, new, not_restored(why));
     }
     let client = Client::new(ctx.paths.data.clone());
@@ -837,18 +858,78 @@ async fn restore(ctx: &Context, old: &Installed, new: &Installed, schema: u32, f
 
 /// A cópia não voltou e o serviço está parado. Com os arquivos do banco no lugar, a nova, que segue registrada,
 /// sobe de novo sobre os dados migrados; fora do lugar, ela criaria um banco vazio e fica parada.
-async fn after_restore_failed<F, Fut>(failed: NotRestored, start: F) -> String
+async fn after_restore_failed<S, SF, O, OF>(paths: &Paths, failed: NotRestored, start: S, off: O) -> String
 where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<(), service::Error>>,
+    S: FnOnce() -> SF,
+    SF: std::future::Future<Output = Result<(), service::Error>>,
+    O: FnOnce() -> OF,
+    OF: std::future::Future<Output = Result<(), service::Error>>,
 {
-    if !failed.in_place {
-        return format!("{}; o serviço ficou parado", failed.why);
+    if !failed.in_place() {
+        // Sem os pares (a troca parou no meio), não há o que pôr de volta sozinho: fica só o serviço parado.
+        if failed.stuck.is_empty() {
+            return format!("{}; o serviço ficou parado", failed.why);
+        }
+        let held = match write_pending(paths, &failed.stuck) {
+            Ok(()) => "; o Hangar põe os arquivos de volta na próxima passada ou no próximo Atualizar".to_owned(),
+            Err(e) => format!("; e o registro dos arquivos presos não gravou: {e}"),
+        };
+        let logon = match off().await {
+            Ok(()) => "; até lá a subida no logon fica desligada".to_owned(),
+            Err(e) => format!("; e a subida no logon não desligou: {}: {}", e.step, e.detail),
+        };
+        return format!("{}; o serviço ficou parado{held}{logon}", failed.why);
     }
     match start().await {
         Ok(()) => format!("{}; a versão nova foi religada sobre os dados migrados", failed.why),
         Err(e) => format!("{}; e a versão nova não religou: {}: {}; o serviço ficou parado", failed.why, e.step, e.detail),
     }
+}
+
+/// O código do Atualizar e do Instalar recusados enquanto arquivos de uma volta seguem fora do lugar.
+pub const RESTORE_PENDING: &str = "whatsapp_restore_pending";
+
+/// Põe de volta os arquivos que uma volta deixou fora do lugar ([`Paths::restore_pending`]), religa a subida no
+/// logon e sobe o serviço. `Ok(false)` sem nada pendente; `Ok(true)` quando voltaram e o serviço subiu.
+///
+/// # Errors
+///
+/// [`RESTORE_PENDING`] com os arquivos que seguem presos; a falha do gerenciador ao religar.
+pub async fn recover(ctx: &Context) -> Result<bool, Failure> {
+    recover_with(&ctx.paths, || async {
+        service::set_autostart(&ctx.paths.home, &SERVICE, true).await?;
+        service::start(&ctx.paths.home, &SERVICE).await
+    }).await
+}
+
+/// Grava os arquivos presos em [`Paths::restore_pending`].
+fn write_pending(paths: &Paths, stuck: &[Stuck]) -> Result<(), String> {
+    let body = serde_json::to_vec(stuck).map_err(|e| e.to_string())?;
+    write_file(&paths.restore_pending(), &body)
+}
+
+/// [`recover`] com quem religa o serviço.
+async fn recover_with<F, Fut>(paths: &Paths, up: F) -> Result<bool, Failure>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), service::Error>>,
+{
+    let file = paths.restore_pending();
+    let stuck: Vec<Stuck> = match std::fs::read(&file) {
+        Ok(body) => serde_json::from_slice(&body)
+            .map_err(|e| Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display())))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display()))),
+    };
+    let left: Vec<Stuck> = stuck.into_iter().filter(|s| !settle(s)).collect();
+    if !left.is_empty() {
+        let _ = write_pending(paths, &left);
+        return Err(Failure::new(RESTORE_PENDING, format!("arquivos do banco fora do lugar desde uma volta anterior: {}", stuck_list(&left))));
+    }
+    std::fs::remove_file(&file).map_err(|e| Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display())))?;
+    up().await.map_err(Failure::from)?;
+    tracing::info!("whatsapp: os arquivos do banco voltaram ao lugar e o serviço subiu");
+    Ok(true)
 }
 
 /// Só com a confirmação do dono, o esquema `v` da cópia `messages.db.schema<v>.bak` que a nova gravou desde
@@ -940,14 +1021,14 @@ pub(crate) const DB_FILES: [&str; 4] = ["", "-wal", "-shm", "-journal"];
 /// # Errors
 ///
 /// O que falhou e o estado em que os arquivos ficaram: o que tinha saído do caminho volta.
-fn restore_backup(data: &Path, schema: u32) -> Result<(), NotRestored> {
+fn restore_backup(data: &Path, schema: u32, pause: &mut dyn FnMut()) -> Result<(), NotRestored> {
     let backup = backup_path(data, schema);
     let staged = data.join(RESTORING);
     let copied = std::fs::copy(&backup, &staged)
         .and_then(|_| std::fs::OpenOptions::new().write(true).open(&staged)?.sync_all());
     if let Err(e) = copied {
         let _ = std::fs::remove_file(&staged);
-        return Err(NotRestored { why: format!("{}: {e}; nada mudou", backup.display()), in_place: true });
+        return Err(NotRestored { why: format!("{}: {e}; nada mudou", backup.display()), stuck: Vec::new(), interrupted: false });
     }
     let mut moved = Vec::new();
     for suffix in DB_FILES {
@@ -961,28 +1042,86 @@ fn restore_backup(data: &Path, schema: u32) -> Result<(), NotRestored> {
         match result {
             Ok(true) => moved.push((from.clone(), to.clone())),
             Ok(false) => {}
-            Err(e) => return Err(undo(&staged, &moved, format!("{}: {e}", path.display()))),
+            Err(e) => return Err(retry(undo(&staged, &moved, format!("{}: {e}", path.display())), pause)),
         }
     }
-    hangar_core::fs::replace(&staged, &data.join("messages.db")).map_err(|e| undo(&staged, &moved, format!("{}: {e}", staged.display())))
+    hangar_core::fs::replace(&staged, &data.join("messages.db")).map_err(|e| retry(undo(&staged, &moved, format!("{}: {e}", staged.display())), pause))
 }
 
-/// A volta da cópia que falhou; `in_place`: os arquivos do banco estão onde estavam antes dela.
+/// A volta da cópia que falhou, com os arquivos do banco que não voltaram ao lugar; `interrupted`: a troca parou
+/// no meio e não se sabe onde eles estão.
 #[derive(Debug)]
 struct NotRestored {
     why: String,
-    in_place: bool,
+    stuck: Vec<Stuck>,
+    interrupted: bool,
+}
+
+impl NotRestored {
+    /// Os arquivos do banco estão onde estavam antes da volta.
+    fn in_place(&self) -> bool {
+        self.stuck.is_empty() && !self.interrupted
+    }
+}
+
+/// Um arquivo do banco fora do lugar: estava em `name` e ficou em `at`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Stuck {
+    name: PathBuf,
+    at: PathBuf,
+}
+
+/// Quantas vezes a volta tenta de novo o que ficou preso, e a espera entre elas: quem segura o arquivo logo
+/// depois da parada (antivírus, indexador) costuma soltá-lo em segundos.
+const UNDO_RETRIES: usize = 3;
+const UNDO_PAUSE: Duration = Duration::from_secs(3);
+
+/// Tenta de novo pôr no lugar o que ficou preso, com `pause` antes de cada tentativa.
+fn retry(mut failed: NotRestored, pause: &mut dyn FnMut()) -> NotRestored {
+    if failed.stuck.is_empty() {
+        return failed;
+    }
+    for _ in 0..UNDO_RETRIES {
+        pause();
+        failed.stuck.retain(|stuck| !settle(stuck));
+        if failed.stuck.is_empty() {
+            failed.why.push_str("; o que tinha ficado preso voltou na repetição");
+            break;
+        }
+    }
+    failed
+}
+
+/// O arquivo preso voltou ao lugar, ou não há mais o que pôr de volta. Com os dois no disco, o do lugar pode ter
+/// dados novos, e nada é sobrescrito.
+fn settle(stuck: &Stuck) -> bool {
+    match (stuck.name.exists(), stuck.at.exists()) {
+        (_, false) => true,
+        (false, true) => hangar_core::fs::replace(&stuck.at, &stuck.name).is_ok(),
+        (true, true) => false,
+    }
+}
+
+/// Os pares presos, para a mensagem.
+fn stuck_list(stuck: &[Stuck]) -> String {
+    stuck.iter().map(|s| format!("{} ficou como {}", s.name.display(), s.at.display())).collect::<Vec<_>>().join("; ")
 }
 
 /// Põe de volta o que saiu do caminho e diz como os arquivos ficaram.
 fn undo(staged: &Path, moved: &[(PathBuf, PathBuf)], why: String) -> NotRestored {
     let _ = std::fs::remove_file(staged);
-    let stuck: Vec<String> = moved.iter().rev().filter_map(|(from, to)| hangar_core::fs::replace(to, from).err()
-        .map(|e| format!("{} ficou como {}: {e}", from.display(), to.display()))).collect();
+    let mut stuck = Vec::new();
+    let mut said = Vec::new();
+    for (from, to) in moved.iter().rev() {
+        if let Err(e) = hangar_core::fs::replace(to, from) {
+            said.push(format!("{} ficou como {}: {e}", from.display(), to.display()));
+            stuck.push(Stuck { name: from.clone(), at: to.clone() });
+        }
+    }
     if stuck.is_empty() {
-        NotRestored { why: format!("{why}; os arquivos do banco voltaram como estavam"), in_place: true }
+        NotRestored { why: format!("{why}; os arquivos do banco voltaram como estavam"), stuck, interrupted: false }
     } else {
-        NotRestored { why: format!("{why}; e não voltaram: {}", stuck.join("; ")), in_place: false }
+        NotRestored { why: format!("{why}; e não voltaram: {}", said.join("; ")), stuck, interrupted: false }
     }
 }
 
@@ -1282,7 +1421,7 @@ mod tests {
             ("messages.db.schema1.bak", "before"), ("session.db", "session"), ("messages.db.migrated-journal", "stale")] {
             write_db_file(&data.join(name), body);
         }
-        restore_backup(data, 1).unwrap();
+        restore_backup(data, 1, &mut || {}).unwrap();
         assert_eq!(read(&data.join("messages.db")), "before");
         for gone in ["messages.db-wal", "messages.db-shm", "messages.db-journal", "messages.db.restoring"] {
             assert!(!data.join(gone).exists(), "{gone} ficou");
@@ -1303,9 +1442,9 @@ mod tests {
         write_db_file(&data.join("messages.db"), "migrated");
         write_db_file(&data.join("messages.db-wal"), "wal");
         write_db_file(&data.join("messages.db.schema2.bak"), "other");
-        let NotRestored { why, in_place } = restore_backup(data, 1).unwrap_err();
-        assert!(why.contains("messages.db.schema1.bak") && why.ends_with("nada mudou"), "{why}");
-        assert!(in_place);
+        let failed = restore_backup(data, 1, &mut || {}).unwrap_err();
+        assert!(failed.why.contains("messages.db.schema1.bak") && failed.why.ends_with("nada mudou"), "{}", failed.why);
+        assert!(failed.in_place());
         assert_eq!(read(&data.join("messages.db")), "migrated");
         assert_eq!(read(&data.join("messages.db-wal")), "wal");
         assert!(!data.join("messages.db.restoring").exists());
@@ -1323,9 +1462,9 @@ mod tests {
         }
         // Uma pasta com conteúdo no nome de destino do `-shm`: o rename dele falha depois do banco e do `-wal`.
         std::fs::create_dir_all(data.join("messages.db.migrated-shm/x")).unwrap();
-        let NotRestored { why, in_place } = restore_backup(data, 1).unwrap_err();
-        assert!(why.contains("messages.db-shm") && why.ends_with("os arquivos do banco voltaram como estavam"), "{why}");
-        assert!(in_place);
+        let failed = restore_backup(data, 1, &mut || {}).unwrap_err();
+        assert!(failed.why.contains("messages.db-shm") && failed.why.ends_with("os arquivos do banco voltaram como estavam"), "{}", failed.why);
+        assert!(failed.in_place());
         assert_eq!(read(&data.join("messages.db")), "migrated");
         assert_eq!(read(&data.join("messages.db-wal")), "wal");
         assert_eq!(read(&data.join("messages.db-shm")), "shm");
@@ -1342,18 +1481,86 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let data = dir.path();
         write_db_file(&data.join("messages.db"), "migrated");
+        let paths = Paths::new(dir.path());
+        let never = || async { panic!("desligou a subida no logon com os arquivos no lugar") };
         let started = std::cell::Cell::new(false);
-        let why = after_restore_failed(restore_backup(data, 1).unwrap_err(), || async { started.set(true); Ok(()) }).await;
+        let why = after_restore_failed(&paths, restore_backup(data, 1, &mut || {}).unwrap_err(), || async { started.set(true); Ok(()) }, never).await;
         assert!(started.get(), "a nova não foi religada");
         assert!(why.contains("religada") && !why.contains("ficou parado"), "{why}");
 
         let refused = || async { Err(service::Error { step: "systemctl restart".into(), detail: "recusou".into() }) };
-        let why = after_restore_failed(restore_backup(data, 1).unwrap_err(), refused).await;
+        let why = after_restore_failed(&paths, restore_backup(data, 1, &mut || {}).unwrap_err(), refused, never).await;
         assert!(why.contains("systemctl restart: recusou") && why.contains("ficou parado"), "{why}");
+        assert!(!paths.restore_pending().exists());
+    }
 
-        let stuck = NotRestored { why: "messages.db ficou como messages.db.migrated".into(), in_place: false };
-        let why = after_restore_failed(stuck, || async { panic!("religou com os arquivos fora do lugar") }).await;
+    /// Preso que segue preso depois das tentativas: o marcador guarda cada par e a subida no logon desliga, para o
+    /// logon não criar um `messages.db` vazio; nada religa.
+    #[tokio::test]
+    async fn a_file_still_stuck_is_recorded_and_the_logon_start_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path());
+        let pair = Stuck { name: dir.path().join("messages.db"), at: dir.path().join("messages.db.migrated") };
+        let stuck = NotRestored { why: "messages.db ficou como messages.db.migrated".into(), stuck: vec![pair.clone()], interrupted: false };
+        let off = std::cell::Cell::new(false);
+        let why = after_restore_failed(&paths, stuck, || async { panic!("religou com os arquivos fora do lugar") },
+            || async { off.set(true); Ok(()) }).await;
         assert!(why.contains("ficou parado"), "{why}");
+        assert!(off.get(), "a subida no logon ficou ligada");
+        let held: Vec<Stuck> = serde_json::from_slice(&std::fs::read(paths.restore_pending()).unwrap()).unwrap();
+        assert_eq!(held, [pair]);
+    }
+
+    /// O que ficou preso na volta é tentado de novo: o que solta o arquivo entre as tentativas deixa tudo no lugar;
+    /// o que nunca solta segue preso depois das três.
+    #[test]
+    fn a_stuck_file_goes_back_when_it_is_released_between_tries() {
+        let dir = tempfile::tempdir().unwrap();
+        let (name, at) = (dir.path().join("messages.db"), dir.path().join("messages.db.migrated"));
+        write_db_file(&at, "migrated");
+        // Uma pasta com conteúdo no lugar do banco: o rename de volta falha até ela sair.
+        std::fs::create_dir_all(name.join("x")).unwrap();
+        let failed = || NotRestored { why: "x".into(), stuck: vec![Stuck { name: name.clone(), at: at.clone() }], interrupted: false };
+        let mut pauses = 0;
+        let kept = retry(failed(), &mut || pauses += 1);
+        assert_eq!((kept.stuck.len(), pauses), (1, UNDO_RETRIES), "{kept:?}");
+        let back = retry(failed(), &mut || { let _ = std::fs::remove_dir_all(&name); });
+        assert!(back.in_place(), "{back:?}");
+        assert_eq!(read(&name), "migrated");
+    }
+
+    /// A passada seguinte põe de volta o que estava preso, apaga o marcador e sobe o serviço; sem marcador, nada.
+    #[tokio::test]
+    async fn the_next_pass_puts_the_files_back_and_starts_the_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path());
+        let never = || async { panic!("subiu sem nada pendente") };
+        assert_eq!(recover_with(&paths, never).await, Ok(false));
+        let (name, at) = (paths.data.join("messages.db"), paths.data.join("messages.db.migrated"));
+        std::fs::create_dir_all(&paths.data).unwrap();
+        write_db_file(&at, "migrated");
+        write_pending(&paths, &[Stuck { name: name.clone(), at }]).unwrap();
+        let up = std::cell::Cell::new(false);
+        assert_eq!(recover_with(&paths, || async { up.set(true); Ok(()) }).await, Ok(true));
+        assert_eq!(read(&name), "migrated");
+        assert!(!paths.restore_pending().exists(), "o marcador ficou");
+        assert!(up.get(), "o serviço não subiu");
+    }
+
+    /// Com um arquivo ainda fora do lugar (aqui o lugar dele está ocupado), o Atualizar do dono recusa com o código
+    /// e a lista, sem procurar versão, e o marcador fica para a próxima tentativa.
+    #[tokio::test]
+    async fn updating_refuses_while_the_files_are_out_of_place() {
+        let (_dir, ctx, _, _) = installed_latest(axum::Router::new()).await;
+        let (name, at) = (ctx.paths.data.join("messages.db"), ctx.paths.data.join("messages.db.migrated"));
+        std::fs::create_dir_all(&ctx.paths.data).unwrap();
+        write_db_file(&name, "vazio");
+        write_db_file(&at, "migrated");
+        write_pending(&ctx.paths, &[Stuck { name, at }]).unwrap();
+        let refused = update(&ctx, Mode::Manual, &|_| {}).await.unwrap_err();
+        assert_eq!(refused.code, RESTORE_PENDING);
+        assert!(refused.detail.contains("messages.db.migrated"), "{}", refused.detail);
+        assert!(ctx.paths.restore_pending().exists());
     }
 
     /// A cópia desta tentativa leva à volta mesmo sem a prova de que a nova abriu os dados: o binário migra antes

@@ -531,7 +531,12 @@ Decisões do usuário (26/11, opção A nas quatro):
   `whatsapp_update_restored`. Sem a parada confirmada ou sem cópia fica o `whatsapp_update_data_migrated`
   de antes, com o serviço parado. Cópia que não volta (disco cheio na cópia de trabalho, troca que falha)
   com os arquivos do banco no lugar religa a nova sobre os dados migrados; religar que falha aparece no
-  resultado. Registrar a anterior antes de parar a nova deixaria ela abrir o banco
+  resultado. Arquivo que segue preso depois de três tentativas (cerca de 10 s) vai a `restore-pending.json`
+  com cada par, e a subida no logon desliga (sem desinstalar), para o logon não criar um `messages.db` vazio.
+  Cada passada do relógio e todo Atualizar ou Instalar tentam pôr os arquivos de volta primeiro; voltaram,
+  o marcador sai, a subida no logon volta e o serviço sobe (diário `whatsapp.recuperado`, sem aviso na tela).
+  Só o Atualizar ou Instalar do dono recusa enquanto não voltam: `whatsapp_restore_pending` com a lista.
+  Registrar a anterior antes de parar a nova deixaria ela abrir o banco
   migrado e sair com 3. Uma cópia gravada nesta tentativa vale como prova de que a nova abriu os dados
   (o binário migra antes de gravar o `control.json`) e estende a espera da subida até 10 min enquanto o
   processo vive: copiar e converter um banco grande passa dos 30 s. A troca de arquivos tira o conjunto
