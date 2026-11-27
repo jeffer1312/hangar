@@ -116,7 +116,8 @@ export function isUpdateJob(job: WhatsAppState['job']): boolean {
  * versão: a linha só diz quando procurou. `checkedAt` em segundos epoch, `null` sem procura legível. */
 export type VersionLine =
   | { kind: 'current' | 'checked'; tag: string; checkedAt: number | null }
-  | { kind: 'available' | 'migration'; tag: string; latest: string };
+  | { kind: 'available'; tag: string; latest: string }
+  | { kind: 'migration'; tag: string; latest: string };
 
 export function versionLine(state: WhatsAppState): VersionLine | null {
   const tag = state.installed_tag;
