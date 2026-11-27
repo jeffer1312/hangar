@@ -5780,7 +5780,9 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   dono quer ver máquinas por dono. Com volume pequeno e perguntas específicas, ficou um receptor
   axum + Postgres na VPS (`services/telemetry-ingest`), com workspace próprio para o driver do
   Postgres não entrar no `Cargo.lock` nem no portão do PR; ele reusa só o módulo `wire` do
-  `hangar-telemetry`. Grafana é provisório.
+  `hangar-telemetry`. Para ver os dados, o próprio receptor serve `/painel` com senha
+  (`PANEL_PASSWORD`; sem ela a rota não existe), no lugar do Grafana que estava no plano: um serviço a
+  menos na VPS e a mesma tela no PC e no celular.
 - **Opt-out com aviso, e nenhum contador antes da resposta.** O padrão é ligado, mas `consent: null`
   não conta nem grava contador. A subida já cria o `~/.hangar/telemetry.json` com `consent: null` e
   os dois ids aleatórios; só "Pode enviar" ou "Não enviar" gravam a escolha, e fechar o aviso pergunta

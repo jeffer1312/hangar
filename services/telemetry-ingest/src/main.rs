@@ -1,5 +1,6 @@
 //! Receptor da telemetria: `POST /v1/batch` grava o pacote diário de cada máquina no Postgres.
 //! Não lê IP nem cabeçalho de origem; o limite de pedidos fica com a Cloudflare.
+mod panel;
 mod store;
 
 use std::time::Duration;
@@ -22,6 +23,10 @@ fn app(pool: PgPool) -> Router {
         .route("/v1/batch", post(post_batch))
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .with_state(pool)
+}
+
+fn app_with_panel(pool: PgPool, password: Option<String>) -> Router {
+    app(pool.clone()).merge(panel::router(pool, password))
 }
 
 fn reply(status: StatusCode, body: String) -> Response {
@@ -83,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = terminate.recv() => {}
         }
     };
-    axum::serve(listener, app(pool)).with_graceful_shutdown(stop).await?;
+    axum::serve(listener, app_with_panel(pool, std::env::var("PANEL_PASSWORD").ok())).with_graceful_shutdown(stop).await?;
     Ok(())
 }
 
@@ -150,6 +155,52 @@ mod tests {
 
     async fn post_json(pool: PgPool, body: &Value) -> (StatusCode, String) {
         send(pool, serde_json::to_vec(body).unwrap()).await
+    }
+
+    async fn get_panel(router: Router, path: &str, password: Option<&str>) -> (StatusCode, String) {
+        let mut request = Request::get(path);
+        if let Some(password) = password {
+            use base64::Engine;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(format!("dono:{password}"));
+            request = request.header(header::AUTHORIZATION, format!("Basic {encoded}"));
+        }
+        let response = router.oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn panel_exists_only_with_a_password_and_asks_for_it() {
+        assert_eq!(get_panel(app_with_panel(offline(), None), "/painel", None).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(get_panel(app_with_panel(offline(), Some(String::new())), "/painel", None).await.0, StatusCode::NOT_FOUND);
+        let with = || app_with_panel(offline(), Some("segredo".into()));
+        assert_eq!(get_panel(with(), "/painel", None).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(get_panel(with(), "/painel/dados", Some("errada")).await.0, StatusCode::UNAUTHORIZED);
+        let (status, page) = get_panel(with(), "/painel", Some("segredo")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(page.contains("/painel/dados"), "a página lê os dados da rota protegida");
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn panel_data_sums_the_counters_of_the_period() {
+        let pool = online().await;
+        let today = utc_day(&pool, 0).await;
+        let (first, second) = (batch_body(&fresh_id(), &today), batch_body(&fresh_id(), &today));
+        for body in [&first, &second] {
+            assert_eq!(post_json(pool.clone(), body).await.0, StatusCode::OK);
+        }
+        let (status, text) = get_panel(app_with_panel(pool, Some("segredo".into())), "/painel/dados?dias=7", Some("segredo")).await;
+        assert_eq!(status, StatusCode::OK);
+        let data: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(data["days"], 7);
+        let future = data["counters"].as_array().unwrap().iter()
+            .find(|c| c["event"] == "future_event" && c["dims"]["new_dim"] == "new_value" && c["bucket"] == "lt3s")
+            .unwrap();
+        // Outras rodadas no mesmo banco somam junto: confere o mínimo destas duas máquinas.
+        assert!(future["count"].as_i64().unwrap() >= 14 && future["machines"].as_i64().unwrap() >= 2, "{future}");
+        assert!(data["active"]["machines_7d"].as_i64().unwrap() >= 2);
     }
 
     #[tokio::test]
