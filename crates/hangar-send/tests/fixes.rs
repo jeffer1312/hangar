@@ -160,18 +160,19 @@ fn a_cut_send_found_in_the_conversation_says_it_arrived() {
     assert_eq!(paths.first().map(String::as_str), Some("/api/sessions/alvo/history?limit=40"));
 }
 
-/// A conversa foi lida e o recado não está nela: não chegou (3), e a frase manda conferir antes de reenviar.
+/// A conversa foi lida e o recado não está nela: o servidor ainda pode gravá-lo, então fica incerto (4),
+/// nunca "não chegou", que levaria a reenviar e duplicar.
 #[test]
-fn a_cut_send_missing_from_the_conversation_says_it_did_not_arrive() {
+fn a_cut_send_missing_from_the_conversation_stays_uncertain() {
     let lines = format!(
         r#"[{{"kind": "user_msg", "id": "u1", "text": "[de: cli] outra coisa", "ts": {LATER}}}, {{"kind": "assistant_msg", "id": "a1", "text": "oi", "ts": {LATER}}}]"#
     );
     let (server, done) = cut_send(history(200, &lines));
-    assert_eq!(done.code, 3, "{}", done.stderr);
+    assert_eq!(done.code, 4, "{}", done.stderr);
     assert_eq!(done.stdout, "");
     assert_eq!(
         done.stderr,
-        format!("erro: sem resposta de http://127.0.0.1:{} no prazo e o recado não apareceu na conversa em 1 s — não chegou; confira antes de reenviar\n", server.port)
+        format!("erro: sem resposta de http://127.0.0.1:{} no prazo e o recado não apareceu na conversa em 1 s; o servidor pode ainda estar processando — confira com hangar-send --list antes de reenviar\n", server.port)
     );
     assert_eq!(posts(&server), 1);
 }
@@ -181,7 +182,7 @@ fn a_cut_send_missing_from_the_conversation_says_it_did_not_arrive() {
 fn an_old_identical_message_does_not_prove_arrival() {
     let line = format!(r#"[{{"kind": "user_msg", "id": "u1", "text": "[de: cli] oi", "ts": {LONG_AGO}}}]"#);
     let (server, done) = cut_send(history(200, &line));
-    assert_eq!(done.code, 3, "{}", done.stderr);
+    assert_eq!(done.code, 4, "{}", done.stderr);
     assert_eq!(done.stdout, "");
     assert_eq!(posts(&server), 1);
 }

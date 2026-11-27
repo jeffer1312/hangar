@@ -54,6 +54,8 @@ struct SendRecord {
     started: f64,
     /// A conversa mostrou esta mensagem; a pergunta lateral confirmada no Enter não conta como prova.
     echoed: bool,
+    /// O eco que provou veio sem horário.
+    echo_untimed: bool,
     /// Linha sem horário prova este envio: o histórico estava na tela no Enter e nenhum igual estava a caminho.
     untimed: bool,
     outcome: Option<SendOutcome>,
@@ -70,6 +72,9 @@ pub struct DeliveryTracker {
     held: HashMap<SessionKey, VecDeque<Held>>,
     /// Transcript trocado na mesma sessão (`/clear`): a resposta do envio em voo chega com a chave antiga.
     moved: HashMap<SessionKey, SessionKey>,
+    /// Envios incertos dados por chegados por uma linha sem horário: uma igual de outro aparelho também prova, e o
+    /// rastro fica no log.
+    untimed_proofs: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -125,7 +130,7 @@ impl DeliveryTracker {
             || self.held.get(&key).into_iter().flatten().any(|(held, ..)| same(held.as_str()))
             || queued.iter().any(|entry| same(entry.as_str())));
         let untimed = !known.is_empty() && !ambiguous;
-        self.records.insert(key, SendRecord { text, known, pending: true, confirmed, started: now_secs(), echoed: false, untimed,
+        self.records.insert(key, SendRecord { text, known, pending: true, confirmed, started: now_secs(), echoed: false, echo_untimed: false, untimed,
             outcome: None, field: None, history: None });
         true
     }
@@ -206,9 +211,16 @@ impl DeliveryTracker {
             SendOutcome::Uncertain => record.echoed,
             SendOutcome::Rejected(_) => false,
         };
+        let untimed_proof = settled && matches!(outcome, SendOutcome::Uncertain) && record.echo_untimed;
         if settled { self.records.remove(key); }
         else { record.outcome = Some(outcome); }
+        self.untimed_proofs += usize::from(untimed_proof);
         true
+    }
+
+    /// Quantos envios incertos uma linha sem horário deu por chegados desde a última leitura.
+    pub fn take_untimed_proofs(&mut self) -> usize {
+        std::mem::take(&mut self.untimed_proofs)
     }
 
     /// Devolve o envio incerto que esta linha prova, já fora do registro.
@@ -219,13 +231,18 @@ impl DeliveryTracker {
         let proved = proves(record, id, ts);
         if record.pending {
             record.confirmed = true;
-            record.echoed |= proved;
+            if proved {
+                // Um eco com horário vale mais que um sem.
+                record.echo_untimed = if record.echoed { record.echo_untimed && ts.is_none() } else { ts.is_none() };
+                record.echoed = true;
+            }
             return None;
         }
         match record.outcome.clone() {
             Some(SendOutcome::Delivered | SendOutcome::Queued) => { self.records.remove(key); None }
             Some(SendOutcome::Uncertain) if proved => {
                 let SendRecord { field, text, history, .. } = self.records.remove(key)?;
+                self.untimed_proofs += usize::from(ts.is_none());
                 Some(Arrived { field: field.unwrap_or_else(|| text.clone()), text, history })
             }
             _ => None,
@@ -444,6 +461,38 @@ mod tests {
         assert_eq!(arrived, Some(Arrived { field: "hello".into(), text: "hello".into(), history: Some("hello".into()) }),
             "o texto que voltou ao campo sai dele");
         assert_eq!(tracker.outcome(&key("one")), None);
+    }
+
+    #[test]
+    fn untimed_proof_of_an_uncertain_send_leaves_a_trace() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "ok".into(), HashSet::from(["old-id".into()]));
+        tracker.complete(&key("one"), "ok", SendOutcome::Uncertain);
+        assert!(tracker.confirm_real(&key("one"), "new-id", None, "ok").is_some());
+        assert_eq!(tracker.take_untimed_proofs(), 1, "outro aparelho também prova sem horário: fica o rastro");
+        assert_eq!(tracker.take_untimed_proofs(), 0, "lido uma vez");
+
+        tracker.begin(key("two"), "ok".into(), HashSet::from(["old-id".into()]));
+        tracker.complete(&key("two"), "ok", SendOutcome::Uncertain);
+        assert!(tracker.confirm_real(&key("two"), "new-id", Some(now()), "ok").is_some());
+        assert_eq!(tracker.take_untimed_proofs(), 0, "com horário a prova é deste envio");
+    }
+
+    #[test]
+    fn untimed_echo_during_the_flight_leaves_a_trace_when_it_settles_the_uncertain_answer() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "ok".into(), HashSet::from(["old-id".into()]));
+        tracker.confirm_real(&key("one"), "new-id", None, "ok");
+        assert_eq!(tracker.take_untimed_proofs(), 0, "ainda em voo, nada foi dado por chegado");
+        assert!(tracker.complete(&key("one"), "ok", SendOutcome::Uncertain));
+        assert_eq!(tracker.outcome(&key("one")), None);
+        assert_eq!(tracker.take_untimed_proofs(), 1);
+
+        tracker.begin(key("two"), "ok".into(), HashSet::from(["old-id".into()]));
+        tracker.confirm_real(&key("two"), "untimed", None, "ok");
+        tracker.confirm_real(&key("two"), "timed", Some(now()), "ok");
+        assert!(tracker.complete(&key("two"), "ok", SendOutcome::Uncertain));
+        assert_eq!(tracker.take_untimed_proofs(), 0, "o eco com horário também chegou: a prova é dele");
     }
 
     #[test]

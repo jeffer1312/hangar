@@ -2752,6 +2752,7 @@ impl Hangar {
             self.send_settled(&key, &text, delivered, cx);
         }
         if !self.delivery.complete(&key, &text, outcome) { return; }
+        self.log_untimed_proofs();
         if let Some(note) = result.as_ref().ok().and_then(|d| d.timing_note.as_deref()) {
             let (message, warning) = match note {
                 "direct" => ("queue_jev_direct", false),
@@ -3435,10 +3436,18 @@ impl Hangar {
     /// O envio incerto apareceu na conversa: o aviso já saiu do registro, e o texto que voltou ao campo sai se
     /// ninguém o mexeu.
     fn uncertain_arrived(&mut self, key: &SessionKey, arrived: crate::delivery::Arrived, window: &mut Window, cx: &mut Context<Self>) {
+        self.log_untimed_proofs();
         self.clear_sent(key, arrived.history, Some(&arrived.field), &arrived.text, window, cx);
         self.sync_working_row(cx);
         self.redraw(panes::Area::Bottom, cx);
         cx.notify();
+    }
+
+    /// Sem texto nem nome: só o rastro de que a prova foi uma linha sem horário, que outro aparelho também daria.
+    fn log_untimed_proofs(&mut self) {
+        for _ in 0..self.delivery.take_untimed_proofs() {
+            crate::log_line("envio: incerto dado por chegado por uma linha sem horário na conversa");
+        }
     }
 
     fn commands_key(&self, cx: &App) -> Option<String> {

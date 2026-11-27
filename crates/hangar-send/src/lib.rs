@@ -57,7 +57,7 @@ pub fn split_root(args: &[String]) -> (Option<PathBuf>, Vec<String>) {
 }
 
 /// Roda o comando e devolve o código de saída: 0 feito, 1 recusa ou erro, 2 uso errado ou servidor
-/// sem resposta, como o script antigo; no recado cortado, 3 não chegou e 4 incerto.
+/// sem resposta, como o script antigo; 4 no recado cortado que a conversa não provou.
 pub fn run(invocation: &Invocation, host: &dyn Host, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let args = &invocation.args;
     // A ajuda sai antes do `.env`: é o que se lê numa máquina ainda sem Hangar.

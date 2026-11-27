@@ -1437,7 +1437,9 @@ regra, não de volume: por isso a chave de envio (idempotência) ficou de fora.
   com o mesmo texto (`matches_real` no nativo, `sameMessage` no Expo) e `ts >= Enter − 30 s` (folga
   para relógio adiantado). Sem `ts` (fala comum do Claude), só vale quando o histórico já estava
   carregado no Enter e não havia outra mensagem igual a caminho nem no painel "Na fila" (salvo no
-  reenvio do próprio incerto). No nativo (`desktop-native/src/delivery.rs`) o texto que voltou ao campo sai
+  reenvio do próprio incerto). Igual mandado de outro aparelho e ainda sem eco não aparece em nenhum
+  dos dois: o primeiro eco sem `ts` dele também prova. Cada prova sem `ts` deixa uma linha no
+  `native.log` (sem texto nem nome), para separar esse caso depois. No nativo (`desktop-native/src/delivery.rs`) o texto que voltou ao campo sai
   dele só se ninguém o mexeu, como no Expo (`mobile/src/stores/chat.ts`).
 - **Expo: queda de rede continua incerta.** O `fetch` do React Native não separa conexão recusada
   de corte no meio; só o 503 com código passou a ser recusa, e só no `/input`: o 503 do `/steer`
@@ -1446,7 +1448,9 @@ regra, não de volume: por isso a chave de envio (idempotência) ficou de fora.
 - **`hangar-send` cortado confere na conversa do destino, nunca reenvia.** Lê
   `/history?limit=40` no mesmo servidor e token do envio, por `HANGAR_SEND_CHECK_SECONDS` (padrão
   6 s): prova é a linha `queued-…` ou `ts >= início − 30 s`; fala igual sem `ts` não prova e deixa
-  incerto (4). Saída 0 "chegou", 3 não apareceu, 4 não deu para conferir (par externo sempre 4).
+  incerto (4). Saída 0 "chegou" e 4 em todo o resto (não apareceu na janela, fala igual sem `ts`,
+  conversa ilegível, par externo). Não há saída "não chegou": o corte vem depois de o pedido sair, e
+  o servidor ocupado (ator, fila que abre, trava da sessão) pode gravar o recado depois da janela.
 
 Fora do conserto, notado: sem terminal, `Disposition::Unknown` ou `runtime_reply_lost` no
 `session_write/input.rs` volta 400 `erro_envio_falhou`, que os clientes tratam como recusa (0 casos

@@ -124,9 +124,10 @@ fn deliver(cx: &Ctx, endpoint: &Endpoint, target: &str, session: &str, text: &st
                 let _ = writeln!(out, "chegou -> {target} (conferido na conversa depois do corte)");
                 0
             }
+            // O corte veio depois de o pedido sair: o servidor pode gravar o recado depois da janela.
             Arrival::NotSeen => {
-                let _ = writeln!(err, "erro: sem resposta de {} no prazo e o recado não apareceu na conversa em {} s — não chegou; confira antes de reenviar", endpoint.base, cx.check_window());
-                3
+                let _ = writeln!(err, "erro: sem resposta de {} no prazo e o recado não apareceu na conversa em {} s; o servidor pode ainda estar processando — confira com hangar-send --list antes de reenviar", endpoint.base, cx.check_window());
+                4
             }
             Arrival::Unknown => {
                 maybe_delivered(endpoint, err);
@@ -170,7 +171,7 @@ fn unix_now() -> f64 {
 }
 
 /// Lê a conversa no mesmo servidor e com o mesmo token do envio, até a primeira prova ou o fim da
-/// janela. Sem uma leitura boa não se afirma nada: "não chegou" levaria a reenviar.
+/// janela. Nada daqui afirma "não chegou": o servidor pode gravar o recado depois dela.
 fn check_arrival(cx: &Ctx, endpoint: &Endpoint, session: &str, text: &str, started: f64) -> Arrival {
     let path = format!("/api/sessions/{}/history?limit=40", path_segment(session));
     let deadline = Instant::now() + Duration::from_secs_f64(cx.check_window());
