@@ -1626,12 +1626,12 @@ mod tests {
     }
 }
 
-/// A rota pública como o dono, fora de uma tool: a recusa do rascunho na chamada largada também passa por aqui.
 /// O mesmo dono da abertura (`session_guest`): o nome em outra vida é do dono; convidados ilegíveis não contam.
 fn counts_as_owner<E>(guests: Result<Option<Value>, E>, name: &str, life: Option<&str>) -> bool {
     matches!(guests, Ok(raw) if raw.as_ref().is_none_or(|raw| crate::session_open::server::session_guest(raw, name, life).is_none()))
 }
 
+/// A rota pública como o dono, fora de uma tool: a recusa do rascunho na chamada largada também passa por aqui.
 pub(super) async fn call_route(mut api: Router, token: &str, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
     let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), mcp_agent);
     let mut request = Request::builder().method(method).uri(path).header("user-agent", agent)

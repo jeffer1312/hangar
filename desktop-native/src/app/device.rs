@@ -1287,7 +1287,7 @@ impl Unsent {
     /// `rejected`: o servidor respondeu sem gravar; passadas `REJECTED_RETRIES` seguidas, o valor sai.
     fn failed(&self, rejected: bool, give_back: impl FnOnce(&Unsent)) -> Option<&'static str> {
         if rejected {
-            let seen = self.rejected.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_add(1))).unwrap_or(u8::MAX);
+            let seen = self.rejected.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_add(1))).unwrap_or_else(|n| n);
             if seen >= REJECTED_RETRIES {
                 return (seen == REJECTED_RETRIES).then_some("descartado depois de 3 lotes não gravados seguidos");
             }
