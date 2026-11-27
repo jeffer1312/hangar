@@ -54,7 +54,7 @@ pub async fn build(st: &AppState, reservations: &Reservations, cwd: Option<&str>
         .map(PathBuf::from).collect();
     let scan = tokio::task::spawn_blocking(move || scan(&cwd, &home, &dirs, folder_state::read)).await
         .map_err(|_| "placement_folder_unreadable")??;
-    Ok(context(scan, &st.server_id, reservations, branch, agent))
+    Ok(context(scan, &st.current_server_id(), reservations, branch, agent))
 }
 
 /// O que a pasta do pedido é nesta máquina.

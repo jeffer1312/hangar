@@ -239,6 +239,9 @@ pub struct SessionOpenRequest {
     /// A conta pedida (`config_dir`/`codex_account`) fica mesmo com 95% ou mais de uso.
     #[serde(default, skip_serializing_if = "is_false")]
     pub force_account: bool,
+    /// `auto`: o servidor escolhe a máquina (`placement`); id de máquina: abre nela. Omitido, abre aqui.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     /// A reserva pré-aquecida (`PUT /api/sessions/prewarm`) que esta abertura adota se couber.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prewarm: Option<String>,
@@ -275,7 +278,7 @@ impl SessionOpenRequest {
         let request: Self = serde_json::from_value(value).map_err(|e| OpenError::invalid_body(&e.to_string()))?;
         // `min_length=1` do Pydantic: só o texto vazio cai, espaço passa.
         let short = [("name", request.name.as_ref()), ("cwd", Some(&request.cwd)), ("branch", request.branch.as_ref()),
-            ("base", request.base.as_ref()), ("creator", request.creator.as_ref())]
+            ("base", request.base.as_ref()), ("creator", request.creator.as_ref()), ("machine", request.machine.as_ref())]
             .into_iter().find(|(_, value)| value.is_some_and(|v| v.is_empty()));
         if let Some((field, _)) = short {
             return Err(OpenError::invalid_body(&format!("{field}: texto vazio")));

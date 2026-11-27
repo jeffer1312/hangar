@@ -535,6 +535,41 @@ pub(crate) fn reply(error: &OpenError) -> Response {
     }
 }
 
+/// A resolução daqui, sem abrir: o que viria da criadora para a abertura noutra máquina, onde ela não existe.
+pub(crate) async fn resolve_here(st: &Arc<AppState>, request: &SessionOpenRequest) -> Result<super::Resolved, OpenError> {
+    let (request, accounts, runtime) = (request.clone(), st.accounts.clone(), tokio::runtime::Handle::current());
+    tokio::task::spawn_blocking(move || {
+        let facts = super::facts::LocalFacts::shared(accounts.env.clone(), &accounts, runtime);
+        super::resolve_open(&request, &OpenCaller::Owner, &facts)
+    }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou")))
+}
+
+/// A abertura que a escolha mandou a outra máquina: a resposta é a de lá, com `alvo` e `placement`.
+async fn forwarded(st: &AppState, server: &str, body: &Value, placement: Option<Value>) -> Response {
+    use crate::groups::peers::PeerError;
+    let opened = crate::placement::forward::open(&st.peers, server, body, true).await
+        .and_then(|info| if info["name"].is_string() { Ok(info) } else { Err(PeerError::Transport(format!("{server}: resposta da abertura sem o nome"))) });
+    match opened {
+        Ok(mut info) => {
+            let alvo = format!("{server}::{}", info["name"].as_str().unwrap_or_default());
+            if let Some(fields) = info.as_object_mut() {
+                fields.insert("alvo".into(), json!(alvo));
+                if let Some(placement) = placement { fields.insert("placement".into(), placement); }
+            }
+            crate::session_write::json_response(StatusCode::OK, info)
+        }
+        Err(error) => {
+            let (status, body) = crate::placement::forward::failure(server, &error);
+            let code = match error {
+                PeerError::Refused { .. } => "placement_forward_refused",
+                PeerError::Unknown => "placement_machine_unknown",
+                _ => "placement_uncertain",
+            };
+            crate::diag::coded(crate::session_write::json_response(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), body), code)
+        }
+    }
+}
+
 /// `POST /api/sessions`: o dono e o convidado com login abrem Claude com terminal no Rust (o do
 /// convidado na pasta dele, com o dono registrado no `guests.json`). Corpo que não é pedido válido é o 422
 /// do Rust, e o que não abre aqui recebe a recusa que o Python dava; quem não é dono nem convidado segue
@@ -560,8 +595,30 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let Ok(request) = SessionOpenRequest::parse(&bytes) else { return crate::session_write::invalid_body(&parts.headers) };
     let _progress = super::open::Progress::track(request.name.as_deref().unwrap_or(""));
     let caller = guest.as_ref().map_or(OpenCaller::Owner, |g| OpenCaller::Guest { root: g.root.clone() });
+    use crate::placement::suggest::Step;
+    let placement = match crate::placement::suggest::step(&st, &request, &caller).await {
+        Step::Here(placement) => placement,
+        Step::Refused(error) => {
+            let mut response = reply(&error);
+            crate::routes::cors(&parts.headers, response.headers_mut());
+            access_diary("POST /api/sessions", &response, started, &diag);
+            return response;
+        }
+        Step::There { server, body, placement } => {
+            let mut response = forwarded(&st, &server, &body, placement).await;
+            crate::routes::cors(&parts.headers, response.headers_mut());
+            access_diary("POST /api/sessions", &response, started, &diag);
+            return response;
+        }
+    };
     match decide_detached(&st, request, caller, guest, None).await {
-        Decision::Opened(opened) => {
+        Decision::Opened(mut opened) => {
+            // O nome que vale em recado e fechamento: aqui, o próprio.
+            if let Some(placement) = placement && let Some(fields) = opened.body.as_object_mut() {
+                let alvo = fields.get("name").cloned().unwrap_or(Value::Null);
+                fields.insert("placement".into(), placement);
+                fields.insert("alvo".into(), alvo);
+            }
             let mut response = crate::session_write::json_response(StatusCode::OK, opened.body);
             crate::routes::cors(&parts.headers, response.headers_mut());
             access_diary("POST /api/sessions", &response, started, &diag);

@@ -172,6 +172,8 @@ pub struct AppState {
     pub work_review: Arc<hangar_work_review::Engine>,
     /// Telemetria anônima; só a subida real (`main.rs`) liga, e `None` quando o estado não se lê.
     pub telemetry: Option<Arc<hangar_telemetry::Telemetry>>,
+    /// Pasta → máquina das aberturas balanceadas dos últimos 30 s.
+    pub placement_reservations: Arc<crate::placement::context::Reservations>,
 }
 
 impl AppState {
@@ -347,6 +349,7 @@ impl AppState {
             status: Arc::default(),
             work_review,
             telemetry: None,
+            placement_reservations: Arc::default(),
             hangar_dir, device_install,
             upload_naming: Default::default(),
             upload_media: Default::default(),
@@ -1072,6 +1075,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Regras do balanceamento: só o dono, nunca repassadas (o Python não tem a rota).
         .route("/api/placement/config", axum::routing::get(crate::placement::routes::config).put(crate::placement::routes::config))
         .route("/api/placement/facts", get(crate::placement::facts::facts))
+        .route("/api/placement/suggest", axum::routing::post(crate::placement::suggest::suggest))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .merge(crate::scheduled_tasks::router())
         .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))

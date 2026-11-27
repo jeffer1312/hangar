@@ -28,3 +28,29 @@ fn new_says_every_open_field() {
         assert!(body.get(field.body).is_some_and(|v| !v.is_null()), "`{}` não chega ao corpo pelo --new {flags:?}: {body}", field.body);
     }
 }
+
+/// Sem servidor:: o `--new` pede a escolha da máquina; a saída dá o nome com a máquina de lá e onde e por quê.
+#[test]
+fn new_asks_for_the_machine_and_prints_the_target_and_the_reason() {
+    let answer = r#"{"name": "s", "provider": "claude", "alvo": "nb::s",
+        "placement": {"server": "nb", "reason": {"code": "least_loaded", "local_out": "working"}, "text": "nb tem menos sessões trabalhando"}}"#;
+    let server = FakeServer::start(vec![Route::new("POST", "/api/sessions", 200, answer)]);
+    let home = Home::new(server.port, "");
+    let host = FakeHost::new(None, BTreeMap::from([("*".to_owned(), Answer { rc: 1, ..Answer::default() })]));
+    let done = home.run(&["--new", "s", "/p"], &[], &host);
+    assert_eq!(done.code, 0, "{}", done.stderr);
+    let post = server.requests().into_iter().rfind(|r| r.path == "/api/sessions").unwrap();
+    let body: Value = serde_json::from_slice(&post.body).unwrap();
+    assert_eq!(body["machine"], "auto", "{body}");
+    assert!(done.stdout.contains("sessão criada: nb::s (/p)") && done.stdout.contains("hangar-send nb::s \"msg\""), "{}", done.stdout);
+    assert!(done.stdout.contains("máquina: nb — nb tem menos sessões trabalhando"), "{}", done.stdout);
+    // Fora do balanceamento nada é dito além da linha de sempre.
+    let kept = r#"{"name": "s", "provider": "claude", "alvo": "s", "placement": {"server": "pc", "reason": {"code": "not_balanced", "why": "link"}, "text": "x"}}"#;
+    let server = FakeServer::start(vec![Route::new("POST", "/api/sessions", 200, kept)]);
+    let done = Home::new(server.port, "").run(&["--new", "s", "/p"], &[], &host);
+    assert_eq!(done.code, 0, "{}", done.stderr);
+    assert!(!done.stdout.contains("máquina:"), "{}", done.stdout);
+    // Servidor e --machine juntos é recusado antes de qualquer pedido.
+    let done = home.run(&["--new", "nb::s", "--machine", "vm"], &[], &host);
+    assert_eq!(done.code, 2, "{}", done.stderr);
+}

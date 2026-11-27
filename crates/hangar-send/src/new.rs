@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::http::Endpoint;
 use crate::{Ctx, identity, msys_drive_path, parse, text, truthy};
 
-const USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--forcar-conta] [--resume <id da conversa>]";
+const USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--forcar-conta] [--machine <id|auto>] [--resume <id da conversa>]";
 /// Preparar conta e worktree passa dos 30 s; desistir antes dizia "inacessível" com a sessão nascendo.
 const CREATE_TIMEOUT: f64 = 120.0;
 
@@ -43,6 +43,8 @@ struct Options {
     resume: String,
     link: bool,
     force_account: bool,
+    /// Id da máquina onde abrir, ou `auto`; vazio = o servidor escolhe (`auto`).
+    machine: String,
 }
 
 fn fail(err: &mut dyn Write, text: &str, code: u8) -> u8 {
@@ -134,7 +136,7 @@ fn parse_options(args: &[String], err: &mut dyn Write) -> Result<Options, u8> {
                 options.headless = if arg == "--headless" { "true".into() } else { "false".into() };
                 step = 1;
             }
-            "--service-tier" | "--subagente" | "--engine" | "--profile" | "--conta" | "--provider" | "--model" | "--effort" | "--permissao" => {
+            "--service-tier" | "--subagente" | "--engine" | "--profile" | "--conta" | "--provider" | "--model" | "--effort" | "--permissao" | "--machine" => {
                 let (slot, usage) = match arg {
                     "--service-tier" => (&mut options.service_tier, "uso: --service-tier <default|priority>"),
                     "--subagente" => (&mut options.subagent, "uso: --subagente <modelo>"),
@@ -144,6 +146,7 @@ fn parse_options(args: &[String], err: &mut dyn Write) -> Result<Options, u8> {
                     "--provider" => (&mut options.provider, "uso: --provider <claude|codex|pi|omp|kimi|antigravity>"),
                     "--model" => (&mut options.model, "uso: --model <id>"),
                     "--effort" => (&mut options.effort, "uso: --effort <nivel>"),
+                    "--machine" => (&mut options.machine, "uso: --machine <id|auto>"),
                     _ => (&mut options.permission, "uso: --permissao <acceptEdits|auto|bypassPermissions|manual|dontAsk|plan>"),
                 };
                 if !slot.is_empty() {
@@ -189,6 +192,9 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
     };
     if !remote.is_empty() && options.link {
         return fail(err, "erro: --link só vale nesta máquina (sem servidor::)", 2);
+    }
+    if !remote.is_empty() && !options.machine.is_empty() {
+        return fail(err, "erro: use servidor::nome ou --machine, não os dois", 2);
     }
     let mut endpoint = cx.local();
     if !remote.is_empty() {
@@ -292,6 +298,10 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
     if !options.resume.is_empty() {
         return resume(cx, &endpoint, &remote, &name, &options, out, err);
     }
+    // Sem servidor:: nem --machine, o servidor daqui escolhe a máquina; o modo do agente gravado nele diz se balanceia.
+    if remote.is_empty() && options.machine.is_empty() {
+        options.machine = "auto".into();
+    }
     let body = creation_body(&name, &options, &creator, customizations);
     let created = match cx.api(&endpoint.with_total(CREATE_TIMEOUT), "POST", "/api/sessions", Some(body.as_str()), err) {
         Ok(created) => created,
@@ -314,6 +324,10 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
     };
     if !remote.is_empty() {
         name = format!("{remote}::{name}");
+    }
+    // Aberta noutra máquina pela escolha: o nome que vale em recado e fechamento é o `alvo`.
+    if let Some(alvo) = result.as_ref().and_then(|result| result.get("alvo")).and_then(Value::as_str).filter(|alvo| !alvo.is_empty()) {
+        name = alvo.to_owned();
     }
     // O provedor que o servidor escolheu é o que a linha mostra; o herdado já sai no sufixo.
     if options.provider.is_empty() && let Some(result) = result.as_ref()
@@ -338,6 +352,9 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
         }
     }
     let _ = writeln!(out, "{}", created_line(&name, &options, &inherited));
+    if let Some(line) = result.as_ref().and_then(placement_line) {
+        let _ = writeln!(out, "{line}");
+    }
     if link_unread {
         let _ = writeln!(err, "erro: a sessão {name} abriu, mas não consegui ler o resultado da ligação na resposta do servidor (confira com hangar-send --list)");
         return 1;
@@ -411,6 +428,7 @@ fn resume(cx: &Ctx, endpoint: &Endpoint, remote: &str, name: &str, options: &Opt
         ("--remember-provider", options.remember_provider),
         ("--link", options.link),
         ("--forcar-conta", options.force_account),
+        ("--machine", !options.machine.is_empty()),
     ];
     if let Some((flag, _)) = refused.iter().find(|(_, given)| *given) {
         return fail(err, &format!("erro: {flag} não combina com --resume"), 2);
@@ -519,6 +537,9 @@ fn creation_body(name: &str, options: &Options, creator: &str, customizations: O
     if options.link {
         put("link", true.into());
     }
+    if !options.machine.is_empty() {
+        put("machine", options.machine.as_str().into());
+    }
     Value::Object(body).to_string()
 }
 
@@ -550,6 +571,15 @@ fn suffixes(result: &Map<String, Value>, headless_flag: &str, err: &mut dyn Writ
         _ => {}
     }
     Some(parts.iter().map(|part| format!(" [{part}]")).collect())
+}
+
+/// Onde a escolha abriu e por quê; nada quando o pedido ficou fora do balanceamento.
+fn placement_line(result: &Map<String, Value>) -> Option<String> {
+    let placement = result.get("placement")?;
+    if placement["reason"]["code"] == "not_balanced" {
+        return None;
+    }
+    Some(format!("máquina: {} — {}", placement["server"].as_str()?, placement["text"].as_str().unwrap_or("")))
 }
 
 fn created_line(name: &str, options: &Options, inherited: &str) -> String {

@@ -1451,3 +1451,60 @@ async fn a_draft_born_after_the_call_was_cancelled_is_declined() {
     assert!(fake.seen.lock().unwrap().contains(&format!("POST /v1/outbox/{id}/decline")));
     task.abort();
 }
+
+/// `maquina` abre naquela máquina: o pedido vai com o id dela fixado (lá não se escolhe de novo), sem a
+/// criadora, que lá não existe, e a resposta dá o `alvo` com a máquina.
+#[tokio::test(flavor = "multi_thread")]
+async fn placement_maquina_opens_there_with_its_id_fixed_and_answers_the_target() {
+    use axum::http::header::CONTENT_TYPE;
+    use axum::routing::{get, post};
+    use hangar_server::groups::peers::{PeerBook, PeerClient};
+    let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let sink = seen.clone();
+    let facts = json!({"server_id": "lab", "version": "1", "capable": true, "mem_total": 0, "mem_available": 0, "working": 0,
+        "cpu_pct": null, "repos": [], "clone_dir": null}).to_string();
+    let app = axum::Router::new()
+        .route("/api/placement/facts", get(move || { let facts = facts.clone(); async move { ([(CONTENT_TYPE, "application/json")], facts) } }))
+        .route("/api/sessions", post(move |body: axum::body::Bytes| {
+            let sink = sink.clone();
+            async move {
+                sink.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
+                ([(CONTENT_TYPE, "application/json")], json!({"name": "filha", "cwd": "/home/lab", "provider": "claude"}).to_string())
+            }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("peers.json");
+    write_json(&file, json!({"lab": {"base_url": format!("http://{addr}"), "token": "tok-lab"}}));
+    let s = scene_full(false, Some(PeerClient::new(PeerBook::new(Some(file))))).await;
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
+    // A pasta pessoal daqui vira a de lá.
+    let home = std::env::home_dir().unwrap();
+    let result = mcp.call("new_session", json!({"nome": "filha", "cwd": home, "maquina": "lab", "provider": "claude", "inherit": false})).await;
+    assert!(!failed(&result), "{result}");
+    assert_eq!(result["structuredContent"]["alvo"], "lab::filha", "{result}");
+    let sent = seen.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!((&sent[0]["machine"], &sent[0]["cwd"], &sent[0]["provider"]), (&json!("lab"), &json!("~"), &json!("claude")), "{}", sent[0]);
+    assert!(sent[0].get("creator").is_none() && sent[0].get("inherit").is_none(), "lá a criadora não existe: {}", sent[0]);
+    let both = mcp.call("new_session", json!({"nome": "lab::x", "maquina": "lab"})).await;
+    assert!(failed(&both) && first_text(&both).contains("não os dois"), "{both}");
+}
+
+/// A sugestão da tela escolhe sem abrir: pasta sem git fica nesta máquina, com o motivo em texto.
+#[tokio::test(flavor = "multi_thread")]
+async fn placement_suggest_chooses_without_opening() {
+    let s = scene().await;
+    let url = format!("http://{}/api/placement/suggest", s.addr);
+    let resp = client().post(&url).bearer_auth(OWNER).json(&json!({"cwd": "/tmp"})).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["server"], json!(s.state.current_server_id()), "{body}");
+    assert!(body["text"].as_str().is_some_and(|t| !t.is_empty()), "{body}");
+    let bad = client().post(&url).bearer_auth(OWNER).body("{}").send().await.unwrap();
+    assert_eq!(bad.status(), 422);
+    let anonymous = client().post(&url).json(&json!({"cwd": "/tmp"})).send().await.unwrap();
+    assert!(matches!(anonymous.status().as_u16(), 401 | 403), "só o dono: {}", anonymous.status());
+}

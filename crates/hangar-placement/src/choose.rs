@@ -80,6 +80,9 @@ pub enum ReasonCode {
     LocalWithinLimits,
     LeastLoaded { local_out: Exclusion },
     NoCandidate,
+    /// O pedido ficou fora do balanceamento e abre na local; `choose` nunca devolve. `why` é o código
+    /// do servidor (`guest`, `local_field`, `link`, `orq`, `mode_off` ou o da leitura que falhou).
+    NotBalanced { why: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

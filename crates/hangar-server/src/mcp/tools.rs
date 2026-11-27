@@ -146,7 +146,7 @@ struct NewSession {
     service_tier: Option<String>, branch: Option<String>, #[serde(default)] new_branch: bool, base: Option<String>,
     codex_account: Option<String>, subagent_model: Option<String>, initial_prompt: Option<String>, engine_account: Option<String>,
     omp_profile: Option<String>, claude_customizations: Option<Value>, inherit: Option<bool>, #[serde(default)] remember_provider: bool,
-    resume: Option<String>, #[serde(default)] link: bool, #[serde(default)] forcar_conta: bool,
+    resume: Option<String>, #[serde(default)] link: bool, #[serde(default)] forcar_conta: bool, maquina: Option<String>,
 }
 
 impl NewSession {
@@ -156,7 +156,8 @@ impl NewSession {
             ("jev", self.jev.is_some()), ("code_mode", self.code_mode.is_some()), ("service_tier", self.service_tier.is_some()), ("branch", self.branch.as_deref().is_some_and(|b| !b.is_empty())),
             ("new_branch", self.new_branch), ("subagent_model", self.subagent_model.is_some()), ("initial_prompt", self.initial_prompt.is_some()),
             ("omp_profile", self.omp_profile.is_some()), ("claude_customizations", self.claude_customizations.is_some()),
-            ("inherit", self.inherit.is_some()), ("remember_provider", self.remember_provider), ("link", self.link), ("forcar_conta", self.forcar_conta)];
+            ("inherit", self.inherit.is_some()), ("remember_provider", self.remember_provider), ("link", self.link), ("forcar_conta", self.forcar_conta),
+            ("maquina", self.maquina.is_some())];
         if let Some((key, _)) = unsupported.iter().find(|(_, set)| *set) { return Err(format!("{key} não combina com resume")); }
         let mut body = json!({"name": self.nome});
         for (key, value) in [("provider", &self.provider), ("engine", &self.engine), ("model", &self.model), ("config_dir", &self.conta),
@@ -179,7 +180,8 @@ impl NewSession {
             ("initial_prompt", self.initial_prompt.map(Value::from)), ("engine_account", self.engine_account.map(Value::from)),
             ("omp_profile", self.omp_profile.map(Value::from)), ("claude_customizations", self.claude_customizations),
             ("read_only", self.read_only.then_some(Value::Bool(true))), ("new_branch", self.new_branch.then_some(Value::Bool(true))),
-            ("remember_provider", self.remember_provider.then_some(Value::Bool(true))), ("force_account", self.forcar_conta.then_some(Value::Bool(true)))];
+            ("remember_provider", self.remember_provider.then_some(Value::Bool(true))), ("force_account", self.forcar_conta.then_some(Value::Bool(true))),
+            ("machine", self.maquina.filter(|m| !m.is_empty()).map(Value::from))];
         for (key, value) in optional {
             if let Some(value) = value { body[key] = value; }
         }
@@ -211,6 +213,14 @@ fn created(info: &Value, server: Option<&str>) -> Outcome {
         "config_dir": info["config_dir"], "account_source": info["account_source"]});
     if let Some(server) = server { out["server"] = json!(server); }
     if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
+    if info["placement"].is_object() { out["placement"] = info["placement"].clone(); }
+    // O nome para `send`, `close_session` e `interrupt`: com a máquina quando a sessão abriu noutra.
+    let name = info["name"].as_str().unwrap_or_default();
+    out["alvo"] = match (info["alvo"].as_str(), server) {
+        (Some(alvo), _) => json!(alvo),
+        (None, Some(server)) => json!(format!("{server}::{name}")),
+        (None, None) => json!(name),
+    };
     // A sessão abriu: o erro diz isso e leva a resposta inteira, para nada se perder.
     if let Some(e) = info.get("link_error").filter(|e| !e.is_null()) {
         return Err(format!("sessão '{}' abriu SEM a ligação: {}: {} — {out}",
@@ -242,7 +252,8 @@ async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> 
         let info = call(reqwest::Method::POST, format!("/api/archive/-/{}/resume", segment(&sid)), Some(a.clone_for_resume()?)).await?;
         return Ok(resumed(&info, Some(server)));
     }
-    let info = call(reqwest::Method::POST, "/api/sessions".into(), Some(a.create_body(cwd))).await?;
+    let info = crate::placement::forward::open(peers, server, &a.create_body(cwd), false).await
+        .map_err(|e| crate::placement::forward::failure_text(server, &e))?;
     created(&info, Some(server))
 }
 
@@ -728,15 +739,19 @@ impl Tools {
         // Quem chama precisa ser resolvido também para abrir noutra máquina, mesmo sem herdar nada.
         let (me, voice) = self.caller(headers).await?;
         if let Some((server, name)) = remote_target(&a.nome)? {
+            if a.maquina.is_some() { return Err("use `servidor::nome` ou `maquina`, não os dois".into()); }
             a.nome = name;
             return remote_session(&self.st.peers, &server, a).await;
         }
         if let Some(sid) = a.resume.as_deref().filter(|s| !s.is_empty()) { return self.resume_session(sid, a.clone_for_resume()).await; }
         let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| self.home().display().to_string());
         let mut body = a.create_body(cwd);
+        // Sem máquina pedida o servidor escolhe; o modo do agente gravado lá diz se balanceia.
+        if body.get("machine").is_none() { body["machine"] = json!(crate::placement::suggest::AUTO); }
         // A voz não tem conta nem modo para herdar: o omitido fica com o padrão do servidor.
         if !voice { body["creator"] = Value::from(me); }
-        let info = self.ok(Method::POST, "/api/sessions", Some(body)).await?;
+        // Com o código na frente: `placement_ask` é o sinal de perguntar à pessoa.
+        let info = self.answer(None, Method::POST, "/api/sessions", Some(body), coded).await?;
         created(&info, None)
     }
 
