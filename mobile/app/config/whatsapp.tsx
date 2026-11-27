@@ -284,7 +284,7 @@ export default function WhatsApp() {
   const update = () => act('update', (s) => updateWhatsApp(s));
   const confirmed = (kind: Confirm, logoutFirst: boolean) => {
     setConfirm(null);
-    if (kind === 'migrate') act('update', (s) => updateWhatsApp(s, true));
+    if (kind === 'migrate') act('update', (s) => updateWhatsApp(s, true, migration?.tag));
     else if (kind === 'logout') act('logout', logoutWhatsApp);
     else if (kind === 'wipe') act('wipe', wipeWhatsApp);
     else act('uninstall', (s) => uninstallWhatsApp(s, logoutFirst));

@@ -311,7 +311,7 @@ fn start_install(wa: &WhatsApp, body: &Value) -> Response {
         tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: aceite não gravado");
         return refused(StatusCode::INTERNAL_SERVER_ERROR, failure.code, "não consegui gravar o aceite");
     }
-    install::begin(reservation, wa.ctx.clone(), install::Mode::Manual);
+    install::begin(reservation, wa.ctx.clone(), install::Mode::Manual, None);
     started(wa, Ok(()))
 }
 
@@ -323,7 +323,11 @@ fn start_update(wa: &WhatsApp, body: &Value) -> Response {
     if install::current(&wa.ctx.paths).is_none() {
         return refused(StatusCode::CONFLICT, "whatsapp_not_installed", "o WhatsApp não está instalado");
     }
-    started(wa, install::spawn(&wa.installer, "update", wa.ctx.clone(), mode))
+    let expected = match confirmed_tag(body) {
+        Ok(expected) => expected,
+        Err(response) => return response,
+    };
+    started(wa, install::spawn(&wa.installer, "update", wa.ctx.clone(), mode, expected))
 }
 
 /// `confirm_migration` ausente ou `false` é o botão de sempre; `true`, o dono confirmou a mudança de formato dos dados.
@@ -332,6 +336,15 @@ fn update_mode(body: &Value) -> Result<install::Mode, Response> {
         Value::Null | Value::Bool(false) => Ok(install::Mode::Manual),
         Value::Bool(true) => Ok(install::Mode::Confirmed),
         _ => Err(refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "confirm_migration deve ser true ou false")),
+    }
+}
+
+/// `tag`: a release que a confirmação mostrou; outra mais nova na hora volta a perguntar. Ausente vale a mais nova.
+fn confirmed_tag(body: &Value) -> Result<Option<String>, Response> {
+    match &body["tag"] {
+        Value::Null => Ok(None),
+        Value::String(tag) => Ok(Some(tag.clone())),
+        _ => Err(refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "tag deve ser texto")),
     }
 }
 
@@ -384,7 +397,11 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     }
     let data = wa.ctx.paths.data.clone();
     match tokio::task::spawn_blocking(move || wipe_data(&data)).await {
-        Ok(Ok(())) => json_response(StatusCode::OK, json!({"logout": "not_done"})),
+        // Apagados os dados, o que o marcador da volta guardava não existe mais: ele sai, e o serviço pode subir.
+        Ok(Ok(())) => {
+            let _ = std::fs::remove_file(wa.ctx.paths.restore_pending());
+            json_response(StatusCode::OK, json!({"logout": "not_done"}))
+        }
         Ok(Err(partial)) => partial_wipe(partial),
         Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),
     }

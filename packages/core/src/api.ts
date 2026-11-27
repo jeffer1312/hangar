@@ -5123,8 +5123,9 @@ export function installWhatsApp(s: Server): Promise<{ job: WhatsAppJob }> {
 }
 
 /** Sem `confirmMigration`, versão que muda o formato dos dados para em `needs_confirm`. */
-export function updateWhatsApp(s: Server, confirmMigration = false): Promise<{ job: WhatsAppJob }> {
-  return postWhatsApp(s, 'update', confirmMigration ? { confirm_migration: true } : undefined);
+/** `tag`: a release que a confirmação mostrou; o servidor volta a perguntar se a mais nova já for outra. */
+export function updateWhatsApp(s: Server, confirmMigration = false, tag?: string): Promise<{ job: WhatsAppJob }> {
+  return postWhatsApp(s, 'update', confirmMigration ? { confirm_migration: true, ...(tag ? { tag } : {}) } : undefined);
 }
 
 /** Com `phone` (só algarismos, com o código do país) o celular recebe um código; sem ele, o servidor gera o QR. */

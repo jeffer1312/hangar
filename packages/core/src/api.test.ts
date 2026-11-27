@@ -1520,8 +1520,10 @@ describe('prazos do WhatsApp', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'));
     await updateWhatsApp(server);
     await updateWhatsApp(server, true);
+    await updateWhatsApp(server, true, 'v0.3.1');
     expect(fetchMock.mock.calls[0][1]?.body).toBeUndefined();
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ confirm_migration: true });
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({ confirm_migration: true, tag: 'v0.3.1' });
   });
 });
 

@@ -534,7 +534,11 @@ Decisões do usuário (26/11, opção A nas quatro):
   resultado. Arquivo que segue preso depois de três tentativas (cerca de 10 s) vai a `restore-pending.json`
   com cada par, e a subida no logon desliga (sem desinstalar), para o logon não criar um `messages.db` vazio.
   Cada passada do relógio e todo Atualizar ou Instalar tentam pôr os arquivos de volta primeiro; voltaram,
-  o marcador sai, a subida no logon volta e o serviço sobe (diário `whatsapp.recuperado`, sem aviso na tela).
+  a subida no logon volta, o serviço sobe e, com a resposta assinada dele, o marcador sai (diário
+  `whatsapp.recuperado`, sem aviso na tela); a subida que falha deixa o marcador para a próxima tentativa, que
+  acha os arquivos no lugar e só religa. Sem nenhum dos dois arquivos a pendência fica, e só "Apagar dados" a tira.
+  Remover o WhatsApp recusa enquanto houver arquivo fora do lugar. A confirmação leva a tag que o dono viu
+  (`tag` no `POST`); outra mais nova na hora volta a perguntar.
   Só o Atualizar ou Instalar do dono recusa enquanto não voltam: `whatsapp_restore_pending` com a lista.
   Registrar a anterior antes de parar a nova deixaria ela abrir o banco
   migrado e sair com 3. Uma cópia gravada nesta tentativa vale como prova de que a nova abriu os dados

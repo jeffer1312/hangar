@@ -253,16 +253,17 @@ impl From<service::Error> for Failure {
 /// # Errors
 ///
 /// [`Busy`] com outra tarefa ou operação em curso.
-pub fn spawn(installer: &Installer, kind: &'static str, ctx: Context, mode: Mode) -> Result<(), Busy> {
-    installer.reserve(kind, Step::Download).map(|reservation| begin(reservation, ctx, mode))
+pub fn spawn(installer: &Installer, kind: &'static str, ctx: Context, mode: Mode, expected: Option<String>) -> Result<(), Busy> {
+    installer.reserve(kind, Step::Download).map(|reservation| begin(reservation, ctx, mode, expected))
 }
 
-/// Começa em segundo plano a tarefa da vez guardada (`install` ou `update`); `mode` só vale para `update`.
-pub fn begin(reservation: Reservation, ctx: Context, mode: Mode) {
+/// Começa em segundo plano a tarefa da vez guardada (`install` ou `update`); `mode` e `expected` (a tag que o dono
+/// confirmou, [`update_expecting`]) só valem para `update`.
+pub fn begin(reservation: Reservation, ctx: Context, mode: Mode, expected: Option<String>) {
     let kind = reservation.kind();
     drop(reservation.start(move |progress| async move {
         match kind {
-            "update" => update(&ctx, mode, &*progress).await,
+            "update" => update_expecting(&ctx, mode, expected.as_deref(), &*progress).await,
             _ => install(&ctx, &*progress).await,
         }
     }));
@@ -423,10 +424,21 @@ pub async fn auto_wants(ctx: &Context) -> AutoPlan {
 /// anterior voltaram ([`Mode::Confirmed`]); `whatsapp_update_data_migrated` quando a nova já abriu os dados e ficou
 /// registrada.
 pub async fn update(ctx: &Context, mode: Mode, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
+    update_expecting(ctx, mode, None, progress).await
+}
+
+/// [`update`] com a tag que o dono viu ao confirmar: a confirmação vale só para ela, e uma release mais nova que
+/// apareceu no meio volta a perguntar ([`Mode::Manual`]).
+///
+/// # Errors
+///
+/// As de [`update`].
+pub async fn update_expecting(ctx: &Context, mode: Mode, expected: Option<&str>, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
     current(&ctx.paths).ok_or_else(not_installed)?;
     recover(ctx).await?;
     progress(Step::Download);
     let latest = release::latest(&ctx.github).await?;
+    let mode = if mode == Mode::Confirmed && expected.is_some_and(|tag| tag != latest.tag) { Mode::Manual } else { mode };
     update_to(ctx, mode, &latest, progress).await
 }
 
@@ -538,7 +550,7 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
             let back = rollback(ctx, old, Failure::new("whatsapp_backup_failed", format!(
                 "{}; {} não conseguiu gravar a cópia dos dados antes de migrar (saída {BACKUP_FAILED_EXIT}) e não mexeu no messages.db",
                 failure.detail, new.tag))).await;
-            discard_download(old, &new.binary, fetched);
+            discard_unless_kept(old, &new.binary, fetched, &back);
             return Err(back);
         }
         let source = restore_source(mode, &ctx.paths.data, file_schema, since);
@@ -548,7 +560,7 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
             AfterFailure::KeepNew => keep_new(&ctx.paths, &new, failure),
             AfterFailure::Rollback => {
                 let back = rollback(ctx, old, failure).await;
-                discard_download(old, &new.binary, fetched);
+                discard_unless_kept(old, &new.binary, fetched, &back);
                 back
             }
         });
@@ -584,6 +596,13 @@ fn same_format(new: Option<u32>, file: Option<u32>) -> bool {
 async fn backup_failed(home: &Path, binary: &Path) -> bool {
     service::process_state(home, &SERVICE, binary).await
         .is_ok_and(|process| process.last_exit == Some(i32::from(BACKUP_FAILED_EXIT)))
+}
+
+/// [`discard_download`] depois de um [`rollback`]: sem a anterior de volta, o serviço pode seguir apontando para a nova.
+fn discard_unless_kept(old: &Installed, binary: &Path, fetched: bool, back: &Failure) {
+    if back.code != "whatsapp_update_no_rollback" {
+        discard_download(old, binary, fetched);
+    }
 }
 
 /// Um programa baixado e não confirmado não fica na pasta: a próxima tentativa o confere de novo. Só sai o que
@@ -646,6 +665,8 @@ async fn ensure_up(ctx: &Context, installed: &Installed, registered: &mut bool, 
 ///
 /// Falha do gerenciador de serviços ou ao apagar a pasta do programa.
 pub async fn uninstall(ctx: &Context) -> Result<(), Failure> {
+    // O marcador é a única pista dos arquivos fora do lugar: remover só com eles de volta.
+    settle_pending(&ctx.paths)?;
     service::unregister(&ctx.paths.home, &ctx.paths.service, &SERVICE).await?;
     let gone = |path: &Path, e: std::io::Error| Failure::new("whatsapp_remove_failed", format!("{}: {e}", path.display()));
     let bin = ctx.paths.service.join("bin");
@@ -897,8 +918,14 @@ pub const RESTORE_PENDING: &str = "whatsapp_restore_pending";
 /// [`RESTORE_PENDING`] com os arquivos que seguem presos; a falha do gerenciador ao religar.
 pub async fn recover(ctx: &Context) -> Result<bool, Failure> {
     recover_with(&ctx.paths, || async {
+        let installed = current(&ctx.paths).ok_or_else(not_installed)?;
+        let version = release::check(&installed.binary).await?;
+        let client = Client::new(ctx.paths.data.clone());
+        let before = client.claimed().map(|c| c.pid);
         service::set_autostart(&ctx.paths.home, &SERVICE, true).await?;
-        service::start(&ctx.paths.home, &SERVICE).await
+        service::start(&ctx.paths.home, &SERVICE).await?;
+        // O gerenciador dar o serviço por iniciado não prova que ele abriu o banco: o marcador só sai com a resposta.
+        wait_up(&client, &version, before, None).await
     }).await
 }
 
@@ -912,8 +939,26 @@ fn write_pending(paths: &Paths, stuck: &[Stuck]) -> Result<(), String> {
 async fn recover_with<F, Fut>(paths: &Paths, up: F) -> Result<bool, Failure>
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<(), service::Error>>,
+    Fut: std::future::Future<Output = Result<(), Failure>>,
 {
+    if !settle_pending(paths)? {
+        return Ok(false);
+    }
+    // O marcador só sai com o serviço de pé: religar que falha fica para a próxima, que acha tudo no lugar e só religa.
+    up().await?;
+    let file = paths.restore_pending();
+    std::fs::remove_file(&file).map_err(|e| Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display())))?;
+    tracing::info!("whatsapp: os arquivos do banco voltaram ao lugar e o serviço respondeu");
+    Ok(true)
+}
+
+/// Põe de volta o que o marcador lista. `Ok(false)` sem marcador; `Ok(true)` com tudo no lugar e o marcador ainda
+/// no disco, para quem chama decidir quando ele sai.
+///
+/// # Errors
+///
+/// [`RESTORE_PENDING`] com os arquivos que seguem presos, ou o marcador que não se lê.
+fn settle_pending(paths: &Paths) -> Result<bool, Failure> {
     let file = paths.restore_pending();
     let stuck: Vec<Stuck> = match std::fs::read(&file) {
         // A gravação é atômica: ilegível é mão de fora, e sem os pares não há como saber onde estão os arquivos.
@@ -927,10 +972,6 @@ where
         let _ = write_pending(paths, &left);
         return Err(Failure::new(RESTORE_PENDING, format!("arquivos do banco fora do lugar desde uma volta anterior: {}", stuck_list(&left))));
     }
-    // O marcador só sai com o serviço de pé: religar que falha fica para a próxima, que acha tudo no lugar e só religa.
-    up().await.map_err(Failure::from)?;
-    std::fs::remove_file(&file).map_err(|e| Failure::new(RESTORE_PENDING, format!("{}: {e}", file.display())))?;
-    tracing::info!("whatsapp: os arquivos do banco voltaram ao lugar e o serviço subiu");
     Ok(true)
 }
 
@@ -1094,13 +1135,13 @@ fn retry(mut failed: NotRestored, pause: &mut dyn FnMut()) -> NotRestored {
     failed
 }
 
-/// O arquivo preso voltou ao lugar, ou não há mais o que pôr de volta. Com os dois no disco, o do lugar pode ter
-/// dados novos, e nada é sobrescrito.
+/// O arquivo preso está de volta no lugar. Com os dois no disco, o do lugar pode ter dados novos, e nada é
+/// sobrescrito; sem nenhum dos dois, ou sem conseguir olhar, a pendência fica: subir criaria um banco vazio.
 fn settle(stuck: &Stuck) -> bool {
-    match (stuck.name.exists(), stuck.at.exists()) {
-        (_, false) => true,
-        (false, true) => hangar_core::fs::replace(&stuck.at, &stuck.name).is_ok(),
-        (true, true) => false,
+    match (stuck.name.try_exists(), stuck.at.try_exists()) {
+        (Ok(true), Ok(false)) => true,
+        (Ok(false), Ok(true)) => hangar_core::fs::replace(&stuck.at, &stuck.name).is_ok(),
+        _ => false,
     }
 }
 
@@ -1542,7 +1583,7 @@ mod tests {
         std::fs::create_dir_all(&paths.data).unwrap();
         write_db_file(&at, "migrated");
         write_pending(&paths, &[Stuck { name: name.clone(), at }]).unwrap();
-        let refused = || async { Err(service::Error { step: "systemctl restart".into(), detail: "recusou".into() }) };
+        let refused = || async { Err(Failure::new("whatsapp_not_started", "não respondeu")) };
         assert!(recover_with(&paths, refused).await.is_err());
         assert!(paths.restore_pending().exists(), "religar falhou e a pendência sumiu");
         let up = std::cell::Cell::new(false);
@@ -1550,6 +1591,28 @@ mod tests {
         assert_eq!(read(&name), "migrated");
         assert!(!paths.restore_pending().exists(), "o marcador ficou");
         assert!(up.get(), "o serviço não subiu");
+    }
+
+    /// Sem nenhum dos dois arquivos (quarentena, apagado à mão) a pendência fica: subir criaria um banco vazio.
+    #[tokio::test]
+    async fn a_pair_with_both_files_gone_stays_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path());
+        write_pending(&paths, &[Stuck { name: paths.data.join("messages.db"), at: paths.data.join("messages.db.migrated") }]).unwrap();
+        let got = recover_with(&paths, || async { panic!("subiu sem o banco") }).await;
+        assert_eq!(got.map_err(|f| f.code), Err(RESTORE_PENDING));
+        assert!(paths.restore_pending().exists());
+    }
+
+    /// A confirmação vale para a tag que o dono viu: com outra mais nova na hora, a troca volta a perguntar.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_confirmation_for_another_tag_asks_again() {
+        let (_dir, ctx, binary, _) = installed_with(&["v0.2.0", "v0.1.0"], axum::Router::new()).await;
+        fake_program(&binary, "0.1.0", None, None);
+        fake_program(&ctx.paths.service.join("bin/0.2.0/hangar-whatsapp"), "0.2.0", Some(2), Some(1));
+        assert_eq!(update_expecting(&ctx, Mode::Confirmed, Some("v0.1.5"), &|_| {}).await, Ok(Outcome::NeedsConfirm));
+        assert_eq!(current(&ctx.paths).map(|c| c.tag).as_deref(), Some("v0.1.0"));
     }
 
     /// Com um arquivo ainda fora do lugar (aqui o lugar dele está ocupado), o Atualizar do dono recusa com o código

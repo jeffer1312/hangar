@@ -873,6 +873,9 @@ async fn the_update_reads_the_migration_confirmation() {
     assert_eq!(update_mode(&json!({"confirm_migration": null})).ok(), Some(install::Mode::Manual));
     assert_eq!(update_mode(&json!({"confirm_migration": false})).ok(), Some(install::Mode::Manual));
     assert_eq!(update_mode(&json!({"confirm_migration": true})).ok(), Some(install::Mode::Confirmed));
+    assert_eq!(confirmed_tag(&json!({"confirm_migration": true, "tag": "v0.3.1"})).ok(), Some(Some("v0.3.1".to_owned())));
+    assert_eq!(confirmed_tag(&json!({})).ok(), Some(None));
+    assert!(confirmed_tag(&json!({"tag": 3})).is_err());
 }
 
 /// Com uma troca de versão em curso (do dono ou do relógio), os dois envios recusam com "atualizando" sem chegar ao

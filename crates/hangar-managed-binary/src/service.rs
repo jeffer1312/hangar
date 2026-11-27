@@ -333,8 +333,9 @@ async fn launchd_stop(home: &Path, id: &ServiceId, launchctl: &str) -> Result<()
     }
 }
 
-/// Liga ou desliga a subida do serviço no logon, sem tirá-lo nem mexer no programa que roda. Desligado, nem o
-/// gerenciador nem o logon o sobem; [`start`] e [`register`] só depois de ligar de novo.
+/// Liga ou desliga a subida do serviço no logon, sem tirá-lo nem mexer no programa que roda. Desligado, só o logon
+/// deixa de subi-lo: [`start`] e [`register`] ainda o sobem (no macOS, religando a subida), e quem precisa
+/// impedir qualquer partida guarda isso por conta própria.
 ///
 /// # Errors
 ///
@@ -699,7 +700,7 @@ mod tests {
         std::fs::write(&unit, "[Unit]\n").unwrap();
         let seen = home.path().join("seen");
         let fake = home.path().join("systemctl");
-        std::fs::write(&fake, format!("#!/bin/sh\necho \"$@\" >> {}\n", seen.display())).unwrap();
+        std::fs::write(&fake, "#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/seen\"\n").unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         let fake = fake.display().to_string();
         systemd_autostart(home.path(), &WHATSAPP, false, &fake).await.unwrap();

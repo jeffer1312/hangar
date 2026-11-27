@@ -456,7 +456,7 @@ impl Hangar {
     }
 
     /// `connection`: a do servidor que mostrou a confirmação; trocada no meio, a troca não vai a outro servidor.
-    fn whatsapp_update_confirmed(&mut self, connection: u64, cx: &mut Context<Self>) {
+    fn whatsapp_update_confirmed(&mut self, connection: u64, tag: String, cx: &mut Context<Self>) {
         if connection != self.connection {
             self.whatsapp.error = Some(tr("whatsapp_migration_other_server"));
             cx.notify();
@@ -464,7 +464,7 @@ impl Hangar {
         }
         if self.whatsapp.busy.is_some() { return; }
         self.whatsapp.own_update = None;
-        self.whatsapp_act(Act::Update, Some(json!({"confirm_migration": true})), cx);
+        self.whatsapp_act(Act::Update, Some(json!({"confirm_migration": true, "tag": tag})), cx);
     }
 
     /// O diálogo de sempre (o do Apagar dados), com o botão primário: a troca guarda a cópia e volta sozinha se falhar.
@@ -472,9 +472,9 @@ impl Hangar {
         let Some((latest, installed)) = self.whatsapp.state.ok().and_then(migration_tags) else { return };
         let body = format!("{}\n\n{}", tr("whatsapp_migration_body").replace("{tag}", &latest).replace("{installed}", &installed),
             tr("whatsapp_migration_backup").replace("{installed}", &installed));
-        let (this, connection) = (cx.entity().downgrade(), self.connection);
+        let (this, connection, tag) = (cx.entity().downgrade(), self.connection, latest.clone());
         chrome::confirm_alert(window, cx, tr("whatsapp_migration_title").replace("{tag}", &latest), body, tr("whatsapp_update"),
-            ButtonVariant::Primary, move |_, cx| { let _ = this.update(cx, |this, cx| this.whatsapp_update_confirmed(connection, cx)); true });
+            ButtonVariant::Primary, move |_, cx| { let _ = this.update(cx, |this, cx| this.whatsapp_update_confirmed(connection, tag.clone(), cx)); true });
     }
 
     fn whatsapp_pair(&mut self, phone: Option<String>, cx: &mut Context<Self>) {
