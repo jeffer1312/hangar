@@ -223,8 +223,9 @@ function dimsLabel(dims) {
 }
 
 // Série diária completa do período (dia sem pacote = 0), em UTC como os pacotes.
+let seriesEnd = null;
 function series(days, valueOf) {
-  const end = new Date(); end.setUTCHours(0, 0, 0, 0);
+  const end = new Date(seriesEnd || Date.now() - 86400000); end.setUTCHours(0, 0, 0, 0);
   const out = [];
   for (let i = days - 1; i >= 0; i--) {
     const day = new Date(end.getTime() - i * 86400000).toISOString().slice(0, 10);
@@ -434,10 +435,11 @@ function settingsCards(rows) {
     if (!items) continue;
     const [title, group, explain] = Object.hasOwn(SETTINGS, key) ? SETTINGS[key] : [key, "Outras", "Preferência nova, ainda sem descrição neste painel."];
     const clients = new Set(items.map(i => i.client)).size;
-    const label = i => (key === "default_provider" ? AGENTS[i.value] : SETTING_VALUES[i.value]) || i.value;
+    const table = key === "default_provider" ? AGENTS : SETTING_VALUES;
+    const label = i => Object.hasOwn(table, i.value) ? table[i.value] : String(i.value);
     // O mesmo valor em dois apps sai em duas barras: somar contaria duas vezes a máquina que tem os dois.
     const bars = items.sort((x, y) => y.machines - x.machines).map(i => ({
-      label: clients > 1 ? label(i) + " · " + (VALUES.client[i.client] || i.client) : label(i), value: i.machines }));
+      label: clients > 1 ? label(i) + " · " + (Object.hasOwn(VALUES.client, i.client) ? VALUES.client[i.client] : String(i.client)) : label(i), value: i.machines }));
     groups.get(group).push(card(title, explain, barList(bars)));
   }
   const out = [];
@@ -454,10 +456,15 @@ function render(data) {
   for (const c of data.by_dims) entry(c.event).dims.push({ label: dimsLabel(c.dims), value: c.count, machines: c.machines });
   for (const c of data.by_bucket) entry(c.event).buckets.set(c.bucket, { value: c.count, machines: c.machines });
   const total = event => (byEvent.get(event)?.dims || []).reduce((s, d) => s + d.value, 0);
+  // O dia só chega depois de fechar em UTC: o gráfico termina no último dia com pacote, não num hoje sempre zerado.
+  const lastDay = data.daily.reduce((m, d) => d.day > m ? d.day : m, "");
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  seriesEnd = (lastDay > yesterday ? lastDay : yesterday) + "T00:00:00Z";
 
   // Falha é o evento de falha inteiro, ou a linha que diz que deu errado (ferramenta com erro, passo que não deu certo).
-  const failed = (event, dims) => BAD.has(event) || dims.error === "true" || dims.ok === "false"
-    || (event === "update_finished" && dims.result && dims.result !== "updated");
+  // Uma atualização que falha conta uma vez, pelo código (update_failed_code); a etapa e o fim dela ficam em Saúde do servidor.
+  const failed = (event, dims) => BAD.has(event)
+    || (event !== "update_step" && event !== "update_finished" && (dims.error === "true" || dims.ok === "false"));
   const failures = [];
   for (const c of data.by_dims) {
     if (!failed(c.event, c.dims || {})) continue;
@@ -483,7 +490,7 @@ function render(data) {
     const [title, , explain] = Object.hasOwn(EVENTS, event) ? EVENTS[event] : [event, "", ""];
     const order = [...e.buckets.keys()].sort(byBucket);
     times.push(card(title, explain, el("p", { class: "headline", text: timeSentence(e.buckets) }),
-      barList(order.map(b => ({ label: BUCKET_LABEL[b] || b, ...e.buckets.get(b) })))));
+      barList(order.map(b => ({ label: Object.hasOwn(BUCKET_LABEL, b) ? BUCKET_LABEL[b] : b, ...e.buckets.get(b) })))));
   }
 
   const counts = { problemas: failTotal, log: logs.length, uso: total("message_sent"), velocidade: times.length,
@@ -502,6 +509,8 @@ function render(data) {
     nodes.push(sectionBlock("geral", null, null, el("div", { class: "card empty big" }, icon("calendar"),
       "Nenhum pacote chegou neste período.", el("span", { class: "minor", text: "Cada máquina manda o dia depois que ele fecha em UTC (21h em Brasília)." }))));
     root.replaceChildren(...nodes);
+    applyFilter();
+    spy();
     return;
   }
 
@@ -551,7 +560,7 @@ function render(data) {
   const envCards = [];
   for (const [key, title, explain] of [["version", "Versão do Hangar", "Versão instalada em cada máquina, pelo último pacote dela."],
       ["os", "Sistema", "Sistema operacional de cada máquina."], ["channel", "Canal de atualização", "Estável recebe só versões publicadas; testes recebe antes."]]) {
-    const items = data.env.filter(e => e.key === key).map(e => ({ label: key === "channel" ? (VALUES.channel[e.value] || e.value) : e.value, value: e.machines }));
+    const items = data.env.filter(e => e.key === key).map(e => ({ label: key === "channel" && Object.hasOwn(VALUES.channel, e.value) ? VALUES.channel[e.value] : String(e.value), value: e.machines }));
     envCards.push(card(title, explain, items.length ? barList(items) : el("div", { class: "empty", text: "Sem dados." })));
   }
   envCards.push(card("Máquinas por pessoa", "Quantas pessoas usam o Hangar em 1, 2, 3… máquinas (últimos 30 dias).",
@@ -572,7 +581,7 @@ function render(data) {
     : [el("div", { class: "card empty" }, icon("config"), "Nenhuma máquina mandou as preferências ainda: elas chegam a partir da versão que coleta esse retrato.")])));
 
   const rows = data.counters.map(c => el("tr", { "data-q": (c.event + " " + dimsLabel(c.dims)).toLowerCase() },
-    el("td", {}, el("code", { text: c.event })), el("td", { text: dimsLabel(c.dims) }), el("td", { text: c.bucket ? (BUCKET_LABEL[c.bucket] || c.bucket) : "" }),
+    el("td", {}, el("code", { text: c.event })), el("td", { text: dimsLabel(c.dims) }), el("td", { text: c.bucket ? (Object.hasOwn(BUCKET_LABEL, c.bucket) ? BUCKET_LABEL[c.bucket] : c.bucket) : "" }),
     el("td", { class: "n", text: fmt.format(c.count) }), el("td", { class: "n", text: String(c.machines) })));
   nodes.push(sectionBlock("dados", null, null, el("details", { class: "card table", "data-title": "dados brutos" },
     el("summary", {}, icon("chevron"), data.counters.length + " linhas, como chegaram"),
@@ -588,7 +597,12 @@ function render(data) {
   spy();
 }
 
-function drawCharts() { document.querySelectorAll(".chart").forEach(slot => slot._chart && lineChart(slot)); }
+// Gráfico escondido pela busca tem largura 0: fica para quando aparecer de novo.
+function drawCharts() {
+  document.querySelectorAll(".chart").forEach(slot => {
+    if (slot._chart && slot.clientWidth && slot._w !== slot.clientWidth) { slot._w = slot.clientWidth; lineChart(slot); }
+  });
+}
 
 // Barras crescem e linhas se desenham quando o cartão entra na tela.
 let cardObserver = null;
@@ -653,7 +667,8 @@ function applyFilter() {
   if (text) document.getElementById("notice-text").textContent = hits
     ? hits + " resultado" + (hits === 1 ? "" : "s") + " para “" + q.value.trim() + "”"
     : "Nada encontrado para “" + q.value.trim() + "”.";
-  document.querySelectorAll(".chip").forEach(c => { c.hidden = !!text && document.getElementById("s-" + c.dataset.sec)?.hidden; });
+  document.querySelectorAll(".chip").forEach(c => { const sec = document.getElementById("s-" + c.dataset.sec); c.hidden = !sec || sec.hidden; });
+  drawCharts();
 }
 q.addEventListener("input", applyFilter);
 q.addEventListener("keydown", e => { if (e.key === "Escape") { q.value = ""; applyFilter(); q.blur(); } });
@@ -706,7 +721,8 @@ document.getElementById("logout").addEventListener("click", async () => {
   const button = document.getElementById("logout");
   try {
     const res = await fetch("/panel/api/logout", { method: "POST" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
+    // 401: a sessão já tinha acabado, o que também é ter saído.
+    if (!res.ok && res.status !== 401) throw new Error("HTTP " + res.status);
     location.replace("/panel");
   } catch (err) {
     // A sessão continua aberta: dizer isso em vez de parecer que saiu.
@@ -720,6 +736,7 @@ document.getElementById("invite").addEventListener("click", async () => {
   dialog.showModal();
   try {
     const res = await fetch("/panel/api/invites", { method: "POST" });
+    if (res.status === 401) { location.replace("/panel"); return; }
     if (!res.ok) throw new Error("HTTP " + res.status);
     const body = await res.json();
     link.value = location.origin + body.path;
@@ -731,9 +748,15 @@ document.getElementById("invite").addEventListener("click", async () => {
 });
 document.getElementById("copy").addEventListener("click", async () => {
   if (!link.value) return;
-  await navigator.clipboard.writeText(link.value).catch(() => link.select());
-  document.getElementById("copy").textContent = "Copiado";
-  setTimeout(() => { document.getElementById("copy").textContent = "Copiar"; }, 1500);
+  const copy = document.getElementById("copy");
+  try {
+    await navigator.clipboard.writeText(link.value);
+    copy.textContent = "Copiado";
+  } catch {
+    link.select();
+    copy.textContent = "Copie à mão (Ctrl+C)";
+  }
+  setTimeout(() => { copy.textContent = "Copiar"; }, 2500);
 });
 document.getElementById("close").addEventListener("click", () => dialog.close());
 load(current);
