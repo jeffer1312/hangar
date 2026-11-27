@@ -5902,3 +5902,29 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   linha; o excesso só soma `log_dropped`. O campo `logs` é opcional no `schema: 1`, e o receptor
   passou a aceitar 256 KB por pacote: as 100 linhas junto dos contadores passariam dos 64 KB, e o 413
   apagaria o dia inteiro na máquina.
+
+## Servidor tmux antigo vivo não ganha outro por cima (27/11/2026)
+
+Uma máquina passou a mostrar sessões pulando entre "trabalhando" e "parada" a cada 1,5–3 s na lista
+de todos os clientes. Cada conversa afetada tinha dois processos Claude vivos: o da sessão e um
+antigo, preso num servidor tmux que ninguém mais alcançava.
+
+- **Como os dois nasceram.** Minutos depois de uma atualização automática, o servidor tmux deixou de
+  atender pelo socket, mas seguiu vivo com as sessões e os agentes. O cliente do tmux responde
+  `no server running` tanto para o socket ausente quanto para a conexão recusada, e o restore leu
+  isso como servidor morto (`multiplexador.perdido`, `mux_died_machine_up`). O `new-session` da
+  restauração, ao encontrar o socket recusando, apaga o arquivo e sobe outro servidor; cada sessão
+  voltou com `--resume`, e os agentes antigos seguiram rodando nas mesmas conversas. A prova com um
+  socket sem ouvinte reproduz as duas mensagens; apagar o socket de um servidor vivo e mandar
+  `SIGUSR1` faz o mesmo servidor voltar a atender, com as sessões dele.
+- **Por que a lista pulava.** O registro nativo do Claude (`<conta>/sessions/<pid>.json`) era lido
+  para um mapa por id de conversa; com dois arquivos do mesmo id, valia o último da iteração de um
+  `HashMap` novo a cada tique. Um dizia `busy`, o outro `idle`.
+- **Regras.** A lista guarda todos os registros da conversa e só usa o nativo quando há um vivo; com
+  dois vivos, vale o marcador do hook. O restore procura o processo do servidor da fotografia (mesmo
+  nascimento): vivo e sem servidor no socket, manda `SIGUSR1` e não reabre nada; vivo com outro
+  servidor no socket, não reabre por cima. Antes de cada `--resume`, um agente vivo da conversa fora
+  do servidor de agora é encerrado (ninguém o alcança); dentro dele, ou com pid cuja linha de comando
+  não cita a conversa, a restauração recua (`restore_conversation_open`/`restore_conversation_running`).
+- **Não confirmado:** por que o servidor tmux parou de atender naquela janela. A memória da máquina
+  estava sob pressão, e os comandos ao tmux já falhavam por tempo antes da restauração.
