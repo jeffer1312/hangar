@@ -255,11 +255,14 @@ async fn kimi_permissions_answer_the_current_mode_without_checking_the_screen() 
 #[tokio::test(start_paused = true)]
 async fn kimi_permissions_clean_up_when_the_selector_never_opens() {
     let typed = KIMI_IDLE.replace("│ > ", "│ > /permission ");
-    for (after, cleanup) in [(typed.as_str(), "C-u"), ("  Something else entirely\n", "Escape")] {
+    let approval = " Run this command?\n ❯ 1. Yes\n   2. No\n";
+    assert_eq!(super::drive::screen(hangar_transcript::Provider::Kimi, approval).state, "awaiting_input");
+    for (after, cleanup) in [(typed.as_str(), Some("C-u")), ("  Something else entirely\n", Some("Escape")), (approval, None)] {
         let io = Screens::texts(&[KIMI_IDLE, after]);
         let reply = run_kimi(&io, "set_permission_mode", json!({"mode":"manual"})).await;
         assert_eq!((reply.disposition, reply.payload["error_code"].as_str()), (RuntimeDisposition::Unknown, Some("erro_permissao_leitura")), "{after}");
-        assert_eq!(io.keys(), ["/permission", "Enter", cleanup], "{after}");
+        let expected: Vec<&str> = ["/permission", "Enter"].into_iter().chain(cleanup).collect();
+        assert_eq!(io.keys(), expected, "uma aprovação aberta não recebe Escape: {after}");
     }
 }
 

@@ -1783,14 +1783,15 @@ async fn open_kimi_permissions(context: &mut Control<'_>) -> Result<KimiPermissi
         if let Some(menu) = kimi_permission_menu(&frame.text) { return Ok(menu); }
         if Instant::now() >= until {
             // Sem o seletor, nada do comando fica para quem digitar depois: tela aberta ou o texto na caixa.
-            // Escape num turno em voo o interromperia.
-            let frame = if composer(context.target, &frame).is_none() && screen(context.target.provider, &frame.text).state != "working" {
-                context.write("Escape", false, false).await?;
-                context.pause(SETTLE, false).await?;
-                context.frame(false, false).await?
-            } else { frame };
-            if composer(context.target, &frame).is_some_and(|draft| draft.content.trim() == "/permission") {
-                context.write("C-u", false, false).await?;
+            // Escape num turno em voo o interromperia, e numa aprovação aberta a recusaria. A limpeza não
+            // troca o motivo da falha.
+            let state = screen(context.target.provider, &frame.text).state;
+            let frame = if composer(context.target, &frame).is_none() && !matches!(state.as_str(), "working" | "awaiting_input") {
+                let escaped = context.write("Escape", false, false).await.is_ok() && context.pause(SETTLE, false).await.is_ok();
+                if escaped { context.frame(false, false).await.ok() } else { None }
+            } else { Some(frame) };
+            if frame.is_some_and(|frame| composer(context.target, &frame).is_some_and(|draft| draft.content.trim() == "/permission")) {
+                let _ = context.write("C-u", false, false).await;
             }
             return Err(failure("erro_permissao_leitura"));
         }
