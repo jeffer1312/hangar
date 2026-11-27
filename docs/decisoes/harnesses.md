@@ -6016,6 +6016,15 @@ As flags de abertura sobrepõem o modo de uma conversa retomada. Reaplicá-las a
 manual elevava a permissão na restauração. O comando de retomada preserva o modo persistido
 pela CLI, sem as flags da criação.
 
+Sem `permission.set_mode` do agente principal, o modo é manual: na CLI 2.8.1 o estado nasce
+`manual` (`defineState("permissionMode", () => "manual")`), e tanto o `defaultPermissionMode`
+do config quanto `--yolo`/`--auto` passam por `setMode`, que grava o evento durável na
+primeira vez mesmo sem mudança (`permissionMode.configured`).
+
+Limite conhecido: o spec de uma sessão Kimi aberta com `--yolo` grava `"permission":"yolo"`,
+valor que a versão anterior não lê. Depois da volta da atualização, restaurar ou reabrir essa
+sessão pelo spec falha com `restore_spec_unreadable`; as demais sessões não mudam.
+
 O Ctrl+S orienta a fila da própria TUI e a resposta é assíncrona. Conferir uma única captura
 300 ms depois podia responder sem confirmação enquanto a orientação estava em andamento.
 O driver agora aguarda o desaparecimento da fila por até 5 s e nunca repete a tecla nessa

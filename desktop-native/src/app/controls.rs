@@ -657,7 +657,8 @@ impl Hangar {
 
     /// Anda `steps` modos a partir do que a pílula mostra. Com a troca em voo só o alvo anda; a resposta manda o resto.
     fn step_mode(&mut self, key: SessionKey, modes: &[String], steps: usize, cx: &mut Context<Self>) {
-        let from = self.ctl_label(Ctl::Mode);
+        // O Kimi não mostra o alvo na pílula, mas a tecla seguinte anda a partir dele.
+        let from = self.controls.mode_target.get(&key).map(|target| target.mode.clone()).or_else(|| self.ctl_label(Ctl::Mode));
         let Some(mode) = mode_ahead(modes, from.as_deref(), steps).filter(|m| from.as_deref() != Some(m.as_str())) else { return; };
         let live = self.ctl_live(Ctl::Mode);
         self.controls.mode_target.entry(key.clone()).or_insert_with(|| ModeTarget { mode: String::new(), before: live, answers: Vec::new() }).mode = mode;

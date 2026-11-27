@@ -1781,7 +1781,19 @@ async fn open_kimi_permissions(context: &mut Control<'_>) -> Result<KimiPermissi
         context.pause(PROOF_INTERVAL, false).await?;
         let frame = context.frame(false, false).await?;
         if let Some(menu) = kimi_permission_menu(&frame.text) { return Ok(menu); }
-        if Instant::now() >= until { return Err(failure("erro_permissao_leitura")); }
+        if Instant::now() >= until {
+            // Sem o seletor, nada do comando fica para quem digitar depois: tela aberta ou o texto na caixa.
+            // Escape num turno em voo o interromperia.
+            let frame = if composer(context.target, &frame).is_none() && screen(context.target.provider, &frame.text).state != "working" {
+                context.write("Escape", false, false).await?;
+                context.pause(SETTLE, false).await?;
+                context.frame(false, false).await?
+            } else { frame };
+            if composer(context.target, &frame).is_some_and(|draft| draft.content.trim() == "/permission") {
+                context.write("C-u", false, false).await?;
+            }
+            return Err(failure("erro_permissao_leitura"));
+        }
     }
 }
 
@@ -1792,13 +1804,16 @@ async fn kimi_permission(context: &mut Control<'_>, payload: &Value, set: bool) 
         return Ok(context.reply(RuntimeDisposition::Accepted,
             json!({"current":current,"modes":KIMI_MODES,"sondavel":false,"previous_non_plan":null})));
     }
-    let frame = context.frame(false, false).await?;
     let requested = payload["mode"].as_str().unwrap_or_default();
     let refuse = |context: &Control<'_>, code: &str| context.reply(RuntimeDisposition::Rejected,
         json!({"current":current,"requested":requested,"error_code":code}));
     let Some(wanted) = KIMI_MODES.iter().position(|mode| *mode == requested) else {
         return Ok(refuse(context, "erro_permissao_invalida"));
     };
+    if current.as_deref() == Some(requested) {
+        return Ok(context.reply(RuntimeDisposition::Accepted, json!({"mode":current,"current":current,"changed":false})));
+    }
+    let frame = context.frame(false, false).await?;
     let analysis = screen(context.target.provider, &frame.text);
     if kimi_permission_menu(&frame.text).is_some() || analysis.overlay || analysis.state == "awaiting_input" {
         return Ok(refuse(context, "permission_menu_open"));
@@ -1809,9 +1824,6 @@ async fn kimi_permission(context: &mut Control<'_>, payload: &Value, set: bool) 
         Some(composer) if composer.is_empty() => {}
         Some(_) => return Ok(refuse(context, "erro_caixa_com_rascunho")),
         None => return Ok(refuse(context, "erro_permissao_leitura")),
-    }
-    if current.as_deref() == Some(requested) {
-        return Ok(context.reply(RuntimeDisposition::Accepted, json!({"mode":current,"current":current,"changed":false})));
     }
     let menu = open_kimi_permissions(context).await?;
     let selected = menu.selected;

@@ -239,6 +239,30 @@ async fn kimi_permissions_without_a_wire_confirm_the_current_tick_and_close_the_
 }
 
 
+/// O pedido do modo atual não depende da tela: com rascunho ou turno em voo, nada a trocar e nenhuma tecla.
+#[tokio::test(start_paused = true)]
+async fn kimi_permissions_answer_the_current_mode_without_checking_the_screen() {
+    for screen in [KIMI_IDLE.replace("│ > ", "│ > rascunho "), "  ⠋ Working for 6s\n".to_owned() + KIMI_IDLE] {
+        let io = Screens::texts(&[&screen]).with_modes(&["manual"]);
+        let reply = run_kimi(&io, "set_permission_mode", json!({"mode":"manual"})).await;
+        assert_eq!(reply.disposition, RuntimeDisposition::Accepted, "{}", reply.payload);
+        assert_eq!(reply.payload["changed"], false);
+        assert!(io.keys().is_empty());
+    }
+}
+
+/// O seletor que não abre não deixa o comando na caixa nem uma tela desconhecida aberta.
+#[tokio::test(start_paused = true)]
+async fn kimi_permissions_clean_up_when_the_selector_never_opens() {
+    let typed = KIMI_IDLE.replace("│ > ", "│ > /permission ");
+    for (after, cleanup) in [(typed.as_str(), "C-u"), ("  Something else entirely\n", "Escape")] {
+        let io = Screens::texts(&[KIMI_IDLE, after]);
+        let reply = run_kimi(&io, "set_permission_mode", json!({"mode":"manual"})).await;
+        assert_eq!((reply.disposition, reply.payload["error_code"].as_str()), (RuntimeDisposition::Unknown, Some("erro_permissao_leitura")), "{after}");
+        assert_eq!(io.keys(), ["/permission", "Enter", cleanup], "{after}");
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn kimi_permissions_do_not_reopen_over_a_new_draft_after_selection() {
     let draft = KIMI_IDLE.replace("│ > ", "│ > novo rascunho ");

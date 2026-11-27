@@ -148,6 +148,7 @@ mod tests {
             -> BoxFuture<'a, Result<(), RuntimeError>> {
             Box::pin(async { unreachable!("observar não escreve") })
         }
+        fn kimi_permission(&self) -> BoxFuture<'_, Result<Option<String>, RuntimeError>> { Box::pin(async { Ok(None) }) }
         fn release<'a>(&'a self) -> BoxFuture<'a, ()> { Box::pin(async {}) }
     }
     #[tokio::test]
@@ -327,7 +328,7 @@ pub trait OtherIo: Send + Sync {
         guard: Option<&'a OtherWriteGuard>,
     ) -> BoxFuture<'a, Result<(), RuntimeError>>;
     /// Modo estruturado do agente; sem arquivo de conversa, o modo ainda é desconhecido.
-    fn kimi_permission(&self) -> BoxFuture<'_, Result<Option<String>, RuntimeError>> { Box::pin(async { Ok(None) }) }
+    fn kimi_permission(&self) -> BoxFuture<'_, Result<Option<String>, RuntimeError>>;
     fn release<'a>(&'a self) -> BoxFuture<'a, ()>;
 }
 #[derive(Clone)]
