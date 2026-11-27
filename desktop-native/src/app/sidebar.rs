@@ -145,6 +145,8 @@ pub(super) enum SidebarReply {
     NotSaved(&'static str, String),
     /// Resposta de agrupar, sair do grupo ou sugerir a tarefa, amarrada ao número do pedido.
     Group(u64, super::grouping::GroupReply),
+    /// Fechar com as filhas: as que não fecharam, com o motivo, e os avisos do grupo das que fecharam.
+    ClosedWithChildren(Vec<(Target, Failure)>, Vec<String>),
     /// Resposta de um pedido do painel do grupo.
     Sheet(super::group_sheet::SheetReply),
     /// Identificador de uma máquina, pela chave dela.
@@ -159,6 +161,17 @@ struct GitNote;
 pub(super) fn git_note(name: &str, kind: NotificationType, text: String) -> Notification {
     // O título diz de qual sessão é: o gesto pode ter sido numa linha que não é a aberta.
     Notification::new().title(name.to_owned()).message(text).with_type(kind).id1::<GitNote>(SharedString::from(name.to_owned()))
+}
+
+/// As filhas ligadas de `parent`, pela regra do `linkedChildren` do core: o vínculo é um nome local, então só conta a
+/// linha da mesma máquina. Em ordem de nome.
+pub(super) fn close_children_of(lists: &[(&str, &[SessionInfo])], parent: &Target) -> Vec<Target> {
+    let mut kids: Vec<Target> = lists.iter().filter(|(server, _)| *server == parent.server)
+        .flat_map(|(server, sessions)| sessions.iter().filter(|s| s.linked_by.as_deref() == Some(parent.name.as_str()))
+            .map(move |s| Target::new(server, &s.name)))
+        .collect();
+    kids.sort_by(|a, b| a.name.cmp(&b.name));
+    kids
 }
 
 /// Git no menu só com pasta num repositório: o backend manda `branch` nulo fora de um (como o web, SCM:162).
@@ -1042,6 +1055,27 @@ impl Hangar {
         self.write(target, Write::Delete, cx);
     }
 
+    /// Fechar com as filhas: uma a uma pelo DELETE de sempre (vale em servidor antigo), as filhas antes do pai. As linhas
+    /// somem na hora; as que falharem voltam e entram num aviso só, no fim.
+    pub(super) fn delete_with_children(&mut self, parent: Target, kids: Vec<Target>, cx: &mut Context<Self>) {
+        let api = self.machine_api(&parent.server).ok_or_else(|| self.machine_error(&parent.server));
+        let order: Vec<Target> = kids.into_iter().chain(std::iter::once(parent)).collect();
+        for target in &order { self.sidebar.deleting.insert(target.clone()); }
+        let tell = self.sidebar_tell();
+        self.runtime.spawn(async move {
+            let (mut failed, mut warnings) = (Vec::new(), Vec::new());
+            for target in order {
+                let result = match &api { Ok(api) => api.act(&target.name, &[], None, true, 30).await, Err(reason) => Err(Failure::local(reason.clone())) };
+                match result {
+                    Ok(value) => warnings.extend(value.get("warning").filter(|w| !w.is_null()).map(crate::api::warning_text)),
+                    Err(error) => failed.push((target, error)),
+                }
+            }
+            tell.send(SidebarReply::ClosedWithChildren(failed, warnings)).await;
+        });
+        cx.notify();
+    }
+
     /// Reabre a sessão que o sistema derrubou, com o mesmo nome e a mesma conversa; a linha volta viva pela lista.
     pub(super) fn reopen_target(&mut self, target: Target, cx: &mut Context<Self>) {
         if !self.sidebar.reopening.insert(target.clone()) { return; }
@@ -1386,26 +1420,56 @@ impl Hangar {
         // Fechar a ponta de um par externo desfaz o par para o grupo inteiro: a confirmação diz.
         let body = std::iter::once(target.name.clone())
             .chain(self.anchored_owners(&target).iter().map(|dono| tr_shared("pair_undo_anchor_body", &[("dono", dono)]))).collect::<Vec<_>>().join("\n\n");
+        let kids: Vec<Target> = close_children_of(&[(target.server.as_str(), self.sessions_of(&target.server))], &target)
+            .into_iter().filter(|kid| !self.sidebar.deleting.contains(kid)).collect();
+        if !kids.is_empty() { self.confirm_delete_with_children(target, kids, body, window, cx); return; }
         chrome::confirm_alert(window, cx, tr("sidebar_close_title"), body, tr("sidebar_close"), ButtonVariant::Danger,
-            move |window, cx| { let _ = this.update(cx, |this, cx| {
-                    // A linha some na hora e volta se o servidor recusar; sem conexão nada sai, ela não some e o motivo aparece.
-                    if this.machine_api(&target.server).is_none() {
-                        window.push_notification(Notification::error(tr("sidebar_close_failed").replace("{n}", &this.machine_error(&target.server))), cx);
-                        return;
-                    }
-                    this.delete_target(target.clone(), cx);
-                    // O Confirm fecha com animação e só então devolve o foco à linha, que já sumiu: passado esse prazo, a raiz
-                    // o recebe (`fallbackFocus` do web). Se a linha voltou (o servidor recusou), o foco fica nela.
-                    let target = target.clone();
-                    cx.spawn_in(window, async move |this, cx| {
-                        cx.background_executor().timer(*dialog::ANIMATION_DURATION + Duration::from_millis(50)).await;
-                        let _ = this.update_in(cx, |this, window, cx| {
-                            let gone = this.sidebar.deleting.contains(&target) || this.target_session(&target).is_none();
-                            let on_row = this.row_focus(&target).is_some_and(|f| f.is_focused(window));
-                            if gone && (on_row || window.focused(cx).is_none()) { this.root_focus.focus(window, cx); }
-                        });
-                    }).detach();
-                }); true });
+            move |window, cx| { let _ = this.update(cx, |this, cx| this.close_confirmed(target.clone(), Vec::new(), window, cx)); true });
+    }
+
+    /// Pai com filhas ligadas abertas: fechar só ele (elas param e ficam, sem pai) ou junto com elas.
+    fn confirm_delete_with_children(&mut self, target: Target, kids: Vec<Target>, body: String, window: &mut Window, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let n = kids.len().to_string();
+        let question = tr_shared("session_close_children_question", &[("name", &target.name), ("n", &n)]);
+        window.open_dialog(cx, move |dialog, _, _| {
+            let run = |id: &'static str, label: String, with: bool| {
+                let (weak, target, kids) = (weak.clone(), target.clone(), kids.clone());
+                Button::new(id).danger().label(label).on_click(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    let kids = if with { kids.clone() } else { Vec::new() };
+                    let _ = weak.update(cx, |this, cx| this.close_confirmed(target.clone(), kids, window, cx));
+                })
+            };
+            popup::dialog(dialog).w(px(420.)).title(tr("sidebar_close_title"))
+                .child(div().flex().flex_col().gap(px(10.)).text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal()
+                    .child(body.clone()).child(question.clone()))
+                .footer(div().flex().justify_end().gap_2()
+                    .child(Button::new("close-cancel").label(tr("cancel")).on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(run("close-only-this", tr_shared("session_close_only_this", &[]), false))
+                    .child(run("close-with-children", tr_shared("session_close_with_children", &[("n", &n)]), true)))
+                .on_ok(enter_to_focused)
+        });
+    }
+
+    /// O fechar já confirmado, com as filhas escolhidas (vazio = só a linha).
+    fn close_confirmed(&mut self, target: Target, kids: Vec<Target>, window: &mut Window, cx: &mut Context<Self>) {
+        // A linha some na hora e volta se o servidor recusar; sem conexão nada sai, ela não some e o motivo aparece.
+        if self.machine_api(&target.server).is_none() {
+            window.push_notification(Notification::error(tr("sidebar_close_failed").replace("{n}", &self.machine_error(&target.server))), cx);
+            return;
+        }
+        if kids.is_empty() { self.delete_target(target.clone(), cx); } else { self.delete_with_children(target.clone(), kids, cx); }
+        // O Confirm fecha com animação e só então devolve o foco à linha, que já sumiu: passado esse prazo, a raiz
+        // o recebe (`fallbackFocus` do web). Se a linha voltou (o servidor recusou), o foco fica nela.
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(*dialog::ANIMATION_DURATION + Duration::from_millis(50)).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let gone = this.sidebar.deleting.contains(&target) || this.target_session(&target).is_none();
+                let on_row = this.row_focus(&target).is_some_and(|f| f.is_focused(window));
+                if gone && (on_row || window.focused(cx).is_none()) { this.root_focus.focus(window, cx); }
+            });
+        }).detach();
     }
 
     pub(super) fn receive_sidebar(&mut self, reply: SidebarReply, window: &mut Window, cx: &mut Context<Self>) {
@@ -1450,6 +1514,15 @@ impl Hangar {
                 window.push_notification(Notification::error(tr(key).replace("{names}", &names.join(", "))), cx);
             }
             SidebarReply::Group(seq, reply) => self.receive_group(seq, reply, window, cx),
+            SidebarReply::ClosedWithChildren(failed, warnings) => {
+                for (target, _) in &failed { self.sidebar.deleting.remove(target); }
+                if !failed.is_empty() {
+                    let names: Vec<String> = failed.iter().map(|(t, error)| format!("{} ({})", t.name, Self::fetch_failure(error))).collect();
+                    window.push_notification(Notification::error(tr_shared("session_close_children_failed", &[("names", &names.join(", "))])), cx);
+                }
+                if !warnings.is_empty() { window.push_notification(Notification::warning(warnings.join("\n")), cx); }
+                cx.notify();
+            }
             SidebarReply::Sheet(reply) => self.receive_sheet(reply, window, cx),
             SidebarReply::Identity(key, result) => self.receive_identity(key, result, window, cx),
             SidebarReply::AutoHide(reply) => self.receive_auto_hide(reply, window, cx),
@@ -2309,6 +2382,19 @@ mod tests {
         assert!(listed_on(&nb[1], &zeta, Some(&open)), "a aberta fica nas abas");
         assert!(!listed_on(&nb[1], &zeta, Some(&Target::new("nb", "api"))), "trocou de sessão, a oculta sai");
         assert!(listed_on(&nb[0], &Target::new("nb", "api"), None));
+    }
+
+    #[test]
+    fn close_children_of_counts_only_linked_children_of_the_same_server() {
+        use super::{Target, close_children_of};
+        let row = |name: &str, parent: Option<&str>| SessionInfo { name: name.into(), linked_by: parent.map(str::to_owned), ..Default::default() };
+        let nb = vec![row("pai", None), row("filha-b", Some("pai")), row("filha-a", Some("pai")), row("neta", Some("filha-a")), row("outra", None)];
+        let dp = vec![row("pai", None), row("filha-de-la", Some("pai"))];
+        let lists = [("nb", nb.as_slice()), ("dp", dp.as_slice())];
+        assert_eq!(close_children_of(&lists, &Target::new("nb", "pai")), vec![Target::new("nb", "filha-a"), Target::new("nb", "filha-b")],
+            "só as filhas diretas, da mesma máquina, por nome");
+        assert_eq!(close_children_of(&lists, &Target::new("dp", "pai")), vec![Target::new("dp", "filha-de-la")]);
+        assert!(close_children_of(&lists, &Target::new("nb", "outra")).is_empty(), "sem filhas, nada");
     }
 
     #[test]

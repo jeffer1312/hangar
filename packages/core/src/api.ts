@@ -3776,16 +3776,33 @@ export async function skipQuestion(name: string, requestId: string, interactionI
   return res.json() as Promise<{ ok: boolean }>;
 }
 
+/** `cascade` só vem com `cascade=1` e descendente ligada; `name: '*'` = os arquivos de grupo não foram lidos. */
+export interface InterruptResult {
+  ok: boolean;
+  cascade?: { interrupted: string[]; failed: { name: string; code: string }[] };
+}
+
 // clear=true tambem limpa o input do terminal (2o Esc no backend). So passar quando havia msg pendente.
-export async function interrupt(name: string, clear = false, server?: Server): Promise<void> {
-  const q = clear ? '?clear=true' : '';
+// `cascade` só no botão Parar: cancelar o cartão de pergunta usa a mesma rota e não pode parar as filhas.
+export async function interrupt(name: string, clear = false, server?: Server, opts?: { cascade?: boolean }): Promise<InterruptResult> {
+  const params = new URLSearchParams();
+  if (clear) params.set('clear', 'true');
+  if (opts?.cascade) params.set('cascade', '1');
+  const qs = params.toString();
+  const q = qs ? `?${qs}` : '';
   const path = `/api/sessions/${encodeURIComponent(name)}/interrupt${q}`;
   const init = {
     method: 'POST',
     body: JSON.stringify({}),
   };
-  await (server ? apiFetchForServer<{ ok: boolean }>(server, path, init)
-                : apiFetch<{ ok: boolean }>(path, init));
+  return server ? apiFetchForServer<InterruptResult>(server, path, init)
+                : apiFetch<InterruptResult>(path, init);
+}
+
+/** As descendentes que não pararam junto; resposta sem `cascade` (servidor antigo, sem filhas) é lista vazia. */
+export function interruptCascadeFailed(result: InterruptResult | null | undefined): string[] {
+  const failed = result?.cascade?.failed;
+  return Array.isArray(failed) ? failed.map((f) => f?.name).filter((n): n is string => typeof n === 'string' && n.length > 0) : [];
 }
 
 /** Clique num botão que um mod desenhou na faixa ou num painel. `copied` e `opened` são o que o mod

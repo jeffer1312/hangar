@@ -245,6 +245,13 @@ fn session_life_key(code: &str) -> Option<(&str, Option<&'static str>)> {
     }
 }
 
+/// Nomes de `cascade.failed` da resposta do `/interrupt`; `*` = os arquivos de grupo não foram lidos.
+fn cascade_failed(body: &Value) -> Vec<String> {
+    body.pointer("/cascade/failed").and_then(Value::as_array).map(|failed| failed.iter()
+        .filter_map(|f| f.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_owned)).collect())
+        .unwrap_or_default()
+}
+
 /// Caminho e bilhete de `open_url` (só página de sessão) sobre `route`, com o prefixo de caminho dela.
 fn rebase_page_url(route: &Url, open_url: &str) -> Option<Url> {
     let page = Url::parse(open_url).ok()?;
@@ -843,12 +850,19 @@ impl Api {
         mermaid_failure(status.as_u16(), message)
     }
 
-    pub async fn interrupt(&self, name: &str, clear: bool) -> Result<(), Failure> {
+    /// `cascade` só no Parar: cancelar o cartão de pergunta usa a mesma rota e não pode parar as filhas.
+    /// Devolve as descendentes ligadas que não pararam junto.
+    pub async fn interrupt(&self, name: &str, clear: bool, cascade: bool) -> Result<Vec<String>, Failure> {
         let mut url = self.endpoint(Some(name), Some("interrupt"));
-        url.query_pairs_mut().append_pair("clear", if clear { "true" } else { "false" });
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("clear", if clear { "true" } else { "false" });
+            if cascade { query.append_pair("cascade", "1"); }
+        }
         let r = self.client.post(url).timeout(Duration::from_secs(15)).send().await.map_err(|_| Failure::transport(true))?;
-        self.checked(r, true).await?;
-        Ok(())
+        let r = self.checked(r, true).await?;
+        // O pai já parou: corpo ilegível não vira falha, só não diz nada das filhas.
+        Ok(cascade_failed(&r.json::<Value>().await.unwrap_or(Value::Null)))
     }
 
     // Mutação sem retry: timeout ou queda depois de enviar vira incerteza, nunca repetição.
@@ -1976,6 +1990,39 @@ mod tests {
             ("POST /api/sessions/a%20b/queue/e%201/steer".to_owned(), None),
             ("POST /api/sessions/a%20b/queue/reorder".to_owned(), Some(json!({"id": "e 1", "before_id": null}))),
         ]);
+    }
+
+    #[tokio::test]
+    async fn interrupt_sends_cascade_only_when_asked() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            for reply in [r#"{"ok":true}"#, r#"{"ok":true,"cascade":{"interrupted":["kid-a"],"failed":[{"name":"kid-b","code":"cascade_timeout"}]}}"#] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                    head.push_str(&line);
+                    if line == "\r\n" { break; }
+                }
+                seen.push(head.lines().next().unwrap().split_whitespace().take(2).collect::<Vec<_>>().join(" "));
+                stream.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).as_bytes()).await.unwrap();
+            }
+            seen
+        });
+        let api = Api::new(&format!("http://{address}"), "fixture-token").unwrap();
+        assert_eq!(api.interrupt("a b", false, false).await.unwrap(), Vec::<String>::new());
+        assert_eq!(api.interrupt("a b", true, true).await.unwrap(), vec!["kid-b".to_owned()]);
+        assert_eq!(server.await.unwrap(), vec![
+            "POST /api/sessions/a%20b/interrupt?clear=false".to_owned(),
+            "POST /api/sessions/a%20b/interrupt?clear=true&cascade=1".to_owned(),
+        ]);
+        assert_eq!(cascade_failed(&json!({"cascade": {"failed": [{"name": "*", "code": "groups_unavailable"}]}})), vec!["*".to_owned()]);
+        assert!(cascade_failed(&Value::Null).is_empty());
     }
 
     /// A recusa de conta em uso com a lista vira o que perguntar; sem lista (servidor antigo) ou vazia, erro comum.

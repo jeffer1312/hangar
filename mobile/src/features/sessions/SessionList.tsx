@@ -14,6 +14,7 @@ import {
   groupGlobal,
   groupHideTargets,
   hideSession,
+  linkedChildren,
   machineNoticeVisible,
   machinesAllDown,
   renameSession,
@@ -150,6 +151,27 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     else toast.erro(m.servidor_nao_existe());
   }, []);
 
+  // As filhas antes do pai, uma a uma pelo DELETE de sempre (vale em servidor antigo); as linhas
+  // somem na hora, as que falharem voltam, e as falhas vêm num aviso só no fim.
+  const fecharComFilhas = useCallback(async (s: AggSession, kids: AggSession[]) => {
+    const order = [...kids, s];
+    for (const x of order) useSessions.getState().markDeleting(x.serverId, x.name);
+    const failed: string[] = [];
+    let warning: unknown = null;
+    for (const x of order) {
+      try {
+        const r = await deleteSession(x.name);
+        if (r.warning && !warning) warning = r.warning;
+      } catch (e: unknown) {
+        useSessions.getState().unmarkDeleting(x.serverId, x.name);
+        failed.push(`${x.name} (${mensagemDe(e)})`);
+      }
+    }
+    if (failed.length) toast.erro(m.session_close_children_failed({ names: failed.join(', ') }));
+    if (warning) toast.erro(formataErro(warning) ?? String(warning));
+    if (!failed.length && !warning) toast.ok(s.name);
+  }, []);
+
   const excluir = useCallback(
     (s: AggSession) => {
       const server = useServers.getState().servers.find((server) => server.id === s.serverId);
@@ -167,34 +189,46 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
       const cancel = () => {
         if (!reservation.confirmed) release();
       };
+      const fechar = (kids: AggSession[]) => {
+        if (deleting.current.get(key) !== reservation || reservation.confirmed) return;
+        reservation.confirmed = true;
+        if (!comServidor(s, () => {
+          if (kids.length) {
+            fecharComFilhas(s, kids).finally(release);
+            return;
+          }
+          useSessions.getState().markDeleting(s.serverId, s.name);
+          deleteSession(s.name)
+            .then((r) => {
+              // A sessão morreu, mas um companheiro do grupo pode não ter sido avisado: o
+              // motivo aparece em vez de a linha sumir calada (mesmo tratamento do desktop).
+              if (r.warning) toast.erro(formataErro(r.warning) ?? String(r.warning));
+              else toast.ok(s.name);
+            })
+            .catch((e: unknown) => {
+              useSessions.getState().unmarkDeleting(s.serverId, s.name);
+              toast.erro(mensagemDe(e));
+            })
+            .finally(release);
+        })) release();
+      };
+      // Pai com filhas ligadas abertas: fechar só ele (elas param e ficam, sem pai) ou junto com elas.
+      const kids = linkedChildren(useSessions.getState().rows, s);
+      const cancelar = { text: m.comum_cancelar(), style: 'cancel' as const, onPress: cancel };
+      if (kids.length) {
+        Alert.alert(m.sessao_excluir(), m.session_close_children_question({ name: s.name, n: kids.length }), [
+          cancelar,
+          { text: m.session_close_only_this(), style: 'destructive', onPress: () => fechar([]) },
+          { text: m.session_close_with_children({ n: kids.length }), style: 'destructive', onPress: () => fechar(kids) },
+        ], { cancelable: true, onDismiss: cancel });
+        return;
+      }
       Alert.alert(m.sessao_excluir(), s.name, [
-        { text: m.comum_cancelar(), style: 'cancel', onPress: cancel },
-        {
-          text: m.sessao_excluir_curto(),
-          style: 'destructive',
-          onPress: () => {
-            if (deleting.current.get(key) !== reservation || reservation.confirmed) return;
-            reservation.confirmed = true;
-            if (!comServidor(s, () => {
-              useSessions.getState().markDeleting(s.serverId, s.name);
-              deleteSession(s.name)
-                .then((r) => {
-                  // A sessão morreu, mas um companheiro do grupo pode não ter sido avisado: o
-                  // motivo aparece em vez de a linha sumir calada (mesmo tratamento do desktop).
-                  if (r.warning) toast.erro(formataErro(r.warning) ?? String(r.warning));
-                  else toast.ok(s.name);
-                })
-                .catch((e: unknown) => {
-                  useSessions.getState().unmarkDeleting(s.serverId, s.name);
-                  toast.erro(mensagemDe(e));
-                })
-                .finally(release);
-            })) release();
-          },
-        },
+        cancelar,
+        { text: m.sessao_excluir_curto(), style: 'destructive', onPress: () => fechar([]) },
       ], { cancelable: true, onDismiss: cancel });
     },
-    [comServidor],
+    [comServidor, fecharComFilhas],
   );
 
   const renomear = useCallback(

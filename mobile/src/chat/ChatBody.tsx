@@ -35,7 +35,7 @@ import { SessionProblem, showsSessionProblem } from './SessionProblem';
 import { SessionPickerSheet } from './SessionPickerSheet';
 import { useLiveVoice } from '../features/voice/liveVoiceStore';
 import { PlanActions } from './PlanActions';
-import { askPayloadFromToolUse, canChooseSurface, codexSubagentState, fetchSessionsForServer, isOrq, matchAgentSubagent, selectOptionForServer, submitSelectedForServer, interrupt, recarregarSessao, setModoExecucao, implementCodexPlan, setPermissionMode, projectSubagentActivity, subagentEnded } from '@hangar/core';
+import { askPayloadFromToolUse, canChooseSurface, codexSubagentState, fetchSessionsForServer, isOrq, matchAgentSubagent, selectOptionForServer, submitSelectedForServer, interrupt, interruptCascadeFailed, recarregarSessao, setModoExecucao, implementCodexPlan, setPermissionMode, projectSubagentActivity, subagentEnded } from '@hangar/core';
 import { agentIdentities } from '../features/activity/agentModel';
 import { createEventProjection } from './eventProjection';
 import type { Provider, SessionInfo } from '@hangar/core';
@@ -411,8 +411,13 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
     // composer (editável) e o segundo Esc limpa o terminal. Sem pendente, interrupção simples.
     const cur = chat.use.getState().pending;
     const last = cur.length ? cur[cur.length - 1] : null;
-    void interrupt(name, !!last, target)
-      .then(() => {
+    // Só o Parar leva a cascata: o Cancelar do cartão de pergunta usa a mesma rota e não para as filhas.
+    void interrupt(name, !!last, target, { cascade: true })
+      .then((result) => {
+        const failed = interruptCascadeFailed(result);
+        if (failed.length && rotaAtual.current === rota) {
+          mostrarAviso(failed.includes('*') ? m.interrupt_cascade_unavailable() : m.interrupt_cascade_failed({ names: failed.join(', ') }));
+        }
         if (!last || !chat.use.getState().pending.some((p) => p.id === last.id)) return;
         chat.use.setState((live) => ({ pending: live.pending.filter((p) => p.id !== last.id) }));
         // Só depois do Esc confirmado: com falha a mensagem segue na fila e voltaria em dobro.
