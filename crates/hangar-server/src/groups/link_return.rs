@@ -31,7 +31,8 @@ const MAX_AGE: f64 = 2.0 * 3600.0;
 /// Janelas de eventos lidas para trás até achar a última mensagem do usuário; a última só para no teto de bytes.
 const WINDOWS: [usize; 2] = [400, usize::MAX];
 const MAX_READ: u64 = 32 * 1024 * 1024;
-const MAX_CHARS: usize = 8000;
+/// Tamanho do recado ao pai e da página do `child_status`, em `char`.
+pub(crate) const MAX_CHARS: usize = 8000;
 /// Sem filha nas linhas, o arquivo de grupo confirma antes de soltar: a lista pode ser de antes da ligação.
 const RESCAN: Duration = Duration::from_secs(30);
 /// Pai e filha trocando turnos sozinhos: cada volta leva 20 s ou mais, então o limite é por filha e longo.
@@ -363,7 +364,7 @@ fn blank_answer(e: &ChatEvent) -> bool { e.kind == ChatKind::AssistantMsg && e.t
 
 /// A resposta final só existe se o turno terminou nela: interrompido ou parado em ferramenta traz
 /// texto pela metade. Volta junto a mensagem do usuário que ela responde.
-fn final_answer(events: &[ChatEvent]) -> Option<(&ChatEvent, Option<&ChatEvent>)> {
+pub(crate) fn final_answer(events: &[ChatEvent]) -> Option<(&ChatEvent, Option<&ChatEvent>)> {
     let asked = events.iter().rposition(|e| e.kind == ChatKind::UserMsg);
     let turn = &events[asked.map_or(0, |i| i + 1)..];
     if turn.iter().any(|e| e.kind == ChatKind::Notice && matches!(e.text.as_deref(), Some("interrupted" | "turn_aborted"))) {
@@ -378,6 +379,15 @@ fn answer_key(answer: &ChatEvent, asked: Option<&ChatEvent>) -> String {
     if !answer.id.is_empty() { return answer.id.clone(); }
     let asked = asked.and_then(|e| e.text.as_deref()).unwrap_or_default();
     sha1_smol::Sha1::from(format!("{asked}\n{}", answer.text.as_deref().unwrap_or_default())).digest().to_string()
+}
+
+/// A identidade que o retorno grava em `returned_key` para o fim desta conversa: a da resposta final, ou a do turno
+/// sem resposta. O `child_status` compara com ela para dizer se a resposta já voltou.
+pub(crate) fn reply_key(events: &[ChatEvent]) -> String {
+    match final_answer(events) {
+        Some((answer, asked)) => answer_key(answer, asked),
+        None => unanswered_key(events),
+    }
 }
 
 /// Turno sem resposta: a pergunta que ele responde, com prefixo próprio para não colidir com uma resposta.
@@ -397,7 +407,7 @@ fn not_returned(child: &str, why: &str) -> String {
 fn message(child: &str, answer: &str) -> String {
     if answer.chars().count() <= MAX_CHARS { return format!("[de: {child}] {answer}"); }
     let cut: String = answer.chars().take(MAX_CHARS).collect();
-    format!("[de: {child}] {cut}\n(cortado; resposta completa na conversa de {child})")
+    format!("[de: {child}] {cut}\n(cortado; o resto pela tool child_status, offset {MAX_CHARS})")
 }
 
 /// Pai ocupado, reabrindo ou runtime doente passam; o resto (sessão sumida, pedido recusado) não.
@@ -479,6 +489,10 @@ async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at:
     })).await;
     if let Err(e) = written {
         report(st, child, "link_returns_write_failed", "returned_at da filha não gravado", &io_kind(&e));
+    }
+    // O aviso de resposta descartada já tem código próprio no diário.
+    if dropped.is_none() {
+        st.diag.report("rust.link_return_delivered", child, "link_return_delivered", "resposta da filha ligada devolvida ao pai");
     }
     Outcome::Done
 }
@@ -764,12 +778,25 @@ mod tests {
         assert!(!still_same(None, "f", 5.0));
     }
 
+    /// O `child_status` diz `returned` pela mesma identidade que o retorno grava, com e sem resposta final.
+    #[test]
+    fn the_reply_key_is_the_one_the_return_records() {
+        let mut events = asked("[de: pai] x");
+        events[3].id = "uuid-resposta".into();
+        let (_, key) = decide(&check(), &turn(events.clone(), false)).unwrap();
+        assert_eq!(reply_key(&events), key);
+        let mut tool = asked("[de: pai] x");
+        tool.push(ev(ChatKind::ToolUse, ""));
+        let Err(Refusal::NoAnswer(unanswered)) = decide(&check(), &turn(tool.clone(), false)) else { panic!("esperava NoAnswer") };
+        assert_eq!(reply_key(&tool), unanswered);
+    }
+
     #[test]
     fn answer_is_cut() {
         assert_eq!(message("f", "oi"), "[de: f] oi");
         let long = "é".repeat(MAX_CHARS + 5);
         let cut = message("f", &long);
         assert!(cut.starts_with(&format!("[de: f] {}", "é".repeat(MAX_CHARS))));
-        assert!(cut.ends_with("(cortado; resposta completa na conversa de f)"));
+        assert!(cut.ends_with("(cortado; o resto pela tool child_status, offset 8000)"), "{cut}");
     }
 }

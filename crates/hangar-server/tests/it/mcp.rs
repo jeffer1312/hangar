@@ -332,7 +332,7 @@ async fn sessions_marks_the_caller() {
     let mine: Vec<_> = rows.iter().filter(|r| r["voce"] == true).map(|r| r["name"].clone()).collect();
     assert_eq!(mine, [json!("s0")]);
     assert!(rows.iter().all(|r| r.as_object().unwrap().keys().eq(["name", "state", "cwd", "provider", "headless", "voce", "grupo",
-        "membros", "dona"])), "membros com `servidor::sessao` e a máquina dona do grupo");
+        "membros", "dona", "linked_by", "question"])), "membros com `servidor::sessao`, a máquina dona do grupo, quem abriu a filha e a pergunta dela");
     assert_eq!(result["content"].as_array().unwrap().len(), rows.len(), "um bloco de texto por sessão, como o SDK do Python");
     let mut nobody = Mcp::open(s.addr, &[]).await;
     let rows = nobody.call("sessions", json!({})).await["structuredContent"]["result"].clone();
@@ -494,6 +494,42 @@ async fn interrupt_only_reaches_a_linked_child() {
     // Ligada, passa a guarda e a rota responde no Rust (cena sem registro: `runtime_unavailable`), nunca o Python.
     let done = mcp.call("interrupt", json!({"alvo": "outra"})).await;
     assert!(!first_text(&done).starts_with("erro_interromper_nao_ligada"), "{done}");
+}
+
+/// `child_status` lê a resposta final da filha ligada em páginas de 8000 caracteres, pela rota do histórico; outra
+/// sessão é recusada com `erro_nao_ligada`, e o `interrupt` segue com o código dele.
+#[tokio::test(flavor = "multi_thread")]
+async fn child_status_pages_the_final_answer_of_a_linked_child_only() {
+    let s = scene_tuned(true, None, false, "", Share::Absent, |st| st.hangar_dir = st.origins_home.join(".hangar")).await;
+    let pages = ["á".repeat(8000), "b".repeat(8000), "ç".repeat(4000)];
+    let answer = pages.concat();
+    // A conversa de `s0` (pasta `w0`) vira a da filha: pedido do pai e resposta de 20 000 caracteres.
+    let cwd = s.home.parent().unwrap().join("w0");
+    let proj = s.home.join(".claude/projects").join(hangar_workspace::worktrees::sanitize_cwd(cwd.to_str().unwrap()));
+    let lines = [
+        json!({"type": "user", "uuid": "u1", "timestamp": "2026-10-02T10:00:00.000Z",
+            "message": {"role": "user", "content": "[de: beta] faz a busca"}}),
+        json!({"type": "assistant", "uuid": "a1", "timestamp": "2026-10-02T10:00:05.000Z",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": answer}]}}),
+    ];
+    std::fs::write(proj.join("00000000-0000-0000-0000-000000000000.jsonl"), lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+    write_json(&s.home.join(".claude/.hangar-pair/s0.json"), json!({"peers": ["beta"], "task": "", "gid": "g1", "harness": {}, "linked_by": "beta"}));
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
+    for (offset, page, next) in [(0, &pages[0], json!(8000)), (8000, &pages[1], json!(16000)), (16000, &pages[2], Value::Null)] {
+        let status = mcp.call("child_status", json!({"alvo": "s0", "offset": offset})).await;
+        assert!(!failed(&status), "{status}");
+        let got = &status["structuredContent"];
+        assert_eq!(got["answer"]["text"].as_str(), Some(page.as_str()), "offset {offset}: {}", got["state"]);
+        assert_eq!((&got["answer"]["offset"], &got["answer"]["total_chars"], &got["answer"]["next_offset"]), (&json!(offset), &json!(20000), &next));
+        assert_eq!(got["returned"], false, "nada voltou sozinho ainda");
+    }
+    let past = mcp.call("child_status", json!({"alvo": "s0", "offset": 30000})).await;
+    let past = &past["structuredContent"]["answer"];
+    assert_eq!((&past["text"], &past["next_offset"]), (&json!(""), &Value::Null), "além do fim: página vazia");
+    let other = mcp.call("child_status", json!({"alvo": "s1"})).await;
+    assert!(failed(&other) && first_text(&other).starts_with("erro_nao_ligada"), "{other}");
+    let interrupt = mcp.call("interrupt", json!({"alvo": "s1"})).await;
+    assert!(failed(&interrupt) && first_text(&interrupt).starts_with("erro_interromper_nao_ligada"), "{interrupt}");
 }
 
 /// O servidor do app desktop (`POST /cmd`): anota cada pedido e responde por verbo.
