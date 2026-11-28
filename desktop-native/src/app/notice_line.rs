@@ -490,8 +490,9 @@ pub(crate) fn notice_action_button(id: &str, label: String) -> Button {
 
 /// A linha da nota do continuar sozinho: o texto neutro e, enquanto espera a rede, o Cancelar.
 pub(crate) fn auto_continue_row(text: String, cancel: Option<AnyElement>) -> Div {
+    // Quebra em vez de cortar: a nota não tem detalhe para abrir, e o texto cortado se perderia.
     div().flex().items_center().gap(px(7.)).min_w_0()
-        .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(text))
+        .child(div().min_w_0().text_size(px(12.5)).text_color(theme::muted()).child(text))
         .children(cancel)
 }
 

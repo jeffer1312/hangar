@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Text, View, useWindowDimensions } from 'react-native';
 import { useIsFocused } from 'expo-router/react-navigation';
 import Animated, { FadeIn, FadeOut, LinearTransition, SlideOutLeft, useReducedMotion } from 'react-native-reanimated';
@@ -9,6 +9,7 @@ import { SessionSectionCard, SessionSectionHeader } from '../sessions/SessionSec
 import { buildSessionSections } from '../sessions/sessionSections';
 import { withAlpha } from '../config/colors';
 import { superficie } from '../../theme/superficie';
+import { WorkingMarkPaused } from '../../ui/WorkingMark';
 import { useScriptStep } from './scriptStep';
 import * as m from '../../paraglide/messages';
 
@@ -49,6 +50,7 @@ function CloseQuestion({ parent, n, width }: { parent: string; n: number; width:
 }
 
 export function LinkedChildrenAnimation({ width }: { width: number }) {
+  const paused = useContext(WorkingMarkPaused);
   const reduced = useReducedMotion();
   const stage = useRef<View>(null);
   const window = useWindowDimensions();
@@ -57,13 +59,13 @@ export function LinkedChildrenAnimation({ width }: { width: number }) {
   const [active, setActive] = useState(AppState.currentState === 'active');
   useEffect(() => { const sub = AppState.addEventListener('change', (state) => setActive(state === 'active')); return () => sub.remove(); }, []);
   useEffect(() => {
-    if (!focused || !active) return;
+    if (!focused || !active || paused) return;
     const check = () => stage.current?.measureInWindow((_x, y, _w, height) => setVisible(height > 0 && y < window.height && y + height > 0));
     check();
     const timer = setInterval(check, 500);
     return () => clearInterval(timer);
-  }, [focused, active, window.height]);
-  const still = reduced || !active || !focused || !visible;
+  }, [focused, active, paused, window.height]);
+  const still = reduced || paused || !active || !focused || !visible;
   const t = useScriptStep(STEPS, CYCLE, STILL, still);
   const rows = useMemo(sampleRows, []);
   const parent = rows[0].name;
@@ -76,18 +78,21 @@ export function LinkedChildrenAnimation({ width }: { width: number }) {
   const layout = still ? undefined : LinearTransition.duration(260);
   const enter = still ? undefined : FadeIn.duration(240);
   return <View ref={stage} style={[styles.stage, { width }]} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-    {sections.map((section) => <Animated.View key={section.id} layout={layout}>
-      {section.label ? <SessionSectionHeader section={section} onToggle={noop} /> : null}
-      {section.data.map((s, index) => <Animated.View key={`${section.id}::${s.name}`} layout={layout}
-        exiting={still ? undefined : SlideOutLeft.duration(320)}>
-        {/* A linha troca de quadro com um esmaecer curto: o trabalho que para, a marca que entra. */}
-        <Animated.View key={String(closed)} entering={enter}>
-          <SessionSectionCard index={index} total={section.data.length}>
-            <SessionRow session={s} compact mostrarServidor={false} onPress={noop} />
-          </SessionSectionCard>
-        </Animated.View>
+    {/* Parado, o avatar das linhas que trabalham também para. */}
+    <WorkingMarkPaused.Provider value={still}>
+      {sections.map((section) => <Animated.View key={section.id} layout={layout}>
+        {section.label ? <SessionSectionHeader section={section} onToggle={noop} /> : null}
+        {section.data.map((s, index) => <Animated.View key={`${section.id}::${s.name}`} layout={layout}
+          exiting={still ? undefined : SlideOutLeft.duration(320)}>
+          {/* A linha troca de quadro com um esmaecer curto: o trabalho que para, a marca que entra. */}
+          <Animated.View key={String(closed)} entering={enter}>
+            <SessionSectionCard index={index} total={section.data.length}>
+              <SessionRow session={s} compact mostrarServidor={false} onPress={noop} />
+            </SessionSectionCard>
+          </Animated.View>
+        </Animated.View>)}
       </Animated.View>)}
-    </Animated.View>)}
+    </WorkingMarkPaused.Provider>
     {asking ? <Animated.View style={styles.veil} entering={enter} exiting={still ? undefined : FadeOut.duration(150)}>
       <CloseQuestion parent={parent} n={rows.length - 1} width={Math.min(width - 32, 270)} />
     </Animated.View> : null}
@@ -111,7 +116,7 @@ const styles = StyleSheet.create(theme => ({
   alertText: { gap: theme.base.space[1], paddingHorizontal: theme.base.space[4], paddingVertical: theme.base.space[3] },
   alertTitle: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold, color: theme.tokens.text.primary, textAlign: 'center' },
   alertMessage: { fontSize: theme.base.text.xs, color: theme.tokens.text.secondary, textAlign: 'center' },
-  // 44 pt: a altura de cada ação no alerta do iOS.
+  // Altura de cada ação, igual à do alerta do iOS.
   alertButton: {
     minHeight: 44, paddingHorizontal: theme.base.space[3], textAlign: 'center', textAlignVertical: 'center', lineHeight: 44,
     fontSize: theme.base.text.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.tokens.border.default,

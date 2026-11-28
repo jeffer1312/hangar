@@ -783,6 +783,27 @@ async fn interrupting_a_parent_does_not_touch_its_linked_children() {
     assert_eq!(tried, 0, "nenhuma filha foi procurada: {:?}", python.diag());
 }
 
+/// Pai em turno: o Parar chega a ele e só a ele, também com o `cascade=1` de um cliente antigo.
+#[tokio::test]
+async fn interrupting_a_parent_in_a_turn_stops_only_the_parent() {
+    let interrupted = |sink: &Arc<std::sync::Mutex<Vec<Value>>>| sink.lock().unwrap().iter()
+        .filter_map(|e| serde_json::from_str::<Value>(e["frame"].as_str()?).ok())
+        .any(|frame| frame["request"]["subtype"] == "interrupt");
+    for path in ["p/interrupt", "p/interrupt?cascade=1"] {
+        let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+        let parent = open_headless(&registry, dir.path(), "p").await;
+        let child = open_headless(&registry, dir.path(), "a").await;
+        let (_python, server, _diag) = linked_family(registry, dir.path()).await;
+        // O cano falso nunca termina o turno que o envio abre.
+        let (status, body) = send(server, "POST", "p/input", r#"{"text":"um"}"#).await;
+        assert_eq!((status, &body["delivered"]), (200, &json!(true)), "{path}: o envio abre o turno: {body}");
+        let (status, body) = send(server, "POST", path, "").await;
+        assert_eq!((status, &body), (200, &json!({"ok": true})), "{path}: {body}");
+        assert!(interrupted(&parent), "{path}: o Parar chegou ao pai");
+        assert!(!interrupted(&child), "{path}: nada foi à filha");
+    }
+}
+
 /// Pai Claude sem terminal estacionado (só o arquivo dele): a recusa sem turno vem antes da entrada, sem subir o
 /// processo só para o Esc.
 #[tokio::test]

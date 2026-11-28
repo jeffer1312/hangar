@@ -365,7 +365,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
             )) : null}
           </View>
         ) : null}
-        {/* A marca de sem pai leva o nome do pai e não cabe ao lado do nome: na linha do nome ela o reduzia a "…". */}
+        {/* A marca de sem pai leva o nome do pai: não cabe na linha do nome. */}
         {s.limited || loop || s.orphaned_from ? (
           <View style={styles.chips}>
             {s.orphaned_from ? <Chip>{m.session_orphaned_from({ name: s.orphaned_from })}</Chip> : null}

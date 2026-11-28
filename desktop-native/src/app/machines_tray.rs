@@ -437,8 +437,8 @@ impl Hangar {
                         .child(super::side::since(at)))))
                 // A pasta (quando difere do nome), a branch e o ↑↓ de push e pull; no modo detalhado, as linhas mudadas e o modelo.
                 .child(div().min_w_0().flex().flex_wrap().items_center().gap_x(px(8.)).gap_y(px(2.)).text_size(px(10.5)).text_color(theme::muted())
-                    // A marca de sem pai leva o nome do pai e não cabe ao lado do nome: na linha do nome ela o reduzia a "…".
-                    .children(orphan.map(|text| div().flex_shrink_0().px(px(6.)).rounded_full().bg(theme::inset()).child(text)))
+                    // A marca de sem pai leva o nome do pai: não cabe na linha do nome.
+                    .children(orphan.map(|text| div().min_w_0().truncate().px(px(6.)).rounded_full().bg(theme::inset()).child(text)))
                     .children(folder_name(session).filter(|f| *f != session.name).map(|f| div().min_w_0().truncate().child(f)))
                     .children(shown_branch(session).map(|b| div().min_w_0().truncate().child(format!("⑂ {b}"))))
                     .children(session.git_ahead.filter(|n| *n > 0).map(|n| div().flex_shrink_0().text_color(theme::accent_text()).child(format!("↑{n}"))))

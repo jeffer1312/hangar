@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, View, useWindowDimensions } from 'react-native';
 import { useIsFocused } from 'expo-router/react-navigation';
 import Animated, { FadeIn, FadeOut, useReducedMotion } from 'react-native-reanimated';
@@ -8,6 +8,7 @@ import { ClaudeNotice } from '../../chat/ClaudeNotice';
 import { SessionRow } from '../sessions/SessionRow';
 import { SessionSectionCard } from '../sessions/SessionSection';
 import { superficie } from '../../theme/superficie';
+import { WorkingMarkPaused } from '../../ui/WorkingMark';
 import { useScriptStep } from './scriptStep';
 import * as m from '../../paraglide/messages';
 
@@ -36,6 +37,7 @@ function note(state: 'waiting' | 'continued'): ChatEvent {
 }
 
 export function AutoContinueAnimation({ width }: { width: number }) {
+  const paused = useContext(WorkingMarkPaused);
   const reduced = useReducedMotion();
   const stage = useRef<View>(null);
   const window = useWindowDimensions();
@@ -44,13 +46,13 @@ export function AutoContinueAnimation({ width }: { width: number }) {
   const [active, setActive] = useState(AppState.currentState === 'active');
   useEffect(() => { const sub = AppState.addEventListener('change', (state) => setActive(state === 'active')); return () => sub.remove(); }, []);
   useEffect(() => {
-    if (!focused || !active) return;
+    if (!focused || !active || paused) return;
     const check = () => stage.current?.measureInWindow((_x, y, _w, height) => setVisible(height > 0 && y < window.height && y + height > 0));
     check();
     const timer = setInterval(check, 500);
     return () => clearInterval(timer);
-  }, [focused, active, window.height]);
-  const still = reduced || !active || !focused || !visible;
+  }, [focused, active, paused, window.height]);
+  const still = reduced || paused || !active || !focused || !visible;
   const t = useScriptStep(STEPS, CYCLE, STILL, still);
   const step = t >= BACK ? 'continued' : t >= DROP ? 'waiting' : 'working';
   // Enquanto espera a rede o turno está parado; antes da queda e depois da volta, trabalhando.
@@ -61,9 +63,12 @@ export function AutoContinueAnimation({ width }: { width: number }) {
   }), [working]);
   const event = useMemo(() => (step === 'working' ? null : note(step)), [step]);
   return <View ref={stage} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.stage, { width }]}>
-    <SessionSectionCard index={0} total={1}>
-      <SessionRow session={session} compact mostrarServidor={false} onPress={noop} />
-    </SessionSectionCard>
+    {/* Parado, o avatar que trabalha também para. */}
+    <WorkingMarkPaused.Provider value={still}>
+      <SessionSectionCard index={0} total={1}>
+        <SessionRow session={session} compact mostrarServidor={false} onPress={noop} />
+      </SessionSectionCard>
+    </WorkingMarkPaused.Provider>
     {event ? <Animated.View key={step} entering={still ? undefined : FadeIn.duration(240)} exiting={still ? undefined : FadeOut.duration(150)}>
       <ClaudeNotice event={event} serverId={SERVER} sessionName={session.name} />
     </Animated.View> : null}
