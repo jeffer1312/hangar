@@ -20,7 +20,7 @@ vi.mock('../../ui/haptics', () => ({ haptic: { selection: vi.fn(), success: vi.f
 vi.mock('@hangar/core', async (original) => ({ ...(await original<typeof import('@hangar/core')>()), tourProgressFor, registrarDiag: vi.fn() }));
 
 import { MOBILE_TOUR_DONE, MOBILE_TOUR_SKIPPED } from '@hangar/core';
-import { planTour, replayTour, syncTour, takeReplay, tourAction, tourChoice, useTour } from './store';
+import { planTour, replayTour, syncTour, tourAction, tourChoice, useTour } from './store';
 
 const casa = { id: 'casa', label: 'Casa', baseUrl: 'https://casa.test', token: 't' };
 
@@ -28,7 +28,7 @@ beforeEach(() => {
   memory.clear();
   tourProgressFor.mockReset();
   servers.list = [casa];
-  useTour.setState({ progress: {}, synced: false, planned: false, run: null, tips: [] });
+  useTour.setState({ progress: {}, synced: false, planned: false, replay: false, run: null, tips: [] });
 });
 
 describe('sincronização do visto', () => {
@@ -53,16 +53,69 @@ describe('sincronização do visto', () => {
     expect(tourProgressFor.mock.calls.filter((call) => call[1])).toHaveLength(0);
   });
 
-  it('não fala com a demonstração, com convite nem com servidor desligado; falha não trava o tour', async () => {
+  it('não fala com a demonstração, com convite nem com servidor desligado', async () => {
     servers.list = [{ ...casa, id: 'demo', baseUrl: 'http://127.0.0.1:1' }, { ...casa, id: 'par', invite: true }, { ...casa, id: 'off', disabled: true }, casa];
-    tourProgressFor.mockRejectedValue(new Error('fora do ar'));
+    tourProgressFor.mockResolvedValue({});
     await syncTour();
     expect(tourProgressFor.mock.calls.map((call) => call[0].id)).toEqual(['casa']);
+  });
+
+  it('sem nenhuma resposta o visto segue desconhecido e a próxima chamada tenta de novo', async () => {
+    tourProgressFor.mockRejectedValueOnce(new Error('fora do ar'));
+    await syncTour();
+    expect(useTour.getState().synced).toBe(false);
+    servers.list = [];
+    await syncTour();
+    expect(useTour.getState().synced).toBe(false);
+    servers.list = [casa];
+    tourProgressFor.mockResolvedValue({ tips: [MOBILE_TOUR_DONE] });
+    await syncTour();
     expect(useTour.getState().synced).toBe(true);
+    expect(useTour.getState().progress.tips).toContain(MOBILE_TOUR_DONE);
+  });
+
+  it('servidor que só não tem a rota conta como resposta', async () => {
+    tourProgressFor.mockResolvedValue(null);
+    await syncTour();
+    expect(useTour.getState().synced).toBe(true);
+  });
+
+  it('pedido com outra rodada em voo roda mais uma, e ela lê o servidor que chegou', async () => {
+    let release!: () => void;
+    tourProgressFor.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({}); }));
+    tourProgressFor.mockResolvedValue({});
+    const first = syncTour();
+    const nova = { ...casa, id: 'nova', baseUrl: 'https://nova.test' };
+    servers.list = [casa, nova];
+    const second = syncTour();
+    expect(syncTour()).toBe(second);
+    release();
+    await Promise.all([first, second]);
+    const read = tourProgressFor.mock.calls.filter((call) => !call[1]).map((call) => call[0].id);
+    expect(read).toEqual(['casa', 'casa', 'nova']);
   });
 });
 
 describe('volta do tour', () => {
+  beforeEach(() => { useTour.setState({ synced: true }); });
+
+  it('sem o visto dos servidores só as dicas existem, e a volta é planejada quando ele chega', () => {
+    useTour.setState({ synced: false });
+    planTour(2);
+    expect(useTour.getState().planned).toBe(false);
+    expect(useTour.getState().run).toBeNull();
+    expect(useTour.getState().tips.map((t) => t.id)).toEqual(['media']);
+    useTour.setState({ synced: true });
+    planTour(2);
+    expect(useTour.getState().run?.steps[0].id).toBe('menu');
+  });
+
+  it('no modo nova conversa o tour começa pelas peças da conversa', () => {
+    planTour(2, 'newConversation');
+    expect(useTour.getState().run?.steps.map((s) => s.id)).toEqual(['attach', 'dictation', 'model']);
+    expect(useTour.getState().tips.map((t) => t.id)).toEqual(['tour-menu', 'tour-search', 'media']);
+  });
+
   it('tour já visto no celular deixa só as dicas', () => {
     useTour.setState({ progress: { tips: [MOBILE_TOUR_DONE] } });
     planTour(2);
@@ -94,8 +147,8 @@ describe('volta do tour', () => {
     useTour.setState({ progress: { tips: [MOBILE_TOUR_SKIPPED] } });
     replayTour();
     expect(useTour.getState().planned).toBe(false);
-    planTour(2, takeReplay());
+    planTour(2);
     expect(useTour.getState().run?.index).toBe(0);
-    expect(takeReplay()).toBe(false);
+    expect(useTour.getState().replay).toBe(false);
   });
 });

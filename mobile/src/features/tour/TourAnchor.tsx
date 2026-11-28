@@ -1,23 +1,36 @@
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useRef, type ReactNode } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
-import { anchorMoved, registerAnchor, reportTourAction, unregisterAnchor } from './anchors';
+import { WorkingMarkPaused } from '../../ui/WorkingMark';
+import { anchorMoved, registerAnchor, unregisterAnchor } from './anchors';
 
-/** Registra uma peça que o tour aponta; `id` nulo não registra (a mesma peça fora da tela real ou escondida). */
+/**
+ * Registra uma peça que o tour aponta; `id` nulo não registra (a mesma peça fora da tela real ou escondida).
+ * Tela sem foco (a inicial por baixo da conversa) tira as peças dela: o balão não pode apontar o que está coberto.
+ */
 export function useTourAnchor(id: string | null) {
+  // `WorkingMarkPaused` é o "esta tela perdeu o foco" que a inicial e a conversa já publicam.
+  const covered = useContext(WorkingMarkPaused);
+  const key = covered ? null : id;
   const node = useRef<View | null>(null);
-  const ref = useCallback((view: View | null) => { node.current = view; if (id && view) registerAnchor(id, view); }, [id]);
+  const ref = useCallback((view: View | null) => {
+    const previous = node.current;
+    node.current = view;
+    if (!key) return;
+    if (previous && previous !== view) unregisterAnchor(key, previous);
+    if (view) registerAnchor(key, view);
+  }, [key]);
   useEffect(() => {
     const view = node.current;
-    if (id && view) registerAnchor(id, view);
-    return () => { if (id && view) unregisterAnchor(id, view); };
-  }, [id]);
-  const onLayout = useCallback(() => { if (id) anchorMoved(id); }, [id]);
+    if (!key || !view) return;
+    registerAnchor(key, view);
+    return () => unregisterAnchor(key, view);
+  }, [key]);
+  const onLayout = useCallback(() => { if (key) anchorMoved(key); }, [key]);
   return { ref, onLayout };
 }
 
-/** Embrulha a peça; `step` faz o toque nela contar como a ação do passo. */
-export function TourAnchor({ id, step, style, children }: { id: string | null; step?: string; style?: StyleProp<ViewStyle>; children: ReactNode }) {
+/** Embrulha a peça; a ação do passo é avisada onde ela de fato acontece, não no toque que pode ter sido arrasto. */
+export function TourAnchor({ id, style, children }: { id: string | null; style?: StyleProp<ViewStyle>; children: ReactNode }) {
   const { ref, onLayout } = useTourAnchor(id);
-  return <View ref={ref} collapsable={false} style={style} onLayout={onLayout}
-    onTouchEnd={id && step ? () => reportTourAction(step) : undefined}>{children}</View>;
+  return <View ref={ref} collapsable={false} style={style} onLayout={onLayout}>{children}</View>;
 }

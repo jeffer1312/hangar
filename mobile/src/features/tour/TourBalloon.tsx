@@ -8,9 +8,10 @@ export type BalloonAction = { label: string; primary?: boolean; onPress: () => v
 
 /** Título e corpo de cada passo e dica do tour do celular. */
 export function tourText(id: string): { title: string; body: string } {
-  switch (id) {
+  // Passo que virou dica ("tour-search") fala como o passo.
+  switch (id.replace(/^tour-/, '')) {
     case 'new': return { title: m.native_tour_new_title(), body: m.mobile_tour_new_body() };
-    case 'menu': case 'tour-menu': return { title: m.mobile_tour_menu_title(), body: m.mobile_tour_menu_body() };
+    case 'menu': return { title: m.mobile_tour_menu_title(), body: m.mobile_tour_menu_body() };
     case 'search': return { title: m.native_tour_search_title(), body: m.mobile_tour_search_body() };
     case 'attach': return { title: m.native_tour_attach_title(), body: m.mobile_tour_attach_body() };
     case 'dictation': return { title: m.native_tour_dictation_title(), body: m.mobile_tour_dictation_body() };

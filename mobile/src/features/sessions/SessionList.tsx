@@ -55,7 +55,7 @@ import { RenameSheet } from './RenameSheet';
 import { WorktreeSheet } from '../worktrees/WorktreeSheet';
 import * as m from '../../paraglide/messages';
 import { TourAnchor, useTourAnchor } from '../tour/TourAnchor';
-import { reportTourAction } from '../tour/anchors';
+import { anchorsScrolled, reportTourAction } from '../tour/anchors';
 import { superficie } from '../../theme/superficie';
 
 // Erro LANÇADO pelo apiFetch — já vem com mensagem pronta. O `formataErro` é pro envelope do
@@ -603,6 +603,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
         onLayout={home ? restoreHomeOffset : undefined}
         onContentSizeChange={home ? restoreHomeOffset : undefined}
         onScroll={home ? ({ nativeEvent: { contentOffset } }) => {
+          anchorsScrolled();
           const target = pendingHomeOffset.current;
           // A lista virtualizada pode ainda não ter altura para chegar à posição guardada.
           if (target && (Math.abs(contentOffset.x - target.x) >= 1 || Math.abs(contentOffset.y - target.y) >= 1)) return;

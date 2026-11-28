@@ -1,49 +1,66 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AccessibilityInfo, Keyboard, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, AppState, Keyboard, View, useWindowDimensions } from 'react-native';
 import Animated, { FadeIn, FadeOut, useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { nextTip, runStep, type TourStep } from '@hangar/core';
+import { runStep, tourListsReady, tourTarget, type TourTarget } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
-import { planTour, setTipsOff, syncTour, takeReplay, tipSeen, tourChoice, useTour } from './store';
+import { useAparencia } from '../../stores/aparencia';
+import { useTabletLandscape } from '../tablet/layout';
+import { planTour, setTipsOff, syncTour, tipSeen, tourChoice, useTour } from './store';
 import { anchorNode, useAnchors } from './anchors';
 import { TourBalloon, tourText, type BalloonAction } from './TourBalloon';
 import * as m from '../../paraglide/messages';
 
-type Target = { kind: 'step'; step: TourStep; n: number; total: number } | { kind: 'tip'; step: TourStep };
 type Rect = { x: number; y: number; width: number; height: number };
 
 const MARGIN = 16;
 const GAP = 12;
 const RING = 4;
 const MAX_WIDTH = 320;
+// Passo cuja peça sumiu por este tempo (outra tela, outro modo) deixa as dicas aparecerem enquanto espera.
+const STALL_MS = 4000;
 
 /** Planeja o tour e escolhe o balão da vez; o desenho só monta quando há balão com a peça na tela. */
 export function TourHost({ enabled }: { enabled: boolean }) {
   const serverKey = useServers((s) => s.servers.map((x) => `${x.id}:${x.baseUrl}`).join('|'));
-  const listRead = useSessions((s) => s.byServer.some((b) => b.loaded));
+  const listsReady = useSessions((s) => tourListsReady(s.byServer));
+  const loadedKey = useSessions((s) => s.byServer.filter((b) => b.loaded).map((b) => b.server.id).join('|'));
   const count = useSessions((s) => s.rows.filter((r) => r.state !== 'dead').length);
+  const tablet = useTabletLandscape();
+  const homeScreen = useAparencia((s) => s.homeScreen);
+  const home = tablet ? 'newConversation' : homeScreen;
   const synced = useTour((s) => s.synced);
   const planned = useTour((s) => s.planned);
   const run = useTour((s) => s.run);
   const tips = useTour((s) => s.tips);
   const onScreen = useAnchors((s) => s.onScreen);
   const progress = useTour((s) => s.progress);
+  const [stalled, setStalled] = useState(false);
 
   useEffect(() => { if (enabled) void syncTour(); }, [enabled, serverKey]);
+  // Sem resposta ainda: tenta de novo quando uma lista chega ou o app volta à frente.
+  useEffect(() => { if (enabled && !synced && loadedKey) void syncTour(); }, [enabled, synced, loadedKey]);
   useEffect(() => {
-    if (enabled && synced && listRead && !planned) planTour(count, takeReplay());
-  }, [enabled, synced, listRead, planned, count]);
+    if (!enabled || synced) return;
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') void syncTour(); });
+    return () => sub.remove();
+  }, [enabled, synced]);
+  useEffect(() => {
+    if (enabled && listsReady && !planned) planTour(count, home);
+  }, [enabled, listsReady, planned, synced, count, home]);
 
-  const target = useMemo<Target | null>(() => {
-    if (!planned) return null;
-    const step = run ? runStep(run) : null;
-    // Passo pendente fora da tela espera a peça aparecer; enquanto isso nenhuma dica o atropela.
-    if (step && run?.index != null) return onScreen.includes(step.anchor) ? { kind: 'step', step, n: run.index + 1, total: run.steps.length } : null;
-    const tip = nextTip(tips, new Set(onScreen), progress);
-    return tip ? { kind: 'tip', step: tip } : null;
-  }, [planned, run, tips, onScreen, progress]);
+  const pending = run ? runStep(run) : null;
+  const waiting = !!pending && !onScreen.includes(pending.anchor);
+  useEffect(() => {
+    setStalled(false);
+    if (!waiting) return;
+    const timer = setTimeout(() => setStalled(true), STALL_MS);
+    return () => clearTimeout(timer);
+  }, [waiting, pending?.id]);
+
+  const target = useMemo(() => tourTarget(run, tips, new Set(onScreen), progress, stalled), [run, tips, onScreen, progress, stalled]);
 
   if (!enabled || !target) return null;
   return <TourLayer key={`${target.kind}:${target.step.id}`} target={target} />;
@@ -51,7 +68,7 @@ export function TourHost({ enabled }: { enabled: boolean }) {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-function TourLayer({ target }: { target: Target }) {
+function TourLayer({ target }: { target: TourTarget }) {
   const { theme } = useUnistyles();
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();

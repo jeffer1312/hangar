@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import {
   mergeTourProgress, mobileTourOutcome, planMobileTour, registrarDiag, runAction, runChoice, sameTourProgress, seenTip, seenTour,
-  startTourRun, tipsSwitch, tourProgressFor, type Server, type TourChoice, type TourProgress, type TourRun, type TourStep,
+  startTourRun, tipsSwitch, tourProgressFor, type Server, type TourChoice, type TourHomeMode, type TourProgress, type TourRun, type TourStep,
 } from '@hangar/core';
 import { prefs } from '../../stores/prefs';
 import { ownServers, useServers } from '../../stores/servers';
@@ -25,15 +25,18 @@ function saveLocal(progress: TourProgress) {
 
 interface TourState {
   progress: TourProgress;
-  /** A primeira leitura dos servidores terminou (ou falhou): antes disso o tour visto noutro aparelho reapareceria. */
+  /** Ao menos um servidor respondeu ao visto: antes disso o tour já visto noutro aparelho reapareceria (offline também). */
   synced: boolean;
+  /** A volta do tour já foi planejada nesta abertura; as dicas podem existir antes dela. */
   planned: boolean;
+  /** "Ver o tour de novo" pedido e ainda não planejado. */
+  replay: boolean;
   run: TourRun | null;
   tips: TourStep[];
 }
 
 export const useTour = create<TourState>(() => ({
-  progress: loadLocal(), synced: false, planned: false, run: null, tips: [],
+  progress: loadLocal(), synced: false, planned: false, replay: false, run: null, tips: [],
 }));
 
 const servers = (): Server[] => ownServers(useServers.getState().servers).filter((s) => !s.disabled && s.baseUrl !== DEMO_BASE_URL);
@@ -52,38 +55,56 @@ function record(patch: TourProgress) {
   push(patch);
 }
 
-let syncing: Promise<void> | null = null;
+let running: Promise<void> | null = null;
+let queued: Promise<void> | null = null;
 
-/** Junta o visto de cada servidor do dono com o deste aparelho e devolve a cada um o que faltava nele. */
+/**
+ * Junta o visto de cada servidor do dono com o deste aparelho e devolve a cada um o que faltava nele.
+ * Pedido com outra rodada em voo não se perde: uma rodada a mais roda depois dela (servidor novo, volta da rede).
+ */
 export function syncTour(): Promise<void> {
-  if (syncing) return syncing;
-  syncing = (async () => {
-    const reads = await Promise.allSettled(servers().map(async (server) => ({ server, remote: await tourProgressFor(server) })));
-    let progress = useTour.getState().progress;
-    for (const read of reads) {
-      if (read.status === 'rejected') failed('tour_progress_get_failed', read.reason);
-      else if (read.value.remote) progress = mergeTourProgress(progress, read.value.remote);
-    }
-    useTour.setState({ progress, synced: true });
-    saveLocal(progress);
-    for (const read of reads) {
-      if (read.status !== 'fulfilled' || !read.value.remote) continue;
-      const { server, remote } = read.value;
-      if (!sameTourProgress(mergeTourProgress(remote, progress), remote)) {
-        tourProgressFor(server, progress).catch((e: unknown) => failed('tour_progress_put_failed', e));
-      }
-    }
-  })().finally(() => { syncing = null; });
-  return syncing;
+  if (!running) {
+    running = syncRound().finally(() => { running = null; });
+    return running;
+  }
+  queued ??= running.then(() => { queued = null; return syncTour(); });
+  return queued;
 }
 
-/** Planeja a volta com a lista lida. O tour já visto (ou pulado) só deixa as dicas. */
-export function planTour(sessions: number, replay = false) {
-  const { progress, planned } = useTour.getState();
-  if (planned && !replay) return;
-  const { steps, tips } = planMobileTour(sessions);
+async function syncRound(): Promise<void> {
+  const reads = await Promise.allSettled(servers().map(async (server) => ({ server, remote: await tourProgressFor(server) })));
+  let progress = useTour.getState().progress;
+  let answered = false;
+  for (const read of reads) {
+    if (read.status === 'rejected') failed('tour_progress_get_failed', read.reason);
+    else {
+      answered = true;
+      if (read.value.remote) progress = mergeTourProgress(progress, read.value.remote);
+    }
+  }
+  // Sem nenhuma resposta o visto continua desconhecido: o tour espera, e a próxima chamada tenta de novo.
+  useTour.setState(answered ? { progress, synced: true } : { progress });
+  saveLocal(progress);
+  for (const read of reads) {
+    if (read.status !== 'fulfilled' || !read.value.remote) continue;
+    const { server, remote } = read.value;
+    if (!sameTourProgress(mergeTourProgress(remote, progress), remote)) {
+      tourProgressFor(server, progress).catch((e: unknown) => failed('tour_progress_put_failed', e));
+    }
+  }
+}
+
+/**
+ * Planeja com as listas lidas e o modo da tela inicial. Sem o visto dos servidores só as dicas
+ * existem; a volta do tour espera ele chegar. O tour já visto (ou pulado) só deixa as dicas.
+ */
+export function planTour(sessions: number, home: TourHomeMode = 'sessions') {
+  const { progress, planned, synced, replay } = useTour.getState();
+  if (planned) return;
+  const { steps, tips } = planMobileTour(sessions, home);
+  if (!synced && !replay) { useTour.setState({ tips }); return; }
   const run = replay || mobileTourOutcome(progress) === null ? startTourRun(steps) : null;
-  useTour.setState({ planned: true, run, tips });
+  useTour.setState({ planned: true, replay: false, run, tips });
 }
 
 function settle(next: { run: TourRun; outcome: TourProgress['tour'] }) {
@@ -114,8 +135,6 @@ export function tipSeen(id: string) { record(seenTip(id)); }
 export function setTipsOff(on: boolean) { record(tipsSwitch(on)); }
 
 /** "Ver o tour de novo": a próxima tela com lista planeja outra volta; o visto não volta atrás. */
-export function replayTour() { useTour.setState({ planned: false, run: null }); replayRequested = true; }
-let replayRequested = false;
-export function takeReplay(): boolean { const asked = replayRequested; replayRequested = false; return asked; }
+export function replayTour() { useTour.setState({ planned: false, replay: true, run: null }); }
 
 listenTourActions(tourAction);

@@ -16,6 +16,7 @@ import { SessionSettingsContent, SessionSettingsFrame, SessionSettingsLink } fro
 import { SettingsList } from '../ui/SettingsList';
 import { Icon, type IconName } from '../ui/Icon';
 import * as m from '../paraglide/messages';
+import { reportTourAction } from '../features/tour/anchors';
 import { useModelControl } from '../features/pills/modelControl';
 import { useEffortControl } from '../features/pills/effortControl';
 import { SPEED_TIERS, speedHint, speedLabel, useServiceTierControl } from '../features/pills/serviceTierControl';
@@ -153,7 +154,7 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
   const featured = model.items.slice(0, 3);
   const selected = model.items.find(it => it.selected);
   if (selected && !featured.includes(selected)) featured.splice(2, 1, selected);
-  return <SessionSettingsControl open={open} onOpen={() => { setTab('model'); setDetail(null); setOpen(true); }} onClose={close}
+  return <SessionSettingsControl open={open} onOpen={() => { reportTourAction('model'); setTab('model'); setDetail(null); setOpen(true); }} onClose={close}
     model={model} effort={effort} fast={fast} plan={plan} icon={icon} modeText={modeText}
     panel={<Sheet open={open} onDismiss={() => {
       const action = afterDismiss.current;

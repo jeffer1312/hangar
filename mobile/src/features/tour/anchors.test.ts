@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { View } from 'react-native';
-import { anchorMoved, anchorNode, listenTourActions, registerAnchor, reportTourAction, unregisterAnchor, useAnchors } from './anchors';
+import { anchorMoved, anchorNode, anchorsScrolled, listenTourActions, registerAnchor, reportTourAction, unregisterAnchor, useAnchors } from './anchors';
 
 const view = (name: string) => ({ name }) as unknown as View;
 
@@ -26,6 +26,23 @@ describe('peças do tour', () => {
     registerAnchor('list-search', view('s'));
     anchorMoved('list-search');
     expect(useAnchors.getState().moved).toBe(1);
+  });
+
+  it('rolagem mede de novo no máximo a cada 50 ms, sempre com a última', () => {
+    vi.useFakeTimers();
+    try {
+      registerAnchor('session-row', view('r'));
+      for (let i = 0; i < 5; i++) anchorsScrolled();
+      expect(useAnchors.getState().moved).toBe(0);
+      vi.advanceTimersByTime(60);
+      expect(useAnchors.getState().moved).toBe(1);
+      anchorsScrolled();
+      vi.advanceTimersByTime(60);
+      expect(useAnchors.getState().moved).toBe(2);
+    } finally {
+      unregisterAnchor('session-row', anchorNode('session-row')!);
+      vi.useRealTimers();
+    }
   });
 
   it('a ação feita na tela chega a quem assina', () => {

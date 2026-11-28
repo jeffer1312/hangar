@@ -1704,7 +1704,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       attach={{ onPress: () => setAttachMenuOpen(true), disabled: attachBlocked, busy: uploading }}
       mic={{ onPress: () => void handleMicPress(), disabled: micBlocked, busy: busyVoice, recording: gravando,
         styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
-      settings={<TourAnchor id="composer-model" step="model"><SessionSettingsButton serverId={serverId} name={name} provider={provider} headless={headless} openRequest={selectorRequest} /></TourAnchor>}
+      settings={<TourAnchor id="composer-model"><SessionSettingsButton serverId={serverId} name={name} provider={provider} headless={headless} openRequest={selectorRequest} /></TourAnchor>}
       afterSettings={<>
         {/* Parar: só o quadrado vermelho, sem círculo em volta, como no PC. */}
         {showStop ? (

@@ -25,6 +25,21 @@ export function anchorMoved(id: string) {
 
 export const anchorNode = (id: string): View | null => nodes.get(id) ?? null;
 
+// Rolagem pede nova medida no máximo a cada SCROLL_MS, com a última sempre feita (a posição em que parou).
+const SCROLL_MS = 50;
+let scrollTimer: ReturnType<typeof setTimeout> | null = null;
+let lastScroll = 0;
+
+/** A lista que contém peças rolou: o anel e o balão acompanham. */
+export function anchorsScrolled(now: number = Date.now()) {
+  if (scrollTimer || nodes.size === 0) return;
+  scrollTimer = setTimeout(() => {
+    scrollTimer = null;
+    lastScroll = Date.now();
+    useAnchors.setState((s) => ({ moved: s.moved + 1 }));
+  }, Math.max(0, SCROLL_MS - (now - lastScroll)));
+}
+
 let listener: ((stepId: string) => void) | null = null;
 
 /** O estado do tour assina aqui as ações feitas nas telas. */
