@@ -116,8 +116,7 @@ pub trait WindowExt: Sized {
     where
         F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static;
 
-    /// Closes the Dialog with this id, even below others; `false` when it is
-    /// no longer open.
+    /// Closes the Dialog with this id, even below others; `false` if already closed.
     fn close_dialog_by_id(&mut self, id: DialogId, cx: &mut App) -> bool;
 
     /// Closes all active Dialogs.

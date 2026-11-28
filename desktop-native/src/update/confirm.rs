@@ -398,8 +398,7 @@ pub(crate) fn stage_slot(id: &str, guess: Pixels, draw: crate::news::NewsAnimati
     }, |_, _, _, _| {}).absolute().top_0().left_0().size_full())
 }
 
-/// Sem ninguém mexer, o "O que chegou para você" fecha sozinho: num computador usado de longe, cada atualização deixava
-/// mais um aberto. O que ele mostrou continua em Configurações → Atualizações.
+/// Num computador usado de longe ninguém fecha o aviso, e cada atualização deixava mais um aberto.
 const WHATS_NEW_IDLE: Duration = Duration::from_secs(10 * 60);
 
 /// O "O que chegou para você" aberto. `mounted` morre com o diálogo (o construtor guarda o `Rc`).
@@ -429,7 +428,7 @@ fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window
     let watch = (touched.clone(), Rc::downgrade(&mounted));
     let dialog = window.open_dialog_with_id(cx, move |dialog, window, cx| {
         let _alive = &mounted;
-        let (moved, scrolled, pressed) = (touched.clone(), touched.clone(), touched.clone());
+        let presence = touched.clone();
         let max = window.viewport_size().height * 0.8 - px(110.);
         let top = (window.viewport_size().height * 0.1).max(px(24.));
         let width = px(780.).min(window.viewport_size().width * 0.92);
@@ -437,9 +436,7 @@ fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window
         let stage = width - px(64.);
         crate::app::popup::dialog(dialog).w(width).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
             .child(div().id("whats-new-body").max_h(max).overflow_y_scroll()
-                .on_mouse_move(move |_, _, _| moved.set(Instant::now()))
-                .on_scroll_wheel(move |_, _, _| scrolled.set(Instant::now()))
-                .on_any_mouse_down(move |_, _, _| pressed.set(Instant::now()))
+                .child(canvas(|_, _, _| {}, move |_, _, window, _| watch_presence(&presence, window)).absolute().size_0())
                 .child(sections(tr_shared("update_whats_new_title", &[]), &items.borrow(), Some(stage), &fixes_open, show.as_ref(), started, window, cx)))
             .footer(DialogFooter::new().child(chrome::light_button("whats-new-close", true, cx).label(tr("close"))
                 .on_click(|_, window, cx| window.close_dialog(cx))))
@@ -454,6 +451,15 @@ fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window
             }
         }
     }).detach();
+}
+
+/// Mouse em qualquer ponto da janela, rodapé e borda do aviso inclusive, mostra alguém diante dela. Registrado a cada
+/// pintura do aviso, como todo ouvinte de janela.
+fn watch_presence(touched: &Rc<Cell<Instant>>, window: &mut Window) {
+    let (moved, scrolled, pressed) = (touched.clone(), touched.clone(), touched.clone());
+    window.on_mouse_event(move |_: &MouseMoveEvent, phase, _, _| if phase == DispatchPhase::Bubble { moved.set(Instant::now()) });
+    window.on_mouse_event(move |_: &ScrollWheelEvent, phase, _, _| if phase == DispatchPhase::Bubble { scrolled.set(Instant::now()) });
+    window.on_mouse_event(move |_: &MouseDownEvent, phase, _, _| if phase == DispatchPhase::Bubble { pressed.set(Instant::now()) });
 }
 
 /// O que chegou agora vem primeiro; do que já estava aberto fica o que não se repete.

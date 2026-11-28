@@ -925,7 +925,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  use crate::{
      Placement,
      dialog::{AlertDialog, Dialog},
-@@ -111,6 +111,15 @@
+@@ -111,6 +111,14 @@
      /// Closes the last active Dialog.
      fn close_dialog(&mut self, cx: &mut App);
  
@@ -934,14 +934,13 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +    where
 +        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static;
 +
-+    /// Closes the Dialog with this id, even below others; `false` when it is
-+    /// no longer open.
++    /// Closes the Dialog with this id, even below others; `false` if already closed.
 +    fn close_dialog_by_id(&mut self, id: DialogId, cx: &mut App) -> bool;
 +
      /// Closes all active Dialogs.
      fn close_all_dialogs(&mut self, cx: &mut App);
  
-@@ -207,6 +216,23 @@
+@@ -207,6 +215,23 @@
          })
      }
  
