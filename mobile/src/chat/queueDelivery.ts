@@ -34,10 +34,14 @@ const caption = (value: string) => {
   return splitContextRefs(body)?.typed ?? body;
 };
 
+/** Quem entra no turno em andamento por mensagem: os modos de entrega valem para ele. */
+export const deliveryProvider = (provider: string | null | undefined) => provider === 'claude' || provider === 'codex' || provider === 'kimi';
+
 export function queueSendMode(mode: DeliveryMode, ready: boolean, state: string, provider: string | null | undefined,
   headless: boolean, message: string, events: ChatEvent[], ask: AskQuestionPayload | null): QueueSendMode | undefined {
-  if (state !== 'working' || (provider !== 'claude' && provider !== 'codex') || message.trimStart().startsWith('/')) return;
-  if (mode === 'direct') return { kind: 'direct', terminalClaude: provider === 'claude' && !headless };
+  if (state !== 'working' || !deliveryProvider(provider) || message.trimStart().startsWith('/')) return;
+  // O Ctrl+S do Kimi entra no turno sem cortá-lo: lá "Na conversa" é o mesmo envio direto.
+  if (mode === 'direct' || (mode === 'conversation' && provider === 'kimi')) return { kind: 'direct', terminalClaude: provider === 'claude' && !headless };
   if (mode === 'conversation') return { kind: 'conversation' };
   if (mode !== 'jev' || !ready) return;
   let latest = -1;

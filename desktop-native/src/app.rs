@@ -6285,6 +6285,7 @@ impl Hangar {
             let joins = queue::sends_direct(true, &self.chat.state.state, self.provider().0);
             let key = match appearance::get().delivery_mode() {
                 appearance::DeliveryMode::Direct => "beta_draft_direct",
+                appearance::DeliveryMode::Conversation if joins && self.provider().0 == "kimi" => "beta_draft_direct",
                 appearance::DeliveryMode::Conversation if joins => "beta_draft_conversation",
                 appearance::DeliveryMode::Jev if joins && self.queue_jev_ready() => "beta_draft_jev",
                 _ => "beta_draft_queue",

@@ -121,9 +121,9 @@ pub(super) fn row_place() -> Option<Bounds<Pixels>> {
     popup::anchor_peek(crate::tour::anchors::COMPOSER).map(row_place_above)
 }
 
-/// "Mandar direto": só Claude e Codex têm o Orientar por mensagem, e só com o agente trabalhando.
+/// "Mandar direto": Claude, Codex e Kimi orientam por mensagem, e só com o agente trabalhando.
 pub(super) fn sends_direct(enabled: bool, state: &str, provider: &str) -> bool {
-    enabled && state == "working" && matches!(provider, "claude" | "codex")
+    enabled && state == "working" && matches!(provider, "claude" | "codex" | "kimi")
 }
 
 /// Aviso de entrega parada no painel: é onde a mensagem presa espera (a bolha dela some da conversa).
@@ -136,7 +136,11 @@ impl Hangar {
 
     /// O envio desta conversa sai como Orientar, sem esperar no painel.
     pub(super) fn queue_sends_direct(&self) -> bool {
-        sends_direct(appearance::get().delivery_mode() == DeliveryMode::Direct, &self.chat.state.state, self.provider().0)
+        let mode = appearance::get().delivery_mode();
+        let provider = self.provider().0;
+        // O Ctrl+S do Kimi entra no turno sem cortá-lo: lá "Na conversa" é o mesmo envio direto.
+        let direct = mode == DeliveryMode::Direct || mode == DeliveryMode::Conversation && provider == "kimi";
+        sends_direct(direct, &self.chat.state.state, provider)
     }
 
     pub(super) fn set_delivery_mode(&mut self, mode: DeliveryMode, cx: &mut Context<Self>) {
@@ -541,11 +545,13 @@ mod tests {
     }
 
     #[test]
-    fn direct_send_only_while_claude_or_codex_works_with_the_option_on() {
+    fn direct_send_only_while_claude_codex_or_kimi_works_with_the_option_on() {
         assert!(sends_direct(true, "working", "claude"));
         assert!(sends_direct(true, "working", "codex"));
+        assert!(sends_direct(true, "working", "kimi"), "o Kimi segue a mesma regra: o Ctrl+S entra no turno");
+        assert!(!sends_direct(false, "working", "kimi"), "desligada, a mensagem espera na fila");
         assert!(!sends_direct(false, "working", "claude"), "desligada, a mensagem espera na fila");
         assert!(!sends_direct(true, "idle", "claude"), "parado, o envio comum já entra na hora");
-        assert!(!sends_direct(true, "working", "kimi"), "o Kimi não tem Orientar por mensagem");
+        assert!(!sends_direct(true, "working", "pi"), "o Pi não orienta por mensagem");
     }
 }
