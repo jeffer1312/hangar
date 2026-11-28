@@ -128,8 +128,9 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  (para a sessão aberta antes de a tool existir). Uma resposta por
                                  item da pergunta, na ordem: N (opção N, contada de 1), N,M (várias,
                                  se o item aceita) ou "texto:resposta livre" (o prefixo manda como
-                                 texto mesmo o que parece número; texto sem número dispensa o
-                                 prefixo). interaction_id é o do aviso mais recente da filha. Só
+                                 texto mesmo o que parece número; sem ele só vale texto sem
+                                 algarismo, e "1 3" ou "opção 2" é recusado). interaction_id é o
+                                 do aviso mais recente da filha. Só
                                  filha desta máquina; quem responde é esta sessão, pela identidade
                                  dela (nunca o cliente tmux anexado). Pergunta de senha ou token
                                  não se responde por aqui: fica com o dono, na filha. Saída 0

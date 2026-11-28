@@ -44,6 +44,11 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
             let _ = writeln!(err, "erro: o servidor não respondeu no prazo; {MAY_HAVE_LEFT}");
             4
         }
+        // Corpo acima do teto: o pedido já saiu e foi atendido.
+        Err(Failure::TooLarge(detail)) => {
+            let _ = writeln!(err, "erro: {detail}; {MAY_HAVE_LEFT}");
+            4
+        }
         Ok((status, raw)) => outcome(child, status, &raw, out, err),
     }
 }

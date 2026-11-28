@@ -33,9 +33,10 @@ pub(crate) enum Failure {
     /// A conexão abriu e a resposta não veio (prazo vencido ou corte no meio): o pedido pode ter
     /// chegado. Fora do envio de recado vale a mesma frase do `NoAnswer`.
     Cut,
-    /// O pedido nem saiu (endereço ou token que não cabem num pedido HTTP), ou a resposta passou do
-    /// teto: a frase diz qual.
+    /// O pedido nem saiu (endereço ou token que não cabem num pedido HTTP): a frase diz qual.
     Invalid(String),
+    /// A resposta passou do teto: o pedido saiu e foi atendido.
+    TooLarge(String),
 }
 
 /// Resposta crua: status e corpo, ou o motivo de não haver.
@@ -92,7 +93,7 @@ pub(crate) async fn fetch_with(endpoint: &Endpoint, method: &str, path: &str, bo
     loop {
         match response.chunk().await {
             Ok(Some(chunk)) if bytes.len() + chunk.len() > BODY_LIMIT => {
-                return invalid(format!("a resposta de {address} passou de {} MiB", BODY_LIMIT / (1024 * 1024)));
+                return Err(Failure::TooLarge(format!("a resposta de {address} passou de {} MiB", BODY_LIMIT / (1024 * 1024))));
             }
             Ok(Some(chunk)) => bytes.extend_from_slice(&chunk),
             Ok(None) => return Ok((status, bytes)),
@@ -112,7 +113,7 @@ pub(crate) fn report(endpoint: &Endpoint, fetched: Fetched, err: &mut dyn Write)
             };
             return Err(2);
         }
-        Err(Failure::Invalid(detail)) => {
+        Err(Failure::Invalid(detail) | Failure::TooLarge(detail)) => {
             let _ = match &endpoint.peer {
                 Some(peer) => writeln!(err, "⚠ servidor '{peer}': {detail}"),
                 None => writeln!(err, "erro: {detail}"),

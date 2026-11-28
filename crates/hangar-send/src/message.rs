@@ -271,7 +271,7 @@ fn send_external(cx: &Ctx, target: &str, sender: &str, text: &str, out: &mut dyn
             maybe_delivered(&endpoint, err);
             return 4;
         }
-        Err(Failure::Invalid(detail)) => {
+        Err(Failure::Invalid(detail) | Failure::TooLarge(detail)) => {
             let _ = writeln!(err, "erro: {detail}");
             return 1;
         }

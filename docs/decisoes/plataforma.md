@@ -4491,8 +4491,11 @@ ninguém.
   voltou com outro `interaction_id`, o pai a tratou como nova, interrompeu a filha e mandou o recado de novo. A
   filha recebeu as duas respostas.
   - O aviso da chamada já avisada (`asked_call` igual ao `tool_use_id` aberto) com outro ID diz "a mesma pergunta
-    já avisada, ainda aberta, agora com interaction_id …" e que não responda de novo se já respondeu. Aviso gravado
-    sem a chamada (servidor de antes do `asked_call`) não tem como ser reconhecido e sai como pergunta nova.
+    já avisada, ainda aberta, agora com interaction_id …" e pede a resposta pelo ID novo, decidido pelas marcas do pai
+    (`parent_mark`): sem marca, "nenhuma resposta a fechou (recado não responde pergunta)"; com marca confirmada, "sua
+    resposta anterior não a fechou"; com a rota da resposta ainda à espera, o aviso espera. Nunca diz para não
+    responder: a pergunta segue aberta, e quem desiste deixa a filha parada. Aviso gravado sem a chamada (servidor de
+    antes do `asked_call`) não tem como ser reconhecido e sai como pergunta nova.
   - `hangar-send --responder <filha> <interaction_id> <resposta...>` responde pela rota
     `POST /api/sessions/{name}/child-answer` (`{interaction_id, replies}`), montada no roteador do MCP: a
     rota resolve quem chama pelos mesmos cabeçalhos da tool (`X-Hangar-Key`, `X-Hangar-Pane`, `X-Hangar-Session`,
@@ -4500,11 +4503,13 @@ ninguém.
     `answer_child` (recusas, menu e permissão do dono antes de montar respostas, marca em `parent_answers`,
     `/answer` numa tarefa própria). O CLI recusa a identidade que só sai do cliente tmux anexado.
     A rota monta as respostas pelo formulário da linha (`ask_form`, ou as opções da linha): `N`/`N,M` escolhe
-    opções contadas de 1, `texto:…` e o resto são texto livre no campo depois das opções; item sem opções só
-    aceita texto. ID diferente da pergunta aberta na linha volta `erro_interacao_desatualizada` antes de qualquer
+    opções contadas de 1, `texto:…` é texto livre no campo depois das opções; sem o prefixo, só texto sem
+    algarismo vira texto, e `1 3` ou `opção 2` volta `answer_reply_invalid` em vez de ir calado como texto; item
+    sem opções só aceita texto. O montador é puro e mora em `hangar-delegation::answer`; o servidor só liga a rota.
+    Recusa sem código vira `answer_refused`; `groups_unavailable` e `group_file_unreadable` são 503. ID diferente da pergunta aberta na linha volta `erro_interacao_desatualizada` antes de qualquer
     envio. Toda resposta leva `maybe_sent` (`answer_maybe_sent` para o que a `/answer` devolveu): o CLI sai 1 só
     quando nada saiu, 0 só com `ok` ou "enviada, sem confirmação", e 4 ("pode ter saído, não repita") no resto,
-    inclusive sem resposta no prazo.
+    inclusive sem resposta no prazo e resposta acima do teto do corpo.
   - Todo aviso de pergunta leva a linha `Sem a tool child_answer: hangar-send --responder …` e diz que pergunta de
     senha ou token fica com o dono, na filha.
 - **Parar para só a sessão.** O `/interrupt` não alcança filha ligada, e o `cascade=1` de cliente

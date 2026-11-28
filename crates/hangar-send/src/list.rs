@@ -130,7 +130,7 @@ pub(crate) fn external_get(cx: &Ctx) -> Result<Vec<u8>, String> {
     let (status, body) = match cx.fetch(&endpoint, "GET", EXTERNAL, None) {
         Ok(answer) => answer,
         Err(crate::http::Failure::NoAnswer | crate::http::Failure::Cut) => return Err(UNREACHABLE.into()),
-        Err(crate::http::Failure::Invalid(detail)) => return Err(detail),
+        Err(crate::http::Failure::Invalid(detail) | crate::http::Failure::TooLarge(detail)) => return Err(detail),
     };
     if (200..300).contains(&status) {
         return Ok(body);

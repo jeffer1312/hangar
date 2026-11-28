@@ -963,9 +963,9 @@ impl Tools {
     async fn linked_child(&self, me: &str, alvo: &str, code: &str) -> Result<(), String> {
         let Some(groups) = self.st.groups.as_ref() else {
             fail("groups_unavailable");
-            return Err("grupos indisponíveis neste servidor: o vínculo da filha não pode ser conferido".into());
+            return Err("groups_unavailable: grupos indisponíveis neste servidor: o vínculo da filha não pode ser conferido".into());
         };
-        let sidecar = groups.link(alvo).await.map_err(|e| { fail("group_file_unreadable"); format!("arquivo de grupo de '{alvo}' ilegível: {e}") })?;
+        let sidecar = groups.link(alvo).await.map_err(|e| { fail("group_file_unreadable"); format!("group_file_unreadable: arquivo de grupo de '{alvo}' ilegível: {e}") })?;
         link_refusal(me, alvo, sidecar.as_ref(), code).map_or(Ok(()), Err)
     }
 

@@ -53,8 +53,6 @@ const ANSWER_WINDOW: usize = 200;
 const RELAY_SOURCE: &str = "hangar-child:";
 /// Comando do `hangar-send` que responde a pergunta da filha, para o pai sem a tool `child_answer` no catálogo.
 pub(crate) const ANSWER_COMMAND: &str = "hangar-send --responder";
-/// Prefixo da resposta do comando que manda o resto como texto livre, mesmo que pareça número de opção.
-pub(crate) const ANSWER_TEXT_PREFIX: &str = "texto:";
 /// Chave de aviso de menu e permissão; a de pergunta é o `interaction_id`.
 const NOTICE_KEY: &str = "notice:";
 /// Tipo da interação ainda ilegível (vínculo da conversa por ligar): espera isto além do `SETTLE` antes de
@@ -411,9 +409,8 @@ impl Watcher {
             _ => { self.asking.insert(child.clone(), (now, id.clone())); now }
         };
         let relay = row.linked_by.as_ref().is_some_and(|parent| self.claude_parents.contains(parent));
-        // A chamada já avisada com outro ID (reinício, filha reabrindo): o pai já a conhece e pode já ter respondido.
-        let repeat = link.asked_call.is_some() && question_call(row) == link.asked_call;
-        let text = question_message(child, &id, row, kind, relay, repeat);
+        let reask = reask(link, row);
+        let text = question_message(child, &id, row, kind, relay, reask);
         let asked = match self.notified.get(child) {
             Some(notified) => *notified == id,
             // Vigia nova (reinício): o ID antigo morreu, vale a chave gravada, que o reinício não muda.
@@ -432,6 +429,8 @@ impl Watcher {
             return QuestionStep::Closed(call.clone());
         }
         if now - since < SETTLE { return QuestionStep::Wait; }
+        // A resposta do pai ainda à espera da rota pode fechar a pergunta: o aviso espera o desfecho dela.
+        if reask == Reask::Pending { return QuestionStep::Wait; }
         if kind.is_none() && now - since < SETTLE + KIND_GRACE { return QuestionStep::Wait; }
         if !self.question_rate.allow(child, now) { return QuestionStep::Limited; }
         QuestionStep::Send(text)
@@ -719,24 +718,47 @@ fn asked_items(row: &SessionRow) -> Vec<(String, Vec<String>)> {
     }
 }
 
+/// A pergunta aberta diante do aviso gravado: outra chamada é nova; a mesma chamada com outro ID (reinício, filha
+/// reabrindo) segue aberta, e as marcas do pai dizem se a resposta dele ainda pode fechá-la.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Reask {
+    New,
+    /// A rota da resposta do pai ainda não respondeu.
+    Pending,
+    /// O pai respondeu e a pergunta não fechou.
+    NotClosed,
+    /// Nada do pai chegou à pergunta (recado não responde pergunta).
+    Unanswered,
+}
+
+fn reask(link: &LinkReturn, row: &SessionRow) -> Reask {
+    let Some(call) = link.asked_call.as_deref().filter(|call| question_call(row).as_deref() == Some(*call)) else { return Reask::New };
+    match parent_mark(&link.parent_answers, call, link.asked_key.as_deref(), wall_now(), answering) {
+        Mark::Pending => Reask::Pending,
+        Mark::Confirmed => Reask::NotClosed,
+        Mark::None => Reask::Unanswered,
+    }
+}
+
 /// Só a pergunta (`Question`) convida o pai a responder; menu, plano e permissão são do dono.
-fn question_message(child: &str, id: &str, row: &SessionRow, kind: Option<&InteractionKind>, relay: bool, repeat: bool) -> String {
+fn question_message(child: &str, id: &str, row: &SessionRow, kind: Option<&InteractionKind>, relay: bool, reask: Reask) -> String {
     if kind != Some(&InteractionKind::Question) {
         let text = row.question.as_deref().or(row.label.as_deref()).filter(|t| !t.trim().is_empty()).unwrap_or("sem texto");
         return format!("[de: {child}] pedido esperando o dono: {}. O dono decide no app.", cut(text, ASK_CHARS));
     }
     let items = asked_items(row);
-    let mut text = if repeat {
-        format!("[de: {child}] a mesma pergunta já avisada, ainda aberta, agora com interaction_id {id} (o anterior não vale mais). Se você já respondeu, não responda de novo:")
-    } else {
-        format!("[de: {child}] pergunta (interaction_id {id}):")
+    let same = format!("[de: {child}] a mesma pergunta já avisada, ainda aberta, agora com interaction_id {id} (o anterior não vale mais).");
+    let mut text = match reask {
+        Reask::New | Reask::Pending => format!("[de: {child}] pergunta (interaction_id {id}):"),
+        Reask::NotClosed => format!("{same} Sua resposta anterior não a fechou: responda de novo com o ID novo:"),
+        Reask::Unanswered => format!("{same} Nenhuma resposta a fechou (recado não responde pergunta): responda com o ID novo:"),
     };
     for (n, (question, options)) in items.iter().enumerate() {
         if items.len() > 1 { text.push_str(&format!("\n{}) {}", n + 1, cut(question, ASK_CHARS))); } else { text.push_str(&format!(" {}", cut(question, ASK_CHARS))); }
         for (i, option) in options.iter().enumerate() { text.push_str(&format!("\n{}. {}", i + 1, cut(option, ASK_CHARS))); }
     }
     text.push_str(&format!("\nResponda com child_answer (alvo {child}, interaction_id {id})."));
-    text.push_str(&format!("\nSem a tool child_answer: {ANSWER_COMMAND} {child} {id} <n.º da opção | \"{ANSWER_TEXT_PREFIX}resposta livre\">."));
+    text.push_str(&format!("\nSem a tool child_answer: {ANSWER_COMMAND} {child} {id} <n.º da opção | \"{}resposta livre\">.", hangar_delegation::answer::TEXT_PREFIX));
     text.push_str("\nPergunta de senha ou token não se responde por child_answer nem pelo comando: fica com o dono, na filha.");
     if let Some(call) = question_call(row).filter(|_| relay) {
         text.push_str(&format!("\nSe for perguntar ao dono, use AskUserQuestion com metadata {{source: \"{RELAY_SOURCE}{call}\"}}."));
@@ -1725,7 +1747,7 @@ mod tests {
     fn a_long_question_is_cut_at_300_chars() {
         let long = "é".repeat(ASK_CHARS + 10);
         let row = waiting("q1", &long, &[]);
-        let text = question_message("f", "q1", &row, Some(&InteractionKind::Question), true, false);
+        let text = question_message("f", "q1", &row, Some(&InteractionKind::Question), true, Reask::New);
         assert!(text.contains(&format!("{}…", "é".repeat(ASK_CHARS))), "{text}");
         assert!(!text.contains(&"é".repeat(ASK_CHARS + 1)));
     }
@@ -1891,35 +1913,45 @@ mod tests {
         LinkReturn { asked_key: Some(id.into()), asked_call: call.map(str::to_owned), ..linked() }
     }
 
-    /// A mesma chamada avisada com outro ID (reinício do servidor): o pai ouve que é a pergunta de antes, com o ID novo,
-    /// e que não responda de novo se já respondeu. Chamada diferente ou aviso gravado sem chamada é pergunta nova.
+    /// A mesma chamada avisada com outro ID (reinício do servidor) segue aberta: o pai ouve que é a pergunta de antes, com
+    /// o ID novo, e que precisa responder, nunca que não responda. Resposta dele ainda à espera da rota segura o aviso.
+    /// Chamada diferente ou aviso gravado sem chamada é pergunta nova.
     #[tokio::test(start_paused = true)]
-    async fn the_same_call_with_a_new_id_says_it_is_the_question_already_asked() {
+    async fn the_same_call_with_a_new_id_asks_again_by_the_parent_marks() {
         let (question, t0) = (Some(&InteractionKind::Question), Instant::now());
         let step = |link: &LinkReturn, row: &SessionRow| {
             let mut w = Watcher::default();
             w.question_step(row, link, question, t0);
-            match w.question_step(row, link, question, t0 + SETTLE) { QuestionStep::Send(text) => text, other => panic!("esperava Send: {other:?}") }
+            w.question_step(row, link, question, t0 + SETTLE)
         };
-        let again = step(&notified("q1", Some("toolu_1")), &asking("q2", "toolu_1"));
-        assert!(again.starts_with("[de: f] a mesma pergunta já avisada, ainda aberta, agora com interaction_id q2"), "{again}");
-        assert!(again.contains("Se você já respondeu, não responda de novo"), "{again}");
-        assert!(again.contains("child_answer (alvo f, interaction_id q2)") && again.contains("hangar-send --responder f q2 "), "{again}");
-        assert!(!again.contains("q1"), "o ID velho não aparece: {again}");
+        let sent = |link: &LinkReturn| match step(link, &asking("q2", "toolu_1")) { QuestionStep::Send(text) => text, other => panic!("esperava Send: {other:?}") };
+        let mark = |at: f64, confirmed: bool| ParentAnswer { attempt: "a1".into(), id: "q1".into(), call: Some("toolu_1".into()), at, confirmed };
+        let unanswered = sent(&notified("q1", Some("toolu_1")));
+        assert!(unanswered.starts_with("[de: f] a mesma pergunta já avisada, ainda aberta, agora com interaction_id q2"), "{unanswered}");
+        assert!(unanswered.contains("recado não responde pergunta"), "{unanswered}");
+        let not_closed = sent(&LinkReturn { parent_answers: vec![mark(0.0, true)], ..notified("q1", Some("toolu_1")) });
+        assert!(not_closed.contains("Sua resposta anterior não a fechou: responda de novo"), "{not_closed}");
+        for text in [&unanswered, &not_closed] {
+            assert!(!text.contains("não responda de novo"), "{text}");
+            assert!(text.contains("child_answer (alvo f, interaction_id q2)") && text.contains("hangar-send --responder f q2 "), "{text}");
+            assert!(!text.contains("q1"), "o ID velho não aparece: {text}");
+        }
+        let pending = LinkReturn { parent_answers: vec![mark(wall_now(), false)], ..notified("q1", Some("toolu_1")) };
+        assert_eq!(step(&pending, &asking("q2", "toolu_1")), QuestionStep::Wait, "a resposta ainda à espera da rota");
         for link in [notified("q1", Some("toolu_0")), notified("q1", None)] {
-            let fresh = step(&link, &asking("q2", "toolu_1"));
+            let fresh = sent(&link);
             assert!(fresh.starts_with("[de: f] pergunta (interaction_id q2): Qual pasta?"), "{fresh}");
         }
     }
 
     #[test]
     fn the_notice_names_the_relay_source_by_the_call() {
-        let text = question_message("f", "q1", &asking("q1", "toolu_1"), Some(&InteractionKind::Question), true, false);
+        let text = question_message("f", "q1", &asking("q1", "toolu_1"), Some(&InteractionKind::Question), true, Reask::New);
         assert!(text.ends_with("\nSe for perguntar ao dono, use AskUserQuestion com metadata {source: \"hangar-child:toolu_1\"}."), "{text}");
         // Sem a chamada não há como casar o repasse: a linha não sai.
-        assert!(!question_message("f", "q1", &waiting("q1", "x", &[]), Some(&InteractionKind::Question), true, false).contains("metadata"));
+        assert!(!question_message("f", "q1", &waiting("q1", "x", &[]), Some(&InteractionKind::Question), true, Reask::New).contains("metadata"));
         // Pai sem `AskUserQuestion` (Codex, Pi, omp, Kimi): a linha não sai.
-        assert!(!question_message("f", "q1", &asking("q1", "toolu_1"), Some(&InteractionKind::Question), false, false).contains("metadata"));
+        assert!(!question_message("f", "q1", &asking("q1", "toolu_1"), Some(&InteractionKind::Question), false, Reask::New).contains("metadata"));
         let mut w = Watcher::default();
         let QuestionStep::Send(text) = settled_step(&asking("q1", "toolu_1"), Some(&InteractionKind::Question), Instant::now()) else { panic!("esperava Send") };
         assert!(!text.contains("metadata"), "pai fora de `claude_parents`: {text}");
