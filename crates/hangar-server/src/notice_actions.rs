@@ -141,7 +141,8 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         match open_owned(&st, open).await {
             Decision::Opened(_) => {
                 let text = format!("Consertando em {child}");
-                if let Err(code) = note(&st, &name, &format!("fix:{}:{attempt}", fix.notice_id), &text, fix_meta(&fix, &child, "running")).await {
+                let entry_id = format!("fix:{}:{attempt}", fix.notice_id);
+                if let Err(code) = note(&st, &name, &entry_id, &format!("notice-fix:{entry_id}"), &text, fix_meta(&fix, &child, "running")).await {
                     // A sessão já abriu: a volta ainda grava o resultado; só a linha de andamento falta.
                     report(&st, &name, &code, "nota de andamento do conserto não gravada");
                 }
@@ -194,12 +195,13 @@ fn fix_meta(fix: &Fix, child: &str, state: &str) -> Value {
 }
 
 /// Nota na conversa de origem pela fila dela: a viva pelo ator, a com terminal ainda sem ator adotada antes,
-/// a adormecida direto no arquivo (sem acordar).
-async fn note(st: &AppState, parent: &str, entry_id: &str, text: &str, meta: Value) -> Result<(), String> {
+/// a adormecida direto no arquivo (sem acordar). `call` é o id da chamada: a nota trocada no lugar (mesmo
+/// `entry_id`, outro texto) precisa de outro, porque o mesmo id com outra ação é reuso.
+pub(crate) async fn note(st: &AppState, parent: &str, entry_id: &str, call: &str, text: &str, meta: Value) -> Result<(), String> {
     let runtime = st.state.runtime.get().ok_or("runtime_watcher")?;
     let action = || Action::AppendLocal { text: text.to_owned(), entry_id: Some(entry_id.to_owned()), confirms: None, hook_error: None,
         notice: None, meta: Some(meta.clone()) };
-    let call = || format!("notice-fix:{entry_id}");
+    let call = || call.to_owned();
     match runtime.queue_action(parent, call(), action()).await {
         Ok(_) => return Ok(()),
         Err(error) if error.code != "runtime_binding" => return Err(error.code),
@@ -307,7 +309,8 @@ async fn round(st: &AppState, rows: &[SessionRow], settled: &mut HashMap<String,
                 None => ("failed", format!("{child}: conversa da sessão de conserto não encontrada")),
             },
         };
-        match note(st, &fix.parent, &format!("fixdone:{}:{}", fix.notice_id, fix.attempt), &text, fix_meta(&fix, &child, state)).await {
+        let entry_id = format!("fixdone:{}:{}", fix.notice_id, fix.attempt);
+        match note(st, &fix.parent, &entry_id, &format!("notice-fix:{entry_id}"), &text, fix_meta(&fix, &child, state)).await {
             Ok(()) => finished.push(child),
             // A origem fechou ou morreu (a lista guarda a linha `dead`): o resultado não tem onde ficar.
             Err(_) if origin_gone(rows, &fix, now) => {

@@ -189,6 +189,9 @@ pub struct SessionRow {
     /// Sessão que abriu esta como filha ligada; só vale se ela ainda está no grupo (`pair_peers`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_by: Option<String>,
+    /// Pai que esta filha ligada perdeu (fechou ou morreu); ela segue aberta. Só sem `linked_by`. Só existe no Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphaned_from: Option<String>,
     /// Sessão que formou o grupo (`lead` do sidecar), a principal da aba no app; só vale se é esta
     /// ou se ainda está em `pair_peers`. Só existe no Rust.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -240,6 +243,9 @@ pub struct SessionRow {
     /// Troca de agente pedida e ainda não concluída; só existe no Rust.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<Handoff>,
+    /// O dono desligou o continuar sozinho nesta sessão (marca do spec); só existe no Rust.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_continue_off: bool,
     /// Portas TCP em LISTEN dos processos da sessão, por porta; só a lista do dono as leva.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<PortEntry>,

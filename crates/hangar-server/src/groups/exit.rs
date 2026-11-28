@@ -33,10 +33,30 @@ pub async fn leave(st: &AppState, groups: &GroupService, name: &str, orq: Option
     Ok((ex.clone(), ex))
 }
 
-/// `leave` e o aviso a cada ex-companheiro de fora: (ex-companheiros, falhas).
+/// `leave` e o aviso a cada ex-companheiro de fora: (ex-companheiros, falhas). É a saída do fechamento,
+/// do Pi/omp/Kimi que acabou e, por `leave_dead_member`, da varredura: as filhas ligadas de quem sai ficam marcadas sem pai.
 pub async fn leave_and_notify(st: &AppState, groups: &GroupService, name: &str, why: &'static str) -> Result<(Vec<String>, Vec<Value>), GroupError> {
-    let (ex, tell) = leave(st, groups, name, None, why).await?;
+    leave_marking(st, groups, name, why, false).await
+}
+
+/// `leave_and_notify` da varredura de membro morto: `name` pode ser o stem saneado do pai, e as filhas
+/// guardaram o nome cru dele.
+pub async fn leave_dead_member(st: &AppState, groups: &GroupService, name: &str) -> Result<(Vec<String>, Vec<Value>), GroupError> {
+    leave_marking(st, groups, name, "sweep_dead_member", true).await
+}
+
+async fn leave_marking(st: &AppState, groups: &GroupService, name: &str, why: &'static str, by_stem: bool) -> Result<(Vec<String>, Vec<Value>), GroupError> {
+    // Antes da saída, que apaga o `linked_by` delas.
+    let orphans = super::link_orphans::leaving(groups, name, by_stem).await;
+    let (ex, tell) = match leave(st, groups, name, None, why).await {
+        Ok(left) => left,
+        Err(error) => {
+            super::link_orphans::mark_after_failed_leave(st, groups, name, orphans).await;
+            return Err(error);
+        }
+    };
     let warnings = notify_exit(st, groups, name, &tell).await;
+    super::link_orphans::mark(st, name, orphans).await;
     Ok((ex, warnings))
 }
 

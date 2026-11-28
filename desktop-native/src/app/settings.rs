@@ -376,7 +376,7 @@ pub(super) struct SettingsUi {
     pick: usize,
     /// Linha levada pela busca: fica destacada até outra busca ou até sair da página.
     hit: Option<&'static str>,
-    scroll: ScrollHandle,
+    pub(super) scroll: ScrollHandle,
     /// A posição da linha só é conhecida no desenho: este sinal pede a rolagem até ela lá.
     reveal: Rc<Cell<bool>>,
     /// Seção da Aparência levada pelo atalho: rola até ela como a busca, sem o destaque.
@@ -933,16 +933,13 @@ impl Hangar {
                         .child(div().flex_1().text_sm().text_color(theme::muted()).child(tr("settings_back")))
                         .child(chrome::kbd("Esc")))
                     .on_click(cx.listener(|this, _, window, cx| this.close_settings(window, cx)))));
-        // Com espaço para a coluna da prévia ao lado do conteúdo de 720px; a caixa ao vivo nunca tem.
+        // Com espaço para a coluna da prévia ao lado do conteúdo; a caixa ao vivo nunca tem.
         let wide = page == Page::Appearance && !self.settings_ui.live && window.viewport_size().width >= px(1400.);
         // Contas cabe em colunas (uma por janela de cota) quando sobra largura ao lado da navegação.
         let accounts_wide = page == Page::Accounts && window.viewport_size().width >= px(1320.);
-        // Servidores põe o detalhe num painel ao lado da lista: usa a largura que houver.
-        let servers_wide = page == Page::Servers;
-        // O artigo do Manual leva o "Nesta página" ao lado do texto.
-        let article_wide = page == Page::Manual && self.article_wide(window);
-        // Status é um painel de gráficos, Agentes e Contas são tabelas e o Connect vira duas colunas: ocupam a largura toda.
-        let status_wide = matches!(page, Page::Status | Page::Harnesses | Page::Accounts | Page::Connect);
+        // O artigo do Manual é texto corrido: fica na largura de leitura, com o "Nesta página" ao lado quando cabe.
+        let article = (page == Page::Manual && self.guide.article_open.is_some())
+            .then(|| if self.article_wide(window) { 960. } else { READING_WIDTH });
         let body = match page {
             Page::Updates => self.render_updates(window, cx),
             Page::Manual => self.render_manual(window, cx),
@@ -975,13 +972,12 @@ impl Hangar {
         };
         let scroll = div().id("settings-content").role(Role::TabPanel).aria_label(page.title())
             .accessibility_id(format!("settings-page-{}", page.key())).flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
-            .child(div().w_full().flex().justify_center().child(motion::fade_quick(div()
-                .when(status_wide, |el| el.w_full().px(px(20.)))
-                .when(!status_wide, |el| el.w(px(if servers_wide { 1040. } else if article_wide { 960. } else { 720. })).px_4())
-                .max_w_full().pt(px(44.)).pb(px(40.)), body_in).child(body)));
+            .child(div().w_full().flex().justify_center().child(motion::fade_quick(
+                match article { Some(width) => div().w(px(width)).max_w_full().px_4(), None => page_column(div()) }
+                    .pt(px(44.)).pb(px(40.)), body_in).child(body)));
         let strip = match page { Page::Appearance => Some(self.section_tabs(cx)), Page::Manual => self.manual_tabs(cx), _ => None };
-        let tabs = strip.map(|strip| div().w_full().flex_shrink_0().flex().justify_center().px_4().pt(px(14.)).pb(px(6.))
-            .child(div().w(px(720.)).max_w_full().when(page == Page::Manual, |el| el.flex().justify_center()).child(strip)));
+        let tabs = strip.map(|strip| page_column(div()).flex_shrink_0().pt(px(14.)).pb(px(6.))
+            .when(page == Page::Manual, |el| el.flex().justify_center()).child(strip));
         let content = div().flex_1().min_w_0().h_full().flex().flex_col().children(tabs).child(scroll).children(self.server_config_footer(page, cx));
         // A prévia fica fora da rolagem: continua à vista enquanto a página desce.
         let content = if wide {
@@ -1081,7 +1077,7 @@ impl Hangar {
 }
 
 /// Rola a página até o elemento (`relative`) que leva este filho, uma vez por pedido em `reveal`.
-fn reveal_here(scroll: ScrollHandle, reveal: Rc<Cell<bool>>) -> impl IntoElement {
+pub(super) fn reveal_here(scroll: ScrollHandle, reveal: Rc<Cell<bool>>) -> impl IntoElement {
     canvas(move |bounds, window, _| {
         if !reveal.get() { return; }
         let area = scroll.bounds();
@@ -1104,7 +1100,7 @@ pub(crate) fn setting_row(live: bool, icon: IconName, title: impl IntoElement, d
             .border_color(theme::border()).bg(theme::inset()).flex().items_center().justify_center().child(chrome::small_icon(icon, 16., theme::muted())))
         .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
             .child(div().font_weight(FontWeight::MEDIUM).text_color(if enabled { theme::text() } else { theme::muted() }).child(title))
-            .child(description.text_size(px(13.)).text_color(theme::muted())));
+            .child(description.max_w(px(READING_WIDTH)).text_size(px(13.)).text_color(theme::muted())));
     // Divisória em cima de toda linha; a da primeira sobe 1px e some sob a borda da caixa.
     div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex()
         .map(|el| if live { el.flex_col().gap(px(10.)).px_3().py(px(12.)) } else { el.items_center().gap(px(14.)).px_4().py(px(14.)) })
@@ -1112,6 +1108,14 @@ pub(crate) fn setting_row(live: bool, icon: IconName, title: impl IntoElement, d
         // Desligado, quem esmaece é o próprio controle; esmaecer a linha também somava as duas e sumia o texto.
         // `flex` no invólucro: embaixo do título o controle fica do tamanho dele, sem esticar a borda.
         .child(div().flex_shrink_0().when(live, |el| el.flex().pl(px(38.))).child(control))
+}
+
+/// Texto corrido das Configurações tem teto de largura; caixas e controles não.
+pub(crate) const READING_WIDTH: f32 = 720.;
+
+/// Coluna padrão das páginas de Configurações; página nova não define largura própria.
+pub(crate) fn page_column(el: Div) -> Div {
+    el.w_full().px(px(20.))
 }
 
 pub(crate) fn settings_box() -> Div {
@@ -1126,7 +1130,7 @@ pub(super) fn section_head(icon: IconName, title: String, subtitle: Option<Strin
             .child(chrome::small_icon(icon, 17., theme::accent_text())))
         .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
             .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(title))
-            .when_some(subtitle, |el, s| el.child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(s))))
+            .when_some(subtitle, |el, s| el.child(div().max_w(px(READING_WIDTH)).text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(s))))
         .children(extra)
 }
 

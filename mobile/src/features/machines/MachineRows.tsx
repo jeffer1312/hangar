@@ -11,8 +11,10 @@ export type MachineView = 'edit' | 'connection' | 'discover' | 'remote' | 'advan
 
 export const MachineGroup = ({ children }: { children: ReactNode }) => <SectionCard>{children}</SectionCard>;
 
-export function MachineRow({ title, accessibilityLabel, value, description, onPress, disabled, danger, action, selected, expanded, valueTone, checked }: {
+export function MachineRow({ title, accessibilityLabel, value, description, onPress, disabled, danger, action, selected, expanded, valueTone, checked, leading }: {
   title: string;
+  /** Ícone à esquerda do texto (logo de serviço, avatar). */
+  leading?: ReactNode;
   /** Quando o título sozinho não diz de quem é a ação (vários "Atualizar" na mesma tela). */
   accessibilityLabel?: string;
   value?: string;
@@ -30,6 +32,7 @@ export function MachineRow({ title, accessibilityLabel, value, description, onPr
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const content = <>
+    {leading}
     <View style={rowStyles.texts}>
       <Text style={[rowStyles.label, { color: danger ? theme.tokens.status.error : action ? c.accent : c.text }]}>{title}</Text>
       {description ? <Text selectable={!onPress} style={[rowStyles.description, { color: c.muted }]}>{description}</Text> : null}

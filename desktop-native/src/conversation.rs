@@ -85,6 +85,9 @@ fn is_codex_agent_followup(name: Option<&str>) -> bool {
     matches!(name, Some("followup_task" | "collaboration.followup_task" | "multi_agent.followup_task" | "functions.followup_task"))
 }
 
+/// Chamada feita de dentro de um script do Code Mode: `repl_` nas versões antigas do Claude Code, `toolu_cc_` nas de hoje.
+pub(crate) fn is_script_call(id: &str) -> bool { id.starts_with("repl_") || id.starts_with("toolu_cc_") }
+
 pub(crate) fn is_agent_call(name: Option<&str>) -> bool { matches!(name, Some("Agent" | "AgentSwarm")) || is_codex_agent_spawn(name) }
 
 /// Página publicada pelo agente: servidor `hangar`, tool `html_render`, separados por `__`, `.` ou `/`, com o
@@ -244,6 +247,8 @@ pub fn fold_tasks(events: &[ChatEvent], paired: &HashMap<usize, usize>) -> Vec<T
 pub struct AgentRun {
     pub call: usize, pub id: String, pub description: String,
     pub subagent_type: Option<String>, pub model: Option<String>, pub prompt: Option<String>, pub running: bool,
+    /// `prompt_key` do prompt, feito uma vez: a Atividade casa Agents e subagentes pelo prompt várias vezes por quadro.
+    pub prompt_key: Option<String>,
     /// Rodando, mas parado esperando o próprio trabalho de fundo (`task:waiting:<id>`).
     pub waiting: bool,
     /// O `agentId` que o resultado do Agent traz: o nome do arquivo do subagente no disco.
@@ -276,10 +281,14 @@ fn agent_run(event: &ChatEvent, call: usize, id: &str) -> AgentRun {
     } else { desc };
     let prompt = text(if codex { "message" } else { "prompt" })
         .filter(|prompt| !codex || !prompt.starts_with("gAAAA"));
+    let key = prompt.as_deref().map(prompt_key);
     AgentRun { call, id: id.to_owned(), description, subagent_type: text(if codex { "agent_type" } else { "subagent_type" }),
-        model: text("model"), prompt, running: false, waiting: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None,
+        model: text("model"), prompt, prompt_key: key, running: false, waiting: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None,
         background: event.tool_input.as_ref().and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) }
 }
+
+/// Prompt sem diferença de espaços e de caixa, para casar o Agent com o registro do subagente no disco.
+pub fn prompt_key(text: &str) -> String { text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase() }
 
 impl AgentRun {
     pub fn elapsed(&self, now: f64) -> Option<std::time::Duration> {
@@ -538,7 +547,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                         let mut run = agent_run(event, i, id);
                         // Lançado de dentro de um script: a linha tem a hora do fim do script, e o começo de verdade é
                         // o do script.
-                        if id.starts_with("repl_") && script_start.is_some() { run.started_at = script_start; }
+                        if is_script_call(id) && script_start.is_some() { run.started_at = script_start; }
                         agents.push(run);
                     }
                     Some("Bash") if input.and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) => {
@@ -774,6 +783,17 @@ pub fn clip(source: &str, max: usize) -> (&str, bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_agent_with_the_current_script_call_id_counts_from_the_script_start() {
+        let call = |id: &str, name: &str, ts: f64| ChatEvent { kind: "tool_use".into(), id: format!("e-{id}"), tool_use_id: Some(id.into()),
+            tool_name: Some(name.into()), tool_input: json!({"description": "busca"}).as_object().cloned(), ts: Some(ts), ..Default::default() };
+        let events = vec![call("toolu_01script", "REPL", 100.0), call("toolu_cc_f2d6", "Agent", 160.0),
+            ChatEvent { kind: "tool_result".into(), id: "r1".into(), tool_use_id: Some("toolu_cc_f2d6".into()), result: Some("feito".into()),
+                ts: Some(160.0), ..Default::default() }];
+        let agent = fold_activity(&events).agents.into_iter().find(|a| a.id == "toolu_cc_f2d6").unwrap();
+        assert_eq!((agent.started_at, agent.finished_at), (Some(100.0), Some(160.0)));
+    }
+
     #[test]
     fn an_agent_launched_inside_a_script_counts_from_the_script_start() {
         let call = |id: &str, name: &str, ts: f64| ChatEvent { kind: "tool_use".into(), id: format!("e-{id}"), tool_use_id: Some(id.into()),

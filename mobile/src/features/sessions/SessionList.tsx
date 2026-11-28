@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MenuView } from '@react-native-menu/menu';
 import {
   deleteSession,
+  deleteSessionForServer,
   dismissFallenSession,
   effectiveGroupBy,
   formataErro,
@@ -14,10 +15,12 @@ import {
   groupGlobal,
   groupHideTargets,
   hideSession,
+  linkedChildren,
   machineNoticeVisible,
   machinesAllDown,
   renameSession,
   setPairAccess,
+  setSessionAutoContinue,
   reopenFallenSession,
   resumeSession,
   showSession,
@@ -33,6 +36,7 @@ import { LiveVoiceChatButton } from '../voice/LiveVoiceChatButton';
 import { Icon } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
 import { SessionRow, type PairAction } from './SessionRow';
+import { autoContinueCappedLabel } from '../../chat/SessionProblem';
 import { buildSessionSections, HIDDEN_SECTION_ID, sessionGroupKey, type SessionSection } from './sessionSections';
 import { setHiddenSectionOpen, useHiddenSectionOpen } from './hiddenSectionPref';
 import { GroupBlockHeader, SessionSectionCard, SessionSectionHeader } from './SessionSection';
@@ -150,6 +154,29 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     else toast.erro(m.servidor_nao_existe());
   }, []);
 
+  // As filhas antes do pai, uma a uma pelo DELETE de sempre (vale em servidor antigo), sempre na máquina
+  // da linha: o servidor ativo pode mudar entre um fechamento e outro. As linhas somem na hora, as que
+  // falharem voltam, e as falhas vêm num aviso só no fim.
+  const closeWithChildren = useCallback(async (server: Server, s: AggSession, kids: AggSession[]) => {
+    const order = [...kids, s];
+    for (const x of order) useSessions.getState().markDeleting(x.serverId, x.name);
+    const failed: string[] = [];
+    // Um aviso por sessão fechada: o da filha não esconde o do pai.
+    const warnings: string[] = [];
+    for (const x of order) {
+      try {
+        const r = await deleteSessionForServer(server, x.name);
+        if (r.warning) warnings.push(formataErro(r.warning) ?? String(r.warning));
+      } catch (e: unknown) {
+        useSessions.getState().unmarkDeleting(x.serverId, x.name);
+        failed.push(`${x.name} (${mensagemDe(e)})`);
+      }
+    }
+    if (failed.length) toast.erro(m.session_close_children_failed({ names: failed.join(', ') }));
+    if (warnings.length) toast.erro(warnings.join('\n'));
+    if (!failed.length && !warnings.length) toast.ok(s.name);
+  }, []);
+
   const excluir = useCallback(
     (s: AggSession) => {
       const server = useServers.getState().servers.find((server) => server.id === s.serverId);
@@ -167,34 +194,51 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
       const cancel = () => {
         if (!reservation.confirmed) release();
       };
+      const close = (kids: AggSession[]) => {
+        if (deleting.current.get(key) !== reservation || reservation.confirmed) return;
+        reservation.confirmed = true;
+        if (kids.length) {
+          if (!server) {
+            toast.erro(m.servidor_nao_existe());
+            release();
+            return;
+          }
+          closeWithChildren(server, s, kids).finally(release);
+          return;
+        }
+        if (!comServidor(s, () => {
+          useSessions.getState().markDeleting(s.serverId, s.name);
+          deleteSession(s.name)
+            .then((r) => {
+              // A sessão morreu, mas um companheiro do grupo pode não ter sido avisado: o
+              // motivo aparece em vez de a linha sumir calada (mesmo tratamento do desktop).
+              if (r.warning) toast.erro(formataErro(r.warning) ?? String(r.warning));
+              else toast.ok(s.name);
+            })
+            .catch((e: unknown) => {
+              useSessions.getState().unmarkDeleting(s.serverId, s.name);
+              toast.erro(mensagemDe(e));
+            })
+            .finally(release);
+        })) release();
+      };
+      // Pai com filhas ligadas abertas: fechar só ele (elas param e ficam, sem pai) ou junto com elas.
+      const kids = linkedChildren(useSessions.getState().rows, s);
+      const cancelAction = { text: m.comum_cancelar(), style: 'cancel' as const, onPress: cancel };
+      if (kids.length) {
+        Alert.alert(m.sessao_excluir(), m.session_close_children_question({ name: s.name, n: kids.length }), [
+          cancelAction,
+          { text: m.session_close_only_this(), style: 'destructive', onPress: () => close([]) },
+          { text: m.session_close_with_children({ n: kids.length }), style: 'destructive', onPress: () => close(kids) },
+        ], { cancelable: true, onDismiss: cancel });
+        return;
+      }
       Alert.alert(m.sessao_excluir(), s.name, [
-        { text: m.comum_cancelar(), style: 'cancel', onPress: cancel },
-        {
-          text: m.sessao_excluir_curto(),
-          style: 'destructive',
-          onPress: () => {
-            if (deleting.current.get(key) !== reservation || reservation.confirmed) return;
-            reservation.confirmed = true;
-            if (!comServidor(s, () => {
-              useSessions.getState().markDeleting(s.serverId, s.name);
-              deleteSession(s.name)
-                .then((r) => {
-                  // A sessão morreu, mas um companheiro do grupo pode não ter sido avisado: o
-                  // motivo aparece em vez de a linha sumir calada (mesmo tratamento do desktop).
-                  if (r.warning) toast.erro(formataErro(r.warning) ?? String(r.warning));
-                  else toast.ok(s.name);
-                })
-                .catch((e: unknown) => {
-                  useSessions.getState().unmarkDeleting(s.serverId, s.name);
-                  toast.erro(mensagemDe(e));
-                })
-                .finally(release);
-            })) release();
-          },
-        },
+        cancelAction,
+        { text: m.sessao_excluir_curto(), style: 'destructive', onPress: () => close([]) },
       ], { cancelable: true, onDismiss: cancel });
     },
-    [comServidor],
+    [comServidor, closeWithChildren],
   );
 
   const renomear = useCallback(
@@ -229,27 +273,39 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   // Fala com o servidor da linha, sem trocar o ativo; a linha morta some quando a lista chega.
   // O servidor responde quando o agente sobe: o segundo toque não manda outro pedido.
   const reopening = useRef(new Set<string>());
-  const reopen = useCallback((s: AggSession) => {
+  const reopen = useCallback((s: AggSession, opts?: { continue?: boolean }) => {
     const server = useServers.getState().servers.find((x) => x.id === s.serverId);
     if (!server) { toast.erro(m.servidor_nao_existe()); return; }
     const key = `${s.serverId}::${s.name}`;
     if (reopening.current.has(key)) return;
     reopening.current.add(key);
-    reopenFallenSession(s.name, server)
-      .then(() => toast.ok(s.name))
+    reopenFallenSession(s.name, server, { ...opts, lifecycleId: s.lifecycle_id })
+      .then((r) => {
+        // Reabriu, mas o continue não saiu: o motivo aparece, com a frase do teto; a sessão já está de pé.
+        if (opts?.continue && r?.continued === false) {
+          toast.aviso(autoContinueCappedLabel(r.code) ?? m.session_reopen_continue_failed({ code: r.code ?? '' }));
+        } else toast.ok(s.name);
+      })
       .catch((e: unknown) => toast.erro(mensagemDe(e)))
       .finally(() => reopening.current.delete(key));
   }, []);
 
-  // Sem confirmação: não há processo para matar, só a linha e o registro para reabrir. Rota própria, não o
-  // DELETE: se o nome já voltou vivo (a linha da tela está velha), o servidor recusa em vez de fechar.
+  // A linha muda quando a lista seguinte trouxer o `auto_continue_off` novo; só a falha avisa.
+  const toggleAutoContinue = useCallback((s: AggSession, enabled: boolean) => {
+    const server = useServers.getState().servers.find((x) => x.id === s.serverId && !x.invite);
+    if (!server) { toast.erro(m.servidor_nao_existe()); return; }
+    setSessionAutoContinue(s.name, enabled, server)
+      .catch((e: unknown) => toast.erro(m.auto_continue_toggle_failed({ why: mensagemDe(e) })));
+  }, []);
+
+  // A rota própria só dispensa a vida indicada pela linha, não a sessão já reaberta com o mesmo nome.
   const dismiss = useCallback((s: AggSession) => {
     const server = useServers.getState().servers.find((x) => x.id === s.serverId);
     if (!server) { toast.erro(m.servidor_nao_existe()); return; }
     if (reopening.current.has(`${s.serverId}::${s.name}`)) return;
-    useSessions.getState().markDeleting(s.serverId, s.name);
-    dismissFallenSession(s.name, server).catch((e: unknown) => {
-      useSessions.getState().unmarkDeleting(s.serverId, s.name);
+    if (!s.lifecycle_id) useSessions.getState().markDeleting(s.serverId, s.name);
+    dismissFallenSession(s.name, server, s.lifecycle_id).catch((e: unknown) => {
+      if (!s.lifecycle_id) useSessions.getState().unmarkDeleting(s.serverId, s.name);
       toast.erro(mensagemDe(e));
     });
   }, []);
@@ -585,6 +641,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               onWorktree={proprios.has(item.serverId) ? abrirWorktree : undefined}
               onPair={proprios.has(item.serverId) || item.outside ? fazerPar : undefined}
               onHidden={proprios.has(item.serverId) && !item.outside ? toggleHidden : undefined}
+              onAutoContinue={proprios.has(item.serverId) && !item.outside ? toggleAutoContinue : undefined}
               crossBadgeText={crossBadges.get(pickKey(item.serverId, item.name))?.text}
               crossBadgeMachines={crossBadges.get(pickKey(item.serverId, item.name))?.machines}
             />}

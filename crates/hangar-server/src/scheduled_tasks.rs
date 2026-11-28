@@ -284,6 +284,7 @@ impl Host for SessionHost {
                         &host,
                         request,
                         OpenCaller::Owner,
+                        None,
                     )
                     .await
                     {

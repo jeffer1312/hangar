@@ -15,11 +15,12 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use hangar_api::session::SessionRow;
+use hangar_auto_continue::{Ledger, Source, StopKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::AgentProvider;
-use super::restore::Entry;
+use super::restore::{Entry, LiveResume, Resume};
 use crate::routes::{AppState, cors};
 use crate::session_write::{detail_body, json_response, session_name};
 
@@ -39,8 +40,17 @@ pub struct Fallen {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     pub died_at: f64,
-    /// O `<r>` de `Failed with result '<r>'` (`oom-kill`, …).
+    /// O `<r>` de `Failed with result '<r>'` (`oom-kill`, …), ou `psmux_orphan`.
     pub cause: String,
+    /// O servidor do psmux que perdeu a ficha e segue de pé: Reabrir e Dispensar o encerram antes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphan_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphan_birth: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orphan_descendants: Vec<(u32, u64)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphan_transcript: Option<String>,
 }
 
 impl Fallen {
@@ -50,7 +60,8 @@ impl Fallen {
     /// A entrada da fotografia com que o restore a reabre.
     pub fn entry(&self, name: &str) -> Entry {
         Entry { name: name.to_owned(), provider: self.provider, conversation: self.conversation.clone(),
-            permission_mode: self.permission_mode.clone(), missing_since: None, unit: None }
+            transcript: self.orphan_transcript.clone(), permission_mode: self.permission_mode.clone(), missing_since: None, unit: None,
+            turn_open: false, last_line: None }
     }
 }
 
@@ -102,6 +113,16 @@ fn with_persisted<T>(home: &Path, change: impl FnOnce(&mut BTreeMap<String, Fall
 
 pub fn get(home: &Path, name: &str) -> Option<Fallen> { with(home, |map| (map.get(name).cloned(), false)) }
 
+#[cfg(windows)]
+pub(super) fn remember_orphan_descendants(home: &Path, name: &str, expected: &Fallen, descendants: &[(u32, u64)]) -> bool {
+    let (matched, saved) = with_persisted(home, |map| {
+        let Some(row) = map.get_mut(name).filter(|row| *row == expected) else { return (false, false); };
+        row.orphan_descendants = descendants.to_vec();
+        (true, true)
+    });
+    matched && saved
+}
+
 #[cfg(test)]
 fn insert(home: &Path, name: &str, fallen: Fallen) {
     with(home, |map| ((), map.insert(name.to_owned(), fallen.clone()).as_ref() != Some(&fallen)));
@@ -146,8 +167,10 @@ pub fn forget_live(home: &Path, live: &HashSet<String>) {
 pub fn rows(home: &Path, live: &[&SessionRow]) -> Vec<SessionRow> {
     let names: HashSet<&str> = live.iter().map(|r| r.name.as_str()).collect();
     with(home, |map| (map.iter().filter(|(name, _)| !names.contains(name.as_str())).filter_map(|(name, fallen)| {
+        let lifecycle = super::orphans::lifecycle(fallen);
+        if fallen.cause == super::orphans::CAUSE && lifecycle.is_none() { return None; }
         let row = json!({"name": name, "provider": fallen.provider.name(), "state": "dead", "problema": fallen.problem(),
-            "cwd": fallen.cwd, "last_activity": fallen.died_at});
+            "cwd": fallen.cwd, "last_activity": fallen.died_at, "lifecycle_id": lifecycle});
         serde_json::from_value::<SessionRow>(row)
             .inspect_err(|error| tracing::warn!(code = "fallen_row_invalid", %error, session = %name, "linha da sessão caída não montada"))
             .ok()
@@ -161,9 +184,11 @@ fn answer(headers: &HeaderMap, status: StatusCode, body: Value) -> Response {
 }
 
 /// `POST /api/sessions/{name}/reopen`: a caída volta pelo spec, na conversa em que estava (o mesmo
-/// caminho do restore depois do reboot). O registro só sai quando a sessão abriu.
+/// caminho do restore depois do reboot). O registro só sai quando a sessão abriu. `?continue=1` é o
+/// "Reabrir e continuar": com o agente de pé, o texto do reboot vai à sessão pelo registro de continuação.
 pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
+    let continue_turn = crate::auth::query_param(req.uri().query(), "continue").is_some_and(|v| v == "1");
     let owner = match crate::routes::gate(&st, peer, &req).await { Ok((_, owner)) => owner, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return answer(&headers, StatusCode::FORBIDDEN, detail_body("erro_so_dono", "só o dono reabre a sessão", json!({}))); }
     let (Some(name), Some(dirs)) = (session_name(req.uri().path()), st.list.env().dirs.clone()) else {
@@ -176,6 +201,15 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     let Some(fallen) = get(&dirs.home, &name) else {
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("session_not_fallen", "a sessão não está caída", json!({"name": name})));
     };
+    let lifecycle = crate::auth::query_param(req.uri().query(), "lifecycle_id");
+    if !super::orphans::accepts_action(&fallen, lifecycle.as_deref()) {
+        let (code, message) = if lifecycle.is_none() {
+            ("fallen_lifecycle_missing", "atualize o app para agir nesta sessão caída")
+        } else {
+            ("fallen_session_changed", "a linha da sessão mudou; atualize a lista")
+        };
+        return answer(&headers, StatusCode::CONFLICT, detail_body(code, message, json!({})));
+    }
     // Cliente que cai no meio não interrompe a abertura. O mesmo caminho do restore: agente de pé, diário, e o
     // registro só sai no sucesso.
     let entry = fallen.entry(&name);
@@ -183,16 +217,54 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     let task = tokio::spawn(async move {
         let _reopening = reopening;
         let host = super::server::ServerHost::new(st.clone()).await;
-        super::restore::restore_one(&host, &st, &program, &fallen.key, &entry).await
+        let orphan = (fallen.cause == super::orphans::CAUSE).then_some(&fallen);
+        if let Err(code) = super::restore::restore_one(&host, &st, &program, &fallen.key, &entry, orphan).await { return Err(code); }
+        if !continue_turn { return Ok(None); }
+        let continued = match st.auto_continue.get() {
+            Some(auto) => continue_after_reopen(&LiveResume(st.as_ref()), &auto.ledger, &entry.name, &fallen).await,
+            None => Err("auto_continue_unavailable".to_owned()),
+        };
+        Ok(Some(continued))
     });
     match task.await {
-        Ok(Ok(())) => answer(&headers, StatusCode::OK, json!({"ok": true})),
+        Ok(Ok(None)) => answer(&headers, StatusCode::OK, json!({"ok": true})),
+        // A sessão voltou mesmo sem o continue: o código diz por que ele não saiu.
+        Ok(Ok(Some(continued))) => answer(&headers, StatusCode::OK, match continued {
+            Ok(()) => json!({"ok": true, "continued": true}),
+            Err(code) => json!({"ok": true, "continued": false, "code": code}),
+        }),
         Ok(Err(code)) if code == "erro_nome_em_uso" =>
             answer(&headers, StatusCode::CONFLICT, detail_body(&code, "já existe uma sessão com esse nome", json!({}))),
+        Ok(Err(code)) if code.starts_with("psmux_orphan_") =>
+            answer(&headers, StatusCode::CONFLICT, detail_body(&code, "a sessão antiga não fechou", json!({}))),
         Ok(Err(code)) => answer(&headers, StatusCode::UNPROCESSABLE_ENTITY, detail_body(&code, "a sessão não reabriu", json!({}))),
         Err(error) => {
             tracing::error!(code = "restore_open_failed", %error, session = %name, "a reabertura da sessão caída parou no meio");
             answer(&headers, StatusCode::INTERNAL_SERVER_ERROR, detail_body("restore_open_failed", "a sessão não reabriu", json!({})))
+        }
+    }
+}
+
+/// O continue do "Reabrir e continuar": só pelo clique, com o texto do reboot (o turno pode ter sido cortado no
+/// meio de um comando). Os tetos do registro valem; a chave é a queda, então a mesma queda continua uma vez.
+pub(crate) async fn continue_after_reopen(resume: &dyn Resume, ledger: &std::sync::Mutex<Ledger>, name: &str, fallen: &Fallen) -> Result<(), String> {
+    let key = format!("fallen:{}:{}", fallen.key, fallen.died_at);
+    let lock = || ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let allowed = lock().allow(name, Source::OomButton, &key, StopKind::Other, resume.now());
+    if let Err(cap) = allowed {
+        let code = format!("auto_continue_capped:{}", cap.code());
+        resume.diary(name, &code, "reabrir e continuar: um teto do registro barrou");
+        return Err(code);
+    }
+    match resume.send(name, hangar_auto_continue::text::REBOOT).await {
+        Ok(()) => {
+            lock().record(name, Source::OomButton, &key, StopKind::Other, resume.now());
+            resume.diary(name, "auto_continue_sent", "reabrir e continuar: o turno cortado seguiu");
+            Ok(())
+        }
+        Err(code) => {
+            resume.diary(name, &format!("auto_continue_failed:{code}"), "reabrir e continuar: o envio do continue foi recusado");
+            Err(code)
         }
     }
 }
@@ -229,10 +301,36 @@ pub async fn dismiss_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     let Some(_hold) = Reopening::begin(&name) else {
         return answer(&headers, StatusCode::CONFLICT, detail_body("session_reopening", "a sessão está reabrindo", json!({"name": name})));
     };
-    if get(&dirs.home, &name).is_none() {
+    let Some(fallen) = get(&dirs.home, &name) else {
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("session_not_fallen", "a sessão não está caída", json!({"name": name})));
+    };
+    // O órfão de pé voltaria na próxima busca e seguiria segurando o nome.
+    let lifecycle = crate::auth::query_param(req.uri().query(), "lifecycle_id");
+    if !super::orphans::accepts_action(&fallen, lifecycle.as_deref()) {
+        let (code, message) = if lifecycle.is_none() {
+            ("fallen_lifecycle_missing", "atualize o app para agir nesta sessão caída")
+        } else {
+            ("fallen_session_changed", "a linha da sessão mudou; atualize a lista")
+        };
+        return answer(&headers, StatusCode::CONFLICT, detail_body(code, message, json!({})));
     }
-    // O `forget` também tira o nome da fotografia do restore: a dispensada não volta no próximo reboot.
+    if fallen.cause == super::orphans::CAUSE {
+        let task = tokio::spawn(async move {
+            let _hold = _hold;
+            let _claim = super::open::NameClaim::take(&dirs.home, &name).map_err(|_| "erro_nome_em_uso")?;
+            super::orphans::end(&dirs.home, &name, &fallen).await?;
+            super::restore::forget(&dirs.home, &name);
+            Ok::<(), &'static str>(())
+        });
+        match task.await {
+            Ok(Ok(())) => return answer(&headers, StatusCode::OK, json!({"ok": true})),
+            Ok(Err(code)) => return answer(&headers, StatusCode::CONFLICT, detail_body(code, "a sessão antiga não fechou", json!({}))),
+            Err(error) => {
+                tracing::error!(code = "psmux_orphan_dismiss_failed", %error, "a dispensa da sessão caída parou no meio");
+                return answer(&headers, StatusCode::INTERNAL_SERVER_ERROR, detail_body("psmux_orphan_dismiss_failed", "a sessão não foi dispensada", json!({})));
+            }
+        }
+    }
     super::restore::forget(&dirs.home, &name);
     answer(&headers, StatusCode::OK, json!({"ok": true}))
 }
@@ -337,7 +435,7 @@ mod tests {
 
     fn oom(key: &str) -> Fallen {
         Fallen { key: key.into(), provider: AgentProvider::Claude, conversation: Some("c1".into()), permission_mode: None,
-            cwd: Some("/home/x".into()), died_at: 10.0, cause: "oom-kill".into() }
+            cwd: Some("/home/x".into()), died_at: 10.0, cause: "oom-kill".into(), orphan_pid: None, orphan_birth: None, orphan_descendants: Vec::new(), orphan_transcript: None }
     }
 
     fn row(name: &str) -> SessionRow { serde_json::from_value(json!({"name": name, "provider": "claude", "state": "idle"})).unwrap() }
@@ -392,10 +490,55 @@ mod tests {
         assert!(Reopening::begin("reabre-um").is_some());
     }
 
+    #[derive(Default)]
+    struct FakeResume { sent: std::sync::Mutex<Vec<(String, String)>>, diary: std::sync::Mutex<Vec<String>>, refuse: bool }
+
+    impl Resume for FakeResume {
+        fn send<'a>(&'a self, name: &'a str, text: &'a str) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
+            self.sent.lock().unwrap().push((name.to_owned(), text.to_owned()));
+            let refuse = self.refuse;
+            Box::pin(async move { if refuse { Err("erro_envio_falhou".to_owned()) } else { Ok(()) } })
+        }
+        fn note<'a>(&'a self, _name: &'a str, _id: &'a str, _call: &'a str, _text: String, _meta: Value) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn diary(&self, _name: &str, code: &str, _reason: &'static str) { self.diary.lock().unwrap().push(code.to_owned()); }
+        fn now(&self) -> f64 { 2_000_000.0 }
+        fn hhmm(&self, _at: f64) -> String { String::new() }
+    }
+
+    /// "Reabrir e continuar": a mesma queda continua uma vez, também depois de reiniciar o servidor; outra queda
+    /// (inclusive a que não foi falta de memória) continua; o envio recusado não gasta a vez.
+    #[tokio::test]
+    async fn reopen_with_continue_sends_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = std::sync::Mutex::new(Ledger::load(hangar_auto_continue::ledger::path(dir.path())));
+        let fake = FakeResume::default();
+        let fall = oom("k1");
+        assert_eq!(continue_after_reopen(&fake, &ledger, "s1", &fall).await, Ok(()));
+        assert_eq!(continue_after_reopen(&fake, &ledger, "s1", &fall).await, Err("auto_continue_capped:once".to_owned()), "o mesmo clique de novo");
+        let reloaded = std::sync::Mutex::new(Ledger::load(hangar_auto_continue::ledger::path(dir.path())));
+        assert_eq!(continue_after_reopen(&fake, &reloaded, "s1", &fall).await, Err("auto_continue_capped:once".to_owned()),
+            "o registro em disco vale depois de reiniciar");
+        let other = Fallen { died_at: 20.0, cause: "signal".into(), ..oom("k1") };
+        assert_eq!(other.problem(), OTHER);
+        assert_eq!(continue_after_reopen(&fake, &reloaded, "s1", &other).await, Ok(()), "outra queda; terminal_died também aceita");
+        assert_eq!(*fake.sent.lock().unwrap(), [("s1".to_owned(), hangar_auto_continue::text::REBOOT.to_owned()),
+            ("s1".to_owned(), hangar_auto_continue::text::REBOOT.to_owned())]);
+        assert_eq!(*fake.diary.lock().unwrap(), ["auto_continue_sent", "auto_continue_capped:once", "auto_continue_capped:once", "auto_continue_sent"]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = std::sync::Mutex::new(Ledger::load(hangar_auto_continue::ledger::path(dir.path())));
+        let refused = FakeResume { refuse: true, ..FakeResume::default() };
+        assert_eq!(continue_after_reopen(&refused, &ledger, "s1", &fall).await, Err("erro_envio_falhou".to_owned()));
+        assert_eq!(*refused.diary.lock().unwrap(), ["auto_continue_failed:erro_envio_falhou"]);
+        assert_eq!(continue_after_reopen(&fake, &ledger, "s1", &fall).await, Ok(()), "o envio recusado não gastou a vez");
+    }
+
     #[test]
     fn the_problem_tells_memory_from_any_other_failure() {
         let fallen = |cause: &str| Fallen { key: "k".into(), provider: AgentProvider::Claude, conversation: None,
-            permission_mode: None, cwd: None, died_at: 0.0, cause: cause.into() };
+            permission_mode: None, cwd: None, died_at: 0.0, cause: cause.into(), orphan_pid: None, orphan_birth: None, orphan_descendants: Vec::new(), orphan_transcript: None };
         assert_eq!(fallen("oom-kill").problem(), OOM);
         assert_eq!(fallen("signal").problem(), OTHER);
     }

@@ -331,6 +331,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   codex_sidecar_check_failed: () => m.codex_sidecar_check_failed(),
   erro_corpo_interrompido: () => m.erro_corpo_interrompido(),
   erro_limpeza_fechamento_falhou: (p) => m.erro_limpeza_fechamento_falhou({ codigo: String(p.codigo ?? '') }),
+  linked_child_not_stopped: (p) => m.linked_child_not_stopped({ codigo: String(p.codigo ?? '') }),
   claude_sidecar_invalid: () => m.claude_sidecar_invalid(),
   erro_workflow_inexistente: () => m.erro_workflow_inexistente(),
   erro_agente_inexistente: () => m.erro_agente_inexistente(),

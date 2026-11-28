@@ -47,6 +47,7 @@ vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: (uri: string) => ({ from
 
 import { useServers } from './servers';
 import { readDraft, writeDraft } from './drafts';
+import * as m from '../paraglide/messages';
 import {
   _resetNewConversationForTests, abandonUnknownAttempt, adoptCandidate, beginAttempt, discardAttempt, recoverAttempt,
   restoreAttempt, useNewConversation, sendFirstInput, readFirstInput, confirmFirstInput, autoSessionName,
@@ -497,6 +498,37 @@ describe('primeiro input', () => {
     expect(calls.send).toHaveBeenCalledTimes(2);
     expect(calls.send.mock.calls[1]).toEqual([serverA, created.sessionName, 'oi']);
     expect(attempt()?.phase).toBe('sent');
+  });
+
+  it('503 com código anterior à escrita é recusa no primeiro envio, igual ao rascunho', async () => {
+    await beginAttempt('server-a', input);
+    const created = attempt()!;
+    calls.send.mockRejectedValueOnce(Object.assign(httpError(503, '503: ator doente'), { code: 'runtime_unhealthy' }));
+    await sendFirstInput('server-a', created.id);
+    expect(attempt()).toMatchObject({ id: created.id, phase: 'created', text: 'oi' });
+    expect(issue()?.kind).toBe('rejected');
+    expect(readDraft('server-a', created.sessionName!)).toMatchObject({ text: 'oi', submission: { text: 'oi', status: 'rejected' } });
+    expect(calls.send).toHaveBeenCalledOnce();
+  });
+
+  it('503 server_starting no primeiro envio é recusa dita em frase, sem o código cru', async () => {
+    await beginAttempt('server-a', input);
+    const created = attempt()!;
+    calls.send.mockRejectedValueOnce(Object.assign(httpError(503, '503: server_starting'), { code: 'server_starting' }));
+    await sendFirstInput('server-a', created.id);
+    expect(issue()).toEqual({ kind: 'rejected', message: m.nova_conversa_envio_servidor_subindo() });
+    expect(issue()?.message).not.toContain('server_starting');
+    expect(readDraft('server-a', created.sessionName!)).toMatchObject({ text: 'oi', submission: { text: 'oi', status: 'rejected' } });
+  });
+
+  it('503 runtime_reply_lost no primeiro envio continua incerto', async () => {
+    await beginAttempt('server-a', input);
+    const created = attempt()!;
+    calls.send.mockRejectedValueOnce(Object.assign(httpError(503), { code: 'runtime_reply_lost' }));
+    await sendFirstInput('server-a', created.id);
+    expect(stored()).toMatchObject({ phase: 'send_unknown', text: 'oi' });
+    expect(issue()?.kind).toBe('unknown');
+    expect(readDraft('server-a', created.sessionName!)?.submission?.status).toBe('unknown');
   });
 
   it.each([new TypeError('offline'), new Error('sem status'), httpError(503), httpError(408)])(
