@@ -598,7 +598,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     setTimeout(() => {
       const { pending, stateEvent } = useChatStore.getState();
       if (!pending.some((p) => p.id === id)) return;
-      if (stateEvent?.state === 'working') settleCommandEcho(id, text);
+      // Sem a tela o estado não anda mais: o eco sai em vez de esperar um "parou" que não chega.
+      if (alive && foreground && stateEvent?.state === 'working') settleCommandEcho(id, text);
       else useChatStore.setState({ pending: pending.filter((p) => p.id !== id) });
     }, ECHO_SETTLE_MS);
   }
