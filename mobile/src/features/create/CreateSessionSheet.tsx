@@ -669,8 +669,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
     setHasSameFolder(false);
     setRuleOffer(null);
     setRuleTaken(false);
-    // Só o formulário cria por aqui: a conversa nova manda a primeira mensagem pela fila de uma máquina só.
-    if (layout === 'form' && p !== NO_PROJECT_CWD && isOwnMachine(active)) {
+    if (p !== NO_PROJECT_CWD && isOwnMachine(active)) {
       const others = ownUpdatableServers(machines).filter((s) => !isDemoUrl(`${s.baseUrl}/`));
       placementRuleOfferFor(active, others, p).then((offer) => {
         if (mounted.current && generation === pickGeneration.current) setRuleOffer(offer);
@@ -684,7 +683,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
       if (!mounted.current || generation !== pickGeneration.current) return;
       setError(cause instanceof Error ? cause.message : m.criar_sessao_erro());
     }
-  }, [active, layout, machines]);
+  }, [active, machines]);
   // Escolha da pessoa, não a pasta que o seletor marca sozinho ao abrir: a sugestão de máquina que chega depois não a tira.
   const pickByHand = useCallback((p: string, root?: string) => { onTouched(); return handlePick(p, root); }, [handlePick, onTouched]);
 
@@ -1236,14 +1235,32 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
       icon: tags?.machine ? MACHINE_ICON_NAME[tags.machine.icon] : 'Laptop' as const,
       accounts: tags?.accounts, demo: isDemoUrl(`${sv.baseUrl}/`), offline: machineOffline[i] ?? false };
   };
-  const activeMachine = machineView(active, machines.findIndex((sv) => sv.id === active.id));
+  // A oferta vale para a pasta escolhida agora e para uma máquina que segue na lista do app.
+  const ruleServer = ruleOffer && ruleOffer.cwd === picked ? machines.find((sv) => sv.id === ruleOffer.serverId) ?? null : null;
+  const ruleLabel = ruleServer ? machineView(ruleServer, machines.indexOf(ruleServer)).label : '';
+  const elsewhere = ruleTaken && ruleOffer && ruleServer ? { server: ruleOffer.server, at: ruleServer } : null;
+  // Voltar a esta máquina depois do clique só desfaz a oferta; outra troca a máquina e descarta a oferta.
+  const pickShownMachine = (id: string) => { if (id === active.id) setRuleTaken(false); else if (id !== elsewhere?.at.id) onPickMachine(id); };
+  // Escolha da pessoa: a sugestão de máquina que chega depois não desfaz o clique.
+  const ruleLine = ruleServer && ruleOffer ? (
+    <View style={styles.ruleLine}>
+      <Text style={styles.ruleText}>{m.native_placement_rule_offer({ projeto: ruleOffer.project, maquina: ruleLabel })}</Text>
+      {!ruleTaken ? (
+        <Pressable onPress={() => { onTouched(); setRuleTaken(true); }} disabled={creating} hitSlop={LINK_SLOP} accessibilityRole="button"
+          accessibilityState={{ disabled: creating }}>
+          <Text style={styles.headingLink}>{m.native_placement_rule_open({ maquina: ruleLabel })}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  ) : null;
+  const shownMachine = elsewhere ? machineView(elsewhere.at, machines.indexOf(elsewhere.at)) : machineView(active, machines.findIndex((sv) => sv.id === active.id));
   // A máquina fica sob o título da conversa nova ("em notebook"), com o menu das máquinas e as contas de cada uma.
   const machinePill = (
-    <QuietPill label={activeMachine.label} shown={m.native_new_chat_on_machine({ maquina: activeMachine.label })}
-      leading={<MachineTile icon={activeMachine.icon} color={activeMachine.color} size={22} />}
+    <QuietPill label={shownMachine.label} shown={m.native_new_chat_on_machine({ maquina: shownMachine.label })}
+      leading={<MachineTile icon={shownMachine.icon} color={shownMachine.color} size={22} />}
       aria={m.native_new_chat_machine()} menuTitle={m.native_new_chat_machine()}
-      menu={(close) => <MachineMenu machines={machines.map(machineView)} active={active.id} suggested={suggestion}
-        onPick={(id) => { close(); if (id !== active.id) onPickMachine(id); }} />}
+      menu={(close) => <MachineMenu machines={machines.map(machineView)} active={shownMachine.id} suggested={suggestion}
+        onPick={(id) => { close(); pickShownMachine(id); }} />}
       size="lg" />
   );
 
@@ -1286,10 +1303,6 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
   // para a mesma pasta e nome digitado: repetir depois de uma falha de rede não abre uma segunda sessão.
   const createInFlight = useRef(false);
   const attemptName = useRef<{ key: string; name: string; known: boolean } | null>(null);
-  // A oferta vale para a pasta escolhida agora e para uma máquina que segue na lista do app.
-  const ruleServer = ruleOffer && ruleOffer.cwd === picked ? machines.find((sv) => sv.id === ruleOffer.serverId) ?? null : null;
-  const ruleLabel = ruleServer ? machineView(ruleServer, machines.indexOf(ruleServer)).label : '';
-  const elsewhere = ruleTaken && ruleOffer && ruleServer ? { server: ruleOffer.server, at: ruleServer } : null;
   const createSession = async () => {
     if (!body || !canCreate || createInFlight.current) return;
     // "Abrir na <máquina>": o servidor desta tela traduz a pasta e encaminha; nome livre, conversa e conferência são de lá.
@@ -1389,24 +1402,13 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
               <SettingRow icon="Monitor" label={m.native_new_chat_machine()} value={elsewhere ? elsewhere.at.label : active.label}
                 actions={machines.map((sv) => ({ id: sv.id, title: sv.label, state: on(sv.id === (elsewhere?.at.id ?? active.id)),
                   subtitle: sv.id === suggestion?.serverId ? m.native_new_chat_machine_suggested({ motivo: suggestion.text }) : undefined }))}
-                // Voltar a esta máquina depois do clique só desfaz a oferta; outra troca a máquina e descarta a oferta.
-                onAction={(id) => { if (id === active.id) setRuleTaken(false); else if (id !== elsewhere?.at.id) onPickMachine(id); }} />
+                onAction={pickShownMachine} />
               <SettingRow ref={folderRef} icon="Folder" label={m.native_new_chat_folder()} detail={picked ?? undefined}
                 value={picked ? folderLabel : m.criar_escolher_pasta()} onPress={() => setFolderOpen(true)} />
               {picked && !noProject ? <SettingRow ref={branchRef} icon="GitBranch" label={m.native_create_checkout_branch()} value={branchLabel}
                 onPress={() => setBranchOpen(true)} /> : null}
             </RowGroup>
-            {ruleServer && ruleOffer ? (
-              <View style={styles.ruleLine}>
-                <Text style={styles.ruleText}>{m.native_placement_rule_offer({ projeto: ruleOffer.project, maquina: ruleLabel })}</Text>
-                {!ruleTaken ? (
-                  <Pressable onPress={() => setRuleTaken(true)} disabled={creating} hitSlop={LINK_SLOP} accessibilityRole="button"
-                    accessibilityState={{ disabled: creating }}>
-                    <Text style={styles.headingLink}>{m.native_placement_rule_open({ maquina: ruleLabel })}</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            ) : null}
+            {ruleLine}
             {/* Os seis agentes à vista, como o seletor do PC: um menu preso à linha cortava os de baixo. */}
             <ProviderTrack value={provider} onChange={chooseProvider} probe={providerProbe} disabled={creating} />
             <RowGroup>
@@ -1499,6 +1501,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
             {/* O aviso é sobre a pasta, então mora colado nela, discreto. */}
             {hasSameFolder ? <Text style={styles.heroNote}>{m.criar_ja_existe()}</Text> : null}
             <View style={styles.heroMachine}>{machinePill}</View>
+            {ruleLine ? <View style={styles.heroRule}>{ruleLine}</View> : null}
             {!active.invite ? (
               <Pressable onPress={() => { void pickByHand(NO_PROJECT_CWD); }} hitSlop={LINK_SLOP} accessibilityRole="button"
                 accessibilityHint={m.native_new_chat_no_project_hint()} style={styles.heroLinkRow}>
@@ -1558,6 +1561,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
       takePrewarm={takePrewarm}
       resumePrewarm={resumePrewarm}
       blocked={blocked || branchBlocked}
+      forward={elsewhere ? { at: elsewhere.at, machine: elsewhere.server } : null}
       commandSource={provider === 'claude' ? {
         // A mesma conta que vai no corpo da criação; sem pasta, a lista traz o que é da conta.
         cwd: picked,
@@ -1617,6 +1621,7 @@ const styles = StyleSheet.create((theme) => ({
   heroLink: { fontSize: theme.base.text.base },
   // Título, máquina e "sem projeto" em três partes, com o mesmo respiro entre elas.
   heroMachine: { marginTop: theme.base.space[3] },
+  heroRule: { marginTop: theme.base.space[2], alignItems: 'center' },
   heroLinkRow: { marginTop: theme.base.space[2] },
   heroNote: { fontSize: theme.base.text.xs, color: theme.tokens.text.muted, textAlign: 'center', marginTop: theme.base.space[1], paddingHorizontal: theme.base.space[4] },
   // Pastas recentes sob o título: atalhos em grade, ícone e nome, um toque troca a pasta.

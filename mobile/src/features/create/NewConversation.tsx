@@ -70,6 +70,9 @@ type Props = {
   commandSource?: NewChatCommandSource | null;
   // Distância fixa do topo da janela até a tela; sem ela o recuo do teclado é medido na janela.
   keyboardOffset?: number;
+  // "Abrir na <máquina>" da regra de projeto: `server` encaminha o pedido para `at`, que a máquina informa como `machine`;
+  // a tentativa, a primeira mensagem e a conversa ficam em `at`.
+  forward?: { at: Server; machine: string } | null;
 };
 
 // O form remonta ao trocar de máquina: o que já foi digitado e anexado vai junto.
@@ -109,14 +112,14 @@ function HistoryButton({ onPress, disabled, busy }: { onPress: () => void; disab
 export function NewConversation({
   server, destination, destinationPending, providerLabel, folderPanel,
   topPills, optionPills, providerChip, resume, notices, optionNotice, body, takePrewarm, resumePrewarm, blocked, keyboardOffset, home,
-  commandSource = null,
+  commandSource = null, forward = null,
 }: Props) {
   const collapsed = home?.mode === 'sessions';
   const input = useRef<TextInput>(null);
   const focusedRequest = useRef(0);
   const router = useRouter();
   const { theme } = useUnistyles();
-  const serverId = server.id;
+  const serverId = (forward?.at ?? server).id;
   const attempt = useNewConversation((s) => s.attempts[serverId] ?? null);
   const issue = useNewConversation((s) => s.issues[serverId] ?? null);
   const busy = useNewConversation((s) => !!s.busy[serverId]);
@@ -292,10 +295,12 @@ export function NewConversation({
     if (!body || blocked || busy || !restored || recording || (!text.trim() && !attachment) || submitting.current) return;
     submitting.current = true;
     try {
-      const ticket = takePrewarm?.() ?? null;
+      // A reserva é desta máquina: encaminhada, a sessão nasce fria lá.
+      const ticket = forward ? null : takePrewarm?.() ?? null;
       await beginAttempt(serverId, {
         body: ticket ? { ...body, prewarm: ticket.id } : body, reserveName: ticket?.name,
         text, attachment: attachment ? withoutUpload(attachment) : null,
+        forward: forward ? { via: server.id, machine: forward.machine } : null,
       });
       if (!useNewConversation.getState().attempts[serverId]?.sessionName) resumePrewarm?.();
       await advanceOnce();

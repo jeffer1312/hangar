@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import {
-  basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory,
+  basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory, placementElsewhereBody,
   sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName,
 } from '@hangar/core';
 import type {
@@ -34,6 +34,9 @@ export type NewConversationInput = {
   text: string;
   // Escolhido antes de a sessão existir: o upload é por sessão, então ele sobe depois que ela nasce.
   attachment?: DraftAttachment | null;
+  // "Abrir na <máquina>" da regra de projeto: o pedido vai a `via` (id do app), que o encaminha à máquina `machine`
+  // (o identificador que ela informa). A tentativa, a primeira mensagem e a conversa são da máquina da regra.
+  forward?: { via: string; machine: string } | null;
 };
 
 // Vídeo leva os quadros e a fala, como no desktop; o envio por terminal recusa quebra de linha.
@@ -182,7 +185,8 @@ async function runCreate(serverId: string, input: NewConversationInput, retried 
   if (current && current.phase !== 'draft') return;
 
   const server = serverById(serverId);
-  if (!server) { setIssue(serverId, { kind: 'local', message: m.nova_conversa_servidor_ausente() }); return; }
+  const creator = input.forward ? serverById(input.forward.via) : server;
+  if (!server || !creator) { setIssue(serverId, { kind: 'local', message: m.nova_conversa_servidor_ausente() }); return; }
 
   // Nome escolhido pela pessoa não ganha sufixo: conflito volta como 409 e ela decide.
   const explicit = input.body.name?.trim();
@@ -195,10 +199,11 @@ async function runCreate(serverId: string, input: NewConversationInput, retried 
   const { prewarm, ...base } = input.body;
   // Branch nova sem nome digitado segue o nome final da sessão, só conhecido aqui, com a limpeza que o
   // backend faz no nome: o digitado pode ter espaço e acento.
+  const body = { ...base, name: finalName, ...(prewarm && finalName === input.reserveName ? { prewarm } : {}),
+    ...(input.body.new_branch && !input.body.branch?.trim() ? { branch: sanitizeSessionName(finalName) } : {}) };
   const draft: FirstConversationAttempt = Object.assign({
     id, serverId, text: input.text, phase: 'draft' as const, sessionName: null,
-    body: { ...base, name: finalName, ...(prewarm && finalName === input.reserveName ? { prewarm } : {}),
-      ...(input.body.new_branch && !input.body.branch?.trim() ? { branch: sanitizeSessionName(finalName) } : {}) },
+    body: input.forward ? placementElsewhereBody(body, input.forward.machine) : body,
   }, input.attachment ? { attachment: input.attachment } : {});
   const creating = transitionFirstConversation(draft, { type: 'begin' });
   try { persist(creating); } catch {
@@ -209,7 +214,7 @@ async function runCreate(serverId: string, input: NewConversationInput, retried 
 
   let session: SessionInfo;
   try {
-    session = await createSessionForServer(server, creating.body);
+    session = await createSessionForServer(creator, creating.body);
     resetCreatedChat(serverId, session.name);
   } catch (cause) {
     const status = statusOf(cause);
@@ -414,8 +419,9 @@ export function recoverAttempt(serverId: string): Promise<void> {
     try {
       const found = (await fetchSessionsForServer(server)).find((s) => s.name === name);
       if (found) {
-        // A sessão volta com o caminho já expandido: "~" não tem com o que comparar aqui.
-        const compatible = (attempt.body.cwd === NO_PROJECT_CWD || found.cwd === attempt.body.cwd)
+        // A sessão volta com o caminho já expandido: "~" não tem com o que comparar aqui. Encaminhada, a pasta
+        // é a do mesmo projeto na máquina da regra.
+        const compatible = (attempt.body.cwd === NO_PROJECT_CWD || 'machine' in attempt.body || found.cwd === attempt.body.cwd)
           && (found.provider ?? 'claude') === (attempt.body.provider ?? 'claude');
         setIssue(serverId, compatible
           ? { kind: 'candidate', message: m.nova_conversa_candidata({ nome: name }), session: found }
