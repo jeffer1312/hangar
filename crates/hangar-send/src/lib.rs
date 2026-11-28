@@ -91,10 +91,12 @@ pub fn run(invocation: &Invocation, host: &dyn Host, out: &mut dyn Write, err: &
         Some("--close") => group::close(&cx, &args[1..], out, err),
         Some("--contrato") => group::contract(&cx, &args[1..], out, err),
         Some("--group") => group::group(&cx, &args[1..], out, err),
+        Some("--responder") => answer::run(&cx, &args[1..], out, err),
         _ => message::run(&cx, args, out, err),
     }
 }
 
+mod answer;
 mod env;
 mod group;
 mod http;

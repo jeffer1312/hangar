@@ -1149,7 +1149,9 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `[de: <id B>::filha]`, pela rede, com a mesma fila de 2 h; só Claude e Codex), por uma assinatura
   interna da lista que não conta como app aberto; sem esperar bloqueante. A pergunta
   (`AskUserQuestion`) da filha desta máquina chega ao pai uma vez por `interaction_id` e é respondida
-  por `child_answer`; menu e permissão só avisam. Respondida pelo dono na filha, o pai sabe pela chamada
+  por `child_answer` (sem a tool no catálogo, por `hangar-send --responder`, que chama a mesma função pela rota
+  `POST /api/sessions/{name}/child-answer` do roteador do MCP); a mesma chamada avisada de novo com outro ID
+  diz que é a pergunta de antes; menu e permissão só avisam. Respondida pelo dono na filha, o pai sabe pela chamada
   (`tool_use_id`), com o resultado dela no transcript: a pergunta de repasse dele com `metadata.source`
   `hangar-child:<chamada>` é respondida pelo servidor quando a rota aceita texto livre (sem terminal ou pelo
   plugin); múltipla escolha pelas teclas do terminal, ou sem a marca, recebe um recado. Parar (botão e tool `interrupt`) para só a sessão,

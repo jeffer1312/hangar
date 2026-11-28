@@ -62,7 +62,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if (matches!(*method, Method::GET | Method::PUT) && path == "/api/placement/config")
         || (*method == Method::GET && path == "/api/placement/facts")
         || (*method == Method::POST && matches!(path, "/api/placement/suggest" | "/api/placement/clone")) { return true; }
-    if *method == Method::POST && path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).is_some_and(|(_, t)| t == "linked-interrupt") { return true; }
+    if *method == Method::POST && path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).is_some_and(|(_, t)| matches!(t, "linked-interrupt" | "child-answer")) { return true; }
     // `peer-address` saiu: o Rust responde qualquer método com o 404 de rota inexistente.
     if path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).is_some_and(|(_, t)| t == "peer-address") { return true; }
     if *method == Method::GET {

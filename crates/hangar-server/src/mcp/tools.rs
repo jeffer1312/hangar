@@ -32,6 +32,7 @@ use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
 use crate::vault::{VaultError, exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
 use hangar_api::chat::ChatEvent;
+use hangar_api::session::SessionRow;
 use hangar_whatsapp::outbox;
 use zeroize::Zeroizing;
 
@@ -447,15 +448,20 @@ fn answer_refusal(kind: Option<&InteractionKind>, alvo: &str) -> Option<String> 
         "erro_permissao_do_dono: o pedido aberto em '{alvo}' é menu ou permissão, e quem decide é o dono no app; child_answer só responde pergunta"))
 }
 
-const ANSWER_UNCONFIRMED: &str = "enviada, sem confirmação; não tente de novo";
+/// O corpo da resposta escrita sem confirmação, igual na tool e na rota do `hangar-send --responder`.
+pub(super) fn answer_unconfirmed() -> Value {
+    json!({"sent": true, "confirmed": false, "message": "enviada, sem confirmação; não tente de novo"})
+}
 
-/// A resposta da rota. Sem confirmação a escrita já foi feita (o Codex com terminal não diz quem resolveu):
-/// é resultado, não erro, para o pai não repetir.
+/// Sem confirmação a escrita já foi feita (o Codex com terminal não diz quem resolveu): é resultado, não erro,
+/// para o pai não repetir.
+pub(super) fn unconfirmed(status: u16, value: &Value) -> bool {
+    status == 409 && value["detail"]["code"] == "erro_sem_confirmacao_resposta"
+}
+
 fn answer_outcome(status: u16, value: Value) -> Outcome {
     if (200..300).contains(&status) { return Ok(dict(value)); }
-    if status == 409 && value["detail"]["code"] == "erro_sem_confirmacao_resposta" {
-        return Ok(dict(json!({"sent": true, "confirmed": false, "message": ANSWER_UNCONFIRMED})));
-    }
+    if unconfirmed(status, &value) { return Ok(dict(answer_unconfirmed())); }
     Err(coded(status, &value))
 }
 
@@ -957,25 +963,42 @@ impl Tools {
     /// `interaction_id` e recusa o que mudou (`erro_interacao_desatualizada`).
     async fn child_answer(&self, headers: &HeaderMap, a: ChildAnswer) -> Outcome {
         let (me, voice) = self.caller(headers).await?;
-        let alvo = a.alvo.as_str();
-        if let Some(refusal) = child_caller_refusal(&me, voice, alvo) { return Err(refusal); }
-        self.linked_child(&me, alvo, "erro_nao_ligada").await?;
-        if let Some(refusal) = answer_refusal(self.interaction_kind(alvo, &a.interaction_id).await.as_ref(), alvo) { return Err(refusal); }
+        self.answerable_child(&me, voice, &a.alvo).await?;
+        let (status, value) = self.answer_child(&me, &a.alvo, &a.interaction_id, a.answers).await?;
+        answer_outcome(status, value)
+    }
+
+    /// Quem chama alcança a filha: as recusas do `child_answer` antes de ler a pergunta. A rota do
+    /// `hangar-send --responder` passa pelas mesmas.
+    pub(super) async fn answerable_child(&self, me: &str, voice: bool, alvo: &str) -> Result<(), String> {
+        if let Some(refusal) = child_caller_refusal(me, voice, alvo) { return Err(refusal); }
+        self.linked_child(me, alvo, "erro_nao_ligada").await
+    }
+
+    /// Manda `answers` à pergunta `interaction_id` da filha `alvo`, já conferida por `answerable_child`: o `(status,
+    /// corpo)` da `/answer`, ou a recusa de antes de qualquer envio.
+    pub(super) async fn answer_child(&self, me: &str, alvo: &str, interaction_id: &str, answers: Vec<Value>) -> Result<(u16, Value), String> {
+        if let Some(refusal) = answer_refusal(self.interaction_kind(alvo, interaction_id).await.as_ref(), alvo) { return Err(refusal); }
         // Marcada antes da rota: a pergunta pode fechar já na resposta, e a que fecha sem a marca foi respondida na filha.
-        let Some(attempt) = link_return::parent_answering(&self.st, alvo, &a.interaction_id).await else {
+        let Some(attempt) = link_return::parent_answering(&self.st, alvo, interaction_id).await else {
             return Err(format!("link_returns_write_failed: não gravei que a resposta é sua; nada foi enviado a '{alvo}'. Tente de novo."));
         };
-        let body = json!({"answers": a.answers, "interaction_id": a.interaction_id});
-        let (api, token, st) = (self.api.clone(), self.st.cfg.auth_token.clone(), self.st.clone());
+        let body = json!({"answers": answers, "interaction_id": interaction_id});
+        let (api, token, st, me) = (self.api.clone(), self.st.cfg.auth_token.clone(), self.st.clone(), me.to_owned());
         let (path, target) = (format!("/api/sessions/{}/answer", segment(alvo)), alvo.to_owned());
-        // Rota e conclusão numa tarefa própria: o cliente MCP que corta a chamada não deixa a marca à espera.
+        // Rota e conclusão numa tarefa própria: quem corta a chamada (cliente MCP, `hangar-send`) não deixa a marca à espera.
         let answered = tokio::spawn(async move {
             let (status, value) = call_route(api, &token, Some(&me), Method::POST, &path, Some(body)).await;
             link_return::parent_answer_settled(&st, &target, &attempt, link_return::answer_maybe_sent(status, &value)).await;
             (status, value)
         });
-        let (status, value) = answered.await.map_err(|e| format!("child_answer_failed: a resposta não terminou ({e})"))?;
-        answer_outcome(status, value)
+        answered.await.map_err(|e| format!("child_answer_failed: a resposta não terminou ({e})"))
+    }
+
+    /// A linha da filha na lista, com a pergunta aberta e o formulário dela.
+    pub(super) async fn child_row(&self, alvo: &str) -> Result<Option<SessionRow>, String> {
+        let produced = self.st.list.snapshot().await.map_err(|_| "child_answer_list_failed: a lista de sessões não respondeu")?;
+        Ok(produced.rows.iter().find(|r| r.name == alvo).cloned())
     }
 
     /// O tipo da interação pelo mesmo vínculo que a rota confere; vínculo ilegível ou ID fora da loja é `None`.

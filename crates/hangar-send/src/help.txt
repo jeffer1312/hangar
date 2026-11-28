@@ -122,7 +122,16 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  peça a resposta por recado: o estado e a resposta inteira saem da
                                  tool child_status do MCP hangar, e a pergunta que a filha fizer
                                  chega a você e se responde pela tool child_answer (as duas só
-                                 alcançam filha desta máquina).
+                                 alcançam filha desta máquina); sem a tool, por --responder.
+  hangar-send --responder <filha> <interaction_id> <resposta...>  responde a pergunta que a filha
+                                 ligada a ESTA sessão fez, pelo mesmo caminho da tool child_answer
+                                 (para a sessão aberta antes de a tool existir). Uma resposta por
+                                 item da pergunta, na ordem: N (opção N, contada de 1), N,M (várias,
+                                 se o item aceita) ou o texto livre entre aspas. interaction_id é o
+                                 do aviso mais recente da filha. Só filha desta máquina. Saída 0
+                                 respondida (ou "enviada, sem confirmação": não repita), 1 recusa,
+                                 2 uso errado ou servidor fora, 4 sem resposta no prazo (pode ter
+                                 saído: confira antes de repetir).
   hangar-send --whoami               imprime o nome desta sessão (a identidade que assina os recados)
   hangar-send --help                esta ajuda (o cabeçalho deste arquivo).
 

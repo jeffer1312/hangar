@@ -4485,6 +4485,23 @@ ninguém.
     recebe o recado; sem terminal e pelo plugin, entra. Sem pergunta de repasse, vai
     `[de: <filha>] a pergunta (interaction_id …) foi respondida pelo dono na filha: … Não responda nem
     repita.` pela entrega normal. Nunca casar pela redação da pergunta.
+- **Pergunta repetida e resposta sem a tool (28/11/2026).** Caso: o pai `telemetria-anonima-hanagr` (Claude com
+  terminal, aberto antes de a tool `child_answer` existir) recebeu a pergunta de `telemetria-contexto`, respondeu
+  por recado, que ficou na fila com a filha parada na pergunta; a atualização reiniciou o servidor, a mesma chamada
+  voltou com outro `interaction_id`, o pai a tratou como nova, interrompeu a filha e mandou o recado de novo. A
+  filha recebeu as duas respostas.
+  - O aviso da chamada já avisada (`asked_call` igual ao `tool_use_id` aberto) com outro ID diz "a mesma pergunta
+    já avisada, ainda aberta, agora com interaction_id …" e que não responda de novo se já respondeu. Aviso gravado
+    sem a chamada (servidor de antes do `asked_call`) não tem como ser reconhecido e sai como pergunta nova.
+  - `hangar-send --responder <filha> <interaction_id> <resposta...>` responde pela rota
+    `POST /api/sessions/{name}/child-answer` (`{parent, interaction_id, replies}`), montada no roteador do MCP: a
+    rota chama as mesmas `answerable_child` e `answer_child` da tool (recusas, marca em `parent_answers`, `/answer`
+    numa tarefa própria). O pai é o que o CLI resolve como identidade, com o token do dono, como o `linked-interrupt`.
+    A rota monta as respostas pelo formulário da linha (`ask_form`, ou as opções da linha): `N`/`N,M` escolhe
+    opções contadas de 1, o resto é texto livre no campo depois das opções; item sem opções só aceita texto.
+    ID diferente da pergunta aberta na linha volta `erro_interacao_desatualizada` antes de qualquer envio. Sem
+    resposta no prazo sai 4: a escrita pode ter saído.
+  - Todo aviso de pergunta leva a linha `Sem a tool child_answer: hangar-send --responder …`.
 - **Parar para só a sessão.** O `/interrupt` não alcança filha ligada, e o `cascade=1` de cliente
   antigo é ignorado; a tool `interrupt` para só a filha nomeada, sem as netas. O dono não pediu o
   Parar em cascata e o tirou (27/11): a filha segue o trabalho dela quando o pai para; quem alcança as
