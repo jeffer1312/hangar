@@ -1772,6 +1772,20 @@ tinha a TypeSafe fixa.
   Migração: o primeiro valor gravado em `jev_aux_*` e a subida do backend copiam o `jev_texto_*`, ou
   o `LLM_*` do MCP quando o primeiro não existe. Se o legado estiver ilegível, a gravação recusa em
   vez de perdê-lo. O `llm_*` do ditado continua separado, pela regra de capacidades separadas.
+- **27/11/2026: a ajuda pode ser a própria sessão (`jev_aux_mode`).** Vazio segue o de antes (o
+  auxiliar gravado, quando há um); `api` usa o auxiliar; `session` não manda a página nem a tela ao
+  auxiliar. O Jev continua recebendo o print pelo provedor dele (entrada "Jev vê o print"). Nesse modo a sessão recebe `JEV_AUX_MODE=session` e nenhum `JEV_AUX_*`, o
+  `objetivo` do hangar-preview para na dúvida e diz a quem chamou para olhar a página (menos na
+  parada por operação arriscada, que espera a ordem do usuário), e o MCP do Computer Use fica sem
+  `LLM_*`. O texto dos campos do formulário passa a sair do comando local (`jev_texto_cmd`, padrão
+  `claude -p` com o Haiku); sem ele instalado, o `objetivo` para no campo e a decisão volta à
+  sessão. A tela só marca "A própria sessão" com o valor `session`: vazio aparece como "Um modelo
+  por API", que é o que o servidor faz. Motivo: a sessão que chamou o Jev já é um modelo de texto e imagem
+  com o contexto do trabalho, e um auxiliar por API era uma segunda conta a manter. Em 27/11/2026 a
+  chave da Anthropic do auxiliar ficou sem crédito, e as sessões culpavam o Jev pelo
+  `Your credit balance is too low`. Limite: sem `LLM_*`, o binário do `hangar-computer-control`
+  ainda tenta o CLIProxy padrão e devolve "ajuda visual indisponível" por falta de chave, sem chamar
+  nada; a dúvida chega à sessão do mesmo jeito.
 - **12/10/2026: a busca de modelos é do auxiliar, e mora no Rust.** As rotas `GET
   /api/jev/aux/cliproxy` e `POST /api/jev/aux/models` ficam no `hangar-server` e só leem o
   runtime-config; quem grava continua sendo o Python. A Anthropic recebe `x-api-key` e

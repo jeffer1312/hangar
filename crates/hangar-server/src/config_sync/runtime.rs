@@ -150,7 +150,7 @@ impl RuntimeConfig {
             requested.insert("jev_aux_api_key".into(),json!(key));
         }
         let changes=&requested;
-        let touches_aux=super::legacy::AUX.iter().any(|key|changes.contains_key(*key)||remove.contains(*key));
+        let touches_aux=super::legacy::AUX.iter().chain(&["jev_aux_mode"]).any(|key|changes.contains_key(*key)||remove.contains(*key));
         if touches_aux&&!super::legacy::AUX.iter().any(|key|current.contains_key(*key)) {
             let legacy=self.legacy_aux(&current,true)?;
             current.extend(legacy.into_iter().filter(|(_,value)|truthy(value)));
@@ -226,7 +226,7 @@ impl RuntimeConfig {
         if idle.is_some() || idle_min.is_some() {
             self.write_idle_compaction(idle,idle_min).map_err(rest_saved)?;
         }
-        if touches_aux||["jev_api_key","jev_endpoint","jev_model"].iter().any(|key|changes.contains_key(*key)||remove.contains(*key)) {
+        if touches_aux||["jev_api_key","jev_endpoint","jev_model","jev_aux_mode"].iter().any(|key|changes.contains_key(*key)||remove.contains(*key)) {
             self.sync_jev().map_err(|error|format!("jev: salvo, mas o Computer Use não recebeu a configuração: {error}"))?;
         }
         Ok(current.into_map())
