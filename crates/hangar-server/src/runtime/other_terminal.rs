@@ -517,6 +517,13 @@ impl OtherHandle {
                                                 payload: json!({"ok": false, "code": "steer_no_turn"}) });
                                         }
                                     }
+                                    // O Jev decidiu sobre um turno: outro turno não recebe a mensagem.
+                                    if let Some(expected) = payload.get("expected_turn").filter(|value| !value.is_null())
+                                        && crate::runtime::protocol::turn_marker(&snapshots.borrow()["view"]).as_ref() != Some(expected)
+                                    {
+                                        return Ok(RuntimeReply { operation_id: id.clone(), disposition: Disposition::Rejected,
+                                            payload: json!({"ok": false, "code": "queue_steer_work_changed"}) });
+                                    }
                                     control = "steer_queue";
                                 }
                                 let frame = frames.borrow().clone();

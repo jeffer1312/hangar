@@ -103,15 +103,19 @@ pub fn wants_steer_queue(p: &Params, sent: &Sent) -> bool {
     p.steer && matches!(sent, Sent::Done { entry: true, delivered, .. } if !*delivered || p.kimi)
 }
 
-/// O Ctrl+S do Kimi orienta toda a fila da TUI, inclusive o que uma escolha anterior mandou esperar: lá a escolha
-/// automática não orienta.
-pub fn choice_for(provider: &str, direct: bool, note: &'static str) -> (bool, &'static str) {
-    if direct && provider == "kimi" { (false, "queue") } else { (direct, note) }
+/// No Kimi o Ctrl+S promove a fila da TUI inteira, onde a mensagem acabou de entrar: a resposta não lista ids.
+pub fn was_steered(operation_id: &str, kimi: bool, promoted: &Result<RuntimeReply, RuntimeError>) -> bool {
+    matches!(promoted, Ok(reply) if reply.disposition == Disposition::Accepted
+        && (reply.payload["ids"].as_array().is_some_and(|ids| ids.iter().any(|id| id == operation_id))
+            || kimi && reply.payload["steered"] == true))
 }
 
-pub fn was_steered(operation_id: &str, promoted: &Result<RuntimeReply, RuntimeError>) -> bool {
-    matches!(promoted, Ok(reply) if reply.disposition == Disposition::Accepted
-        && reply.payload["ids"].as_array().is_some_and(|ids| ids.iter().any(|id| id == operation_id)))
+/// O resultado da escolha do Jev. No Kimi, entregue sem orientar é a mensagem esperando na fila da TUI.
+pub fn timing_outcome(steer: bool, kimi: bool, body: &Value, note: &'static str) -> &'static str {
+    if kimi && body["waiting"] == true { "queue" }
+    else if steer && body["delivered"] != true { "refused" }
+    else if kimi && body["steered"] != true { if steer { "queue" } else { note } }
+    else if !steer && body["delivered"] == true { "delivered" } else { note }
 }
 
 pub fn input_answer(sent: &Sent, steered: bool) -> (StatusCode, Value) {
@@ -348,7 +352,7 @@ async fn send_with_entry(st: &AppState, name: &str, target: &WriteTarget, text: 
     let uncertain = include_uncertain && unproven(&sent);
     let (sent, diary) = classify(&params, &sent);
     report(st, name, diary);
-    let mut steered = false;
+    let (mut steered, mut unconfirmed) = (false, false);
     if wants_steer_queue(&params, &sent) {
         let mut payload = json!({"entry_id": operation_id});
         if let Some(expected) = expected_turn { payload["expected_turn"] = expected; }
@@ -362,9 +366,13 @@ async fn send_with_entry(st: &AppState, name: &str, target: &WriteTarget, text: 
             payload }).await;
         // O recado já está na fila: falha de orientação nunca desfaz nem repete o envio.
         if let Err(error) = &promoted { tracing::warn!(session = %name, code = %error.code, "orientação do recado falhou; ele segue na fila"); }
-        steered = was_steered(&operation_id, &promoted);
+        steered = was_steered(&operation_id, params.kimi, &promoted);
+        // Ctrl+S do Kimi sem confirmação: a mensagem pode estar esperando na fila da TUI, não no turno.
+        unconfirmed = params.kimi && !steered && !matches!(&promoted, Ok(reply) if reply.disposition == Disposition::Accepted);
     }
     let mut answer=input_answer(&sent, steered);
+    // `waiting`: digitada na fila da TUI, que roda no fim do turno; sem fila à vista (`sem_fila`), ela já abriu o turno.
+    if unconfirmed { answer.1["delivered"] = json!(false); answer.1["waiting"] = json!(true); }
     if uncertain {answer.1["uncertain"]=json!(true);}
     (answer, operation_id)
 }
@@ -394,8 +402,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     }
     let (steer, note, expected_turn) = if let Some((task, message)) = task.filter(|_| !text.trim_start().starts_with('/')) {
         let before = ctx.target.handle.snapshot().await.ok();
-        let (direct, note) = super::delivery_timing::decide(&ctx.st, &ctx.name, &message, &task).await;
-        let (mut direct, mut note) = choice_for(&ctx.target.provider, direct, note);
+        let (mut direct, mut note) = super::delivery_timing::decide(&ctx.st, &ctx.name, &message, &task).await;
         if direct {
             let after = ctx.target.handle.snapshot().await.ok();
             if !super::delivery_timing::same_work(before.as_ref(), after.as_ref()) { direct = false; note = "work_changed"; }
@@ -408,8 +415,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     // `false`: o pedido foi para a fila comum (Claude com terminal, Pi, omp, Kimi, Antigravity, comando de barra).
     if wants_conversation && result.0.is_success() { result.1["conversation"] = json!(conversation); }
     if let Some(note) = note {
-        let outcome = if steer && result.1["delivered"] != true { "refused" }
-            else if !steer && result.1["delivered"] == true { "delivered" } else { note };
+        let outcome = timing_outcome(steer, ctx.target.provider == "kimi", &result.1, note);
         tracing::info!(target: "delivery_timing", session=%ctx.name, outcome, "decisão de entrega aplicada");
         result.1["timing_note"] = json!(outcome);
     }
@@ -815,6 +821,12 @@ pub async fn steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
                 },
             }
         }
+        // O Ctrl+S do Kimi não leva texto: a mensagem é digitada na fila da TUI e então orientada, como no Direto.
+        crate::runtime::gateway::EntryHandle::OtherTerminal { .. } if text.is_some() && ctx.target.provider == "kimi" => {
+            let sent = send_with_receipt(&ctx.st, &ctx.name, &ctx.target, text.as_deref().unwrap_or_default(), true, false, None, false).await;
+            // Como no `/steer` sem terminal: sem chegar ao turno, a orientação é incerta (409), nunca um 200.
+            if sent.0.is_success() && sent.1["delivered"] != true { sem_turno(MSG_STEER_UNKNOWN) } else { sent }
+        }
         headless => {
             let (kind, payload) = match &text {
                 // `now`: o botão corta o turno do Claude; o Codex ignora.
@@ -907,6 +919,26 @@ mod broadcast_tests {
     }
 
     #[test]
+    fn kimi_steer_counts_when_its_tui_queue_was_promoted() {
+        let reply = |payload: Value| Ok(RuntimeReply { operation_id: "s".into(), disposition: Disposition::Accepted, payload });
+        assert!(was_steered("op", true, &reply(json!({"ok": true, "steered": true}))));
+        assert!(!was_steered("op", true, &reply(json!({"ok": true, "steered": false, "sem_fila": true}))));
+        assert!(!was_steered("op", false, &reply(json!({"ok": true, "steered": true}))), "fora do Kimi vale a lista de ids");
+        assert!(was_steered("op", false, &reply(json!({"ids": ["op"]}))));
+    }
+
+    #[test]
+    fn jev_direct_on_kimi_without_the_steer_is_a_queued_message() {
+        assert_eq!(timing_outcome(true, true, &json!({"delivered": true, "steered": false}), "direct"), "queue");
+        assert_eq!(timing_outcome(true, true, &json!({"delivered": true, "steered": true}), "direct"), "direct");
+        assert_eq!(timing_outcome(true, false, &json!({"delivered": true, "steered": false}), "direct"), "direct");
+        assert_eq!(timing_outcome(true, true, &json!({"delivered": false}), "direct"), "refused");
+        assert_eq!(timing_outcome(true, true, &json!({"delivered": false, "waiting": true}), "direct"), "queue", "Ctrl+S sem confirmação");
+        assert_eq!(timing_outcome(false, true, &json!({"delivered": true}), "queue"), "queue", "na fila da TUI, não no turno");
+        assert_eq!(timing_outcome(false, false, &json!({"delivered": true}), "queue"), "delivered");
+    }
+
+    #[test]
     fn kimi_steers_the_message_already_typed_in_its_own_queue() {
         let params = |kimi| Params { text: "oi", steer: true, terminal: true, codex: false, kimi, operation_id: "op" };
         let typed = Sent::Done { delivered: true, native: false, entry: true };
@@ -916,13 +948,6 @@ mod broadcast_tests {
         assert!(wants_steer_queue(&params(false), &waiting));
         let unasked = Params { steer: false, ..params(true) };
         assert!(!wants_steer_queue(&unasked, &typed));
-    }
-
-    #[test]
-    fn the_automatic_choice_never_steers_the_kimi_whole_queue() {
-        assert_eq!(choice_for("kimi", true, "direct"), (false, "queue"));
-        assert_eq!(choice_for("kimi", false, "uncertain"), (false, "uncertain"));
-        assert_eq!(choice_for("claude", true, "direct"), (true, "direct"));
     }
 
     #[test]

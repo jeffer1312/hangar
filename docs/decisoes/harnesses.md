@@ -5,6 +5,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **O Kimi segue os modos de entrega de Claude e Codex.** Com a sessão trabalhando, Direto e a escolha do
+  Jev entram no turno pelo Ctrl+S da fila da TUI, que não corta o trabalho; por isso, no Kimi, "Na conversa"
+  também sai como envio direto. A tela do Kimi não cria pergunta: `❯ 1. …` é a mensagem da pessoa (no
+  histórico e na fila da TUI). Pergunta e aprovação vêm do arquivo da conversa, e o painel aberto (rodapé
+  `↵ confirm`, `↵ choose`) só segura a caixa contra digitação e Escape. Ver
+  [o Kimi segue a entrega dos outros](#o-kimi-segue-a-entrega-dos-outros-e-não-lê-pergunta-da-tela-27112026).
+
 - **Permissão do Kimi vem do wire do agente principal.** `permission.set_mode` decide o modo,
   com leitura incremental; ausência de evento após o primeiro registro válido é o estado inicial
   manual do Kimi. O rodapé é configurável e não comprova permissão. A troca dirige `/permission`,
@@ -6038,6 +6045,23 @@ anteriores. O detalhe adota a retomada do mesmo filho e volta a consultar, sem r
 transição invalida também o detalhe antigo em voo. A versão recompilada confirmou na tela a
 retomada com o detalhe aberto e a linha Rodando com modelo, chamadas e ferramenta atual.
 
+
+## O Kimi segue a entrega dos outros e não lê pergunta da tela (27/11/2026)
+
+O commit `f702a2b57` (26/11) tirou o Kimi da escolha automática: o Ctrl+S promove a fila inteira da TUI,
+inclusive o que uma escolha anterior mandara esperar. Os clientes também o deixavam fora do Direto e do "Na
+conversa": a mensagem ficava na fila da TUI, com a bolha antiga e o chip "N na fila · mandar agora".
+Decisão do usuário em 27/11/2026: o Kimi segue exatamente a regra dos outros; com envio direto nas
+configurações, envia direto. O `ctrl-s` do Kimi injeta no turno sem parar nada (medido na seção do steer),
+então "Na conversa" vira o mesmo envio direto. O risco aceito: uma mensagem que a fila mandou esperar na
+TUI entra junto quando outra é orientada.
+
+Desde a migração para o Rust (`2239369f6`, 08/11), o estado do Kimi passava pelo leitor de tela do Claude
+Code. O Kimi desenha a mensagem da pessoa como `❯ texto`; com número, `❯ 1. corrige…` casava com o cursor
+de menu numerado e a sessão aparecia esperando resposta, com as linhas da mensagem como opções. Os painéis
+reais do Kimi não usam esse cursor (aprovação com `▶ 1. Approve`, pergunta com `→ [1] …`) e as perguntas
+dele já vinham do `wire.jsonl`. A leitura de tela do Kimi não publica mais menu; o rodapé do painel
+continua impedindo que o Hangar digite ou aperte Escape sobre ele.
 
 ## Permissões e envio direto do Kimi (27/11/2026)
 

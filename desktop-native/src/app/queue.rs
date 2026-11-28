@@ -121,9 +121,17 @@ pub(super) fn row_place() -> Option<Bounds<Pixels>> {
     popup::anchor_peek(crate::tour::anchors::COMPOSER).map(row_place_above)
 }
 
-/// "Mandar direto": só Claude e Codex têm o Orientar por mensagem, e só com o agente trabalhando.
+/// Quem entra no turno em andamento por mensagem: os modos de entrega valem para ele.
+pub(super) fn steers_by_message(provider: &str) -> bool { matches!(provider, "claude" | "codex" | "kimi") }
+
+/// O modo que vale para o agente: o Ctrl+S do Kimi entra no turno sem cortá-lo, e lá "Na conversa" é o envio direto.
+pub(super) fn effective_mode(mode: DeliveryMode, provider: &str) -> DeliveryMode {
+    if mode == DeliveryMode::Conversation && provider == "kimi" { DeliveryMode::Direct } else { mode }
+}
+
+/// "Mandar direto": só com o agente trabalhando.
 pub(super) fn sends_direct(enabled: bool, state: &str, provider: &str) -> bool {
-    enabled && state == "working" && matches!(provider, "claude" | "codex")
+    enabled && state == "working" && steers_by_message(provider)
 }
 
 /// Aviso de entrega parada no painel: é onde a mensagem presa espera (a bolha dela some da conversa).
@@ -136,8 +144,11 @@ impl Hangar {
 
     /// O envio desta conversa sai como Orientar, sem esperar no painel.
     pub(super) fn queue_sends_direct(&self) -> bool {
-        sends_direct(appearance::get().delivery_mode() == DeliveryMode::Direct, &self.chat.state.state, self.provider().0)
+        sends_direct(self.queue_mode() == DeliveryMode::Direct, &self.chat.state.state, self.provider().0)
     }
+
+    /// O modo de entrega escolhido, como vale para o agente desta conversa.
+    pub(super) fn queue_mode(&self) -> DeliveryMode { effective_mode(appearance::get().delivery_mode(), self.provider().0) }
 
     pub(super) fn set_delivery_mode(&mut self, mode: DeliveryMode, cx: &mut Context<Self>) {
         let mut next = appearance::get();
@@ -192,7 +203,7 @@ impl Hangar {
 
     pub(super) fn queue_timing(&self, direct: bool, ordinary: bool, message: &str) -> SendTiming {
         if direct { return SendTiming::Direct; }
-        let mode = appearance::get().delivery_mode();
+        let mode = self.queue_mode();
         // "Na conversa" vale com e sem terminal: o Claude Code lê a mensagem na pausa seguinte nos dois.
         if ordinary && sends_direct(mode == DeliveryMode::Conversation, &self.chat.state.state, self.provider().0) {
             return SendTiming::Conversation;
@@ -328,7 +339,7 @@ impl Hangar {
         self.idle_tick(cx);
         let (planned, _) = (self.queue.planned.take(), self.queue.drawn.take());
         // O Jev decide no Enter: a leitura dele não pode esperar o painel aparecer.
-        if matches!(self.provider().0, "claude" | "codex") && appearance::get().delivery_mode() == DeliveryMode::Jev { self.refresh_queue_jev(cx); }
+        if steers_by_message(self.provider().0) && appearance::get().delivery_mode() == DeliveryMode::Jev { self.refresh_queue_jev(cx); }
         let panel = self.chat.queue_panel();
         let read_only = self.selected.as_ref().is_some_and(|s| s.read_only());
         let stalled = stalled_notice(&panel, self.chat.state.problema.as_deref(), read_only);
@@ -508,7 +519,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{panel_height, row_place_above, sends_direct, stalled_notice};
+    use super::{DeliveryMode, effective_mode, panel_height, row_place_above, sends_direct, stalled_notice};
     use crate::api::dto::ChatEvent;
     use gpui_kit::{Bounds, point, px, size};
 
@@ -541,11 +552,20 @@ mod tests {
     }
 
     #[test]
-    fn direct_send_only_while_claude_or_codex_works_with_the_option_on() {
+    fn direct_send_only_while_claude_codex_or_kimi_works_with_the_option_on() {
         assert!(sends_direct(true, "working", "claude"));
         assert!(sends_direct(true, "working", "codex"));
+        assert!(sends_direct(true, "working", "kimi"), "o Kimi segue a mesma regra: o Ctrl+S entra no turno");
+        assert!(!sends_direct(false, "working", "kimi"), "desligada, a mensagem espera na fila");
         assert!(!sends_direct(false, "working", "claude"), "desligada, a mensagem espera na fila");
         assert!(!sends_direct(true, "idle", "claude"), "parado, o envio comum já entra na hora");
-        assert!(!sends_direct(true, "working", "kimi"), "o Kimi não tem Orientar por mensagem");
+        assert!(!sends_direct(true, "working", "pi"), "o Pi não orienta por mensagem");
+    }
+
+    #[test]
+    fn conversation_is_a_direct_send_only_for_kimi() {
+        assert_eq!(effective_mode(DeliveryMode::Conversation, "kimi"), DeliveryMode::Direct);
+        assert_eq!(effective_mode(DeliveryMode::Conversation, "claude"), DeliveryMode::Conversation);
+        assert_eq!(effective_mode(DeliveryMode::Jev, "kimi"), DeliveryMode::Jev);
     }
 }

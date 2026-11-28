@@ -123,6 +123,47 @@ impl Env {
     }
 }
 
+/// O aviso único de "Não enviar" (`POST /v1/declined`): nenhum identificador, só o que o receptor conta por dia.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Refusal {
+    pub kind: RefusalKind,
+    pub version: String,
+    pub os: String,
+    pub channel: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RefusalKind {
+    /// A primeira resposta ao aviso foi não.
+    Declined,
+    /// Tinha aceitado e desligou.
+    Revoked,
+}
+
+impl RefusalKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RefusalKind::Declined => "declined",
+            RefusalKind::Revoked => "revoked",
+        }
+    }
+}
+
+impl Refusal {
+    pub fn new(kind: RefusalKind, env: &Env) -> Refusal {
+        Refusal { kind, version: env.version.clone(), os: env.os.clone(), channel: env.channel.clone() }
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        for (field, value) in [("version", &self.version), ("os", &self.os), ("channel", &self.channel)] {
+            if !is_name(value) { return Err(field); }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Counter {
     pub event: String,
@@ -424,5 +465,17 @@ mod tests {
         assert!(!is_name("acceptEdits"));
         assert!(!is_name("/api/sessions/{name}"));
         assert!(!is_name(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn refusal_carries_only_kind_version_os_and_channel() {
+        let env = Env::new("0.42.0", None, "latest");
+        let wire = serde_json::to_value(Refusal::new(RefusalKind::Revoked, &env)).unwrap();
+        assert_eq!(wire, json!({"kind": "revoked", "version": "0.42.0", "os": std::env::consts::OS, "channel": "latest"}));
+        let with_id = json!({"kind": "declined", "version": "0.42.0", "os": "linux", "channel": "latest", "machine_id": "1".repeat(32)});
+        assert!(serde_json::from_value::<Refusal>(with_id).is_err(), "identificador não passa");
+        assert!(serde_json::from_value::<Refusal>(json!({"kind": "maybe", "version": "0.42.0", "os": "linux", "channel": "latest"})).is_err());
+        let bad: Refusal = serde_json::from_value(json!({"kind": "declined", "version": "0.42.0", "os": "Linux Mint", "channel": "latest"})).unwrap();
+        assert_eq!(bad.validate(), Err("os"));
     }
 }

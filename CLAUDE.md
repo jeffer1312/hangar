@@ -727,7 +727,9 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   (`telemetry-v3`); o booleano legado permanece desligado no aceite de B. Só sai ação comprovada do
   dono e situação de saúde da máquina, com campos de listas fechadas e descrições fixas, nunca logs
   genéricos ou diário bruto. A época de coleta é conferida a cada POST; `HANGAR_TELEMETRY=0`,
-  `DO_NOT_TRACK=1` e CI vencem. Retratos de hora em hora e final do dia UTC usam o mesmo
+  `DO_NOT_TRACK=1` e CI vencem. O "Não enviar" do dono manda uma única vez por máquina o aviso
+  anônimo `POST /v1/declined` (só tipo, versão, sistema e canal; marca `refusal_reported`), nunca com
+  desligamento do ambiente nem por convidado. Retratos de hora em hora e final do dia UTC usam o mesmo
   `batch_id`; teto de 2 MiB no JSON, 413 não remove o lote. Evento ou valor novo entra em `events.rs` e em
   [`docs/telemetria.md`](docs/telemetria.md) no mesmo commit. Motivo em
   [plataforma.md](docs/decisoes/plataforma.md#telemetria-anônima-só-o-dono-lista-fechada-envio-diário-26112026).

@@ -1,7 +1,7 @@
 //! Gravação no Postgres: um pacote por transação, `batch_id` como chave da repetição.
 use std::collections::HashMap;
 
-use hangar_telemetry::wire::Batch;
+use hangar_telemetry::wire::{Batch, Refusal};
 use sqlx::PgPool;
 use sqlx::types::Json;
 
@@ -156,6 +156,21 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
     }
     tx.commit().await?;
     Ok(Insert::Accepted)
+}
+
+/// Soma um ao dia UTC de hoje na combinação do aviso.
+pub async fn count_refusal(pool: &PgPool, refusal: &Refusal) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO refusals (kind, version, os, channel) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (day, kind, version, os, channel) DO UPDATE SET count = refusals.count + 1",
+    )
+    .bind(refusal.kind.as_str())
+    .bind(&refusal.version)
+    .bind(&refusal.os)
+    .bind(&refusal.channel)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Valor que o Postgres recusou por conteúdo (classe 22, como uma data que não existe no calendário no `day`): erro de quem mandou.
@@ -349,6 +364,13 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .fetch_all(&mut *pool)
     .await?;
     let trail_days_total = trail_days.first().map_or(0, |d| d.6);
+    let refusals: (i64, i64) = sqlx::query_as(concat!(
+        "SELECT coalesce(sum(count) FILTER (WHERE kind = 'declined'), 0)::bigint, coalesce(sum(count) FILTER (WHERE kind = 'revoked'), 0)::bigint
+         FROM refusals WHERE ", in_period!("day")
+    ))
+    .bind(days)
+    .fetch_one(&mut *pool)
+    .await?;
     tx.commit().await?;
     use serde_json::json;
     Ok(json!({
@@ -369,6 +391,7 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
             "steps": steps, "problems": problems,
         })).collect::<Vec<_>>(),
         "trail_days_total": trail_days_total,
+        "refusals": {"declined": refusals.0, "revoked": refusals.1},
         "days": days,
         "active": {"machines_7d": active.0, "machines_30d": active.1, "owners_7d": active.2, "owners_30d": active.3},
         "period": {"batches": batches, "machines": machines, "partial_batches": partial_batches},
@@ -410,6 +433,12 @@ pub async fn trail(pool: &PgPool, machine: &str, day: &str) -> Result<serde_json
     .fetch_one(pool)
     .await?;
     Ok(serde_json::json!({"machine": machine, "day": day, "partial": partial, "steps": steps.0}))
+}
+
+/// À parte da limpeza dos pacotes: falha aqui não segura a outra.
+pub async fn prune_refusals(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM refusals WHERE day < (now() AT TIME ZONE 'utc')::date - $1").bind(RETENTION_DAYS).execute(pool).await?;
+    Ok(result.rows_affected())
 }
 
 pub async fn prune(pool: &PgPool) -> Result<u64, sqlx::Error> {
