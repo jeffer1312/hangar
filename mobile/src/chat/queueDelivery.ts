@@ -1,6 +1,6 @@
 import {
   comTeto, splitContextRefs, failureWithCode, parseImageMessage, parsePeerMessage,
-  probeServerResponse, sendInputForServer, type AnswerItem, type AskQuestionPayload, type ChatEvent, type Server,
+  isSlashCommand, probeServerResponse, sendInputForServer, type AnswerItem, type AskQuestionPayload, type ChatEvent, type Server,
 } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
@@ -36,7 +36,7 @@ const caption = (value: string) => {
 
 export function queueSendMode(mode: DeliveryMode, ready: boolean, state: string, provider: string | null | undefined,
   headless: boolean, message: string, events: ChatEvent[], ask: AskQuestionPayload | null): QueueSendMode | undefined {
-  if (state !== 'working' || (provider !== 'claude' && provider !== 'codex') || message.trimStart().startsWith('/')) return;
+  if (state !== 'working' || (provider !== 'claude' && provider !== 'codex') || isSlashCommand(message)) return;
   if (mode === 'direct') return { kind: 'direct', terminalClaude: provider === 'claude' && !headless };
   if (mode === 'conversation') return { kind: 'conversation' };
   if (mode !== 'jev' || !ready) return;
