@@ -40,6 +40,8 @@ pub trait Machine {
     /// O canal que o Atualizar segue (`super::channel`); `None` fora do modo pacote.
     fn package_channel(&self) -> Option<String>;
     fn automations(&self) -> bool;
+    /// O lançador sobe o binário de teste (`super::executor::test_server_bin`).
+    fn test_server_bin(&self) -> bool;
     fn state(&self) -> super::StateSnapshot;
     /// A versão publicada quando é mais nova que a instalada.
     fn newer(&self, channel: &str) -> impl Future<Output = Result<Option<String>, String>> + Send;
@@ -134,6 +136,8 @@ async fn tick_inner(machine: &impl Machine, now: Time, since: Option<Time>, unce
     let holds = |busy: Busy, uncertain: Option<Time>| (if busy == Busy::Uncertain { uncertain } else { since }).is_none_or(|start| now - start < DEFER_CEILING);
     let skip = |why: &str| Tick::Skipped(why.to_owned());
     let Some(channel) = machine.package_channel() else { return skip("fora do modo pacote") };
+    // Trocar a versão não troca o binário de teste: o reinício subiria o mesmo, sem pacote para provar.
+    if machine.test_server_bin() { return skip(super::executor::TEST_SERVER); }
     // Como no motor `git`: o automático segue só a main; canal de teste atualiza pelo botão.
     if channel != "latest" { return skip("canal de teste"); }
     if !machine.automations() { return skip("automações desligadas"); }
@@ -214,6 +218,8 @@ impl Machine for Live {
         enabled
     }
 
+    fn test_server_bin(&self) -> bool { super::executor::test_server_bin() }
+
     fn state(&self) -> super::StateSnapshot {
         super::for_screen(&super::state_dir(&self.env.claude_base), &self.layout(), super::running_package().map(|p| p.version.as_str()))
     }
@@ -238,7 +244,7 @@ impl Machine for Live {
         tokio::task::spawn_blocking(move || {
             super::executor::launch(&home, &claude, &args, require_scope).map(|_| ()).map_err(|e| match e {
                 StartError::Busy => "ja rodando".to_owned(),
-                StartError::Launch(why) => why,
+                StartError::Launch(why) | StartError::Refused(why) => why,
             })
         }).await.map_err(|e| e.to_string())?
     }
@@ -277,6 +283,7 @@ mod tests {
     struct Fake {
         channel: Option<&'static str>,
         automations: bool,
+        test_server: bool,
         state: Value,
         newer: Option<&'static str>,
         busy: Option<Busy>,
@@ -290,7 +297,7 @@ mod tests {
 
     impl Default for Fake {
         fn default() -> Fake {
-            Fake { channel: Some("latest"), automations: true, state: json!({"fase": "pronto", "ok": true}), newer: Some("0.1.0.9"),
+            Fake { channel: Some("latest"), automations: true, test_server: false, state: json!({"fase": "pronto", "ok": true}), newer: Some("0.1.0.9"),
                 busy: None, list_down: false, index_down: false, uncertain_after_index: false, launched: AtomicUsize::new(0), newer_calls: AtomicUsize::new(0) }
         }
     }
@@ -298,6 +305,7 @@ mod tests {
     impl Machine for Fake {
         fn package_channel(&self) -> Option<String> { self.channel.map(str::to_owned) }
         fn automations(&self) -> bool { self.automations }
+        fn test_server_bin(&self) -> bool { self.test_server }
         fn state(&self) -> crate::update::StateSnapshot { self.state.as_object().cloned().unwrap().into() }
         async fn newer(&self, _channel: &str) -> Result<Option<String>, String> {
             self.newer_calls.fetch_add(1, Ordering::SeqCst);
@@ -328,6 +336,13 @@ mod tests {
         assert_eq!(launches(Fake { channel: None, ..Fake::default() }).await, 0, "modo desenvolvedor e máquina não migrada");
         assert_eq!(launches(Fake { channel: Some("beta"), ..Fake::default() }).await, 0);
         assert_eq!(launches(Fake { state: json!({"fase": "rodando"}), ..Fake::default() }).await, 0);
+    }
+
+    #[tokio::test]
+    async fn update_periodic_skips_while_a_test_server_is_up() {
+        let fake = Fake { test_server: true, ..Fake::default() };
+        assert_eq!(tick(&fake, now(), None).await, Tick::Skipped(crate::update::executor::TEST_SERVER.into()));
+        assert_eq!((fake.newer_calls.load(Ordering::SeqCst), fake.launched.load(Ordering::SeqCst)), (0, 0), "nem vai ao índice");
     }
 
     #[tokio::test]

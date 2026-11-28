@@ -295,6 +295,10 @@ TIME_WAIT e também com ela ainda aberta.
   "WMI nao respondeu". O `Get-HangarProcessTable` esperava 5 s pelo Job, que abre um PowerShell novo;
   o diagnóstico dessa máquina mostra "Preparando módulos para primeiro uso" a cada PowerShell. O prazo
   passou a 30 s. Causa tirada do relatório, não reproduzida.
+  Com a máquina sem memória (`rfuyizzt`) a leitura estourou os 30 s uma vez e a volta 8 s depois
+  passou: quando a leitura de antes da parada estoura, ela é feita de novo uma vez (nada foi parado
+  ainda), e o erro final continua dizendo que nenhuma instância foi encerrada. A de depois da parada
+  não repete.
 - **PID 0 como dono da porta** (`qw7yzbiy`): a lista de portas deu o System Idle (PID 0) como
   dono da 8765 com o servidor vivo; o diagnóstico depois da volta dizia "ninguém escutando" com a porta
   aceitando conexão. O reinício recusava antes de parar qualquer coisa. Na conferência de antes da

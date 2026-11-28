@@ -114,7 +114,7 @@ fn distance(installed: &str, remote: &str) -> u64 {
 /// O `GET` no modo pacote. `remote_error`: a última leitura do índice falhou; vai ao `pre_voo`, e sem
 /// entrada conhecida a tela oferece o Atualizar, que diz o motivo (como o Python sem `origin`).
 pub fn package_body(installed: Option<&Manifest>, running: Option<&str>, remote: Option<&PlatformEntry>, remote_error: Option<&str>,
-    topology: &str, estado: impl Into<super::StateSnapshot>) -> Value {
+    test_server: bool, topology: &str, estado: impl Into<super::StateSnapshot>) -> Value {
     let disk = installed.map_or("", |m| m.version.as_str());
     let behind = remote.map_or(0, |r| distance(disk, &r.version));
     let branch = target_branch(installed.map_or("latest", |m| m.channel.as_str()));
@@ -140,6 +140,12 @@ pub fn package_body(installed: Option<&Manifest>, running: Option<&str>, remote:
         body["pre_voo"]["erro"] = "indice_indisponivel".into();
         body["pre_voo"]["detalhe"] = error.into();
         if remote.is_none() { body["atualizacao_disponivel"] = true.into(); }
+    }
+    // O executor recusaria: o botão fica preso com o motivo, como no manifesto inválido.
+    if test_server {
+        body["pre_voo"]["pode"] = false.into();
+        body["pre_voo"]["erro"] = "test_server".into();
+        body["pre_voo"]["detalhe"] = super::executor::test_server_refusal().into();
     }
     body
 }
@@ -204,6 +210,7 @@ pub(crate) async fn status_body(st: &AppState, refresh: bool) -> Option<Value> {
     let (home, claude) = (st.accounts.env.home.clone(), st.accounts.env.claude_base.clone());
     let topology = topology().await.name();
     let running = super::running_package().map(|p| p.version.clone());
+    let test_server = super::executor::test_server_bin();
     let layout = Layout::new(&home);
     let estado = {
         let (layout, running, home, claude) = (layout.clone(), running.clone(), home.clone(), claude.clone());
@@ -221,7 +228,7 @@ pub(crate) async fn status_body(st: &AppState, refresh: bool) -> Option<Value> {
     let mut body = match mode {
         Mode::Package(_) if let Some(why) = super::broken_manifest(&layout) => {
             // Pacote sem o que o atualizador precisa: o botão fica preso com o motivo, sem ir ao Python.
-            let mut body = package_body(None, running.as_deref(), None, None, topology, estado);
+            let mut body = package_body(None, running.as_deref(), None, None, false, topology, estado);
             body["pre_voo"]["pode"] = false.into();
             body["pre_voo"]["erro"] = "manifesto_invalido".into();
             body["pre_voo"]["detalhe"] = why.into();
@@ -232,7 +239,7 @@ pub(crate) async fn status_body(st: &AppState, refresh: bool) -> Option<Value> {
             let channel = super::channel(&layout);
             let switching = installed.as_ref().is_some_and(|m| m.channel != channel);
             let remote = published(&Release { base_url: st.update_release_base.clone(), channel }, refresh).await;
-            let mut body = package_body(installed.as_ref(), running.as_deref(), remote.entry.as_ref(), remote.error.as_deref(), topology, estado);
+            let mut body = package_body(installed.as_ref(), running.as_deref(), remote.entry.as_ref(), remote.error.as_deref(), test_server, topology, estado);
             // Canal trocado na tela: o publicado no outro entra, mesmo com número menor.
             if switching && remote.entry.as_ref().zip(installed.as_ref()).is_some_and(|(r, m)| r.version != m.version) {
                 body["atras"] = 1.into();
@@ -283,6 +290,7 @@ fn started(started: Result<Started, StartError>) -> Response {
         Ok(Started { pid, request_id: Some(id) }) => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "pid": pid, "request_id": id})),
         Err(StartError::Busy) => busy(),
         Err(StartError::Launch(why)) => detail(StatusCode::INTERNAL_SERVER_ERROR, "erro_atualizacao_lancamento", &why, json!({})),
+        Err(StartError::Refused(why)) => detail(StatusCode::CONFLICT, "update_test_server", &why, json!({})),
     }
 }
 
@@ -557,7 +565,7 @@ mod tests {
     fn update_package_body_has_the_python_shape_with_package_values() {
         let installed = manifest("0.1.0.8200", "latest");
         let estado = json!({"fase": "pronto", "ok": true}).as_object().cloned().unwrap();
-        let body = package_body(Some(&installed), Some("0.1.0.8200"), Some(&entry("0.1.0.8207", 5)), None, "systemd", estado.clone());
+        let body = package_body(Some(&installed), Some("0.1.0.8200"), Some(&entry("0.1.0.8207", 5)), None, false, "systemd", estado.clone());
         assert_client_shape(&body);
         assert_eq!(body["atualizacao_disponivel"], true);
         assert_eq!(body["atras"], 7, "contagem de commits do número da versão");
@@ -568,15 +576,27 @@ mod tests {
         assert_eq!(body["versao_legivel"]["remoto"], "0.1.0.8207");
         assert_eq!(body["estado"], Value::Object(estado.clone()));
 
-        let same = package_body(Some(&installed), Some("0.1.0.8199"), Some(&entry("0.1.0.8200", 5)), None, "windows", estado.clone());
+        let same = package_body(Some(&installed), Some("0.1.0.8199"), Some(&entry("0.1.0.8200", 5)), None, false, "windows", estado.clone());
         assert_eq!((same["atualizacao_disponivel"].clone(), same["atras"].clone()), (json!(false), json!(0)));
         assert_ne!(same["versoes"]["repo"], same["versoes"]["backend"], "disco à frente do processo: a tela oferece reiniciar");
-        let base = package_body(Some(&installed), None, Some(&entry("0.2.0.10", 5)), None, "manual", estado.clone());
+        let base = package_body(Some(&installed), None, Some(&entry("0.2.0.10", 5)), None, false, "manual", estado.clone());
         assert_eq!((base["atras"].clone(), base["atualizacao_disponivel"].clone()), (json!(1), json!(true)), "VERSION novo");
-        let offline = package_body(Some(&manifest("0.1.0.8200", "beta")), Some("0.1.0.8200"), None, None, "systemd", estado);
+        let offline = package_body(Some(&manifest("0.1.0.8200", "beta")), Some("0.1.0.8200"), None, None, false, "systemd", estado);
         assert_client_shape(&offline);
         assert_eq!((offline["atualizacao_disponivel"].clone(), offline["api_publicado"].clone()), (json!(false), json!(4)), "sem índice: a API instalada");
         assert_eq!(offline["pre_voo"]["alvo"], "beta");
+    }
+
+    #[test]
+    fn update_package_body_holds_the_button_while_a_test_server_is_up() {
+        let installed = manifest("0.1.0.8200", "latest");
+        let body = package_body(Some(&installed), None, Some(&entry("0.1.0.8207", 5)), None, true, "systemd", Map::new());
+        assert_client_shape(&body);
+        assert_eq!((body["pre_voo"]["pode"].clone(), body["pre_voo"]["erro"].clone()), (json!(false), json!("test_server")));
+        assert!(body["pre_voo"]["detalhe"].as_str().unwrap().contains(super::super::executor::TEST_SERVER), "{body}");
+        assert_eq!(body["atualizacao_disponivel"], true, "a versão nova continua aparecendo");
+        let packaged = package_body(Some(&installed), None, Some(&entry("0.1.0.8207", 5)), None, false, "systemd", Map::new());
+        assert_eq!(packaged["pre_voo"]["pode"], true);
     }
 
     #[test]
@@ -619,7 +639,7 @@ mod tests {
     #[test]
     fn update_unknown_running_version_is_the_disk_one() {
         // Vazio faria o nativo oferecer "reiniciar" para sempre (`behind` compara repo com backend).
-        let body = package_body(Some(&manifest("0.1.0.5", "latest")), None, None, None, "systemd", Map::new());
+        let body = package_body(Some(&manifest("0.1.0.5", "latest")), None, None, None, false, "systemd", Map::new());
         assert_eq!(body["versoes"], json!({"repo": "0.1.0.5", "backend": "0.1.0.5"}));
         assert_eq!(body["versao_legivel"]["backend"], "0.1.0.5");
         let checkout = Checkout { branch: "main".into(), head: "aaa1111".into(), ..Checkout::default() };
@@ -638,12 +658,12 @@ mod tests {
         assert_eq!((kept.entry.clone(), kept.error.as_deref()), (Some(good.clone()), Some("sem rede")), "a entrada boa fica");
 
         let installed = manifest("0.1.0.8200", "latest");
-        let body = package_body(Some(&installed), None, kept.entry.as_ref(), kept.error.as_deref(), "systemd", Map::new());
+        let body = package_body(Some(&installed), None, kept.entry.as_ref(), kept.error.as_deref(), false, "systemd", Map::new());
         assert_client_shape(&body);
         assert_eq!((body["pre_voo"]["erro"].clone(), body["pre_voo"]["detalhe"].clone()), (json!("indice_indisponivel"), json!("sem rede")));
         assert_eq!(body["atras"], 7, "o que se sabia continua valendo");
         // Sem nada conhecido, como o Python: a tela oferece o Atualizar e o motor diz o motivo.
-        let blind = package_body(Some(&installed), None, None, Some("sem rede"), "systemd", Map::new());
+        let blind = package_body(Some(&installed), None, None, Some("sem rede"), false, "systemd", Map::new());
         assert_eq!((blind["atualizacao_disponivel"].clone(), blind["pre_voo"]["pode"].clone()), (json!(true), json!(true)));
     }
 

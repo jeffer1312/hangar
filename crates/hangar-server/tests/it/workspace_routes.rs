@@ -718,6 +718,44 @@ async fn folder_git_refusal_keeps_the_python_error_shape() {
     }
 }
 
+#[tokio::test]
+async fn folder_branches_of_a_folder_without_git_answers_404() {
+    const TEST: &str = "workspace_routes::folder_branches_of_a_folder_without_git_answers_404";
+    // O git do servidor herda o ambiente: o limite de descoberta vai num processo filho, sem mexer no deste.
+    let Some(root) = std::env::var_os("HANGAR_NO_GIT_ROOT") else {
+        let dir = tempfile::tempdir().unwrap();
+        let root = hangar_workspace::real(dir.path());
+        let child = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", TEST, "--nocapture"])
+            .env("HANGAR_NO_GIT_ROOT", &root).env("GIT_CEILING_DIRECTORIES", &root).output().unwrap();
+        let out = String::from_utf8_lossy(&child.stdout);
+        assert!(child.status.success() && out.contains("1 passed"), "{out}\n{}", String::from_utf8_lossy(&child.stderr));
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let (plain, repo, broken) = (root.join("sem-git"), root.join("repo"), root.join("worktree-quebrada"));
+    for path in [&plain, &repo, &broken] { std::fs::create_dir_all(path).unwrap(); }
+    // Worktree cuja pasta em .git/worktrees sumiu.
+    std::fs::write(broken.join(".git"), format!("gitdir: {}\n", repo.join(".git/worktrees/x").display())).unwrap();
+    let init = std::process::Command::new("git").arg("-C").arg(&repo).args(["init", "-q", "-b", "main"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+    assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
+    let (addr, _fixture) = fixture(&root).await;
+    let url = |path: &std::path::Path| {
+        let mut url = reqwest::Url::parse(&format!("http://{addr}/api/fs/branches")).unwrap();
+        url.query_pairs_mut().append_pair("root", root.to_str().unwrap()).append_pair("path", path.to_str().unwrap());
+        url
+    };
+    let c = client();
+    // Os apps leem 404 como pasta sem Git; 409 ia ao diário e às falhas recentes como erro.
+    let response = c.get(url(&plain)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(response.status(), 404);
+    let body: Value = response.json().await.unwrap();
+    assert!(body["detail"]["msg"].as_str().unwrap_or("").contains("not a git repository"), "{body}");
+    assert_eq!(c.get(url(&repo)).bearer_auth(OWNER).send().await.unwrap().status(), 200);
+    // Repositório com defeito não é "sem Git": continua 409.
+    assert_eq!(c.get(url(&broken)).bearer_auth(OWNER).send().await.unwrap().status(), 409);
+}
+
 const TRANSFER_THREAD: &str = "019f99de-9572-7221-89c0-80c62f883d44";
 const FILE_TRANSFER: &str = "a563a017-af37-42e8-a8e5-2bd837584f8e";
 const ORIGINAL_DIGEST: &str = "0682c5f2076f099c34cfdd15a9e063849ed437a49677e6fcc5b4198c76575be5";
