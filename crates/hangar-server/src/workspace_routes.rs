@@ -648,6 +648,10 @@ fn map_operation(
     operation(op, json!(a))
 }
 
+/// A recusa do git para pasta fora de qualquer repositório; a de worktree quebrada
+/// (`not a git repository: <gitdir>`) é repositório com defeito.
+fn without_git(detail: &str) -> bool { detail.contains("not a git repository (or any") }
+
 async fn folder_operation(
     st: &Arc<AppState>,
     guard: Operation,
@@ -683,8 +687,7 @@ async fn folder_operation(
             .await
             .map_err(|e| {
                 // Pasta sem Git não é falha: os apps leem 404 como "sem Git", e o 409 ia como erro às falhas recentes.
-                let missing = e.status == 409
-                    && e.detail.as_str().is_some_and(|d| d.contains("not a git repository"));
+                let missing = e.status == 409 && e.detail.as_str().is_some_and(without_git);
                 let e = session_error(e);
                 if missing { hangar_workspace::WorkspaceError { status: 404, ..e } } else { e }
             })?;
@@ -847,6 +850,15 @@ mod tests {
         assert!(op("git/files").contains("\"/repo-x\""));
         assert!(op("branches").contains("\"/repo-x\""));
         assert!(op("files/list").contains("cwd: \"/repo\""));
+    }
+
+    #[test]
+    fn without_git_is_only_a_folder_outside_any_repository() {
+        assert!(without_git("fatal: not a git repository (or any of the parent directories): .git"));
+        assert!(without_git("fatal: not a git repository (or any parent up to mount point /)\nStopping at filesystem boundary"));
+        // Worktree quebrada é repositório com defeito: continua 409.
+        assert!(!without_git("fatal: not a git repository: /repo/.git/worktrees/x"));
+        assert!(!without_git("fatal: gitfile does not point to a valid repository: /repo-x/.git"));
     }
 
     #[test]

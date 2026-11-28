@@ -11,15 +11,16 @@ function Read-HangarProcessJob([int]$seconds) {
     } finally { Remove-Job $job -Force -ErrorAction SilentlyContinue }
 }
 
-function Get-HangarProcessTable {
-    # O Job abre um PowerShell novo, que em maquina lenta gasta segundos preparando modulos antes da
-    # consulta. Nada foi parado antes desta leitura: repetir quando estoura o prazo e seguro.
+# -Retry: so na leitura de antes da parada, quando repetir e seguro porque nada foi encerrado ainda.
+function Get-HangarProcessTable([switch]$Retry) {
+    # O Job abre um PowerShell novo, que em maquina lenta gasta segundos preparando modulos antes da consulta.
+    $attempts = if ($Retry) { 2 } else { 1 }
     $rows = $null
-    foreach ($attempt in 1..2) {
+    foreach ($attempt in 1..$attempts) {
         $rows = Read-HangarProcessJob 30
         if ($null -ne $rows) { break }
     }
-    if ($null -eq $rows) { throw 'WMI nao respondeu em 2 tentativas de 30 s; nenhuma instancia sera encerrada ou iniciada' }
+    if ($null -eq $rows) { throw "WMI nao respondeu em $attempts tentativa(s) de 30 s; nenhuma instancia sera encerrada ou iniciada" }
     if (-not $rows.Count) { throw 'Tabela de processos vazia; nao e seguro recuperar a tarefa' }
     return $rows
 }
@@ -201,7 +202,7 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         if (-not $locked) { throw "Outra recuperacao de $name esta em andamento" }
         $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
         if (-not $task.Settings.Enabled) { throw "A tarefa $name esta desabilitada" }
-        $rows = Get-HangarProcessTable
+        $rows = Get-HangarProcessTable -Retry
         $candidates = @(Get-HangarTaskProcesses $rows $name $directory)
         # Na versao pelo Python o hangar-server e filho dele e segura a porta publica: entra na parada
         # depois do pai (ele sai sozinho quando o cano do stdin fecha; se ainda estiver vivo, cai aqui).
@@ -295,7 +296,7 @@ function Stop-HangarFrontend([string]$raiz) {
     try {
         try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
         if (-not $locked) { throw 'Outra recuperacao de hangar-frontend esta em andamento' }
-        $rows = Get-HangarProcessTable
+        $rows = Get-HangarProcessTable -Retry
         foreach ($candidate in @(Get-HangarTaskProcesses $rows 'hangar-frontend' (Join-Path $raiz 'frontend'))) {
             $process = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
             if (-not $process) { continue }

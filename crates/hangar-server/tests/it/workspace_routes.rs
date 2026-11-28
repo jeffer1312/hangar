@@ -722,8 +722,10 @@ async fn folder_git_refusal_keeps_the_python_error_shape() {
 async fn folder_branches_of_a_folder_without_git_answers_404() {
     let dir = tempfile::tempdir().unwrap();
     let root = hangar_workspace::real(dir.path());
-    let (plain, repo) = (root.join("sem-git"), root.join("repo"));
-    for path in [&plain, &repo] { std::fs::create_dir_all(path).unwrap(); }
+    let (plain, repo, broken) = (root.join("sem-git"), root.join("repo"), root.join("worktree-quebrada"));
+    for path in [&plain, &repo, &broken] { std::fs::create_dir_all(path).unwrap(); }
+    // Worktree cuja pasta em .git/worktrees sumiu.
+    std::fs::write(broken.join(".git"), format!("gitdir: {}\n", repo.join(".git/worktrees/x").display())).unwrap();
     let init = std::process::Command::new("git").arg("-C").arg(&repo).args(["init", "-q", "-b", "main"])
         .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
     assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
@@ -740,6 +742,8 @@ async fn folder_branches_of_a_folder_without_git_answers_404() {
     let body: Value = response.json().await.unwrap();
     assert!(body["detail"]["msg"].as_str().unwrap_or("").contains("not a git repository"), "{body}");
     assert_eq!(c.get(url(&repo)).bearer_auth(OWNER).send().await.unwrap().status(), 200);
+    // Repositório com defeito não é "sem Git": continua 409.
+    assert_eq!(c.get(url(&broken)).bearer_auth(OWNER).send().await.unwrap().status(), 409);
 }
 
 const TRANSFER_THREAD: &str = "019f99de-9572-7221-89c0-80c62f883d44";

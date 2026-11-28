@@ -20,7 +20,7 @@ fn update_state_refusal_is_visible_before_package_spawn() {
     std::fs::write(file.path(), original).unwrap();
     let recorder = Recorder(AtomicUsize::new(0));
     let args = executor::Args::parse(&["--run".into()]).unwrap();
-    let outcome = executor::start(temp.path(), &claude, &args, &recorder, Some("0.1.0.5"));
+    let outcome = executor::start(temp.path(), &claude, &args, &recorder, Some("0.1.0.5"), false);
     assert!(matches!(outcome, Err(executor::StartError::Launch(ref message)) if message == "update_state_invalid_unicode: texto contém surrogate Unicode isolado"));
     assert_eq!(recorder.0.load(Ordering::SeqCst), 0);
     assert_eq!(std::fs::read(file.path()).unwrap(), original);

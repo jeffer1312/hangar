@@ -76,6 +76,7 @@ function Reset-State {
     $script:phantomStarts = 0
     $script:migrated = $true
     $script:tableReads = 0
+    $script:tableRetries = @()
     $script:stopFails = $false
     $script:exitsBeforeStop = $null
     $script:tableFails = $false
@@ -84,7 +85,8 @@ function Reset-State {
 }
 # Processo vivo que nao e da tarefa (o executor da atualizacao sai do Job): nao a segura em Running.
 function Get-TaskLive { @($script:live.Keys | Where-Object { [int]$_ -notin $script:apart }).Count }
-function Get-HangarProcessTable {
+function Get-HangarProcessTable([switch]$Retry) {
+    $script:tableRetries += [bool]$Retry
     if ($script:tableFails) { throw 'WMI indisponivel' }
     $script:tableReads++
     return $script:processRows
@@ -314,6 +316,8 @@ try {
         Assert ('start' -notin $script:events) "Front subiu com a porta tomada: $($case.late)"
         if ($case.served) { Assert (-not $failed) "Porta do front no hangar-server virou falha: $failed" }
         else { Assert ($failed -match "ainda ocupada por $($case.holder)") "Porta presa nao disse quem segura: $failed" }
+        # Depois da parada a leitura nao repete: so a de antes leva -Retry.
+        Assert (($script:tableRetries -join ',') -eq 'True,False') "Leituras da tabela com -Retry errado: '$($script:tableRetries -join ',')'"
     }
     Reset-State
     $script:processRows = $frontRows
@@ -411,20 +415,24 @@ try {
         try { Restart-HangarTasks 'C:\repo' 8765 0 } catch { $failed = "$_" }
         Assert ($failed -match 'em andamento' -and -not $script:events.Count) "Reinicio do atualizador interferiu com instalacao em outro processo: $failed"
     } finally { Remove-Job $lockJob -Force }
-    # Leitura que estoura o prazo tenta de novo uma vez: nada foi parado antes dela.
-    $tabela = @((Row 1 0 'System' ''))
+    # Com -Retry (antes da parada) a leitura que estoura o prazo tenta de novo uma vez; sem ele, nao.
+    $table = @((Row 1 0 'System' ''))
     function Read-HangarProcessJob([int]$seconds) {
         $script:jobWaits += $seconds
         if ($script:jobWaits.Count -le $script:jobTimeouts) { return $null }
-        return ,@($tabela)
+        return ,@($table)
     }
     $script:jobWaits = @(); $script:jobTimeouts = 1
-    $lidas = & $realProcessTable
-    Assert (($script:jobWaits -join ',') -eq '30,30' -and @($lidas).Count -eq 1) "Leitura que estourou o prazo nao foi repetida: esperas '$($script:jobWaits -join ',')'"
+    $read = & $realProcessTable -Retry
+    Assert (($script:jobWaits -join ',') -eq '30,30' -and @($read).Count -eq 1) "Leitura que estourou o prazo nao foi repetida: esperas '$($script:jobWaits -join ',')'"
     $script:jobWaits = @(); $script:jobTimeouts = 2
     $failed = $null
-    try { & $realProcessTable | Out-Null } catch { $failed = "$_" }
+    try { & $realProcessTable -Retry | Out-Null } catch { $failed = "$_" }
     Assert (($script:jobWaits -join ',') -eq '30,30' -and $failed -match 'nenhuma instancia sera encerrada') "Duas leituras estouradas: esperas '$($script:jobWaits -join ',')', erro: $failed"
+    $script:jobWaits = @(); $script:jobTimeouts = 1
+    $failed = $null
+    try { & $realProcessTable | Out-Null } catch { $failed = "$_" }
+    Assert (($script:jobWaits -join ',') -eq '30' -and $failed -match 'WMI nao respondeu') "Leitura sem -Retry repetiu: esperas '$($script:jobWaits -join ',')', erro: $failed"
 
     $tokens = $null; $errors = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile("$PSScriptRoot/../install.ps1", [ref]$tokens, [ref]$errors)
