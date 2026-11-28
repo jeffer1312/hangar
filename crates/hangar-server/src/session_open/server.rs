@@ -555,32 +555,31 @@ pub(crate) fn reply(error: &OpenError) -> Response {
     }
 }
 
-/// A resolução daqui, sem abrir: o que viria da criadora para a abertura noutra máquina, onde ela não existe.
-/// Com a criadora como ela foi encontrada aqui (`None`: sem criadora ou não achada).
-pub(crate) async fn resolve_here(st: &Arc<AppState>, request: &SessionOpenRequest)
-    -> Result<(super::Resolved, Option<super::resolve::CreatorFacts>), OpenError> {
-    let (request, accounts, runtime) = (request.clone(), st.accounts.clone(), tokio::runtime::Handle::current());
+/// A criadora como ela é lida aqui (`None`: não achada), para a abertura noutra máquina, onde ela não existe.
+pub(crate) async fn creator_here(st: &Arc<AppState>, name: &str) -> Result<Option<super::resolve::CreatorFacts>, OpenError> {
+    let (name, accounts, runtime) = (name.to_owned(), st.accounts.clone(), tokio::runtime::Handle::current());
     tokio::task::spawn_blocking(move || {
         use super::OpenFacts;
-        let facts = super::facts::LocalFacts::shared(accounts.env.clone(), &accounts, runtime);
-        let creator = match request.creator.as_deref() { Some(name) => facts.creator(name)?, None => None };
-        Ok((super::resolve_open(&request, &OpenCaller::Owner, &facts)?, creator))
-    }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou")))
+        super::facts::LocalFacts::shared(accounts.env.clone(), &accounts, runtime).creator(&name)
+    }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a leitura da sessão criadora não terminou")))
 }
 
-/// A abertura que a escolha mandou a outra máquina: a resposta é a de lá, com `alvo`, `placement` e, com
-/// `link`, a ligação feita daqui (a criadora é daqui; lá a filha nasce sem ela).
-async fn forwarded(st: &Arc<AppState>, server: &str, body: &Value, placement: Option<Value>, cloned: bool, link: super::LinkPlan) -> Response {
+/// A abertura que a escolha mandou a outra máquina: a resposta é a de lá, com `target`, `placement` e, com
+/// `link`, a ligação feita daqui (a criadora é daqui; lá a filha nasce sem ela). A pasta só fica reservada para
+/// lá (`reserve`) quando lá confirmou: abertura recusada ou incerta não prende a próxima.
+async fn forwarded(st: &Arc<AppState>, server: &str, body: &Value, placement: Option<Value>, cloned: bool, reserve: Option<(String, String)>,
+    link: super::LinkPlan) -> Response {
     use crate::groups::peers::PeerError;
     let opened = crate::placement::forward::open(&st.peers, server, body, true).await
         .and_then(|info| if info["name"].is_string() { Ok(info) } else { Err(PeerError::Transport(format!("{server}: resposta da abertura sem o nome"))) });
     match opened {
         Ok(mut info) => {
-            let alvo = format!("{server}::{}", info["name"].as_str().unwrap_or_default());
-            let link_error = link_child(st, link, &alvo).await;
+            if let Some((root, id)) = reserve { st.placement_reservations.reserve(&root, &id); }
+            let target = format!("{server}::{}", info["name"].as_str().unwrap_or_default());
+            let link_error = link_child(st, link, &target).await;
             if let Some(fields) = info.as_object_mut() {
                 if let Some(error) = link_error { fields.insert("link_error".into(), error); }
-                fields.insert("alvo".into(), json!(alvo));
+                fields.insert("target".into(), json!(target));
                 if let Some(placement) = placement { fields.insert("placement".into(), placement); }
             }
             let warnings = if cloned { vec![super::baton::FRESH_CLONE_NOTE.to_owned()] } else { Vec::new() };
@@ -638,15 +637,15 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let placement = match crate::placement::suggest::step(&st, &request, &caller).await {
         Step::Here(placement) => placement,
         Step::Refused(error) => return done(reply(&error)),
-        Step::There { server, body, placement, cloned } => return done(forwarded(&st, &server, &body, placement, cloned, link).await),
+        Step::There { server, body, placement, cloned, reserve } => return done(forwarded(&st, &server, &body, placement, cloned, reserve, link).await),
     };
     match decide_detached(&st, request, caller, guest, None).await {
         Decision::Opened(mut opened) => {
             // O nome que vale em recado e fechamento: aqui, o próprio.
             if let Some(placement) = placement && let Some(fields) = opened.body.as_object_mut() {
-                let alvo = fields.get("name").cloned().unwrap_or(Value::Null);
+                let target = fields.get("name").cloned().unwrap_or(Value::Null);
                 fields.insert("placement".into(), placement);
-                fields.insert("alvo".into(), alvo);
+                fields.insert("target".into(), target);
             }
             done(crate::session_write::json_response(StatusCode::OK, opened.body))
         }

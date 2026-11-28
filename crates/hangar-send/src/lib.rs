@@ -102,6 +102,7 @@ mod identity;
 mod list;
 mod message;
 mod new;
+pub use new::create_timeout;
 
 use http::Endpoint;
 use serde_json::Value;

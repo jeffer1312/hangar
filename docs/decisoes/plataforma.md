@@ -28,10 +28,10 @@ a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
   `hangar-placement` (fatos + regras + hora → máquina, motivo, clone e avisos). Só o pedido com
   `machine: "auto"` é balanceado; omitido, abre aqui como antes; id de máquina abre nela. A tela pede
   `POST /api/placement/suggest` (a mesma escolha, sem criar nada) e cria na máquina marcada; o MCP
-  `new_session` sem `maquina` nem `servidor::nome` e o `hangar-send --new` sem `servidor::` nem
+  `new_session` sem `machine` nem `servidor::nome` e o `hangar-send --new` sem `servidor::` nem
   `--machine`, rodando dentro de uma sessão, mandam `auto`, e o modo do agente gravado no servidor
   decide. O `hangar-send` sem sessão de origem (terminal fora de sessão, o vigia da orquestração)
-  abre local: não manda `machine`. `--machine`/`maquina` aceitam a chave do `peers.json` ou o id
+  abre local: não manda `machine`. `--machine`/`machine` aceitam a chave do `peers.json` ou o id
   que a máquina informa (o `CP_SERVER_ID` de lá, achado nos fatos); valor que não é nenhum dos dois
   recebe `placement_machine_unknown`.
 - **Quem nunca é balanceado.** O que não manda `machine` (terminal digitado, tarefa agendada,
@@ -61,15 +61,19 @@ a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 - **Mesma pasta.** A raiz git do pedido igual (comparação exata) ao `git_cwd` de uma sessão aberta;
   a pasta pessoal não conta. Pasta sem git que não é a pessoal fica aqui. Uma reserva de 30 s
   pasta → máquina, em memória, impede que duas aberturas seguidas na mesma pasta se separem antes
-  de a lista republicar; vale também no modo "perguntar".
+  de a lista republicar. Ela é gravada na escolha que fica aqui e, para outra máquina, só quando lá
+  confirmou a abertura: recusada ou incerta não prende a próxima. A pasta reservada para outra
+  máquina lê só os fatos das outras; com a reservada fora deles (desligou), a reserva cai e a pasta
+  volta à escolha, nunca 503.
 - **Abrir lá.** O pedido vai pronto (`placement::forward`): `machine` fixada (lá não se escolhe de
   novo nem volta para cá), sem criadora e sem `link` (a ligação é feita daqui) e com a pasta
   traduzida para a raiz do mesmo projeto lá, na branch daqui. Lá a sessão abre numa worktree limpa
   da branch, depois de buscar no remoto; a busca falha só como aviso. Sem resposta da abertura, o
   texto é "incerto, confira em B", nunca reabertura aqui.
-- **Herança só da criadora.** O que viria da criadora é resolvido aqui e vai explícito: provedor
-  herdado e superfície (com ou sem terminal). Modelo, esforço e modo só com `inherit: true`; sem
-  ele valem os padrões salvos de lá, como numa abertura local valem os daqui. Mandar o padrão salvo
+- **Herança só da criadora.** Aqui só a criadora é lida (`facts.creator`), sem a resolução da
+  abertura: nome em uso, cota e conta são de lá, e o nome que só existe aqui não recusa a filha.
+  Vai explícito o provedor herdado e a superfície (com ou sem terminal); o modo só com
+  `inherit: true`, e modelo e esforço nunca vêm da criadora. Sem `inherit: true` valem os padrões salvos de lá, como numa abertura local valem os daqui. Mandar o padrão salvo
   daqui explícito passaria por cima do de lá. Codex com terminal não leva modo, porque recusa modo
   pedido.
 - **Clone em passo próprio.** `POST /api/placement/clone {origin, dir}` (só do dono) clona numa pasta
@@ -81,12 +85,12 @@ a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
   criação não manda nada antes de terminar. Clone: o `git clone` tem 600 s lá, e quem espera tem
   660 s (`CLONE_TIMEOUT`), para não desistir com o clone ainda correndo. Cliente: o MCP passou a ser
   registrado com 900 s (`TOOL_TIMEOUT_S` do `mcp-register`, antes 660 s, que o cofre ainda cabe) e
-  o `hangar-send --new` espera 900 s. O pior caso, 2 × 2 s + 660 s + 150 s = 814 s, fica abaixo do
-  corte do cliente; um teste do servidor confere essa soma.
-- **Perguntar.** No agente, `ask` devolve 409 `placement_ask` com a sugestão; o agente pergunta à
-  pessoa e abre de novo com a máquina escolhida. Na tela, `ask` ainda não tem desenho: a Nova
+  o `hangar-send --new` espera 900 s com máquina pedida (`auto` ou id) e 120 s sem ela. O pior
+  caso, 2 × 2 s + 660 s + 150 s = 814 s, fica abaixo do corte do cliente; um teste do servidor confere essa soma.
+- **Perguntar.** No agente, `ask` devolve 409 `placement_ask` com a sugestão, só quando ela sai desta
+  máquina (a que fica aqui abre direto); o agente pergunta à pessoa e abre de novo com a máquina escolhida. Na tela, `ask` ainda não tem desenho: a Nova
   conversa abre sem máquina marcada.
-- **Resposta.** `placement: {server, reason, text}` e `alvo: "B::nome"`. A tool manda usar `alvo` em
+- **Resposta.** `placement: {server, reason, text}` e `target: "B::nome"`. A tool manda usar `target` em
   `send`, `close_session` e `interrupt`, senão o nome cai numa homônima local. O `text` sai em
   português; os clientes montam o motivo dos códigos no idioma do app.
 - **Regras num arquivo do servidor.** `~/.hangar/placement.json` (`GET`/`PUT /api/placement/config`,

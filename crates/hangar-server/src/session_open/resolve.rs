@@ -482,7 +482,7 @@ pub fn choose_provider(catalog: &ProviderCatalog) -> AgentProvider {
 }
 
 /// `_creator_permission_mode` / `_codex_as_claude_mode`: o modo da criadora no nome do `--permission-mode`.
-fn creator_mode(info: &CreatorFacts) -> Option<PermissionMode> {
+pub(crate) fn creator_mode(info: &CreatorFacts) -> Option<PermissionMode> {
     let raw = info.permission_mode.as_deref()?;
     if info.provider == AgentProvider::Codex {
         // Chave exata do `PERMISSION_POLICIES`, sem a tolerância de maiúscula da abertura.
@@ -499,7 +499,7 @@ fn creator_mode(info: &CreatorFacts) -> Option<PermissionMode> {
 /// nome; do Claude, o inverso do `_codex_as_claude_mode` (bypass → Full Access, acceptEdits →
 /// Approve for me, manual → Ask for approval), e os modos sem imagem no Codex (auto, dontAsk, plan)
 /// vão para Ask for approval, o mais restrito.
-fn creator_codex_mode(info: &CreatorFacts) -> Option<PermissionMode> {
+pub(crate) fn creator_codex_mode(info: &CreatorFacts) -> Option<PermissionMode> {
     let raw = info.permission_mode.as_deref()?;
     if info.provider == AgentProvider::Codex {
         return PermissionMode::CODEX.into_iter().find(|m| m.name() == raw);

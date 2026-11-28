@@ -1054,8 +1054,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   reserva, campo só daqui nem orquestração (criadora em grupo `orq` ou que conduz execução viva).
   Mesma raiz git de sessão aberta e trabalho não publicado ficam; regras do dono vencem a carga;
   limite, não pontuação. O id da máquina é o `CP_SERVER_ID` que ela informa nos fatos. O pedido
-  encaminhado vai com `machine` fixada e a herança só da criadora, resolvida aqui. Prazos: fatos 2 s,
-  abertura lá 150 s, clone 660 s, cliente (MCP, `hangar-send`) 900 s. Regras em
+  encaminhado vai com `machine` fixada e a herança só da criadora, lida aqui sem a resolução da abertura.
+  Prazos: fatos 2 s, abertura lá 150 s, clone 660 s, cliente (MCP, `hangar-send` com máquina) 900 s. Regras em
   `~/.hangar/placement.json`, gravadas pela tela em todas as máquinas.
   [Decisão](docs/decisoes/plataforma.md#balanceamento-de-sessões-entre-máquinas-27112026).
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes

@@ -2134,6 +2134,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "hangar-core",
+ "hangar-workspace",
  "serde",
  "serde_json",
  "tempfile",

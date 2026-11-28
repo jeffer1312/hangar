@@ -1588,16 +1588,16 @@ async fn a_draft_born_after_the_call_was_cancelled_is_declined() {
     task.abort();
 }
 
-/// `maquina` abre naquela máquina: o pedido vai com o id dela fixado (lá não se escolhe de novo), sem a
-/// criadora, que lá não existe, e a resposta dá o `alvo` com a máquina.
+/// `machine` abre naquela máquina: o pedido vai com o id dela fixado (lá não se escolhe de novo), sem a
+/// criadora, que lá não existe, e a resposta dá o `target` com a máquina.
 #[tokio::test(flavor = "multi_thread")]
-async fn placement_maquina_opens_there_with_its_id_fixed_and_answers_the_target() {
+async fn placement_machine_opens_there_with_its_id_fixed_and_answers_the_target() {
     use axum::http::header::CONTENT_TYPE;
     use axum::routing::{get, post};
     use hangar_server::groups::peers::{PeerBook, PeerClient};
     let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
     let sink = seen.clone();
-    // Lá o `CP_SERVER_ID` não é a chave do `peers.json` daqui: o pedido leva o id de lá, o `alvo`, a chave.
+    // Lá o `CP_SERVER_ID` não é a chave do `peers.json` daqui: o pedido leva o id de lá, o `target`, a chave.
     let facts = json!({"server_id": "lab-id", "version": "1", "capable": true, "mem_total": 0, "mem_available": 0, "working": 0,
         "cpu_pct": null, "repos": [], "clone_dir": null}).to_string();
     let app = axum::Router::new()
@@ -1618,24 +1618,75 @@ async fn placement_maquina_opens_there_with_its_id_fixed_and_answers_the_target(
     let s = scene_tuned(false, Some(PeerClient::new(PeerBook::new(Some(file)))), false, "", Share::Absent, isolated_accounts).await;
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
     // A pasta pessoal daqui vira a de lá.
-    let result = mcp.call("new_session", json!({"nome": "filha", "cwd": s.home, "maquina": "lab", "provider": "claude", "inherit": false})).await;
+    let result = mcp.call("new_session", json!({"nome": "filha", "cwd": s.home, "machine": "lab", "provider": "claude", "inherit": false})).await;
     assert!(!failed(&result), "{result}");
-    assert_eq!(result["structuredContent"]["alvo"], "lab::filha", "{result}");
+    assert_eq!(result["structuredContent"]["target"], "lab::filha", "{result}");
     let sent = seen.lock().unwrap().clone();
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!((&sent[0]["machine"], &sent[0]["cwd"], &sent[0]["provider"]), (&json!("lab-id"), &json!("~"), &json!("claude")), "{}", sent[0]);
     assert!(sent[0].get("creator").is_none() && sent[0].get("inherit").is_none(), "lá a criadora não existe: {}", sent[0]);
     // O id que ela informa (o que a sugestão e as mensagens citam) também abre lá, pela chave daqui.
-    let by_id = mcp.call("new_session", json!({"nome": "filha2", "cwd": s.home, "maquina": "lab-id", "provider": "claude", "inherit": false})).await;
+    let by_id = mcp.call("new_session", json!({"nome": "filha2", "cwd": s.home, "machine": "lab-id", "provider": "claude", "inherit": false})).await;
     assert!(!failed(&by_id), "{by_id}");
-    assert_eq!(by_id["structuredContent"]["alvo"], "lab::filha", "{by_id}");
+    assert_eq!(by_id["structuredContent"]["target"], "lab::filha", "{by_id}");
     assert_eq!(seen.lock().unwrap().get(1).map(|b| b["machine"].clone()), Some(json!("lab-id")));
-    let both = mcp.call("new_session", json!({"nome": "lab::x", "maquina": "lab"})).await;
+    // Com a criadora (`beta`, a do pane), só ela é lida aqui: o nome em uso nesta máquina (o tmux falso diz que todo
+    // nome existe) é assunto de lá e não recusa a abertura.
+    let inherited = mcp.call("new_session", json!({"nome": "s0", "cwd": s.home, "machine": "lab", "provider": "claude"})).await;
+    assert!(!failed(&inherited), "{inherited}");
+    assert_eq!(seen.lock().unwrap().get(2).map(|b| b["name"].clone()), Some(json!("s0")));
+    let both = mcp.call("new_session", json!({"nome": "lab::x", "machine": "lab"})).await;
     assert!(failed(&both) && first_text(&both).contains("não os dois"), "{both}");
     // Nem chave do `peers.json` nem id informado: recusa clara, nada aberto.
-    let unknown = mcp.call("new_session", json!({"nome": "outra", "cwd": s.home, "maquina": "nada", "provider": "claude", "inherit": false})).await;
+    let unknown = mcp.call("new_session", json!({"nome": "outra", "cwd": s.home, "machine": "nada", "provider": "claude", "inherit": false})).await;
     assert!(failed(&unknown) && first_text(&unknown).starts_with("placement_machine_unknown:"), "{unknown}");
-    assert_eq!(seen.lock().unwrap().len(), 2);
+    assert_eq!(seen.lock().unwrap().len(), 3);
+}
+
+/// A pasta fica reservada para a outra máquina só quando lá confirmou a abertura: a recusada não prende a próxima.
+#[tokio::test(flavor = "multi_thread")]
+async fn placement_reserves_the_folder_only_after_the_other_machine_opens() {
+    use axum::http::{StatusCode, header::CONTENT_TYPE};
+    use axum::routing::{get, post};
+    use hangar_server::groups::peers::{PeerBook, PeerClient};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let facts = json!({"server_id": "lab-id", "version": "1", "capable": true, "mem_total": 0, "mem_available": 0, "working": 0,
+        "cpu_pct": null, "repos": [{"project": "git:github.com/a/b", "root": "/lab/b"}], "clone_dir": null}).to_string();
+    let refuse = Arc::new(AtomicBool::new(true));
+    let gate = refuse.clone();
+    let app = axum::Router::new()
+        .route("/api/placement/facts", get(move || { let facts = facts.clone(); async move { ([(CONTENT_TYPE, "application/json")], facts) } }))
+        .route("/api/sessions", post(move || {
+            let refused = gate.swap(false, Ordering::SeqCst);
+            async move {
+                if refused { return (StatusCode::CONFLICT, [(CONTENT_TYPE, "application/json")], json!({"detail": {"code": "erro_x", "msg": "não"}}).to_string()) }
+                (StatusCode::OK, [(CONTENT_TYPE, "application/json")], json!({"name": "filha", "cwd": "/lab/b", "provider": "claude"}).to_string())
+            }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("peers.json");
+    write_json(&file, json!({"lab": {"base_url": format!("http://{addr}"), "token": "tok-lab"}}));
+    let s = scene_tuned(false, Some(PeerClient::new(PeerBook::new(Some(file)))), false, "", Share::Absent, isolated_accounts).await;
+    let repo = s.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [&["init", "-q", "-b", "main"][..], &["remote", "add", "origin", "https://github.com/a/b"],
+                 &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "um"]] {
+        let out = std::process::Command::new("git").arg("-C").arg(&repo).args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    let root = repo.to_string_lossy().into_owned();
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
+    let open = json!({"nome": "filha", "cwd": root, "machine": "lab", "provider": "claude", "inherit": false});
+    let refused = mcp.call("new_session", open.clone()).await;
+    assert!(failed(&refused), "{refused}");
+    assert_eq!(s.state.placement_reservations.lookup(&root), None, "lá recusou: a pasta não fica presa a lá");
+    let opened = mcp.call("new_session", open).await;
+    assert!(!failed(&opened), "{opened}");
+    assert_eq!(s.state.placement_reservations.lookup(&root).as_deref(), Some("lab-id"));
 }
 
 /// As contas e as regras do balanceamento na pasta pessoal da cena, nunca na de quem roda o teste.

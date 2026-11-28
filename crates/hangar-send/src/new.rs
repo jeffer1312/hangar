@@ -8,8 +8,14 @@ use crate::{Ctx, identity, msys_drive_path, parse, text, truthy};
 
 const USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--forcar-conta] [--machine <id|auto>] [--resume <id da conversa>]";
 /// Preparar conta e worktree passa dos 30 s; desistir antes dizia "inacessível" com a sessão nascendo.
+const CREATE_TIMEOUT: f64 = 120.0;
 /// Acima do pior caminho do servidor ao abrir noutra máquina: fatos, clone lá e abertura.
-const CREATE_TIMEOUT: f64 = 900.0;
+const PLACED_CREATE_TIMEOUT: f64 = 900.0;
+
+/// O prazo da criação: com máquina pedida (`auto` ou um id) o servidor pode abrir noutra.
+pub fn create_timeout(machine: &str) -> f64 {
+    if machine.is_empty() { CREATE_TIMEOUT } else { PLACED_CREATE_TIMEOUT }
+}
 
 #[derive(Default)]
 struct Options {
@@ -306,7 +312,7 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
         options.machine = "auto".into();
     }
     let body = creation_body(&name, &options, &creator, customizations);
-    let created = match cx.api(&endpoint.with_total(CREATE_TIMEOUT), "POST", "/api/sessions", Some(body.as_str()), err) {
+    let created = match cx.api(&endpoint.with_total(create_timeout(&options.machine)), "POST", "/api/sessions", Some(body.as_str()), err) {
         Ok(created) => created,
         Err(_) => return 1,
     };
@@ -328,9 +334,9 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
     if !remote.is_empty() {
         name = format!("{remote}::{name}");
     }
-    // Aberta noutra máquina pela escolha: o nome que vale em recado e fechamento é o `alvo`.
-    if let Some(alvo) = result.as_ref().and_then(|result| result.get("alvo")).and_then(Value::as_str).filter(|alvo| !alvo.is_empty()) {
-        name = alvo.to_owned();
+    // Aberta noutra máquina pela escolha: o nome que vale em recado e fechamento é o `target`.
+    if let Some(target) = result.as_ref().and_then(|result| result.get("target")).and_then(Value::as_str).filter(|target| !target.is_empty()) {
+        name = target.to_owned();
     }
     // O provedor que o servidor escolheu é o que a linha mostra; o herdado já sai no sufixo.
     if options.provider.is_empty() && let Some(result) = result.as_ref()

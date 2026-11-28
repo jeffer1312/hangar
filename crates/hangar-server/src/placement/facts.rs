@@ -88,7 +88,8 @@ fn scan(st: &AppState) -> Result<Scan, &'static str> {
     };
     let clone_dir = configured.or_else(|| common_parent(&roots));
     if let Some(dir) = &clone_dir {
-        let children = std::fs::read_dir(dir).into_iter().flatten().flatten()
+        // A pasta de clone escrita na tela pode começar por `~`.
+        let children = std::fs::read_dir(crate::worktree_context::expanded(dir, &st.accounts.env)).into_iter().flatten().flatten()
             .map(|entry| entry.path()).filter(|path| path.join(".git").exists())
             .map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>();
         roots.extend(worktrees::main_repos(children.iter().map(String::as_str)));

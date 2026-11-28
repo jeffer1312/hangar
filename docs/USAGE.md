@@ -563,8 +563,8 @@ processador acima de 80% sai da escolha, e vai a que tem menos sessões trabalha
   `new_session` sem máquina pedem a escolha ao servidor (o `hangar-send` sem sessão de origem, num
   terminal fora de sessão ou no vigia da orquestração, abre nesta máquina); a saída diz
   `máquina: <id> — <motivo>`, e a resposta da tool traz
-  `placement` e `alvo` (`servidor::nome` quando abriu noutra máquina): use o `alvo` para mandar
-  recado, interromper ou fechar. `--machine <id>` (`maquina` na tool; o nome dela no `peers.json` ou o
+  `placement` e `target` (`servidor::nome` quando abriu noutra máquina): use o `target` para mandar
+  recado, interromper ou fechar. `--machine <id>` (`machine` na tool; o nome dela no `peers.json` ou o
   `CP_SERVER_ID` dela) abre naquela máquina, com a
   pasta traduzida para o mesmo projeto lá, numa worktree limpa da branch. Se nenhuma máquina com o
   repositório sobrou, ele é clonado na escolhida e a sessão nasce avisando que precisa instalar as

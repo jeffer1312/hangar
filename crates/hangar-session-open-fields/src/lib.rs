@@ -55,7 +55,7 @@ pub const FIELDS: &[OpenField] = &[
     field("inherit", "inherit", &["--inherit"], false),
     field("link", "link", &["--link"], false),
     // `auto` pede a escolha da máquina; omitido, abre nesta.
-    field("machine", "maquina", &["--machine", "nb"], false),
+    field("machine", "machine", &["--machine", "nb"], false),
 ];
 
 /// Os campos que uma tarefa agendada guarda para abrir a conversa a cada rodada: sem nome, branch,

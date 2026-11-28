@@ -33,7 +33,7 @@ fn new_says_every_open_field() {
 /// lá e onde e por quê.
 #[test]
 fn new_asks_for_the_machine_and_prints_the_target_and_the_reason() {
-    let answer = r#"{"name": "s", "provider": "claude", "alvo": "nb::s",
+    let answer = r#"{"name": "s", "provider": "claude", "target": "nb::s",
         "placement": {"server": "nb", "reason": {"code": "least_loaded", "local_out": "working"}, "text": "nb tem menos sessões trabalhando"}}"#;
     let server = FakeServer::start(vec![Route::new("POST", "/api/sessions", 200, answer)]);
     let home = Home::new(server.port, "");
@@ -49,7 +49,7 @@ fn new_asks_for_the_machine_and_prints_the_target_and_the_reason() {
     assert!(done.stdout.contains("sessão criada: nb::s (/p)") && done.stdout.contains("hangar-send nb::s \"msg\""), "{}", done.stdout);
     assert!(done.stdout.contains("máquina: nb — nb tem menos sessões trabalhando"), "{}", done.stdout);
     // Fora do balanceamento nada é dito além da linha de sempre.
-    let kept = r#"{"name": "s", "provider": "claude", "alvo": "s", "placement": {"server": "pc", "reason": {"code": "not_balanced", "why": "link"}, "text": "x"}}"#;
+    let kept = r#"{"name": "s", "provider": "claude", "target": "s", "placement": {"server": "pc", "reason": {"code": "not_balanced", "why": "link"}, "text": "x"}}"#;
     let server = FakeServer::start(vec![Route::new("POST", "/api/sessions", 200, kept)]);
     let done = Home::new(server.port, "").run(&["--new", "s", "/p"], inside, &host);
     assert_eq!(done.code, 0, "{}", done.stderr);
@@ -69,7 +69,7 @@ fn new_asks_for_the_machine_and_prints_the_target_and_the_reason() {
 /// `servidor::nome --link` vai ao servidor daqui com a máquina fixada: lá a criadora não existe.
 #[test]
 fn a_linked_child_elsewhere_goes_through_this_server_with_the_machine() {
-    let answer = r#"{"name": "s", "provider": "claude", "alvo": "nb::s"}"#;
+    let answer = r#"{"name": "s", "provider": "claude", "target": "nb::s"}"#;
     let server = FakeServer::start(vec![Route::new("POST", "/api/sessions", 200, answer)]);
     let home = Home::new(server.port, "");
     let host = FakeHost::new(None, BTreeMap::from([("*".to_owned(), Answer { rc: 1, ..Answer::default() })]));

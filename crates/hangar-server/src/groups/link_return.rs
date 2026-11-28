@@ -278,7 +278,7 @@ impl Watcher {
             match blocking(move || link_state::ensure_linked(&dir, &names, at)).await {
                 Ok(created) => {
                     for child in created {
-                        report(st, &child, "link_returns_entry_missing", "filha ligada sem registro de ligação; só a resposta ao prompt inicial e as de agora em diante voltam", "");
+                        report(st, &child, "link_returns_entry_missing", "filha ligada sem registro de ligação; só as respostas de agora em diante voltam", "");
                     }
                     self.known.extend(unseen);
                 }
@@ -570,10 +570,12 @@ pub(crate) struct Check<'a> {
 /// Critério 3 pela linha (parada há `SETTLE` e provedor devolvível já filtrados no `round`): resposta
 /// nova desde o último retorno, com menos de `MAX_AGE`. Sem retorno ainda, a de antes da ligação também
 /// passa, e o `decide` só a aceita se for a do `initial_prompt`: a filha de outra máquina é ligada
-/// depois de abrir e pode responder antes.
+/// depois de abrir e pode responder antes. A entrada recuperada não sabe quando a ligação foi feita: só
+/// resposta posterior a ela.
 fn settled(c: &Check) -> bool {
     let (Some(at), Some(link)) = (c.last_reply_at, &c.link) else { return false };
-    link.returned_at.is_none_or(|r| at > r.max(link.linked_at)) && c.now - at < MAX_AGE
+    let early = link.returned_at.is_none() && !link.recovered;
+    (early || at > link.returned_at.unwrap_or(f64::MIN).max(link.linked_at)) && c.now - at < MAX_AGE
 }
 
 /// A resposta lida é de antes da ligação.
@@ -940,6 +942,10 @@ mod tests {
         assert_eq!(decide(&early, &turn(first.clone(), true)).map(|(a, _)| a), Ok("pronto"));
         assert_eq!(decide(&early, &turn(first, false)), Err(Refusal::NotAsked), "sem ler desde o começo, não é o prompt inicial");
         assert_eq!(decide(&early, &turn(asked("[de: pai] x"), true)), Err(Refusal::NotAsked), "outro turno de antes da ligação não volta");
+        // A entrada recuperada (`ensure_linked`) não é a ligação: a resposta de antes dela não volta, nem a do prompt inicial.
+        let recovered = Check { link: Some(LinkReturn { linked_at: NOW - 30.0, recovered: true, ..LinkReturn::default() }), ..check() };
+        assert!(!settled(&recovered));
+        assert!(settled(&Check { last_reply_at: Some(NOW - 10.0), ..recovered }), "a de depois volta");
     }
 
     #[test]

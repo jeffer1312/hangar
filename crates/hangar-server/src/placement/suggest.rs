@@ -9,12 +9,13 @@ use reqwest::Method;
 use serde_json::{Value, json};
 
 use hangar_core::project::ProjectId;
-use hangar_placement::{AgentMode, Exclusion, KnownRepo, MachineFacts, OpenContext, Placement, PlacementConfig, ReasonCode, UiMode, Unpublished, Warning, choose};
+use hangar_placement::{AgentMode, KnownRepo, MachineFacts, OpenContext, Placement, PlacementConfig, ReasonCode, UiMode, choose, text, why_text};
 
 use super::{clone, context, facts, forward};
 use crate::groups::peers::PeerError;
 use crate::routes::{AppState, owner_gate};
-use crate::session_open::{AgentProvider, OpenCaller, OpenError, SessionOpenRequest, SessionSpec, Surface};
+use crate::session_open::resolve::{CreatorFacts, creator_codex_mode, creator_mode};
+use crate::session_open::{AgentProvider, OpenCaller, OpenError, SessionOpenRequest};
 use crate::session_write::{detail_body, json_response};
 
 /// O valor de `machine` que pede a escolha.
@@ -27,8 +28,9 @@ pub enum Step {
     /// Abre nesta máquina; `placement` vai na resposta quando o pedido trouxe `auto`.
     Here(Option<Value>),
     /// Abre em `server` com este corpo (`forward::open`); `placement` é `None` com máquina explícita.
-    /// `cloned`: o repositório foi clonado lá agora (o aviso vai aos `avisos` da resposta).
-    There { server: String, body: Value, placement: Option<Value>, cloned: bool },
+    /// `cloned`: o repositório foi clonado lá agora (o aviso vai aos `avisos` da resposta). `reserve`: a raiz daqui e o
+    /// id de lá, reservados só quando lá confirmar a abertura.
+    There { server: String, body: Value, placement: Option<Value>, cloned: bool, reserve: Option<(String, String)> },
     Refused(OpenError),
 }
 
@@ -105,11 +107,15 @@ async fn choose_step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &
     let (placement, dest) = if auto {
         let (placement, facts) = place(st, &ctx, &config).await;
         *chosen = Some(placement.reason.clone());
-        if matches!(placement.reason, ReasonCode::NotBalanced { .. }) { return Step::Here(Some(wire(&placement))) }
-        // Também no Ask: a pessoa costuma confirmar a sugestão, e a segunda abertura na pasta não se separa dela.
-        if let Some(root) = &ctx.cwd_root { st.placement_reservations.reserve(root, &placement.server); }
-        if config.agent_mode == AgentMode::Ask { return Step::Refused(ask(&placement)) }
-        if placement.server == ctx.local_id { return Step::Here(Some(wire(&placement))) }
+        match chosen_step(&placement, &ctx.local_id, config.agent_mode) {
+            Chosen::Kept => return Step::Here(Some(wire(&placement))),
+            Chosen::Here => {
+                if let Some(root) = &ctx.cwd_root { st.placement_reservations.reserve(root, &placement.server); }
+                return Step::Here(Some(wire(&placement)));
+            }
+            Chosen::Ask => return Step::Refused(ask(&placement)),
+            Chosen::There => {}
+        }
         let dest = facts.into_iter().find(|(_, f)| f.server_id == placement.server).ok_or(None);
         (Some(placement), dest)
     } else {
@@ -123,7 +129,7 @@ async fn choose_step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &
             format!("{server} está numa versão sem a escolha de máquina: abra com `{server}::<nome>`")).with_params(json!({"server": server}))),
         Err(dropped) => return Step::Refused(peer_unavailable(&fallback, dropped.as_ref())),
     };
-    if placement.is_none() && let Some(root) = &ctx.cwd_root { st.placement_reservations.reserve(root, &dest.server_id); }
+    let reserve = ctx.cwd_root.clone().map(|root| (root, dest.server_id.clone()));
     let inherited = match inherited(st, request).await {
         Ok(inherited) => inherited,
         Err(error) => return Step::Refused(error),
@@ -143,7 +149,7 @@ async fn choose_step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &
             if cloned {
                 body["initial_prompt"] = json!(crate::session_open::baton::fresh_clone_prompt(body["initial_prompt"].as_str()));
             }
-            Step::There { server, body, placement: placement.as_ref().map(wire), cloned }
+            Step::There { server, body, placement: placement.as_ref().map(wire), cloned, reserve }
         }
         None => Step::Refused(clone_unavailable(&server, placement.as_ref())),
     }
@@ -191,26 +197,70 @@ async fn suggestion(st: &Arc<AppState>, request: &SessionOpenRequest) -> Placeme
     }
 }
 
-/// A escolha com os fatos desta máquina e, só se ela passou do limite ou uma regra aponta outra, os das
-/// outras, em paralelo. Sem os fatos daqui não balanceia. Cada fato vai com a chave do `peers.json` que alcança
-/// a máquina (a daqui, com o id daqui).
+/// O que a abertura `auto` faz com a escolha.
+#[derive(Debug, PartialEq)]
+enum Chosen {
+    /// Fora do balanceamento: abre aqui sem reservar a pasta.
+    Kept,
+    Here,
+    /// O Ask só pergunta quando a escolha sai desta máquina: aqui não há o que confirmar.
+    Ask,
+    There,
+}
+
+fn chosen_step(placement: &Placement, local: &str, mode: AgentMode) -> Chosen {
+    if matches!(placement.reason, ReasonCode::NotBalanced { .. }) { Chosen::Kept }
+    else if placement.server == local { Chosen::Here }
+    else if mode == AgentMode::Ask { Chosen::Ask }
+    else { Chosen::There }
+}
+
+/// A escolha com os fatos lidos agora. Sem os fatos daqui não balanceia (vai ao diário e abre aqui).
 async fn place(st: &Arc<AppState>, ctx: &OpenContext, config: &PlacementConfig) -> (Placement, Vec<(String, MachineFacts)>) {
-    let now = Utc::now();
-    // Mesma pasta, trabalho não publicado e pasta sem git decidem sem fato nenhum.
-    let pinned = hangar_placement::pinned(ctx, config);
-    if let Some(pinned) = pinned.as_ref().filter(|p| p.server == ctx.local_id) { return (pinned.clone(), Vec::new()) }
-    // A escolha não olha os repositórios daqui: a pasta do pedido é desta máquina.
-    let mut seen = match facts::local(st, None, false).await {
-        Ok(local) => vec![(ctx.local_id.clone(), local)],
-        Err(code) => { skipped(st, code); return (not_balanced(&ctx.local_id, code), Vec::new()) }
-    };
-    let only = |seen: &[(String, MachineFacts)]| seen.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>();
-    if pinned.is_none() {
-        let first = choose(ctx, &only(&seen), config, now);
-        if first.server == ctx.local_id && first.warnings.is_empty() { return (first, seen) }
+    let local = || async { facts::local(st, None, false).await };
+    let others = || gather(st, ctx.cwd_project.as_ref(), &ctx.local_id);
+    match place_with(ctx, config, Utc::now(), local, others).await {
+        Ok(chosen) => chosen,
+        Err(code) => { skipped(st, code); (not_balanced(&ctx.local_id, code), Vec::new()) }
     }
-    seen.extend(gather(st, ctx.cwd_project.as_ref(), &ctx.local_id).await);
-    (choose(ctx, &only(&seen), config, now), seen)
+}
+
+/// A escolha com os fatos desta máquina (`local`) e, só se ela passou do limite ou uma regra aponta outra, os das
+/// outras (`others`, em paralelo). Cada fato vai com a chave do `peers.json` que alcança a máquina (a daqui, com o id
+/// daqui). A pasta reservada para outra máquina só lê os das outras; com a reservada fora deles (desligou), a
+/// reserva cai e a pasta volta à escolha. `Err`: os fatos daqui, quando precisos, não vieram.
+async fn place_with<L, O>(ctx: &OpenContext, config: &PlacementConfig, now: chrono::DateTime<Utc>, local: impl FnOnce() -> L,
+    others: impl FnOnce() -> O) -> Result<(Placement, Vec<(String, MachineFacts)>), &'static str>
+where L: std::future::Future<Output = Result<MachineFacts, &'static str>>, O: std::future::Future<Output = Vec<(String, MachineFacts)>> {
+    // Lidos uma vez só, no primeiro caminho que precisar deles.
+    let mut others = Some(others);
+    // Mesma pasta, trabalho não publicado e pasta sem git decidem sem fato nenhum.
+    let free;
+    let (ctx, gathered) = match hangar_placement::pinned(ctx, config) {
+        Some(pinned) if pinned.server == ctx.local_id => return Ok((pinned, Vec::new())),
+        // Só a reserva prende noutra máquina (sessão daqui na pasta prende aqui).
+        Some(pinned) => {
+            let seen = match others.take() { Some(others) => others().await, None => Vec::new() };
+            if seen.iter().any(|(_, f)| f.server_id == pinned.server) { return Ok((pinned, seen)) }
+            free = OpenContext { same_folder_server: None, ..ctx.clone() };
+            if let Some(pinned) = hangar_placement::pinned(&free, config) { return Ok((pinned, Vec::new())) }
+            (&free, Some(seen))
+        }
+        None => (ctx, None),
+    };
+    // A escolha não olha os repositórios daqui: a pasta do pedido é desta máquina.
+    let mut seen = vec![(ctx.local_id.clone(), local().await?)];
+    let only = |seen: &[(String, MachineFacts)]| seen.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>();
+    let rest = match gathered {
+        Some(rest) => rest,
+        None => {
+            let first = choose(ctx, &only(&seen), config, now);
+            if first.server == ctx.local_id && first.warnings.is_empty() { return Ok((first, seen)) }
+            match others.take() { Some(others) => others().await, None => Vec::new() }
+        }
+    };
+    seen.extend(rest);
+    Ok((choose(ctx, &only(&seen), config, now), seen))
 }
 
 /// Os fatos das máquinas ligadas do `peers.json`; a que não responde em 2 s fica fora, e a que se diz esta também.
@@ -352,28 +402,35 @@ pub(super) async fn load_config(st: &AppState) -> Result<PlacementConfig, &'stat
     }
 }
 
-/// O que viria da criadora, resolvido aqui pela mesma resolução da abertura: lá ela não existe. Vai só o que
-/// veio dela; o que veio do padrão salvo daqui fica de fora, e lá vale o padrão salvo de lá.
+/// O que vem da criadora: lá ela não existe. Só a criadora é lida aqui, sem a resolução da abertura (nome em uso,
+/// cota, conta), que é de lá. Modelo e esforço nunca vêm dela; o padrão salvo daqui fica de fora, e lá vale o de lá.
 async fn inherited(st: &Arc<AppState>, request: &SessionOpenRequest) -> Result<forward::Inherited, OpenError> {
-    if request.creator.is_none() || request.inherit == Some(false) { return Ok(forward::Inherited::default()) }
-    let (resolved, creator) = crate::session_open::server::resolve_here(st, request).await?;
-    Ok(from_creator(request, &resolved.spec, resolved.provider_source, creator.map(|c| c.headless)))
+    let Some(name) = request.creator.as_deref().filter(|_| request.inherit != Some(false)) else { return Ok(forward::Inherited::default()) };
+    let creator = crate::session_open::server::creator_here(st, name).await?;
+    Ok(creator.map(|creator| from_creator(request, &creator)).unwrap_or_default())
 }
 
-/// `creator_headless`: a superfície da criadora encontrada aqui.
-fn from_creator(request: &SessionOpenRequest, spec: &SessionSpec, provider_source: Option<&str>, creator_headless: Option<bool>)
-    -> forward::Inherited {
-    // Com `inherit: true` a criadora vem antes do padrão salvo; sem ele, modelo, esforço e modo são do padrão.
-    let asked = request.inherit == Some(true);
-    // O Codex com terminal recusa modo pedido: lá ele fica com o padrão de lá.
-    let terminal_codex = spec.provider == AgentProvider::Codex && spec.surface == Surface::Terminal;
-    let surfaces = matches!(spec.provider, AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity);
+fn from_creator(request: &SessionOpenRequest, creator: &CreatorFacts) -> forward::Inherited {
+    // Conta, motor e perfil ficaram aqui (`kept_by_request`); o modelo de subagente é do Claude, como na abertura.
+    let provider = match request.provider.as_deref() {
+        Some(name) => AgentProvider::parse(name),
+        None if request.subagent_model.is_some() => Some(AgentProvider::Claude),
+        None => Some(creator.provider),
+    };
+    let surfaces = matches!(provider, Some(AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity));
+    let headless = (request.headless.is_none() && surfaces && !request.read_only).then_some(creator.headless);
+    // Com `inherit: true` o modo da criadora vem antes do padrão salvo; sem ele vale o padrão de lá.
+    let asked = request.inherit == Some(true) && matches!(creator.provider, AgentProvider::Claude | AgentProvider::Codex);
+    let permission_mode = match provider {
+        Some(AgentProvider::Claude) if asked => creator_mode(creator),
+        // O Codex com terminal recusa modo pedido: lá ele fica com o padrão de lá, e sem superfície sabida também.
+        Some(AgentProvider::Codex) if asked && request.headless.or(headless) == Some(true) => creator_codex_mode(creator),
+        _ => None,
+    };
     forward::Inherited {
-        provider: (provider_source == Some("inherited")).then(|| spec.provider.name().to_owned()),
-        model: spec.model.clone().filter(|_| asked),
-        effort: spec.effort.clone().filter(|_| asked),
-        permission_mode: spec.permission_mode.filter(|_| asked && !terminal_codex).map(|mode| mode.name().to_owned()),
-        headless: creator_headless.filter(|_| request.headless.is_none() && surfaces && !request.read_only),
+        provider: (request.provider.is_none() && request.subagent_model.is_none()).then(|| creator.provider.name().to_owned()),
+        permission_mode: permission_mode.map(|mode| mode.name().to_owned()),
+        headless,
     }
 }
 
@@ -385,14 +442,14 @@ fn skipped(st: &AppState, code: &str) {
 fn ask(placement: &Placement) -> OpenError {
     let server = &placement.server;
     OpenError::new(409, "placement_ask", format!("o balanceamento pede confirmação: a sugestão é abrir em {server} ({}). Pergunte à \
-        pessoa e abra de novo com a máquina escolhida (`maquina: \"{server}\"` no new_session, `--machine {server}` no hangar-send)",
+        pessoa e abra de novo com a máquina escolhida (`machine: \"{server}\"` no new_session, `--machine {server}` no hangar-send)",
         text(placement)))
         .with_params(json!({"placement": wire(placement)}))
 }
 
 fn clone_unavailable(server: &str, placement: Option<&Placement>) -> OpenError {
     OpenError::new(409, "placement_clone_unavailable", format!("{server} não tem o repositório desta pasta nem pasta de clone \
-        conhecida: escolha outra máquina (`maquina` no new_session, `--machine` no hangar-send) ou a pasta de clone dela na tela"))
+        conhecida: escolha outra máquina (`machine` no new_session, `--machine` no hangar-send) ou a pasta de clone dela na tela"))
         .with_params(json!({"server": server, "placement": placement.map(wire)}))
 }
 
@@ -407,60 +464,10 @@ pub fn wire(placement: &Placement) -> Value {
     value
 }
 
-pub fn text(p: &Placement) -> String {
-    let mut text = match &p.reason {
-        ReasonCode::SameFolder => format!("mesma pasta de uma sessão aberta em {}", p.server),
-        ReasonCode::Unpublished { why } => format!("{}: fica nesta máquina", match why {
-            Unpublished::Ahead => "commit não enviado",
-            Unpublished::Dirty => "mudança não commitada",
-            Unpublished::NoUpstream => "branch sem upstream",
-        }),
-        ReasonCode::PlainDir => "pasta sem git (ou sem origin) que só existe nesta máquina".to_owned(),
-        ReasonCode::ProjectRule { project } => format!("a regra do projeto {} manda para {}", project.0, p.server),
-        ReasonCode::LocalWithinLimits => "esta máquina está dentro dos limites".to_owned(),
-        ReasonCode::LeastLoaded { local_out } => format!("esta máquina saiu da escolha ({}); {} tem menos sessões trabalhando",
-            exclusion(*local_out), p.server),
-        ReasonCode::NoCandidate => "nenhuma máquina dentro dos limites: fica nesta".to_owned(),
-        ReasonCode::NotBalanced { why } => format!("fora do balanceamento ({})", why_text(why)),
-    };
-    for warning in &p.warnings {
-        text.push_str("; ");
-        text.push_str(&match warning {
-            Warning::RuleServerOut { server, why } => format!("a máquina da regra, {server}, ficou fora ({})", exclusion(*why)),
-            Warning::RuleOverridden { server } => format!("a regra do projeto mandaria para {server}"),
-            Warning::AllOverLimit => "todas as máquinas passaram do limite".to_owned(),
-        });
-    }
-    if let Some(clone) = &p.clone { text.push_str(&format!("; {} não tem o repositório: clonar em {}", p.server, clone.dir)); }
-    text
-}
-
-fn exclusion(why: Exclusion) -> &'static str {
-    match why {
-        Exclusion::Missing => "desligada ou sem resposta",
-        Exclusion::NotCapable => "versão sem a escolha de máquina",
-        Exclusion::Schedule => "regra de horário",
-        Exclusion::Memory => "pouca memória livre",
-        Exclusion::Working => "muitas sessões trabalhando",
-        Exclusion::Cpu => "processador acima do limite",
-        Exclusion::NoCloneDir => "sem o repositório e sem pasta de clone",
-    }
-}
-
-fn why_text(why: &str) -> &str {
-    match why {
-        "guest" => "pedido de convidado",
-        "prewarm" => "reserva pré-aquecida",
-        "local_field" => "conta, motor ou perfil desta máquina",
-        "orq" => "orquestração",
-        "mode_off" => "balanceamento desligado",
-        other => other,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hangar_placement::{Exclusion, Warning};
 
     #[test]
     fn what_only_exists_here_keeps_the_request_here() {
@@ -537,33 +544,71 @@ mod tests {
         assert!(!leads(&rows, "executor") && !leads(&[], "arb"));
     }
 
-    fn spec(provider: AgentProvider, surface: Surface) -> SessionSpec {
-        use crate::session_open::{Account, AccountSource, PermissionMode, SPEC_VERSION};
-        SessionSpec { version: SPEC_VERSION, key: "k".into(), name: "s".into(), cwd: "/w".into(), provider, surface,
-            account: Account::Default, account_source: AccountSource::Default, model: Some("opus".into()), effort: Some("high".into()),
-            service_tier: None, permission_mode: Some(PermissionMode::BypassPermissions), subagent_model: None, customizations: None,
-            jev: false, code_mode: false, read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
-            name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false, auto_continue_off: false }
+    fn creator(provider: AgentProvider, headless: bool, mode: &str) -> CreatorFacts {
+        CreatorFacts { provider, headless, config_dir: Ok(None), permission_mode: Some(mode.into()), codex_account: None }
     }
 
     #[test]
     fn only_what_came_from_the_creator_goes_explicit() {
         let asked = SessionOpenRequest { creator: Some("pai".into()), ..Default::default() };
-        let claude = spec(AgentProvider::Claude, Surface::Headless);
-        // Sem `inherit: true`, modelo, esforço e modo vieram do padrão salvo daqui: lá vale o de lá.
-        let plain = from_creator(&asked, &claude, Some("inherited"), Some(true));
+        let claude = creator(AgentProvider::Claude, true, "bypassPermissions");
+        // Sem `inherit: true` o modo é o padrão salvo de lá; o provedor e a superfície são da criadora.
+        let plain = from_creator(&asked, &claude);
         assert_eq!(plain, forward::Inherited { provider: Some("claude".into()), headless: Some(true), ..Default::default() });
-        let with = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked.clone() }, &claude, Some("inherited"), Some(true));
-        assert_eq!((with.model.as_deref(), with.effort.as_deref(), with.permission_mode.as_deref()),
-            (Some("opus"), Some("high"), Some("bypassPermissions")));
-        // Provedor do padrão daqui, criadora não achada ou superfície pedida: nada disso vai.
-        let none = from_creator(&SessionOpenRequest { headless: Some(false), ..asked.clone() }, &claude, Some("default"), Some(true));
+        let with = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked.clone() }, &claude);
+        assert_eq!(with.permission_mode.as_deref(), Some("bypassPermissions"));
+        // Provedor e superfície pedidos não vêm dela.
+        let none = from_creator(&SessionOpenRequest { provider: Some("claude".into()), headless: Some(false), ..asked.clone() }, &claude);
         assert_eq!(none, forward::Inherited::default());
-        assert_eq!(from_creator(&asked, &claude, Some("remembered"), None), forward::Inherited::default());
-        // Codex com terminal: lá fica com o modo de lá.
-        let codex = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked }, &spec(AgentProvider::Codex, Surface::Terminal),
-            Some("inherited"), Some(false));
-        assert_eq!((codex.permission_mode, codex.headless), (None, Some(false)));
+        // Codex com terminal: lá fica com o modo de lá; sem terminal, o modo Codex da criadora.
+        let terminal = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked.clone() }, &creator(AgentProvider::Codex, false, "Full Access"));
+        assert_eq!((terminal.permission_mode, terminal.headless), (None, Some(false)));
+        let headless = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked }, &creator(AgentProvider::Codex, true, "Full Access"));
+        assert_eq!(headless.permission_mode.as_deref(), Some("Full Access"));
+    }
+
+    #[test]
+    fn ask_only_asks_when_the_choice_leaves_this_machine() {
+        let at = |server: &str| Placement { server: server.into(), reason: ReasonCode::LocalWithinLimits, clone: None, warnings: Vec::new() };
+        assert_eq!(chosen_step(&at("pc"), "pc", AgentMode::Ask), Chosen::Here);
+        assert_eq!(chosen_step(&at("nb"), "pc", AgentMode::Ask), Chosen::Ask);
+        assert_eq!(chosen_step(&at("nb"), "pc", AgentMode::Auto), Chosen::There);
+        assert_eq!(chosen_step(&not_balanced("pc", "orq"), "pc", AgentMode::Ask), Chosen::Kept);
+    }
+
+    fn machine(id: &str, working: u32) -> MachineFacts {
+        MachineFacts { server_id: id.into(), version: "1".into(), capable: true, mem_total: 0, mem_available: 0, working, cpu_pct: None,
+            repos: Vec::new(), clone_dir: None }
+    }
+
+    fn reserved_for(server: &str) -> OpenContext {
+        OpenContext { local_id: "pc".into(), cwd_root: Some("/w/repo".into()), same_folder_server: Some(server.into()), ..Default::default() }
+    }
+
+    fn now() -> chrono::DateTime<Utc> { chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 11, 27, 15, 0, 0).unwrap() }
+
+    #[tokio::test]
+    async fn a_folder_reserved_elsewhere_does_not_read_the_facts_here() {
+        let config = PlacementConfig::default();
+        let local = || async { Err("placement_facts_list_unavailable") };
+        let others = || async { vec![("notebook".to_owned(), machine("nb", 9))] };
+        let (placement, seen) = place_with(&reserved_for("nb"), &config, now(), local, others).await.unwrap();
+        assert_eq!((placement.server.as_str(), placement.reason), ("nb", ReasonCode::SameFolder));
+        assert_eq!(seen.len(), 1, "os fatos de lá seguem para o encaminhamento");
+    }
+
+    #[tokio::test]
+    async fn a_reservation_for_a_machine_that_left_falls_back_to_the_choice() {
+        let config = PlacementConfig::default();
+        let local = || async { Ok(machine("pc", 0)) };
+        let others = || async { vec![("vm".to_owned(), machine("vm", 0))] };
+        let (placement, _) = place_with(&reserved_for("nb"), &config, now(), local, others).await.unwrap();
+        assert_eq!((placement.server.as_str(), placement.reason), ("pc", ReasonCode::LocalWithinLimits));
+        // Daqui fora do limite, a carga escolhe entre as que responderam, com os fatos já lidos.
+        let busy = || async { Ok(machine("pc", 9)) };
+        let others = || async { vec![("vm".to_owned(), machine("vm", 0))] };
+        let (placement, _) = place_with(&reserved_for("nb"), &config, now(), busy, others).await.unwrap();
+        assert_eq!(placement.server, "vm");
     }
 
     #[test]
@@ -571,6 +616,9 @@ mod tests {
         use crate::groups::peers::{CLONE_TIMEOUT, OPEN_TIMEOUT};
         let worst = FACTS_WAIT * 2 + CLONE_TIMEOUT + OPEN_TIMEOUT;
         assert!(Duration::from_secs(hangar_registration::mcp_register::TOOL_TIMEOUT_S) > worst);
+        // O `hangar-send --new` só espera tanto com máquina pedida (`auto` ou id); sem ela, o prazo curto de sempre.
+        for machine in ["auto", "nb"] { assert!(Duration::from_secs_f64(hangar_send::create_timeout(machine)) > worst, "{machine}"); }
+        assert!(Duration::from_secs_f64(hangar_send::create_timeout("")) < worst);
     }
 
     #[test]
@@ -579,8 +627,7 @@ mod tests {
             warnings: vec![Warning::RuleServerOut { server: "vm".into(), why: Exclusion::Missing }] };
         let value = wire(&p);
         assert_eq!(value["reason"], json!({"code": "least_loaded", "local_out": "working"}));
-        assert_eq!(value["text"], "esta máquina saiu da escolha (muitas sessões trabalhando); nb tem menos sessões trabalhando; \
-            a máquina da regra, vm, ficou fora (desligada ou sem resposta)");
+        assert_eq!(value["text"], text(&p));
         let kept = wire(&not_balanced("pc", "orq"));
         assert_eq!((&kept["server"], &kept["reason"]), (&json!("pc"), &json!({"code": "not_balanced", "why": "orq"})));
         assert_eq!(kept["text"], "fora do balanceamento (orquestração)");
@@ -592,8 +639,8 @@ mod tests {
         let error = ask(&p);
         assert_eq!((error.status, error.code), (409, Some("placement_ask")));
         assert_eq!(error.params["placement"]["server"], "nb");
-        // O id da sugestão é aceito pelo `--machine`/`maquina` (`machine_key`): a mensagem o cita pronto.
-        assert!(error.msg.contains("--machine nb") && error.msg.contains(r#"maquina: "nb""#), "{}", error.msg);
+        // O id da sugestão é aceito pelo `--machine`/`machine` (`machine_key`): a mensagem o cita pronto.
+        assert!(error.msg.contains("--machine nb") && error.msg.contains(r#"machine: "nb""#), "{}", error.msg);
         let error = clone_unavailable("vm", None);
         assert_eq!((error.status, error.code), (409, Some("placement_clone_unavailable")));
         assert!(error.msg.starts_with("vm "), "{}", error.msg);
@@ -609,7 +656,7 @@ mod tests {
         assert!(telemetry.counters().is_empty(), "convidado não conta");
         count_placed(Some(&telemetry), &OpenCaller::Owner, None, &Step::Here(None));
         count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&ReasonCode::NotBalanced { why: "orq".into() }), &Step::Here(None));
-        let there = Step::There { server: "notebook".into(), body: json!({}), placement: None, cloned: true };
+        let there = Step::There { server: "notebook".into(), body: json!({}), placement: None, cloned: true, reserve: None };
         count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&ReasonCode::LeastLoaded { local_out: Exclusion::Working }), &there);
         count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&rule), &Step::Refused(ask(&Placement { server: "nb".into(),
             reason: rule.clone(), clone: None, warnings: Vec::new() })));

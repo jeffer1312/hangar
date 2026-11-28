@@ -15,12 +15,10 @@ use crate::session_write::detail_body;
 /// A parte do prazo da abertura que a busca no remoto pode gastar: o resto é da criação lá.
 const FETCH_SHARE: Duration = Duration::from_secs(60);
 
-/// O que viria da criadora, resolvido nesta máquina: lá nada herda.
+/// O que viria da criadora, lido nesta máquina: lá nada herda.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Inherited {
     pub provider: Option<String>,
-    pub model: Option<String>,
-    pub effort: Option<String>,
     pub permission_mode: Option<String>,
     pub headless: Option<bool>,
 }
@@ -50,8 +48,6 @@ pub fn body(request: &SessionOpenRequest, ctx: &OpenContext, dest: &MachineFacts
     out.inherit = None;
     let fill = |asked: &mut Option<String>, from: &Option<String>| { if asked.is_none() { asked.clone_from(from); } };
     fill(&mut out.provider, &inherited.provider);
-    fill(&mut out.model, &inherited.model);
-    fill(&mut out.effort, &inherited.effort);
     fill(&mut out.permission_mode, &inherited.permission_mode);
     out.headless = out.headless.or(inherited.headless);
     serde_json::to_value(&out).ok()
@@ -175,13 +171,13 @@ mod tests {
 
     #[test]
     fn what_comes_from_the_creator_goes_explicit_and_the_asked_value_wins() {
-        let inherited = Inherited { provider: Some("claude".into()), model: Some("opus".into()), effort: Some("high".into()),
-            permission_mode: Some("bypassPermissions".into()), headless: Some(true) };
-        let asked = SessionOpenRequest { model: Some("sonnet".into()), headless: Some(false), ..request("/home/j") };
+        let inherited = Inherited { provider: Some("claude".into()), permission_mode: Some("bypassPermissions".into()), headless: Some(true) };
+        let asked = SessionOpenRequest { permission_mode: Some("acceptEdits".into()), headless: Some(false), ..request("/home/j") };
         let home = OpenContext { local_id: "pc".into(), ..Default::default() };
         let body = body(&asked, &home, &nb(), &inherited).unwrap();
-        assert_eq!((&body["provider"], &body["model"], &body["effort"]), (&json!("claude"), &json!("sonnet"), &json!("high")));
-        assert_eq!((&body["permission_mode"], &body["headless"]), (&json!("bypassPermissions"), &json!(false)));
+        assert_eq!((&body["provider"], &body["permission_mode"], &body["headless"]), (&json!("claude"), &json!("acceptEdits"), &json!(false)));
+        let plain = super::body(&request("/home/j"), &home, &nb(), &inherited).unwrap();
+        assert_eq!((&plain["permission_mode"], &plain["headless"]), (&json!("bypassPermissions"), &json!(true)));
     }
 
     #[test]
