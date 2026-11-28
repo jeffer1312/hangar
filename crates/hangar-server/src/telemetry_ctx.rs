@@ -24,9 +24,17 @@ static SESSION_KEYS: LazyLock<Vec<((Provider, Surface), &'static str)>> = LazyLo
     })).collect()
 });
 
+/// A última leitura vale por alguns segundos: falhas em rajada não releem memória e discos a cada uma.
+static LAST: Mutex<Option<(std::time::Instant, Option<HostBlock>)>> = Mutex::new(None);
+const HOST_FRESH: std::time::Duration = std::time::Duration::from_secs(15);
+
 fn host() -> Option<HostBlock> {
     const NONE: DirSize = DirSize { bytes: None, computing: false };
-    HOST.lock().unwrap_or_else(|e| e.into_inner()).read(NONE, NONE)
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, block)) = last.as_ref().filter(|(at, _)| at.elapsed() < HOST_FRESH) { let _ = at; return block.clone(); }
+    let block = HOST.lock().unwrap_or_else(|e| e.into_inner()).read(NONE, NONE);
+    *last = Some((std::time::Instant::now(), block.clone()));
+    block
 }
 
 /// Servidor de pé há, memória e disco livres, carga e sessões vivas por provedor e superfície.

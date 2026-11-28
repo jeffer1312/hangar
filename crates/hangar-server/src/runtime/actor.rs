@@ -1834,7 +1834,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     },
                     Some(IoEvent::End { code }) => {
                         if respawn.next_at.is_none() { respawn.was_working = engine.view()["in_progress"] == true; }
-                        effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":code})),clock(start))?);
+                        let asked = closed.load(Ordering::Acquire);
+                        effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":code,"asked":asked})),clock(start))?);
                         if target.provider=="claude" {publish(&events,&target,&mut revision,"claude_exit",json!({"conversation":engine.view()["conversation"]}));}
                         respawn.kill = true;
                         effects.extend(after_exit(&mut respawn,&mut engine,&target,clock(start).monotonic_s,closed.load(Ordering::Acquire)));
@@ -1842,7 +1843,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     None => {
                         io_open = false; enter_error(&mut error,&target,failure("cano_closed"));
                         if respawn.next_at.is_none() && !respawn.kill { respawn.was_working = engine.view()["in_progress"] == true; }
-                        effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null})),clock(start))?);
+                        let asked = closed.load(Ordering::Acquire);
+                        effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null,"asked":asked})),clock(start))?);
                         if target.provider=="claude" {publish(&events,&target,&mut revision,"claude_exit",json!({"conversation":engine.view()["conversation"]}));}
                         effects.extend(after_exit(&mut respawn,&mut engine,&target,clock(start).monotonic_s,closed.load(Ordering::Acquire)));
                     },
@@ -3163,6 +3165,8 @@ fn take_mods(engine:&mut RuntimeEngine,waiters:&mut ModsWaiters,token:&mut u64,c
 /// A causa (`events::HEALTH`) e o `exit` da saída do processo pela linha `cano_saiu`; `None` quando não é queda
 /// (0 ou SIGTERM com a sessão parada). Código negativo é o sinal. O ator diz em `cause` quando foi ele quem viu a queda.
 pub(crate) fn crash(line:&Value,working:bool) -> Option<(&'static str,&'static str)> {
+    // O próprio Hangar parou o processo (fechar, reabrir, trocar de conta): não é queda.
+    if line["asked"] == true { return None; }
     let seen = match line["cause"].as_str() { Some("cano_died_socket_down")=>Some("cano_died_socket_down"), Some("respawn_failed")=>Some("respawn_failed"), _=>None };
     let Some(rc) = line["rc"].as_i64() else { return Some((seen.unwrap_or("pipe_closed_no_rc"),"none")) };
     let exit = match rc { 0=>"code_0", 1=>"code_1", -9=>"sigkill", -15=>"sigterm", -11=>"sigsegv", -6=>"sigabrt", rc if rc < 0=>"signal_other", _=>"code_other" };
@@ -3199,6 +3203,7 @@ mod tests {
         assert_eq!(crash(&json!({"type":"cano_saiu","rc":null,"cause":"cano_died_socket_down"}),false),Some(("cano_died_socket_down","none")));
         assert_eq!(crash(&json!({"type":"cano_saiu","rc":null,"cause":"respawn_failed"}),false),Some(("respawn_failed","none")));
         assert_eq!(crash(&json!({"type":"cano_saiu","rc":null,"cause":"texto"}),false),Some(("pipe_closed_no_rc","none")),"só causa do ator");
+        assert_eq!(crash(&json!({"type":"cano_saiu","rc":-9,"asked":true}),true),None,"parada pedida pelo Hangar");
     }
 
     fn commit_target()->RuntimeTarget {

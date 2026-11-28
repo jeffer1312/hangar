@@ -78,6 +78,21 @@ pub(crate) fn remove_day(home: &Path, day: &str) -> io::Result<()> {
     }
 }
 
+/// Grava o carimbo deste binário e devolve o que estava lá (o da vida anterior do servidor).
+pub(crate) fn swap_build(home: &Path, build: &str) -> io::Result<Option<String>> {
+    let path = root(home).join("build");
+    let previous = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text.trim().to_owned()).filter(|text| is_name(text)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    if previous.as_deref() != Some(build) {
+        std::fs::create_dir_all(root(home))?;
+        hangar_core::fs::atomic_write(&path, build.as_bytes())?;
+    }
+    Ok(previous)
+}
+
 /// Os dias na fila, do mais antigo ao mais novo.
 pub(crate) fn days(home: &Path) -> io::Result<Vec<String>> {
     let entries = match std::fs::read_dir(queue_dir(home)) {

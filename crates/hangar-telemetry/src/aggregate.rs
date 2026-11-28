@@ -44,6 +44,8 @@ pub struct Telemetry {
     pub(crate) build: String,
     /// Ambiente da máquina em valores fechados, renovado pelo servidor.
     machine: Mutex<BTreeMap<String, String>>,
+    /// O binário da vida anterior do servidor, quando era outro: a queda dela vai no lote dela.
+    previous_build: Option<String>,
     pub(crate) lookup: EnvLookup,
     pub(crate) clock: Clock,
     enabled: AtomicBool,
@@ -173,8 +175,11 @@ impl Telemetry {
         let now = clock();
         let (state, recovered) = state::load(&config.home, now)?;
         let batch_env = Env::new(&config.version, config.release_commit.as_deref(), &config.channel, &config.install);
+        let build = format!("{}-{}", batch_env.version, batch_env.commit);
+        let previous_build = queue::swap_build(&config.home, &build);
         let telemetry = Telemetry {
-            build: format!("{}-{}", batch_env.version, batch_env.commit),
+            previous_build: previous_build.as_ref().ok().cloned().flatten().filter(|previous| *previous != build),
+            build,
             machine: Mutex::new(BTreeMap::new()),
             batch_env,
             home: config.home,
@@ -186,7 +191,7 @@ impl Telemetry {
             live: Mutex::new(Live::new(Day::new(day_of(now)), false)),
             io: Mutex::new(()),
             post_gate: Mutex::new(None),
-            notes: Mutex::new(recovered.into_iter().map(Failure::Disk).collect()),
+            notes: Mutex::new(recovered.into_iter().chain(previous_build.err()).map(Failure::Disk).collect()),
             unreachable_day: Mutex::new(None),
             detail: OnceLock::new(),
             refusal_post: OnceLock::new(),
@@ -349,6 +354,9 @@ impl Telemetry {
 
     /// `versão-commit` deste binário, o carimbo que o diário põe nas linhas da coleta.
     pub fn build(&self) -> &str { &self.build }
+
+    /// O carimbo da vida anterior do servidor; o deste binário quando era o mesmo ou não se sabe.
+    pub fn previous_build(&self) -> &str { self.previous_build.as_deref().unwrap_or(&self.build) }
 
     /// Troca o ambiente da máquina que sai nos próximos pacotes; chave ou valor fora de `events::MACHINE` fica fora.
     pub fn set_machine(&self, facts: impl IntoIterator<Item = (&'static str, String)>) {
@@ -887,6 +895,16 @@ pub(crate) mod tests {
         telemetry.save().unwrap();
         let file = queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap();
         assert_eq!(file.counters, counters);
+    }
+
+    #[test]
+    fn telemetry_knows_the_build_of_the_previous_server_life() {
+        let fx = Fixture::new();
+        let none: EnvLookup = Arc::new(|_: &str| -> Option<String> { None });
+        assert_eq!(fx.start_version("0.42.0", none.clone()).previous_build(), "0.42.0-dev", "primeira vida: o próprio");
+        let next = fx.start_version("0.43.0", none.clone());
+        assert_eq!((next.build(), next.previous_build()), ("0.43.0-dev", "0.42.0-dev"));
+        assert_eq!(fx.start_version("0.43.0", none).previous_build(), "0.43.0-dev");
     }
 
     #[test]

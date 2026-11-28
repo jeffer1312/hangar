@@ -18,7 +18,7 @@ fn telemetry_lines_carry_the_binary_the_context_and_the_cause() {
         Some("desktop_app_closed"), &ctx).unwrap();
     record_owner_action(dir.path(), OwnerAction::Http, "c1", now(), "session.rename", "request", None, 3, None, &ctx).unwrap();
     let at = DateTime::parse_from_rfc3339("2026-11-16T09:00:00-03:00").unwrap();
-    record_health(dir.path(), "c1", now(), Some(at), "health.server_exit", "server_exit", "core_dump", Severity::Error, &ctx).unwrap();
+    record_health(dir.path(), "c1", now(), Some(at), "health.server_exit", "server_exit", "core_dump", Severity::Error, &ctx, Some("0.41.0-abc1234")).unwrap();
     let body = json!([{"evento": "sse.caiu", "nivel": "aviso", "ts": "2026-11-16T12:59:00Z", "cliente": "ios", "cli": "a1"},
                       {"evento": "tela.ver", "nivel": "ok", "ts": "2026-11-16T12:59:01Z"},
                       {"evento": "api.sem_rede", "nivel": "erro", "ts": "2026-11-16T12:00:00Z"}]);
@@ -26,7 +26,8 @@ fn telemetry_lines_carry_the_binary_the_context_and_the_cause() {
     let screen_ctx = [("mem_free", "lt10".to_owned()), ("up", "lt1h".to_owned())];
     record_screen_with_owner(dir.path(), body.to_string().as_bytes(), now(), Some(("c1", &screen_ctx[..], started))).unwrap();
     let rows = rows(dir.path());
-    assert!(rows.iter().all(|r| r["telemetry_build"] == "0.42.0-abc1234"));
+    assert!(rows.iter().enumerate().all(|(i, r)| r["telemetry_build"] == if i == 2 { "0.41.0-abc1234" } else { "0.42.0-abc1234" }),
+        "a queda da vida anterior fica no binário dela");
     assert_eq!((rows[0]["causa"].as_str(), rows[0]["ctx"]["mem_free"].as_str()), (Some("desktop_app_closed"), Some("lt10")));
     assert!(rows[1].get("ctx").is_none() && rows[1].get("causa").is_none(), "sucesso não leva retrato");
     let health = &rows[2];

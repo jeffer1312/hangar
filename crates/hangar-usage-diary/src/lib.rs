@@ -160,13 +160,14 @@ pub fn record_owner_action(base: &Path, origin: OwnerAction, collection: &str, n
 }
 
 /// Falha que o servidor percebeu sozinho (`server_health`): código e causa fechados, retrato da hora.
-/// `at` é quando aconteceu, se não foi agora (a saída da vida anterior do servidor).
+/// `at` é quando aconteceu, se não foi agora (a saída da vida anterior do servidor), e `build` o binário
+/// em que aconteceu, quando não foi este.
 ///
 /// # Errors
 /// Devolve `WriteError` se a pasta não puder ser preparada ou o append falhar.
 #[allow(clippy::too_many_arguments)]
 pub fn record_health(base: &Path, collection: &str, now: DateTime<FixedOffset>, at: Option<DateTime<FixedOffset>>, event: &str,
-                     code: &str, cause: &str, severity: Severity, ctx: &[(&'static str, String)]) -> Result<(), WriteError> {
+                     code: &str, cause: &str, severity: Severity, ctx: &[(&'static str, String)], build: Option<&str>) -> Result<(), WriteError> {
     let mut line = Map::from_iter([
         ("ts".into(), json!(now.to_rfc3339())), ("origem".into(), json!("servidor")), ("evento".into(), json!(event)),
         ("nivel".into(), json!(match severity { Severity::Warn => "aviso", Severity::Error => "erro" })),
@@ -175,6 +176,7 @@ pub fn record_health(base: &Path, collection: &str, now: DateTime<FixedOffset>, 
     if let Some(at) = at { line.insert("telemetry_at".into(), json!(at.to_rfc3339())); }
     put_ctx(&mut line, ctx);
     mark_telemetry(&mut line, "server_health", collection);
+    if let Some(build) = build { line.insert("telemetry_build".into(), json!(build)); }
     write(base, vec![line], now)
 }
 
