@@ -304,7 +304,8 @@ mod tests {
     #[test]
     fn local_at_the_edge_and_without_cpu_reading_stays() {
         // 5 trabalhando, 15% livre e processador sem medida: dentro dos três limites.
-        let local = MachineFacts { cpu_pct: None, mem_available: 32 * GB * 15 / 100, ..machine("pc", 5, 0) };
+        // 3 de 20 GB é 15% exato; 15% de 32 GB não é inteiro e o corte o deixaria abaixo.
+        let local = MachineFacts { cpu_pct: None, mem_total: 20 * GB, mem_available: 3 * GB, ..machine("pc", 5, 0) };
         let p = choose(&ctx(), &[local, machine("nb", 0, 30)], &PlacementConfig::default(), now());
         assert_eq!((p.server.as_str(), p.reason), ("pc", ReasonCode::LocalWithinLimits));
     }

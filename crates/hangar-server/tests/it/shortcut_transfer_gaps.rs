@@ -313,18 +313,19 @@ async fn export_excludes_links_binary_and_non_utf8_files() {
 async fn export_total_limit_is_one_mebibyte() {
     let scene = Scene::new();
     let big = vec![b'a'; 120 * 1024];
-    let names: Vec<String> = (0..9).map(|i| format!("b{i}")).chain(["small".to_owned()]).collect();
+    // Nome que nenhum programa do PATH de login tem: `b2` é o CLI do Backblaze em /usr/bin e venceria o script.
+    let names: Vec<String> = (0..9).map(|i| format!("hangar-big-{i}")).chain(["hangar-small".to_owned()]).collect();
     for name in &names[..9] {
         scene.script(&format!(".local/bin/{name}"), &big, 0o700);
     }
-    scene.script(".local/bin/small", b"echo", 0o700);
+    scene.script(".local/bin/hangar-small", b"echo", 0o700);
     scene.save(shell(&names.join("; ")));
     let (status, body) = scene.export("").await;
     assert_eq!(status, 200, "{body}");
     let paths: Vec<&str> = body["scripts"].as_array().unwrap().iter().map(|s| s["path"].as_str().unwrap()).collect();
-    let expected: Vec<String> = (0..8).map(|i| format!(".local/bin/b{i}")).chain([".local/bin/small".to_owned()]).collect();
+    let expected: Vec<String> = (0..8).map(|i| format!(".local/bin/hangar-big-{i}")).chain([".local/bin/hangar-small".to_owned()]).collect();
     assert_eq!(paths, expected);
-    assert_eq!(body["warnings"], json!([format!("{EXCLUDED} Caminho: ⟦HOME⟧/.local/bin/b8")]));
+    assert_eq!(body["warnings"], json!([format!("{EXCLUDED} Caminho: ⟦HOME⟧/.local/bin/hangar-big-8")]));
     assert_eq!(body["removed"], 0);
 }
 

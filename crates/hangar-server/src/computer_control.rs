@@ -184,7 +184,11 @@ fn facts(st: &AppState, config: &RuntimeConfig) -> setup::Facts {
         // A instalação do próprio Hangar fica fora do PATH: conta também a que o assistente instalou ou adotou.
         cliproxy_installed: crate::cli_probe::resolve_program("cli-proxy-api", env).is_some()
             || !matches!(
-                hangar_cliproxy_setup::install::current(&hangar_cliproxy_setup::detect::Paths::new(&env.home)),
+                hangar_cliproxy_setup::detect::state(
+                    &hangar_cliproxy_setup::detect::Paths::new(&env.home),
+                    env.base.get("PATH").map(std::ffi::OsStr::new),
+                    &(st.cliproxy_units)(&env.home),
+                ),
                 hangar_cliproxy_setup::detect::Install::Absent
             ),
         hyprland: setup::hyprland_found(),

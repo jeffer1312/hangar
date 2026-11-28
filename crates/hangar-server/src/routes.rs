@@ -118,6 +118,8 @@ pub struct AppState {
     pub artifacts: Arc<crate::artifacts::Catalogs>,
     /// Onde está o Chromium do servidor, perguntado a cada medição; o teste força "ausente".
     pub chromium: fn() -> Option<std::path::PathBuf>,
+    /// Units do CLIProxy que o sistema pode ter, a partir da HOME; o teste troca por uma lista sem as do sistema.
+    pub cliproxy_units: fn(&std::path::Path) -> Vec<std::path::PathBuf>,
     /// Quanto uma escrita espera a porta de entrada da sessão reabrir (os testes encurtam).
     pub write_gate_wait: std::time::Duration,
     /// O `claude` e o `hangar-engine` do fork do `/btw` (os testes trocam por falsos).
@@ -361,6 +363,7 @@ impl AppState {
             mermaid: Arc::new(crate::mermaid::cache::Cache::new(crate::mermaid::cache::Cache::default_root())),
             artifacts: Arc::default(),
             chromium: crate::pages::chrome::find,
+            cliproxy_units: hangar_cliproxy_setup::detect::system_units,
             write_gate_wait: std::time::Duration::from_secs(30),
             btw_programs: Default::default(),
             voice: Arc::new(crate::voice::hub::VoiceHub::new()),
