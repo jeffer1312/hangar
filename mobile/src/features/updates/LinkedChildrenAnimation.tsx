@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
-import { Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AppState, Text, View, useWindowDimensions } from 'react-native';
+import { useIsFocused } from 'expo-router/react-navigation';
 import Animated, { FadeIn, FadeOut, LinearTransition, SlideOutLeft, useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
 import type { AggSession } from '@hangar/core';
@@ -49,7 +50,21 @@ function CloseQuestion({ parent, n, width }: { parent: string; n: number; width:
 
 export function LinkedChildrenAnimation({ width }: { width: number }) {
   const reduced = useReducedMotion();
-  const t = useScriptStep(STEPS, CYCLE, STILL, reduced);
+  const stage = useRef<View>(null);
+  const window = useWindowDimensions();
+  const [visible, setVisible] = useState(false);
+  const focused = useIsFocused();
+  const [active, setActive] = useState(AppState.currentState === 'active');
+  useEffect(() => { const sub = AppState.addEventListener('change', (state) => setActive(state === 'active')); return () => sub.remove(); }, []);
+  useEffect(() => {
+    if (!focused || !active) return;
+    const check = () => stage.current?.measureInWindow((_x, y, _w, height) => setVisible(height > 0 && y < window.height && y + height > 0));
+    check();
+    const timer = setInterval(check, 500);
+    return () => clearInterval(timer);
+  }, [focused, active, window.height]);
+  const still = reduced || !active || !focused || !visible;
+  const t = useScriptStep(STEPS, CYCLE, STILL, still);
   const rows = useMemo(sampleRows, []);
   const parent = rows[0].name;
   const asking = t >= ASK && t < CLOSE;
@@ -58,13 +73,13 @@ export function LinkedChildrenAnimation({ width }: { width: number }) {
     .filter((r) => !closed || r.name !== parent)
     .map((r) => closed ? { ...r, state: 'idle' as const, label: undefined, linked_by: undefined, orphaned_from: parent } : r),
   'expanded', 'none', '', NO_GROUPS), [rows, parent, closed]);
-  const layout = reduced ? undefined : LinearTransition.duration(260);
-  const enter = reduced ? undefined : FadeIn.duration(240);
-  return <View style={[styles.stage, { width }]} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+  const layout = still ? undefined : LinearTransition.duration(260);
+  const enter = still ? undefined : FadeIn.duration(240);
+  return <View ref={stage} style={[styles.stage, { width }]} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
     {sections.map((section) => <Animated.View key={section.id} layout={layout}>
       {section.label ? <SessionSectionHeader section={section} onToggle={noop} /> : null}
       {section.data.map((s, index) => <Animated.View key={`${section.id}::${s.name}`} layout={layout}
-        exiting={reduced ? undefined : SlideOutLeft.duration(320)}>
+        exiting={still ? undefined : SlideOutLeft.duration(320)}>
         {/* A linha troca de quadro com um esmaecer curto: o trabalho que para, a marca que entra. */}
         <Animated.View key={String(closed)} entering={enter}>
           <SessionSectionCard index={index} total={section.data.length}>
@@ -73,7 +88,7 @@ export function LinkedChildrenAnimation({ width }: { width: number }) {
         </Animated.View>
       </Animated.View>)}
     </Animated.View>)}
-    {asking ? <Animated.View style={styles.veil} entering={enter} exiting={reduced ? undefined : FadeOut.duration(150)}>
+    {asking ? <Animated.View style={styles.veil} entering={enter} exiting={still ? undefined : FadeOut.duration(150)}>
       <CloseQuestion parent={parent} n={rows.length - 1} width={Math.min(width - 32, 270)} />
     </Animated.View> : null}
   </View>;

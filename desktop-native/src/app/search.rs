@@ -1235,11 +1235,12 @@ impl Hangar {
                                 .text_size(px(10.5)).text_color(theme::muted()).child(tr("sidebar_hidden_badge"))))
                             .when(s.asleep, |el| el.child(div().flex_shrink_0().px(px(6.)).rounded_full().bg(theme::inset())
                                 .text_size(px(10.5)).text_color(theme::muted()).child(tr_shared("session_asleep_badge", &[]))))
-                            .when_some(s.orphaned_from.as_deref(), |el, parent| el.child(div().flex_shrink_0().px(px(6.)).rounded_full()
-                                .bg(theme::inset()).text_size(px(10.5)).text_color(theme::muted())
-                                .child(tr_shared("session_orphaned_from", &[("name", parent)]))))
                             .children(self.work_review_chip(&target.server, &target.name)))
-                        .children(place.map(|c| div().truncate().text_size(px(11.5)).text_color(theme::faint()).child(c))))
+                        .children(place.map(|c| div().truncate().text_size(px(11.5)).text_color(theme::faint()).child(c)))
+                        // A marca de sem pai leva o nome do pai e não cabe ao lado do nome: na linha do nome ela o reduzia a "…".
+                        .when_some(s.orphaned_from.as_deref(), |el, parent| el.child(div().flex().child(div().flex_shrink_0().px(px(6.))
+                            .rounded_full().bg(theme::inset()).text_size(px(10.5)).text_color(theme::muted())
+                            .child(tr_shared("session_orphaned_from", &[("name", parent)]))))))
                     .children(s.last_activity.map(|t| div().flex_shrink_0().text_size(px(12.)).text_color(theme::faint()).child(ago(t))))
                     .into_any_element()
             }

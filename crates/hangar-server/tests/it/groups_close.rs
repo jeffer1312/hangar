@@ -135,6 +135,60 @@ async fn an_unconfirmed_kill_leaves_the_children_linked() {
     assert!(!e.python.diag().iter().any(|l| l["evento"] == "rust.link_cascade_failed"), "ninguém foi interrompido: {:?}", e.python.diag());
 }
 
+/// Filha Claude sem terminal estacionada (só o arquivo dela, sem processo nem entrada aqui): fechar o pai a conta
+/// como parada, sem aviso, e não sobe um processo novo só para mandar o Esc.
+#[tokio::test]
+async fn closing_a_parent_counts_a_parked_child_as_stopped_without_launching_it() {
+    let e = crate::session_close_by_name::env_built(|registry, home| registry.with_codex_environment(
+        hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.to_string_lossy().into_owned())].into())),
+        |_| {}, "x", |state| {
+        let home = state.list.env().dirs.as_ref().unwrap().home.clone();
+        state.hangar_dir = home.join(".hangar");
+        let vault = Arc::new(OrqVault::from_state(state));
+        state.groups = Some(Arc::new(GroupService::new(PairDir::new(home.join(".claude/.hangar-pair"), home.join("pair-arquivo")), vault, "casa".into())));
+    }).await;
+    let pair = e.home.join(".claude/.hangar-pair");
+    std::fs::create_dir_all(&pair).unwrap();
+    let harness = json!({"pai": "claude", "parada": "claude"});
+    std::fs::write(pair.join("pai.json"), json!({"peers": ["parada"], "task": "", "gid": "g1", "harness": harness, "lead": "pai"}).to_string()).unwrap();
+    std::fs::write(pair.join("parada.json"), json!({"peers": ["pai"], "task": "", "gid": "g1", "harness": harness, "lead": "pai", "linked_by": "pai"}).to_string()).unwrap();
+    let sidecars = e.home.join(".hangar/claude-headless");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    let parked = json!({"name": "parada", "key": "ab".repeat(16), "cwd": &e.root, "session_id": "sid-parada", "headless": true, "permission_mode": "manual"});
+    std::fs::write(sidecars.join("parada.json"), parked.to_string()).unwrap();
+    e.sessions(&["pai"]);
+    let (status, body) = e.delete("pai").await;
+    assert_eq!((status, &body["warning"]), (200, &Value::Null), "a estacionada não tinha turno: {body}");
+    assert!(e.alive().is_empty(), "o pai fechou");
+    assert!(e.registry.writable("parada").await.is_none(), "a estacionada não subiu só para o Esc");
+    assert!(!e.python.diag().iter().any(|l| l["evento"] == "rust.link_cascade_failed"), "{:?}", e.python.diag());
+}
+
+/// Arquivos de grupo ilegíveis: o pai fecha, e o `warning` diz que as filhas não foram conferidas, porque elas podem
+/// seguir trabalhando; a falha vai também ao diário.
+#[tokio::test]
+async fn closing_a_parent_with_unreadable_groups_says_the_children_were_not_checked() {
+    let e = crate::session_close_by_name::env_full(|_| {}, "x", |state| {
+        let home = state.list.env().dirs.as_ref().unwrap().home.clone();
+        state.hangar_dir = home.join(".hangar");
+        // A pasta dos grupos é um arquivo: a leitura falha.
+        let pair = home.join("grupos-ilegiveis");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(&pair, "não é pasta").unwrap();
+        let vault = Arc::new(OrqVault::from_state(state));
+        state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair, home.join("pair-arquivo")), vault, "casa".into())));
+    }).await;
+    e.sessions(&["pai"]);
+    let (status, body) = e.delete("pai").await;
+    assert_eq!(status, 200, "{body}");
+    assert!(e.alive().is_empty(), "o pai fechou");
+    let warnings = body["warning"]["params"]["avisos"].as_array().cloned().unwrap_or_default();
+    let unchecked = warnings.iter().find(|w| w["erro"]["code"] == "linked_children_unchecked")
+        .unwrap_or_else(|| panic!("as filhas não conferidas no `warning`: {body}"));
+    assert_eq!((&unchecked["sessao"], &unchecked["erro"]["params"]["codigo"]), (&json!("pai"), &json!("groups_unavailable")), "{body}");
+    assert!(e.diary_has("pai", "groups_unavailable").await, "{:?}", e.python.diag());
+}
+
 /// A varredura de verdade (`leave_dead_member`) sobre uma lista falsa.
 struct DeadEnv { st: Arc<hangar_server::routes::AppState>, groups: Arc<GroupService>, live: Vec<String> }
 

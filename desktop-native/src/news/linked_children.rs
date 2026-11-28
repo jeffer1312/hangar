@@ -21,15 +21,15 @@ fn step(t: f32) -> Step { if t >= CLOSE { Step::Orphaned } else if t >= ASK { St
 /// Segundos até o próximo instante em que o quadro muda: o roteiro anda em degraus, não a cada quadro.
 fn until_next_step(t: f32) -> f32 { [ASK, CLOSE, CYCLE].into_iter().filter(|b| *b > t).fold(CYCLE, f32::min) - t }
 
-/// A linha como a barra a desenha: marca do agente, nome com a marca de sem pai e o que está fazendo.
+/// A linha como a barra a desenha: marca do agente, nome, o que está fazendo e, embaixo, a marca de sem pai.
 fn row(id: &str, name: String, working: Option<String>, orphan: Option<String>) -> Stateful<Div> {
     let avatar = chrome::session_avatar(&chrome::AvatarLook::new("claude", None, if working.is_some() { "working" } else { "idle" }, false), 30., None);
     app::session_row_frame(SharedString::from(format!("news-linked-row-{id}")), false)
         .child(avatar)
         .child(app::session_row_text()
-            .child(div().flex().items_center().gap_2().min_w_0().child(app::session_row_name(name))
-                .when_some(orphan, |el, orphan| el.child(app::badge(orphan, theme::muted()))))
-            .when_some(working, |el, text| el.child(app::session_row_sub(text, RowSub::Working, theme::muted(), true))))
+            .child(div().flex().items_center().gap_2().min_w_0().child(app::session_row_name(name)))
+            .when_some(working, |el, text| el.child(app::session_row_sub(text, RowSub::Working, theme::muted(), true)))
+            .when_some(orphan, |el, orphan| el.child(div().flex().text_size(px(11.5)).child(app::badge(orphan, theme::muted())))))
 }
 
 pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {

@@ -4302,7 +4302,9 @@ ninguém.
   Pi/omp/Kimi sai do grupo por dentro, e a saída apaga o `linked_by`) e interrompidas depois dele. A
   árvore sai de `cascade::plan`, em largura, até `MAX_DEPTH = 3` níveis e sem voltar a quem já apareceu
   (vínculo em ciclo termina); sem turno conta como parada, e adormecida ou estacionada não acorda.
-  Arquivos de grupo ilegíveis vão ao diário (`rust.link_cascade_failed`) e o fechamento segue; o
+  Arquivos de grupo ilegíveis não seguram o fechamento: vão ao diário (`rust.link_cascade_failed`) e ao
+  `warning` do fechamento (`linked_children_unchecked`, código `groups_unavailable`), porque as filhas
+  podem seguir trabalhando e a tela precisa dizer que não foram conferidas; o
   Pi/omp/Kimi que some sozinho só marca, como a varredura. A filha que não parou volta no `warning` do
   fechamento (`linked_child_not_stopped`), em todo agente do pai: é o campo que os clientes leem. Toda saída do grupo grava a marca em
   `~/.hangar/link-orphans.json` (`hangar_delegation::orphans`): o DELETE (dono ou convidado), a

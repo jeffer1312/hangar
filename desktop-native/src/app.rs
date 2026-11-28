@@ -7476,7 +7476,9 @@ impl Hangar {
         // Como a branch, o chip e o aviso de worktree apagada ficam fora do modo compacto.
         let worktree = worktree_label(&session).filter(|_| !compact && !session.worktree_gone);
         let worktree_gone = !compact && session.worktree_gone;
-        let second_line = server.is_some() || branch.is_some() || worktree.is_some() || worktree_gone;
+        // A marca de sem pai leva o nome do pai e não cabe ao lado do nome: na linha do nome ela o reduzia a "…".
+        let orphan = session.orphaned_from.as_deref().map(orphan_label);
+        let second_line = server.is_some() || branch.is_some() || worktree.is_some() || worktree_gone || orphan.is_some();
         let worktree_target = session.worktree_path.clone().or_else(|| session.cwd.clone()).unwrap_or_default();
         let worktree_server = target.server.clone();
         let merged = self.worktrees.status(&target.server, &worktree_target).is_some_and(|s| s.merged);
@@ -7511,7 +7513,6 @@ impl Hangar {
                 .child(format!("? {}", session.pending_questions))))
             .when(session.tracked == Some(false), |el| el.child(badge(tr("untracked_badge"), theme::muted())))
             .when(session.asleep, |el| el.child(badge(tr_shared("session_asleep_badge", &[]), theme::muted())))
-            .when_some(session.orphaned_from.as_deref(), |el, parent| el.child(badge(orphan_label(parent), theme::muted())))
             .when(session.orq(), |el| el.child(badge(tr_shared("orq_row_badge", &[]), theme::muted())))
             .when_some(session.owner.clone(), |el, owner| el.child(badge(format!("👤 {owner}"), theme::muted())))
             .children(pair_badges(&session))
@@ -7543,6 +7544,7 @@ impl Hangar {
                     .child(div().flex_shrink_0().max_w(px(112.)).flex().items_center().gap(px(4.))
                         .child(chrome::small_icon(IconName::Monitor, 12., theme::muted()))
                         .child(div().min_w_0().truncate().child(server))))
+                .when_some(orphan, |el, text| el.child(div().flex_shrink_0().child(text)))
                 .when_some(branch, |el, branch| el
                     .child(chrome::small_icon(IconName::GitBranch, 12., theme::muted()))
                     .child(div().flex_1().min_w_0().truncate().child(branch)))
@@ -7618,6 +7620,8 @@ impl Hangar {
         // Como o web: a pasta só com a lista por servidor (por projeto o cabeçalho já a diz), e sempre na worktree.
         let folder = folder_name(&session).filter(|_| session.worktree == Some(true) || (self.multi_server() && !Self::by_project()));
         let branch = shown_branch(&session);
+        // A marca de sem pai leva o nome do pai e não cabe ao lado do nome: na linha do nome ela o reduzia a "…".
+        let orphan = session.orphaned_from.as_deref().map(orphan_label);
         let (added, removed) = (session.git_added.filter(|n| *n > 0), session.git_removed.filter(|n| *n > 0));
         let (ahead, behind) = (session.git_ahead.filter(|n| *n > 0), session.git_behind.filter(|n| *n > 0));
         let sync_title = tr("git_sync_title").replace("{ahead}", &ahead.unwrap_or(0).to_string()).replace("{behind}", &behind.unwrap_or(0).to_string());
@@ -7651,7 +7655,6 @@ impl Hangar {
                     .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("create_mode_headless")).build(window, cx))
                     .child(chrome::no_terminal_mark(12., theme::muted()))))
                 .when(session.asleep, |el| el.child(badge(tr_shared("session_asleep_badge", &[]), theme::muted())))
-                .when_some(session.orphaned_from.as_deref(), |el, parent| el.child(badge(orphan_label(parent), theme::muted())))
                 .when(session.orq(), |el| el.child(badge(tr_shared("orq_row_badge", &[]), theme::muted())))
                 .when(session.shared, |el| el.child(div().id(SharedString::from(format!("row-shared-{row_key}"))).flex_shrink_0().flex()
                     .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr_shared("sessao_compartilhada", &[])).build(window, cx))
@@ -7702,9 +7705,10 @@ impl Hangar {
                     .child(div().min_w_0().truncate().child(label))))
                 .when_some(when, |el, w| el.child(div().flex_shrink_0().text_size(px(10.)).text_color(theme::faint()).child(w))))
             .when_some(sub, |el, (text, kind)| el.child(session_row_sub(text, kind, sub_color, kind == sidebar::Sub::Working && working)))
-            .when(server.is_some() || engine_label.is_some() || folder.is_some() || branch.is_some() || added.is_some() || removed.is_some() || ahead.is_some() || behind.is_some(), |el| el.child(div().flex().items_center().gap(px(8.))
+            .when(orphan.is_some() || server.is_some() || engine_label.is_some() || folder.is_some() || branch.is_some() || added.is_some() || removed.is_some() || ahead.is_some() || behind.is_some(), |el| el.child(div().flex().items_center().gap(px(8.))
                 .text_size(px(11.5)).text_color(theme::faint())
                 .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.))
+                    .when_some(orphan, |el, text| el.child(badge(text, theme::muted())))
                     .when_some(engine_label, |el, label| el.child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme::accent()).child(label)))
                     .when_some(server, |el, server| el.child(div().flex_shrink_0().max_w(px(112.)).flex().items_center().gap(px(4.))

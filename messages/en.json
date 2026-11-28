@@ -3571,6 +3571,7 @@
   "erro_corpo_interrompido": "the request did not arrive whole; nothing was sent",
   "erro_limpeza_fechamento_falhou": "the session closed, but cleanup did not finish ({codigo})",
   "linked_child_not_stopped": "the linked child did not stop with it and is still open ({codigo})",
+  "linked_children_unchecked": "the linked children were not checked and may still be working ({codigo})",
   "claude_sidecar_invalid": "this Claude session's file does not open on the server; close and reopen the session",
   "erro_sessao_tmux_em_uso": "a tmux session named '{nome}' already exists without the panel mark — it could be one of your sessions with the same name, or this panel's shell that lost its mark. Close or rename it before opening the shell",
   "erro_shell_criacao_falhou": "tmux refused to create the shell",

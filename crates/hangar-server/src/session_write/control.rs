@@ -517,7 +517,7 @@ const CASCADE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 const CASCADE_UNOWNED: &str = "session_unowned";
 const MSG_CASCADE_UNOWNED: &str = "nenhum agente do Hangar nesta sessão para interromper";
 const CASCADE_UNCONFIRMED: &str = "interrupt_unconfirmed";
-const CASCADE_GROUPS_UNAVAILABLE: &str = "groups_unavailable";
+pub(crate) const CASCADE_GROUPS_UNAVAILABLE: &str = "groups_unavailable";
 
 /// As descendentes ligadas de `root` pelos arquivos de grupo. `Err` = arquivos indisponíveis, já no diário. Sem
 /// serviço de grupos não há filha ligada.

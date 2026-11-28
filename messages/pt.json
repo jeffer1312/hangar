@@ -3571,6 +3571,7 @@
   "erro_corpo_interrompido": "o pedido não chegou inteiro; nada foi enviado",
   "erro_limpeza_fechamento_falhou": "a sessão fechou, mas a limpeza não terminou ({codigo})",
   "linked_child_not_stopped": "a filha ligada não parou junto e segue aberta ({codigo})",
+  "linked_children_unchecked": "as filhas ligadas não foram conferidas e podem seguir trabalhando ({codigo})",
   "claude_sidecar_invalid": "o arquivo desta sessão Claude não abre no servidor; feche e abra a sessão",
   "erro_sessao_tmux_em_uso": "já existe uma sessão tmux chamada '{nome}' sem a marca do painel — pode ser uma sessão sua de mesmo nome, ou o shell deste painel que perdeu a marca. Encerre ou renomeie essa sessão antes de abrir o shell",
   "erro_shell_criacao_falhou": "tmux recusou criar o shell",
