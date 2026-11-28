@@ -209,6 +209,9 @@ mod tests {
         assert_eq!(call(app_with_panel(offline()), "GET", "/panel/data", None, None).await.0, StatusCode::UNAUTHORIZED);
         assert_eq!(call(app_with_panel(offline()), "POST", "/panel/api/invites", None, None).await.0, StatusCode::UNAUTHORIZED);
         assert_eq!(call(app_with_panel(offline()), "GET", "/panel/trail?machine=x&day=y", None, None).await.0, StatusCode::UNAUTHORIZED);
+        // Consulta que nem desserializa também é 401 sem sessão.
+        assert_eq!(call(app_with_panel(offline()), "GET", "/panel/trail?machine=a&machine=b", None, None).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(call(app_with_panel(offline()), "GET", "/panel/data?days=abc", None, None).await.0, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -522,6 +525,14 @@ mod tests {
 
         assert_eq!(post_json(pool.clone(), &delayed).await.0, StatusCode::OK);
         assert_eq!(stored(pool.clone(), id.clone()).await, (5, 0, 4, 3, 0));
+
+        // Reenvio do final por uma versão nova: 200, e o final guardado fica como estava.
+        body["env"]["version"] = json!("0.43.0");
+        body["counters"][0]["count"] = json!(9);
+        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+        assert_eq!(stored(pool.clone(), id.clone()).await, (5, 0, 4, 3, 0));
+        let version: String = sqlx::query_scalar("SELECT version FROM batches WHERE batch_id = $1").bind(&id).fetch_one(&pool).await.unwrap();
+        assert_eq!(version, "0.42.0");
         forget(&pool, &[id]).await;
     }
 

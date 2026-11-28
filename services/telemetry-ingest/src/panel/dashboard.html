@@ -69,7 +69,7 @@ const EVENTS = {
   update_failed_code: ["Falhas de atualização", "saude", "O código do erro de cada atualização que falhou."],
   server_startup: ["Subida do servidor", "saude", "Do início do servidor até ele aceitar pedidos, depois de ligar, reiniciar ou atualizar."],
   log_dropped: ["Linhas de log que sobraram", "saude", "Linhas novas de aviso ou erro que não couberam no teto de 100 por dia."],
-  diary_dropped: ["Registros do diário que não couberam", "saude", "Registros cortados na máquina antes do envio do pacote."],
+  diary_dropped: ["Itens do diário que não couberam", "saude", "Registros de falha e passos do caminho cortados na máquina antes do envio do pacote."],
 };
 // Preferências do retrato diário (evento settings): [título, grupo, o que é].
 const SETTING_GROUPS = ["Aparência", "Conversa", "Barra e navegação", "Beta", "Servidor"];
@@ -499,7 +499,10 @@ function recordBody(r) {
       el("span", {}, "Versões: ", el("b", { text: (r.versions || []).join(", ") })),
       el("span", {}, "Sistemas: ", el("b", { text: (r.os || []).join(", ") })),
       el("span", {}, "Primeira vez no período: ", el("b", { text: when(r.first) + " UTC" })),
+      el("span", {}, "Última no período: ", el("b", { text: when(r.last) + " UTC" })),
       r.sample_at ? el("span", {}, sampleTimeLabel + ": ", el("b", { text: when(r.sample_at) + " UTC" })) : null),
+    // Na tela estreita a linha esconde a minibarra; aqui ela volta.
+    el("div", { class: "rec-daily" }, el("h4", { text: "Vezes " + sparkNote() }), spark(r.daily, r.level)),
     el("h4", { text: "Campos da amostra" }),
     fields.length ? el("dl", { class: "rec-fields" }, ...fields.map(({ key, label, value }) =>
       el("div", { class: "rec-field" + (key === "detalhe" || value.length > 80 ? " wide" : "") },
@@ -590,7 +593,7 @@ function timelineCard(days, total) {
     const shown = trailOnlyProblems ? steps.filter(s => s.level !== "ok") : steps;
     const empty = !steps.length ? "Nenhum passo recebido nesse dia." : "Nenhuma falha nem aviso nesse dia.";
     status.textContent = (shown.length ? quantity(shown.length, "passo", "passos") + "." : empty)
-      + (partial ? " Dados parciais: o último pacote desse dia ainda não é o final." : "");
+      + (partial ? " Há pacotes parciais neste dia: os passos ainda podem mudar." : "");
     box.replaceChildren(...(shown.length ? [el("ol", { class: "timeline", role: "list" }, ...shown.map(s => {
       const levelText = s.level === "error" ? "erro" : s.level === "warn" ? "aviso" : "";
       return el("li", { class: "tl-row " + s.level, "data-q": [s.t, s.event, s.screen, levelText].join(" ").toLowerCase() },
@@ -660,7 +663,7 @@ function trailSection(data) {
     "Nenhuma máquina enviou o caminho de uso no período. Ele chega a cada hora nas versões que coletam o diário."));
   const list = transitions.length ? barList(transitions.map(t => ({ label: t.from + " → " + t.to, value: t.count, machines: t.machines }))) : null;
   if (list) { list.classList.add("short"); list.id = "trail-transitions"; }
-  const top = card("Passagens mais comuns", "De uma ação para a seguinte, somando os dias de todas as máquinas.",
+  const top = card("Passagens mais comuns", "De uma ação para a seguinte dentro de cada pacote, somando todas as máquinas.",
     cutNote(data.transitions_total, transitions.length, "passagens distintas"),
     list || el("div", { class: "empty", text: "Nenhuma passagem no período." }), list ? moreButton(list, transitions.length, 12) : null);
   return sectionBlock("trail", fmt.format(dayTotal), dayTotal === 1 ? "dia com caminho" : "dias com caminho",
@@ -799,10 +802,15 @@ function stackChart(rows, keys) {
   });
   cols.append(...colNodes);
   let at = rows.length - 1;
+  // O foco fica nas colunas: quem lê a tela ouve o dia escolhido por esta região.
+  const live = el("p", { class: "sr-only", role: "status" });
   const focusDay = () => {
     colNodes.forEach((c, i) => c.classList.toggle("cur", i === at));
     const b = colNodes[at].getBoundingClientRect();
     showTipNodes(tipOf(rows[at]), b.left + b.width / 2, b.top + b.height * .4);
+    const r = rows[at];
+    live.textContent = dayMonth(r.day) + ": " + fmt.format(r.total) + " no total"
+      + keys.filter(k => r.parts[k]).map(k => "; " + agentName(k) + " " + fmt.format(r.parts[k])).join("") + ".";
   };
   cols.addEventListener("focus", () => { cols.classList.add("kbd"); focusDay(); });
   cols.addEventListener("blur", () => { cols.classList.remove("kbd"); colNodes.forEach(c => c.classList.remove("cur")); hideTip(); });
@@ -820,7 +828,7 @@ function stackChart(rows, keys) {
     xt.append(el("span", { style: "left:" + ((i + .5) / rows.length * 100).toFixed(2) + "%", text: dayMonth(rows[i].day) }));
   }
   if (marks) { xt.firstChild.style.left = "0"; xt.lastChild.style.left = "100%"; }
-  chart.append(yt, cols, xt);
+  chart.append(yt, cols, xt, live);
   return chart;
 }
 
@@ -885,8 +893,9 @@ const TOOLS = { browser: ["Navegador", "globe"], browser_open: ["Abrir navegador
   whatsapp_request_media: ["WhatsApp: mídia", "chat"], whatsapp_draft: ["WhatsApp: rascunho", "chat"], other: ["outra ferramenta", "wrench"] };
 const upper = s => s.charAt(0).toUpperCase() + s.slice(1);
 
-function rankList(items, color, unit) {
-  const total = items.reduce((s, i) => s + i.value, 0), max = Math.max(1, ...items.map(i => i.value));
+// `total` é o do ranking inteiro, antes do corte: a fatia de cada linha não infla com o corte.
+function rankList(items, color, unit, total) {
+  const max = Math.max(1, ...items.map(i => i.value));
   return el("div", { class: "bl", style: "--c:" + color }, ...items.map((it, i) => withTip(el("div", { class: "bl-row", tabindex: "0",
     "data-q": (it.label + " " + it.key).toLowerCase(), style: "--i:" + i + ";--w:" + (it.value / max).toFixed(3) },
     el("div", { class: "bl-bar" }), el("span", { class: "bl-ic" }, icon(it.icon)),
@@ -914,9 +923,9 @@ function topCards(byDims) {
   const tItems = [...tools].sort((x, y) => y[1].value - x[1].value).map(([key, t]) => ({ key, value: t.value, failed: t.failed, counterKey: "tool:" + key,
     label: Object.hasOwn(TOOLS, key) ? TOOLS[key][0] : key, icon: Object.hasOwn(TOOLS, key) ? TOOLS[key][1] : "wrench" }));
   const fCard = card("Recursos mais usados", "Ações que deram certo no app.", fItems.length
-    ? rankList(fItems.slice(0, TOP_ITEMS), HUE.usage, ["vez", "vezes"]) : el("p", { class: "empty", text: "Nenhum recurso usado no período." }), more(fItems.length));
+    ? rankList(fItems.slice(0, TOP_ITEMS), HUE.usage, ["vez", "vezes"], fItems.reduce((s, i) => s + i.value, 0)) : el("p", { class: "empty", text: "Nenhum recurso usado no período." }), more(fItems.length));
   const tCard = card("Ferramentas que os agentes mais chamam", "Chamadas às ferramentas do Hangar; em vermelho, as que falharam.", tItems.length
-    ? rankList(tItems.slice(0, TOP_ITEMS), "#8b93f0", ["chamada", "chamadas"]) : el("p", { class: "empty", text: "Nenhuma ferramenta chamada no período." }), more(tItems.length));
+    ? rankList(tItems.slice(0, TOP_ITEMS), "#8b93f0", ["chamada", "chamadas"], tItems.reduce((s, i) => s + i.value, 0)) : el("p", { class: "empty", text: "Nenhuma ferramenta chamada no período." }), more(tItems.length));
   tCard.style.setProperty("--hue", "#8b93f0");
   return [fCard, tCard];
 }
@@ -1117,11 +1126,16 @@ function render(data) {
   if (onlyRecords) failureKpi.href = "#" + failureDetailsId;
   topFailures.style.setProperty("--hue", HUE.problems);
   topFailures.style.setProperty("--hue-soft", "color-mix(in srgb, " + HUE.problems + " 15%, transparent)");
-  const partial = data.period.partial_batches || 0, dropped = total("diary_dropped");
+  const partial = data.period.partial_batches || 0;
+  // O emissor separa o corte por `part`: registros de falha (`records`) e passos do caminho (`trail`).
+  const droppedOf = part => data.by_dims.filter(c => c.event === "diary_dropped" && c.dims?.part === part).reduce((s, c) => s + c.count, 0);
+  const droppedRecords = droppedOf("records"), droppedSteps = droppedOf("trail"), dropped = droppedRecords + droppedSteps;
   nodes.push(sectionBlock("overview", null, null,
     partial || dropped ? el("div", { class: "report-note" },
       partial ? el("p", { text: "Dados parciais: " + quantity(partial, "pacote ainda não é final", "pacotes ainda não são finais") + "." }) : null,
-      dropped ? el("p", { text: "Corte no envio: " + quantity(dropped, "registro do diário não coube", "registros do diário não couberam") + "." }) : null) : null,
+      dropped ? el("p", { text: "Corte no envio: " + [
+        droppedRecords ? quantity(droppedRecords, "registro de falha não coube", "registros de falha não couberam") : "",
+        droppedSteps ? quantity(droppedSteps, "passo do caminho não coube", "passos do caminho não couberam") : ""].filter(Boolean).join("; ") + "." }) : null) : null,
     el("div", { class: "kpis" },
       kpi("machines", "machines", "Máquinas ativas", "m", a.machines_30d, a.machines_7d + " nos últimos 7 dias"),
       kpi("overview", "users", "Pessoas", "p", a.owners_30d, "cada pessoa conta uma vez"),

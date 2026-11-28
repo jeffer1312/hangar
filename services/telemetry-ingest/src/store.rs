@@ -13,8 +13,8 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
 }
 
 pub enum Insert {
-    /// Gravado agora, ou trocado pelo que já havia com o mesmo `batch_id` (retrato da hora, envio final
-    /// ou repetição de quem não viu a resposta).
+    /// Gravado agora, trocado pelo parcial que já havia com o mesmo `batch_id`, ou já guardado como final
+    /// (repetição de quem não viu a resposta).
     Accepted,
     /// `day` mais de `FUTURE_SLACK_DAYS` à frente de hoje em UTC.
     DayAhead,
@@ -25,7 +25,8 @@ const FUTURE_SLACK_DAYS: i32 = 2;
 
 /// Grava o pacote já conferido por `Batch::validate`, que limita cada `count` a `MAX_COUNT`.
 /// O mesmo `batch_id` de novo troca tudo o que ele tinha, na mesma transação: os retratos da hora e o
-/// envio final nunca somam duas vezes. Não troca se a máquina ou o dia mudaram, nem o final por um retrato.
+/// envio final nunca somam duas vezes. Só um parcial é trocado: o final guardado fica, e o reenvio dele
+/// (resposta perdida, versão nova da máquina) é aceito sem mudar nada. Também não troca se a máquina ou o dia mudaram.
 pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let env = &batch.env;
@@ -37,7 +38,7 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
                "commit" = EXCLUDED."commit", os = EXCLUDED.os, arch = EXCLUDED.arch, channel = EXCLUDED.channel,
                partial = EXCLUDED.partial, received_at = now()
            WHERE batches.machine_id = EXCLUDED.machine_id AND batches.day = EXCLUDED.day
-             AND (batches.partial OR NOT EXCLUDED.partial)"#,
+             AND batches.partial"#,
     )
     .bind(&batch.batch_id)
     .bind(&batch.machine_id)
@@ -263,22 +264,36 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
-    // Os campos e os passos vêm da primeira ocorrência de cada lote, não da última.
+    // Os campos e os passos vêm da primeira ocorrência de cada lote, não da última. A amostra é escolhida
+    // só entre as assinaturas do corte, e o JSON dela é montado só para a linha escolhida.
     let records: Vec<RecordRow> = sqlx::query_as(concat!(
         "WITH r AS (
              SELECT r.level, r.event, r.count, r.fields, r.trail, b.machine_id, b.version, b.os, b.batch_id,
-                    b.day + r.first_at AS first_ts, b.day + r.last_at AS last_ts
+                    b.day + r.first_at AS first_ts, b.day + r.last_at AS last_ts,
+                    r.fields->>'codigo' AS codigo, r.fields->>'etapa' AS etapa, r.fields->>'erro_tipo' AS erro_tipo,
+                    r.fields->>'action' AS action
              FROM records r JOIN batches b ON b.batch_id = r.batch_id
-             WHERE ", in_period!("b.day"), ")
-         SELECT CASE WHEN bool_or(level = 'error') THEN 'error' ELSE 'warn' END, event,
-                fields->>'codigo', fields->>'etapa', fields->>'erro_tipo',
-                LEAST(sum(count), 9223372036854775807)::bigint, count(DISTINCT machine_id),
-                array_agg(DISTINCT version ORDER BY version), array_agg(DISTINCT os ORDER BY os),
-                to_char(min(first_ts), 'YYYY-MM-DD HH24:MI:SS'), to_char(max(last_ts), 'YYYY-MM-DD HH24:MI:SS'),
-                (array_agg(jsonb_build_object('at', to_char(first_ts, 'YYYY-MM-DD HH24:MI:SS'), 'fields', fields, 'trail', trail)
-                    ORDER BY first_ts DESC, batch_id, fields, trail))[1], fields->>'action', count(*) OVER ()
-         FROM r GROUP BY event, fields->>'codigo', fields->>'etapa', fields->>'erro_tipo', fields->>'action'
-         ORDER BY 7 DESC, 6 DESC, event, fields->>'action' LIMIT 300"
+             WHERE ", in_period!("b.day"), "),
+         g AS (
+             SELECT CASE WHEN bool_or(level = 'error') THEN 'error' ELSE 'warn' END AS level, event, codigo, etapa, erro_tipo,
+                    LEAST(sum(count), 9223372036854775807)::bigint AS count, count(DISTINCT machine_id) AS machines,
+                    array_agg(DISTINCT version ORDER BY version) AS versions, array_agg(DISTINCT os ORDER BY os) AS os,
+                    min(first_ts) AS first_ts, max(last_ts) AS last_ts, action, count(*) OVER () AS total
+             FROM r GROUP BY event, codigo, etapa, erro_tipo, action
+             ORDER BY machines DESC, count DESC, event, action LIMIT 300),
+         s AS (
+             SELECT DISTINCT ON (r.event, r.codigo, r.etapa, r.erro_tipo, r.action)
+                    r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.first_ts, r.fields, r.trail
+             FROM r JOIN g ON g.event = r.event AND g.codigo IS NOT DISTINCT FROM r.codigo AND g.etapa IS NOT DISTINCT FROM r.etapa
+                  AND g.erro_tipo IS NOT DISTINCT FROM r.erro_tipo AND g.action IS NOT DISTINCT FROM r.action
+             ORDER BY r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.first_ts DESC, r.batch_id, r.fields, r.trail)
+         SELECT g.level, g.event, g.codigo, g.etapa, g.erro_tipo, g.count, g.machines, g.versions, g.os,
+                to_char(g.first_ts, 'YYYY-MM-DD HH24:MI:SS'), to_char(g.last_ts, 'YYYY-MM-DD HH24:MI:SS'),
+                jsonb_build_object('at', to_char(s.first_ts, 'YYYY-MM-DD HH24:MI:SS'), 'fields', s.fields, 'trail', s.trail),
+                g.action, g.total
+         FROM g JOIN s ON s.event = g.event AND s.codigo IS NOT DISTINCT FROM g.codigo AND s.etapa IS NOT DISTINCT FROM g.etapa
+              AND s.erro_tipo IS NOT DISTINCT FROM g.erro_tipo AND s.action IS NOT DISTINCT FROM g.action
+         ORDER BY g.machines DESC, g.count DESC, g.event, g.action"
     ))
     .bind(days)
     .fetch_all(&mut *pool)
@@ -307,7 +322,8 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     for (event, codigo, etapa, erro_tipo, action, day, count) in record_days {
         daily_of.entry((event, codigo, etapa, erro_tipo, action)).or_default().push(serde_json::json!({"day": day, "count": count}));
     }
-    // Passagens de um passo ao seguinte dentro do dia de cada máquina.
+    // Passagens de um passo ao seguinte dentro de cada pacote: pacotes do mesmo dia vêm de aceites
+    // diferentes da máquina, e ligar o fim de um ao começo do outro inventaria uma passagem.
     let transitions: Vec<(String, String, i64, i64, i64)> = sqlx::query_as(concat!(
         "WITH s AS (
              SELECT b.machine_id, t.event, lag(t.event) OVER (PARTITION BY t.batch_id ORDER BY t.seq) AS prev

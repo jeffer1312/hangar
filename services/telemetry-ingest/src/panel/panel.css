@@ -476,3 +476,6 @@ body { background: radial-gradient(1200px 600px at 10% -10%, rgba(124,135,232,.1
   .rec-head.iss { grid-template-columns: 36px minmax(0, 1fr) 64px; gap: var(--s3); padding: var(--s3) var(--s2); }
   .rec-head.iss .spark, .rec-head.iss .iss-m2, .rec-head.iss .iss-t, .rec-head.iss .iss-go { display: none; }
 }
+/* A minibarra da linha só some na tela estreita; no detalhe aberto ela aparece só ali. */
+.rec-daily .spark { max-width: 360px; }
+@media (min-width: 981px) { .rec-daily { display: none; } }
