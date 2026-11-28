@@ -255,14 +255,16 @@ impl Telemetry {
     }
 
     pub fn duration(&self, event: Event, dims: Dims, took: Duration) {
-        if self.enabled() { self.duration_in_epoch(self.consent_epoch(), event, dims, took); }
+        if self.enabled() { self.duration_in(self.consent_epoch(), event, dims, took); }
     }
 
-    pub fn duration_in_epoch(&self, epoch: u64, event: Event, dims: Dims, took: Duration) {
+    /// Só soma se o aceite ainda for o de `epoch`, conferido junto com a soma sob a trava `live`: o que foi
+    /// capturado antes de uma revogação não entra no período do aceite seguinte.
+    pub fn duration_in(&self, epoch: u64, event: Event, dims: Dims, took: Duration) {
         self.add_in_epoch(epoch, Counter::new(event, dims, Some(Bucket::of(took)), 1));
     }
 
-    pub fn count_in_epoch(&self, epoch: u64, event: Event, dims: Dims, n: u64) {
+    pub fn count_in(&self, epoch: u64, event: Event, dims: Dims, n: u64) {
         self.add_in_epoch(epoch, Counter::new(event, dims, None, n));
     }
 
@@ -271,6 +273,7 @@ impl Telemetry {
     fn add_in_epoch(&self, epoch: u64, counter: Counter) {
         let today = self.today();
         let Ok(mut live) = self.live.lock() else { return };
+        // A época sobe sob esta mesma trava (`refresh_held`): conferida aqui, não há janela entre ver e somar.
         if !self.enabled() || self.consent_epoch() != epoch {
             return;
         }
@@ -533,9 +536,10 @@ impl Telemetry {
                 None => Live::new(Day::new(today), false),
             };
             live.snapshot_period = Some(hangar_core::ids::random_hex(16));
-            *lock(&self.live)? = live;
-            let mut gate = lock(&self.post_gate)?;
-            *gate = Some(period.id.clone());
+            *lock(&self.post_gate)? = Some(period.id.clone());
+            // A época sobe sob a trava `live`: quem soma confere a época sob ela.
+            let mut current = lock(&self.live)?;
+            *current = live;
             self.consent_epoch.fetch_add(1, Ordering::SeqCst);
             self.enabled.store(true, Ordering::SeqCst);
         }
@@ -739,6 +743,20 @@ pub(crate) mod tests {
         assert_eq!(stored["consent"], serde_json::Value::Null);
         assert!(is_id(stored["machine_id"].as_str().unwrap()));
         assert!(is_id(stored["owner_id"].as_str().unwrap()));
+    }
+
+    #[test]
+    fn a_count_from_before_a_new_consent_is_not_added_to_it() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        let before = telemetry.consent_epoch();
+        telemetry.set_consent(false).unwrap();
+        telemetry.set_consent(true).unwrap();
+        telemetry.count_in(before, Event::MessageSent, message(), 5);
+        telemetry.duration_in(before, Event::MessageSent, message(), Duration::from_millis(10));
+        assert!(telemetry.counters().is_empty(), "captura da época anterior não soma no aceite novo");
+        telemetry.count_in(telemetry.consent_epoch(), Event::MessageSent, message(), 1);
+        assert_eq!(telemetry.counters().len(), 1);
     }
 
     #[test]

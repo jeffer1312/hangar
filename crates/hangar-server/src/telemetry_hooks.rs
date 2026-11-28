@@ -98,7 +98,7 @@ pub(crate) async fn count_feature(State(st): State<Arc<AppState>>, req: Request,
     if let Some(auth) = auth && auth.owner_verified().await {
         let status = response.status();
         if status.is_success() {
-            telemetry.count_in_epoch(epoch, Event::FeatureUsed, Dims::new().with("feature", feature), 1);
+            telemetry.count_in(epoch, Event::FeatureUsed, Dims::new().with("feature", feature), 1);
             record_action(&st, period, OwnerAction::Http, feature.as_str(), "request", None, start.elapsed()).await;
         } else if status.is_client_error() || status.is_server_error() {
             let failure = response.extensions().get::<crate::diag::FailureCode>().map(|code| code.0)

@@ -547,7 +547,7 @@ impl Tools {
         let Some(telemetry) = self.telemetry() else { return };
         let tool = Code::known(name, super::tool_names());
         let dims = Dims::new().with("tool", tool).with("error", code.is_some());
-        telemetry.count_in_epoch(epoch, Event::McpTool, dims, 1);
+        telemetry.count_in(epoch, Event::McpTool, dims, 1);
         crate::telemetry_hooks::record_action(&self.st, period, hangar_usage_diary::OwnerAction::Mcp, tool.as_str(), stage, code, took).await;
     }
 

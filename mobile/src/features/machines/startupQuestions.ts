@@ -1,6 +1,6 @@
 import { Alert, Linking } from 'react-native';
 import { SETTINGS_CONSENT_SCOPE, TELEMETRY_CONSENT_SCOPE, putAutoReportEm, putTelemetry, registrarDiag, type PendingTelemetry, type Server } from '@hangar/core';
-import { onTelemetrySaved } from '../../net/diag';
+import { onTelemetrySaved } from '../../net/telemetrySaved';
 import { toast } from '../../ui/Toast';
 import * as m from '../../paraglide/messages';
 

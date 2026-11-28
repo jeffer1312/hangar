@@ -388,7 +388,7 @@ pub(crate) fn count_screen_in_period(telemetry: &Telemetry, period: &Collection,
             let started = item["started_at"].as_str().and_then(|ts| DateTime::parse_from_rfc3339(ts).ok()).map(|ts| ts.to_utc());
             if started.is_none_or(|started| started < period.since || started > at || started.date_naive() != at.date_naive()) { continue; }
         }
-        screen_event(telemetry, epoch, &day, item);
+        screen_event(telemetry, epoch, item);
     }
 }
 
@@ -396,7 +396,7 @@ fn screen_client(item: &Value) -> ClientKind {
     item["cliente"].as_str().and_then(ClientKind::parse).filter(|c| *c != ClientKind::Server).unwrap_or(ClientKind::Other)
 }
 
-fn screen_event(telemetry: &Telemetry, epoch: u64, day: &str, item: &Value) {
+fn screen_event(telemetry: &Telemetry, epoch: u64, item: &Value) {
     let text = |key: &str| item[key].as_str().unwrap_or_default();
     let client = screen_client(item);
     let took = item["ms"].as_u64();
@@ -404,23 +404,23 @@ fn screen_event(telemetry: &Telemetry, epoch: u64, day: &str, item: &Value) {
     match text("evento") {
         "app.visible_time" => {
             let minutes = took.map_or(0, |ms| (ms.min(VISIBLE_CAP_MS) + 30_000) / 60_000);
-            if minutes > 0 { telemetry.count_in_epoch(epoch, Event::AppVisibleMinutes, dims, minutes); }
+            if minutes > 0 { telemetry.count_in(epoch, Event::AppVisibleMinutes, dims, minutes); }
         }
         "rota.escolhida" => {
             let dims = dims.with("failed", false).with("route", Code::known(text("detalhe"), ROUTES));
             match took {
-                Some(ms) => telemetry.duration_in_epoch(epoch, Event::ClientRoute, dims, Duration::from_millis(ms)),
-                None => telemetry.count_in_epoch(epoch, Event::ClientRoute, dims, 1),
+                Some(ms) => telemetry.duration_in(epoch, Event::ClientRoute, dims, Duration::from_millis(ms)),
+                None => telemetry.count_in(epoch, Event::ClientRoute, dims, 1),
             }
         }
         "rota.falhou" => {
             let code = Code::known(&text("codigo").to_ascii_lowercase(), ROUTE_FAILURES);
-            telemetry.count_in_epoch(epoch, Event::ClientRoute, dims.with("failed", true).with("code", code), 1);
+            telemetry.count_in(epoch, Event::ClientRoute, dims.with("failed", true).with("code", code), 1);
         }
-        "chat.opened" => if let Some(ms) = took { telemetry.duration_in_epoch(epoch, Event::ChatOpen, dims, Duration::from_millis(ms)); },
+        "chat.opened" => if let Some(ms) = took { telemetry.duration_in(epoch, Event::ChatOpen, dims, Duration::from_millis(ms)); },
         "app.crash" => {
             let code = Code::known(&text("codigo").to_ascii_lowercase(), FATAL_CODES);
-            telemetry.count_in_epoch(epoch, Event::ClientFatal, dims.with("code", code), 1);
+            telemetry.count_in(epoch, Event::ClientFatal, dims.with("code", code), 1);
         }
         _ => {}
     }

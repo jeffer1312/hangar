@@ -5,6 +5,7 @@ import { baseOf, configureDiag, criarTransporteDiag, getTelemetry, isOwnMachine,
   SETTINGS_CONSENT_SCOPE, subscribeRoutes, TELEMETRY_CONSENT_SCOPE, UNCONFIRMED_BASE, type EventoDiag, type Server, type TelemetrySetting } from '@hangar/core';
 import { useServers } from '../stores/servers';
 import { fatalTelemetryEvent, replayFatalError } from './fatalErrors';
+import { setTelemetrySavedListener } from './telemetrySaved';
 
 let iniciado = false;
 // O tempo na tela sai neste compasso; o servidor recusa mais que isso num evento.
@@ -14,11 +15,7 @@ const destination = (server: Server) => trimBase(server.baseUrl);
 type SettingsSnapshot = Pick<EventoDiag, 'values' | 'device'> & {
   cliente: 'ios' | 'android'; ts: string; snapshot_period: string;
 };
-let telemetrySaved: ((server: Server, state: TelemetrySetting) => void) | undefined;
-
-export function onTelemetrySaved(server: Server, state: TelemetrySetting): void {
-  telemetrySaved?.(server, state);
-}
+export { onTelemetrySaved } from './telemetrySaved';
 
 export function withMachineRequestDiagnostics(fetcher: typeof fetch): typeof fetch {
   return async (input, init) => {
@@ -183,11 +180,13 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'values' | 'device
       if (inFlight.get(key) === flight) inFlight.delete(key);
     }
   };
-  telemetrySaved = (server, state) => {
-    if (!sameServer(server, ownActive())) return;
+  setTelemetrySavedListener((server, state) => {
+    // Aceite novo em qualquer máquina vale a releitura dela; o envio imediato fica só para a ativa.
+    settingsDay.delete(destination(server));
     inFlight.delete(destination(server));
+    if (!sameServer(server, ownActive())) return;
     if (state.snapshot_period) void settingsSnapshot(state);
-  };
+  });
   let lastRoute = '';
   const checkActiveRoute = () => {
     const s = snapshotTarget();
