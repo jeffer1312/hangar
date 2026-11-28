@@ -95,12 +95,12 @@ const SETTINGS: [string, [string, number][]][] = [
 
 // Retrato e ambiente da amostra, nas faixas fechadas que a máquina manda.
 const CTX: Record<string, string>[] = [
-  { up: "ge1d", mem_free: "lt5", disk_free: "ge20g", load: "lt2", cpu: "ge80", sessions: "4-9", working: "2-3", "sessions.claude.terminal": "2-3",
-    "sessions.codex.headless": "1", provider: "claude", surface: "terminal", model: "opus", age: "lt1h", state: "working", cli: "2.1.195" },
-  { up: "lt1d", mem_free: "ge40", disk_free: "ge20g", load: "lt0_5", cpu: "lt50", sessions: "2-3", working: "1", provider: "claude", surface: "headless",
-    model: "sonnet", age: "lt10m", state: "working", cli: "2.1.195" },
+  { up: "ge1d", mem_free: "lt5", disk_free: "ge20g", load: "lt2", sessions: "4-9", working: "2-3", "sessions.claude.terminal": "2-3",
+    "sessions.codex.headless": "1", provider: "claude", surface: "terminal", model: "opus", state: "working", cli: "2.1.195" },
+  { up: "lt1d", mem_free: "ge40", disk_free: "ge20g", load: "lt0_5", sessions: "2-3", working: "1", provider: "claude", surface: "headless",
+    model: "sonnet", state: "working", cli: "2.1.195" },
   { client: "ios", client_version: "1.4.2", resumed: "lt5s" },
-  { up: "ge1d", mem_free: "lt5", disk_free: "lt5g", load: "ge2", cpu: "ge80", sessions: "ge10", working: "4-9", exit: "sigkill" },
+  { up: "ge1d", mem_free: "lt5", disk_free: "lt5g", load: "ge2", sessions: "ge10", working: "4-9", exit: "sigkill" },
 ];
 const MACHINE_ENV: Record<string, string>[] = [
   { os: "linux", os_name: "cachyos", os_version: "absent", cpus: "9-16", ram_total: "16-32g", mux: "tmux", mux_version: "3.5a",
@@ -136,8 +136,8 @@ const RECORDS = ((): Omit<FailureRecord, "daily" | "count" | "first" | "last">[]
   // As quatro primeiras são do contrato novo; as outras vêm como de pacote antigo, sem retrato.
   ...(k < 4 ? {
     trail_last: [["tela.ver:chat", "session.interrupt", "app.oculto", "app.visivel"], ["tela.ver:chat", "browser", "send", "browser"], ["app.oculto", "app.visivel"], []][k],
-    ctx_first: k === 0 ? { ...CTX[0], mem_free: "lt20", load: "lt1", cpu: "lt80" } : CTX[k], ctx_last: CTX[k],
-    after: ["recovered", "other_action", "recovered", "none"][k], capped: k === 1,
+    ctx_first: k === 0 ? { ...CTX[0], mem_free: "lt20", load: "lt1" } : CTX[k], ctx_last: CTX[k],
+    after: ["recovered", "other_action", "recovered", "none"][k], capped: false,
     batch: { version: "0.45.0", commit: k === 2 ? "dev" : "a1b2c3d", install: k === 2 ? "checkout" : "package", os: k === 2 ? "windows" : "linux",
       clock_skew_s: [3, -15, 185, null][k], machine: MACHINE_ENV[k === 2 ? 1 : 0] },
   } : { trail_last: [], ctx_first: {}, ctx_last: {}, after: null, capped: false,
