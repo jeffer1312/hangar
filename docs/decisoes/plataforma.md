@@ -3323,7 +3323,9 @@ sem alterações, parada), e a tela mostrava "Sem branch" para sempre. Em 27/11/
 assim num repositório, todas com os commits já na `origin/develop`. Agora a base dela é a
 branch principal do remoto (`refs/remotes/origin/HEAD`; sem `origin`, a do único remoto que
 tem HEAD). Não é a branch do checkout principal, que costuma estar numa branch de trabalho.
-Sem HEAD de remoto, ou com dois remotos sem `origin`, continua sem base. A prova por PR fica
+Sem HEAD de remoto, com `origin` sem HEAD, ou sem `origin` e com mais de um remoto publicando
+HEAD, continua sem base. Worktree sem branch com commit fora da base nunca entra na limpeza
+automática: só ela alcança esse commit. A prova por PR fica
 de fora: ela precisa do nome da branch.
 
 A busca de repositórios percorria as raízes numa linha só, com teto de 20 mil pastas e 2 s. As

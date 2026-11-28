@@ -549,6 +549,10 @@ pub fn candidate(
     if st["degraded"] != false || st["base"].as_str().is_none() || st["head"].as_str().is_none() {
         return Ok(None);
     }
+    // Sem branch, só a worktree alcança os commits dela: com algum fora da base, removê-la os perde.
+    if st["branch"].is_null() && st["ahead"].as_u64() != Some(0) {
+        return Ok(None);
+    }
     let no_commits = st["ahead"].as_u64() == Some(0);
     let by_state = settings.delete_merged && st["merged"] == true || settings.delete_unchanged && no_commits;
     let unchanged = by_state && no_commits;
@@ -1633,30 +1637,58 @@ mod tests {
         assert!(!wt.exists());
         git(&repo, &["show-ref", "--verify", "refs/heads/topic"]);
     }
-    #[test]
-    fn automatic_removal_takes_a_merged_worktree_without_a_branch() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = crate::real(dir.path());
+    /// Repositório com `origin/HEAD` apontando a develop; `detached` abre uma worktree sem branch
+    /// sobre ela, com um commit publicado ou não.
+    fn detached_origin(root: &Path) -> PathBuf {
         let repo = root.join("repo");
         let origin = root.join("origin.git");
         std::fs::create_dir(&repo).unwrap();
         git(&repo, &["init", "-b", "main"]);
-        let commit = |at: &Path, msg: &str| git(at, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-m", msg]);
-        commit(&repo, "initial");
-        git(&root, &["init", "--bare", "-b", "develop", origin.to_str().unwrap()]);
+        detached_commit_in(&repo, "initial");
+        git(root, &["init", "--bare", "-b", "develop", origin.to_str().unwrap()]);
         git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
         git(&repo, &["push", "origin", "main:develop"]);
         git(&repo, &["fetch", "origin"]);
         git(&repo, &["remote", "set-head", "origin", "develop"]);
-        let detached = |name: &str| {
-            let wt = root.join(name);
-            git(&repo, &["worktree", "add", "--detach", wt.to_str().unwrap(), "origin/develop"]);
-            commit(&wt, name);
+        repo
+    }
+    fn detached_commit_in(at: &Path, msg: &str) {
+        git(at, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-m", msg]);
+    }
+    fn detached(repo: &Path, root: &Path, name: &str, push: bool) -> PathBuf {
+        let wt = root.join(name);
+        git(repo, &["worktree", "add", "--detach", wt.to_str().unwrap(), "origin/develop"]);
+        detached_commit_in(&wt, name);
+        if push {
             git(&wt, &["push", "origin", "HEAD:develop"]);
-            wt
-        };
-        let wt = detached("mesclada");
-        detached("depois");
+        }
+        wt
+    }
+
+    #[test]
+    fn inactive_worktree_without_a_branch_keeps_its_unpublished_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = crate::real(dir.path());
+        let repo = detached_origin(&root);
+        let wt = detached(&repo, &root, "pendente", false);
+        let settings = WorktreeSettings { inactive_days: Some(1), ..WorktreeSettings::default() };
+        let path = wt.to_str().unwrap();
+        let created = worktrees::status_of(path, &[], false, &[])["created_at"].as_u64().unwrap();
+        assert!(candidate(path, &[], &[], &root, &settings, created, Some(0)).unwrap().is_none());
+        assert!(
+            candidate(path, &[], &[], &root, &settings, created + 3 * 86400, Some(0)).unwrap().is_none(),
+            "o commit fora da base só é alcançável pela worktree sem branch"
+        );
+        assert!(wt.exists());
+    }
+
+    #[test]
+    fn automatic_removal_takes_a_merged_worktree_without_a_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = crate::real(dir.path());
+        let repo = detached_origin(&root);
+        let wt = detached(&repo, &root, "mesclada", true);
+        detached(&repo, &root, "depois", true);
         git(&repo, &["fetch", "origin"]);
         let settings = WorktreeSettings { delete_merged: true, ..WorktreeSettings::default() };
         settings.save_at(&root.join(".hangar/worktree-settings.json"), &root).unwrap();
