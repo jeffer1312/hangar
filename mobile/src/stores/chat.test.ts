@@ -750,32 +750,78 @@ test('/clear aceito só retira seu eco quando o servidor confirma a troca de con
   chat.release();
 });
 
-test('comando de barra aceito não fica como eco: o servidor não o põe na fila e a conversa não o repete', async () => {
+test('comando de barra com a sessão trabalhando fica na conversa até ela repeti-lo, fora do painel "Na fila"', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[]];
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'working' }));
+    const requests = fetchManual();
+    const sending = chat.send('/effort xhigh');
+    expect(chat.use.getState().pending.map((p) => [p.text, p.queue])).toEqual([['/effort xhigh', undefined]]);
+    requests[0].responder({ ok: true });
+    await sending;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/effort xhigh']);
+    created[0].trigger('message', JSON.stringify(ev({ id: 'u:1', text: '/effort xhigh' })));
+    expect(chat.use.getState().pending).toEqual([]);
+    chat.release();
+  } finally { vi.useRealTimers(); }
+});
+
+test('comando que a conversa não repete (/compact) sai do eco depois de a sessão parar', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[]];
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'working' }));
+    const requests = fetchManual();
+    const sending = chat.send('/compact');
+    requests[0].responder({ ok: true });
+    await sending;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/compact']);
+    created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'idle' }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(chat.use.getState().pending).toEqual([]);
+    chat.release();
+  } finally { vi.useRealTimers(); }
+});
+
+test('comando de barra no Codex trabalhando vai para o painel "Na fila": lá o servidor o enfileira', async () => {
   historyResponses = [[]];
   const chat = chatStore('srv1', 'sess');
+  chat.setIdentity({ provider: 'codex' });
   chat.retain();
   await tick();
-  created[0].trigger('state', JSON.stringify({ session: 'sess', provider: 'claude', state: 'working' }));
+  created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'working' }));
   const requests = fetchManual();
-  const sending = chat.send('/compact');
-  expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/compact']);
-  expect(chat.use.getState().pending[0].queue).toBeUndefined();
+  const sending = chat.send('/review');
+  expect(chat.use.getState().pending.map((p) => [p.text, p.queue])).toEqual([['/review', true]]);
   requests[0].responder({ ok: true });
   await sending;
-  expect(chat.use.getState().pending).toEqual([]);
   chat.release();
 });
 
-test('comando de barra com a rede caindo no POST também não deixa eco: nada na conversa o confirmaria', async () => {
-  historyResponses = [[]];
-  const chat = chatStore('srv1', 'sess');
-  chat.retain();
-  await tick();
-  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed'); }));
-  await chat.send('/compact').catch(() => undefined);
-  expect(chat.use.getState().pending).toEqual([]);
-  expect(readDraft('srv1', 'sess')?.submission?.status).toBe('unknown');
-  chat.release();
+test('comando de barra com a rede caindo no POST mantém o eco: o envio pode ter chegado', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[]];
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed'); }));
+    await chat.send('/compact').catch(() => undefined);
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/compact']);
+    expect(readDraft('srv1', 'sess')?.submission?.status).toBe('unknown');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(chat.use.getState().pending).toEqual([]);
+    chat.release();
+  } finally { vi.useRealTimers(); }
 });
 
 test('(c) preview some quando o assistant_msg real chega', async () => {

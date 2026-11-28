@@ -43,6 +43,7 @@ import {
   parseCodexOutput,
   givenUpSlot,
   isInputRefusal,
+  isSlashCommand,
   type ContextRef,
 } from '@hangar/core';
 import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEvent, EventSourceLike, Server, QueuePanel, QueueEdit } from '@hangar/core';
@@ -588,6 +589,18 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     // A entrada listada tarde recomeça o prazo final: o antigo tiraria o eco antes de o painel aparecer.
     clearTimeout(echoDeadlines.get(entry));
     echoDeadlines.set(entry, setTimeout(() => { echoDeadlines.delete(entry); drop(false); }, ECHO_SETTLE_MS));
+  }
+
+  // A conversa repete o comando digitado, menos o /clear (sai no reset) e o que o Claude Code só anuncia (/compact):
+  // o eco que ela não confirmou sai depois de a sessão parar.
+  function settleCommandEcho(id: string, text: string): void {
+    if (text.trim() === '/clear') return;
+    setTimeout(() => {
+      const { pending, stateEvent } = useChatStore.getState();
+      if (!pending.some((p) => p.id === id)) return;
+      if (stateEvent?.state === 'working') settleCommandEcho(id, text);
+      else useChatStore.setState({ pending: pending.filter((p) => p.id !== id) });
+    }, ECHO_SETTLE_MS);
   }
 
   function connectSSE(): void {
@@ -1186,9 +1199,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         const solid = state === 'idle';
         // "Na conversa" fica no fim da conversa, inteiro; trabalhando, o resto que não é Direto espera no painel.
         const conversation = typeof mode === 'object' && mode.kind === 'conversation';
-        // Comando de barra nunca entra na fila do servidor, e os do Claude Code (/compact, /model) não voltam à conversa
-        // com o mesmo texto: o eco dele só vale enquanto o POST está em voo, fora do painel "Na fila".
-        const command = trimmed.trimStart().startsWith('/');
+        // Comando de barra só tem linha na fila do servidor no Codex: nos outros o eco fica na conversa.
+        const command = isSlashCommand(trimmed) && identity?.provider !== 'codex';
         const queue = state === 'working' && mode !== 'steer' && !conversation && !command && !(typeof mode === 'object' && mode.kind === 'direct');
         // A bolha `queued-` da fila durável sai depois, e o registro real chega com outro id.
         const afterId = useChatStore.getState().events.findLast((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'))?.id;
@@ -1207,8 +1219,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
             } else showDeliveryFeedback(sent);
           }
           else await sendInputForServer(target, name, trimmed);
-          // O /clear espera o reset da conversa para sair; os outros comandos já rodaram.
-          if (command && trimmed.trim() !== '/clear') useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
+          if (command) settleCommandEcho(id, trimmed);
         } catch (err) {
           // O /steer também usa 409 quando escreveu sem confirmar: não presumir recusa.
           const steer = mode === 'steer' || (typeof mode === 'object' && mode.kind === 'direct' && !mode.terminalClaude);
@@ -1219,8 +1230,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           // O 503 com código só é recusa no `/input`: o do `/steer` continua incerto.
           if (steer && status === 503) throw Object.assign(new Error((err as Error).message, { cause: err }), { status });
           // A linha local do painel sai em qualquer falha: se a mensagem entrou na fila mesmo assim, o servidor a lista.
-          // Comando também: nenhuma mensagem da conversa confirmaria o eco dele depois.
-          if (queue || command || isInputRefusal(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
+          if (queue || isInputRefusal(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
+          else if (command) settleCommandEcho(id, trimmed);
           throw err;
         }
       }, draftRevision).catch((error: unknown) => {
