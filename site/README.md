@@ -70,6 +70,15 @@ site/tools/record/enc.sh <cena> <lang>
   `HANGAR_RECORD_SIZE`, `HANGAR_RECORD_POS`, `HANGAR_NATIVE_BIN` (padrão: `hangar-native` no
   `PATH`) e `HANGAR_RECORD_OUT` mudam tamanho, posição, binário e pasta de saída.
 
+Animações das novidades (`media/news-*.mp4`): build de debug do nativo, aberto com
+`HANGAR_NATIVE_PREVIEW=<nome da animação>` na mesma configuração isolada do `launch.sh`, gravando só o quadro
+da animação com o `wf-recorder` e cortando um ciclo dela (o `CYCLE` de `desktop-native/src/news/<módulo>.rs`).
+
+Cena do celular (`media/phone-approve-v2.mp4`, cena `phone` do `live.py`, que manda a pergunta como `ask_question` para abrir a folha "Precisa de você"): APK no emulador sem janela, entrando por "Endereço e token" em
+`http://127.0.0.1:47123` (com `adb reverse tcp:47123 tcp:47123`) e o token do fixture,
+gravada com `adb shell screenrecord`. Dados do app limpos (`pm clear`) e `live.py` reiniciado antes de cada
+gravação, senão a conversa sai com as respostas da gravação anterior.
+
 ## Relatórios de falha (`worker/`)
 
 Worker de `hangar.dev.br/api/relatorio`: recebe o relatório do assistente de instalação, guarda no KV por 90 dias e manda

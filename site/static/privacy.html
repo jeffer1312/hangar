@@ -16,16 +16,22 @@ a{color:inherit}</style>
 <body>
 <main>
 <h1>Hangar Privacy Policy</h1>
-<p><small>Updated November 4, 2026 · <a href="/privacidade">Português</a></small></p>
-<p>Hangar is an app for controlling, from your phone, coding agents that run on your own servers. The developer operates no server for the app, has no user accounts and does not receive your conversations or files.</p>
+<p><small>Updated November 28, 2026 · <a href="/privacidade">Português</a></small></p>
+<p>Hangar is an app for controlling, from your phone, coding agents that run on your own servers. The developer does not receive your conversations or files. Developer services only come into the path in the cases described below: Hangar Connect, the anonymous usage counts and problem reports.</p>
 <h2>What stays on the device</h2>
 <p>Addresses and credentials of your servers, kept in the system's secure storage, and a device identifier created by the app.</p>
 <h2>What goes to your server</h2>
 <p>Messages, attachments you choose, dictation or voice audio, that identifier and the notification token. You control the server, and what it does with this data, including sending it to AI or transcription providers you configure, follows your configuration.</p>
+<h2>Hangar Connect (optional)</h2>
+<p>If you use Hangar Connect to sign in from any network, the app asks the developer's service where your machines are from the account name, and that service keeps your Connect account, the names of your machines and the devices you approved, and relays the connection through a tunnel. The connection stays encrypted all the way to your machine, which holds the certificate. Without Connect, the app talks straight to your server, over your LAN or your VPN.</p>
+<h2>Anonymous usage counts (optional)</h2>
+<p>Your server only sends anonymous usage and error counts to the developer if you accept in the app; without an answer, nothing is counted. If you decline, it sends a single anonymous note that you declined, with only kind, version, system and update channel. Apart from Connect, the phone app does not talk to the developer: the counts leave from your server. Conversations, typed text, session names, accounts, machines and addresses never go. <a href="https://github.com/jeffer1312/hangar/blob/main/docs/telemetria.md">Full list of what is sent</a>.</p>
+<h2>Problem reports</h2>
+<p>When you use "Report a problem", or when an update fails and you have already allowed automatic sending, your server sends the developer a diagnostic report with paths, names and secrets removed. Without that request or permission, nothing is sent.</p>
 <h2>Permissions</h2>
 <p>Microphone for dictation and voice; camera to read connection QR codes; photos and files only when you attach something; notifications for alerts from your servers.</p>
 <h2>Third parties</h2>
-<p>Notifications pass through Expo and Google (Firebase Cloud Messaging). App updates come from Expo, which receives technical data such as IP address and app version. We use no ads or analytics tools, and we do not sell data.</p>
+<p>Notifications pass through Expo and Google (Firebase Cloud Messaging). App updates come from Expo, which receives technical data such as IP address and app version. We use no ads or third-party analytics tools, and we do not sell data.</p>
 <h2>Deletion</h2>
 <p>Uninstalling the app deletes its data from the device. Data on your server stays under your control.</p>
 <h2>Children</h2>

@@ -17,7 +17,7 @@ SCRIPT = []
 
 
 def live(name):
-    return LIVE.setdefault(name, {"preview": "", "thinking": "", "tool": "", "label": None})
+    return LIVE.setdefault(name, {"preview": "", "thinking": "", "tool": "", "label": None, "ask": None})
 
 
 SL = {"claude": "🤖 Opus5.5·1M (high✦) │ 📁 {repo} [{branch}*] │ 💬 9k/1.2k {ctx}k/1M │ 💵 $0.74 │ ⏱ 6m",
@@ -114,6 +114,8 @@ SCENE_TEXT = {
                      "Added a property test over 10k random carts — **12 tests pass**."),
         "k_q": "Round per line item or once on the total?",
         "k_opts": ["Once on the total (recommended)", "Per line item, like today", "Ask finance first"],
+        "k_header": "Rounding",
+        "k_opt_desc": ["Line items keep full precision; only the total is rounded.", "Each line item is rounded before the sum.", "No change until finance sets the rule."],
         "k_tests_desc": "Run billing tests",
         "p_prompt": "Redesign the checkout summary card and get it reviewed before pushing.",
         "p_found": "Summary card is split into line items and totals. Sent the diff to **checkout-review** for a second look.",
@@ -155,6 +157,8 @@ SCENE_TEXT = {
                      "Adicionei um teste de propriedade com 10 mil carrinhos aleatórios — **12 testes passam**."),
         "k_q": "Arredondo por item ou uma vez só no total?",
         "k_opts": ["Uma vez no total (recomendado)", "Por item, como hoje", "Perguntar ao financeiro antes"],
+        "k_header": "Arredondamento",
+        "k_opt_desc": ["Os itens ficam com a precisão inteira e só o total é arredondado.", "Cada item é arredondado antes da soma.", "Não mexo até o financeiro definir a regra."],
         "k_tests_desc": "Rodar os testes de cobrança",
         "p_prompt": "Refaça o card de resumo do checkout e peça revisão antes do push.",
         "p_found": "O card de resumo agora separa itens e totais. Mandei o diff para o **checkout-review** dar uma segunda olhada.",
@@ -339,7 +343,19 @@ def scene_group(t):
 
 
 SCR = {}
-SCENES = {"group": scene_group, "agents": scene_agents, "ask": scene_ask, "pair": scene_pair, "orq": scene_orq}
+def scene_phone(t):
+    # mesma conversa da cena ask, com a pergunta na folha do AskUserQuestion, como o app do celular mostra
+    T, S = scene_ask(t)
+    Q, OPTS = t["k_q"], list(t["k_opts"])
+    ASK = {"interaction_id": "phone-ask-1", "tool_use_id": "toolu_phone_ask", "questions": [
+        {"header": t["k_header"], "question": Q, "multiSelect": False,
+         "options": [{"label": o, "description": d} for o, d in zip(OPTS, t["k_opt_desc"])]}]}
+    rest = [(at + 3.0, f) for at, f in S[1:]]
+    return T, [(1.0, lambda: (st(T, "awaiting_input", question=Q), live(T).update(ask=ASK))),
+               (9.0, lambda: live(T).update(ask=None))] + rest
+
+
+SCENES = {"group": scene_group, "agents": scene_agents, "ask": scene_ask, "pair": scene_pair, "orq": scene_orq, "phone": scene_phone}
 CUR = {"script": []}
 
 
@@ -397,6 +413,9 @@ def go():
     return None
 
 
+VOICE_MODEL = {"model": None, "effort": "low", "tier": None}
+
+
 class L(FX["H"]):
     def do_GET(self):
         url = urlparse(self.path)
@@ -418,14 +437,37 @@ class L(FX["H"]):
             with LOCK:
                 body = {"running": RUN["running"], "error": RUN["error"], "steps_done": RUN["done"], "steps_total": RUN["total"]}
             self.send_json(body); return
+        if url.path == "/api/voice/settings":
+            # mesmo retrato da demonstração do app: sem Codex o botão de voz some
+            self.send_json({"enabled": False, "codex": False, "jev": False, "voices": [], "call": {"active": False, "client": None},
+                            "settings": {"voice": None, "codex_account": "demo", "organizer": {"direct": VOICE_MODEL, "plan": VOICE_MODEL}}}); return
         super().do_GET()
+
+    def authorized(self):
+        # o app do celular manda o token na query do SSE
+        if parse_qs(urlparse(self.path).query).get("token", [""])[0] == "sintetica-fixture-sessao-0000":
+            return True
+        return super().authorized()
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        parts = path.split("/")
+        shortcut = (path.startswith("/api/sessions/") and parts[-1] == "answer" and len(parts) > 3 and live(parts[3])["ask"] is not None) \
+            or path.startswith("/api/push/expo/")
+        # resposta à folha da cena phone só confirma (a conversa segue pela linha do tempo da cena);
+        # a assinatura de push que o app faz ao entrar também, porque o fixture não manda push
+        if shortcut:
+            # conexão HTTP/1.1 reaproveitada: o corpo não lido viraria o começo do pedido seguinte
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_json({"ok": True}); return
+        super().do_POST()
 
     def stream_session(self, name):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
         sent, version, epoch = set(), -1, EPOCH["n"]
-        shown = {"thinking": None, "tool": None, "preview": None}
+        shown = {"thinking": None, "tool": None, "preview": None, "ask": None}
         try:
             while True:
                 frames = []
@@ -449,6 +491,9 @@ class L(FX["H"]):
                             if shown[slot] != lv[slot]:
                                 shown[slot] = lv[slot]
                                 frames.append((kind, {"text": lv[slot]}, None))
+                        if shown["ask"] != lv["ask"]:
+                            shown["ask"] = lv["ask"]
+                            frames.append(("ask_question", lv["ask"], None))
                         if shown["preview"] != lv["preview"]:
                             shown["preview"] = lv["preview"]
                             frames.append(("preview", {"text": lv["preview"], "md": True, "full": True, "vivo": True}, None))
