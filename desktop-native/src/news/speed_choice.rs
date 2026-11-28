@@ -4,15 +4,15 @@ use std::time::Instant;
 use gpui_kit::{component::ActiveTheme, *};
 use crate::{app::{self, chrome}, i18n::tr, theme};
 
-const CYCLE: f32 = 6.;
+pub(super) const CYCLE: f32 = 6.;
 const FAST: f32 = 1.8;
 const ULTRA: f32 = 3.6;
 const MODEL: &str = "gpt-6.2-sol";
 
 /// A posição da escolha em `SPEED_TIERS`.
-fn frame(t: f32) -> usize { if t >= ULTRA { 2 } else if t >= FAST { 1 } else { 0 } }
+pub(super) fn frame(t: f32) -> usize { if t >= ULTRA { 2 } else if t >= FAST { 1 } else { 0 } }
 
-fn until_next_step(t: f32) -> f32 { [FAST, ULTRA, CYCLE].into_iter().filter(|b| *b > t).fold(CYCLE, f32::min) - t }
+pub(super) fn until_next_step(t: f32) -> f32 { [FAST, ULTRA, CYCLE].into_iter().filter(|b| *b > t).fold(CYCLE, f32::min) - t }
 
 pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
     // Movimento reduzido: quadro parado no Ultra Fast escolhido, o que a novidade traz.

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getCodexModels, getPermissionModes, setCodexMode, setPermissionMode } from '@hangar/core';
+import { KIMI_PERMISSION_MODES, getCodexModels, getPermissionModes, setCodexMode, setPermissionMode } from '@hangar/core';
 import { chatStore } from '../../stores/chat';
 import { useServers } from '../../stores/servers';
 import * as m from '../../paraglide/messages';
@@ -13,8 +13,8 @@ const ANTIGRAVITY_MODES = ['manual', 'auto', 'acceptEdits', 'plan', 'bypassPermi
 interface Args {
   serverId: string;
   name: string;
-  // null: provider sem modo de permissão (Pi, Kimi, omp, motores) — nada é lido.
-  provider: 'claude' | 'codex' | 'antigravity' | null;
+  // null: provider sem modo de permissão (Pi, omp, motores) — nada é lido.
+  provider: 'claude' | 'codex' | 'antigravity' | 'kimi' | null;
 }
 
 // Modo da sessão: no Claude é o modo de permissão (ciclo lido da própria sessão), no Codex é
@@ -27,7 +27,8 @@ export function usePermissionControl({ serverId, name, provider }: Args) {
   const isCodex = provider === 'codex';
   const isClaude = provider === 'claude';
   const isAntigravity = provider === 'antigravity';
-  const claudeRoutes = isClaude || isAntigravity;
+  const isKimi = provider === 'kimi';
+  const claudeRoutes = isClaude || isAntigravity || isKimi;
   const sseClaude = chat.use((s) => s.stateEvent?.claude_permission_mode ?? null);
   const sseCodex = chat.use((s) => s.stateEvent?.codex_mode ?? null);
   const sessionState = chat.use((s) => s.stateEvent?.state ?? null);
@@ -125,7 +126,9 @@ export function usePermissionControl({ serverId, name, provider }: Args) {
       setNotice(e instanceof Error ? e.message : String(e));
       if (!isCodex) {
         // Mostrar o modo antigo depois de uma troca que pode ter pegado afirma uma permissão falsa.
+        const my = ++seq.current;
         getPermissionModes(name, false, server).then((res) => {
+          if (my !== seq.current) return;
           setCurrent(res.current);
           if (res.modes.length) setModes(res.modes);
         }).catch(() => {});
@@ -138,7 +141,8 @@ export function usePermissionControl({ serverId, name, provider }: Args) {
 
   // Só o que o ciclo da sessão alcança; modo novo do CLI entra cru no fim. Sem ciclo lido ainda,
   // o atual fica à vista sozinho.
-  const options = isCodex ? CODEX_MODES
+  const options = isKimi ? [...KIMI_PERMISSION_MODES]
+    : isCodex ? CODEX_MODES
     : isAntigravity ? CLAUDE_MODES.filter((mo) => ANTIGRAVITY_MODES.includes(mo) || mo === current)
     : modes.length
       ? [...CLAUDE_MODES.filter((mo) => modes.includes(mo) || mo === current), ...modes.filter((mo) => !CLAUDE_MODES.includes(mo))]
@@ -146,7 +150,7 @@ export function usePermissionControl({ serverId, name, provider }: Args) {
   const cycleUnknown = isClaude && modes.length === 0;
 
   return {
-    enabled: isClaude || isCodex || isAntigravity,
+    enabled: isClaude || isCodex || isAntigravity || isKimi,
     current,
     options,
     // Ciclo ainda não lido: o botão "Ler do terminal" aparece; sem sonda possível, o aviso de dontAsk.

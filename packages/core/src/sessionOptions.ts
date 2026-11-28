@@ -32,6 +32,10 @@ export const CLAUDE_PERMISSION_MODES = [
 // pergunta antes de agir, e o agy só o tem sem terminal.
 export const ANTIGRAVITY_PERMISSION_MODES = ['plan', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'] as const;
 
+export const KIMI_PERMISSION_MODES = ['manual', 'yolo', 'auto'] as const;
+// A CLI não tem flag manual; a escolha vazia conserva o padrão do próprio Kimi.
+export const KIMI_OPEN_PERMISSION_MODES = ['yolo', 'auto'] as const;
+
 // Codex sem terminal: o modo vira sandbox/approval, com os nomes do próprio Codex.
 export const CODEX_HEADLESS_PERMISSION_MODES = ['Ask for approval', 'Approve for me', 'Full Access'] as const;
 

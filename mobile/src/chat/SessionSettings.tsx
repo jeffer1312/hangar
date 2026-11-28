@@ -34,7 +34,7 @@ interface Props {
 }
 
 const MODE_ICON: Record<string, IconName> = {
-  manual: 'Hand', auto: 'Sparkles', acceptEdits: 'Pencil', plan: 'Diamond', bypassPermissions: 'Zap', dontAsk: 'ShieldOff',
+  yolo: 'ShieldCheck', manual: 'Hand', auto: 'Sparkles', acceptEdits: 'Pencil', plan: 'Diamond', bypassPermissions: 'Zap', dontAsk: 'ShieldOff',
 };
 const APPROVAL_ICON: Record<string, IconName> = { 'Ask for approval': 'Hand', 'Approve for me': 'Sparkles', 'Full Access': 'Zap' };
 const LEVEL: Record<string, () => string> = {
@@ -85,7 +85,7 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
   const isCodex = provider === 'codex';
   const isClaude = !provider || provider === 'claude';
   const permission = usePermissionControl({ serverId, name,
-    provider: isCodex ? 'codex' : isClaude ? 'claude' : provider === 'antigravity' ? 'antigravity' : null });
+    provider: isCodex ? 'codex' : isClaude ? 'claude' : provider === 'antigravity' ? 'antigravity' : provider === 'kimi' ? 'kimi' : null });
   const approval = useCodexApproval({ serverId, name, headless, enabled: isCodex });
   const choose = useCallback((next: Chosen) => { setChosen(next); setTab('model'); setDetail(null); }, []);
   const model = useModelControl({ serverId, name, provider, chosen, onChosen: choose, close });
@@ -118,7 +118,7 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
     ? (isCodex && !plan ? (approval.current ? APPROVAL_ICON[approval.current] : undefined) : MODE_ICON[permission.current])
     : undefined;
   const modeText = permission.current
-    ? (isCodex ? (plan ? m.chat_mode_plan() : m.chat_mode_normal()) : permissionLabel(permission.current)) : null;
+    ? (isCodex ? (plan ? m.chat_mode_plan() : m.chat_mode_normal()) : permissionLabel(permission.current, provider ?? undefined)) : null;
   const pickMode = async (mo: string) => {
     if (mo === permission.current || await permission.select(mo)) setDetail(null);
   };
@@ -136,7 +136,7 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
     </>;
   const modeControls = permission.enabled ? <>
       {permission.options.length ? <SettingsList comfortable searchable={false}
-        items={permission.options.map((mo) => ({ id: mo, label: isCodex ? (mo === 'plan' ? m.chat_mode_plan() : m.chat_mode_normal()) : permissionLabel(mo), selected: mo === permission.current, disabled: permission.applying }))}
+        items={permission.options.map((mo) => ({ id: mo, label: isCodex ? (mo === 'plan' ? m.chat_mode_plan() : m.chat_mode_normal()) : permissionLabel(mo, provider ?? undefined), selected: mo === permission.current, disabled: permission.applying }))}
         onPick={(mo) => void pickMode(mo)} /> : null}
       {permission.probing ? <Skeleton rows={1} /> : permission.canProbe ? <Probe hint={m.native_mode_probe_hint()} onPress={() => void permission.probe()} />
         : permission.noCycle ? <Empty text={m.permissao_sem_ciclo()} /> : null}

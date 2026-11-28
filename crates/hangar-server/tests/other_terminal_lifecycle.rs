@@ -142,6 +142,9 @@ impl OtherIo for Io {
             Ok(())
         })
     }
+    fn kimi_permission(&self) -> BoxFuture<'_, Result<Option<String>, RuntimeError>> {
+        Box::pin(async { Ok(None) })
+    }
     fn release<'a>(&'a self) -> BoxFuture<'a, ()> {
         Box::pin(async {})
     }

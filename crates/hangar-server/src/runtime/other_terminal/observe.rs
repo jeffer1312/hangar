@@ -233,6 +233,8 @@ pub(super) fn read(
         .then(|| crate::terminal_state::agy_footer(pane)).flatten();
     state.claude_permission_mode = if footer.is_some() && cache.agy_bypass(target) {
         Some("bypassPermissions".to_owned())
+    } else if target.provider == hangar_transcript::Provider::Kimi {
+        cache.kimi_wire.read(&target.transcript).ok().and_then(|facts| facts.permission.clone())
     } else {
         footer.as_ref().and_then(|footer| footer.mode).map(str::to_owned)
     };
