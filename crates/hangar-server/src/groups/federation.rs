@@ -378,6 +378,8 @@ pub struct PushBody {
     #[serde(default)] pub convert_from_legacy: Option<String>,
     /// Os vínculos do registro com uma ponta nesta máquina.
     #[serde(default)] pub links: BTreeMap<String, String>,
+    /// O registro pedido à dona na subida, que vem sem os vínculos: os do sidecar com outra máquina ficam.
+    #[serde(skip)] pub startup: bool,
 }
 
 /// `PUT /api/groups/{gid}`: a dona empurra o grupo. Nunca entra na porta das sessões: só sidecar
@@ -581,7 +583,7 @@ fn plan_owner(dir: &PairDir, me: &str, ask: &JoinAsk, outside: &HashSet<String>,
         peers.extend(kept_outside.iter().cloned());
         let mut s = Sidecar { peers, task: Some(task.clone()), gid: survivor.clone(), harness: harness_all.clone(), orq: false,
             fed: Some(Fed { owner: me.into(), local: true, version }), lead: old.as_ref().and_then(|s| s.lead.clone()), ..Sidecar::default() };
-        linked_fields(&mut s, links.get(&key).map(|p| view_of(me, p)), children_of(&links, &key, me), old.as_ref());
+        linked_fields(&mut s, links.get(&key).map(|p| view_of(me, p)), children_of(&links, &key, me), old.as_ref(), true);
         if ask.links.contains_key(&key) && old.as_ref().and_then(Sidecar::linked_parent) != s.linked_by.as_deref() { linked.push(m.name.clone()); }
         writes.push((m.name.clone(), s));
         before.insert(m.name.clone(), old);
@@ -591,12 +593,26 @@ fn plan_owner(dir: &PairDir, me: &str, ask: &JoinAsk, outside: &HashSet<String>,
     Ok(OwnerPlan { record, before_records, before, writes, joiners, newcomers, linked, losers })
 }
 
-/// `linked_by` e `linked_children` do registro, senão os que o sidecar já tinha (o registro pedido à dona
-/// na subida vem sem os vínculos), e só com a outra ponta no grupo.
-fn linked_fields(s: &mut Sidecar, parent: Option<String>, children: Vec<String>, old: Option<&Sidecar>) {
-    s.linked_by = parent.or_else(|| old.and_then(|o| o.linked_by.clone()));
-    s.linked_children = if children.is_empty() { old.map(|o| o.linked_children.clone()).unwrap_or_default() } else { children };
+/// `linked_by` e `linked_children` do registro, senão os que o sidecar já tinha, e só com a outra ponta no
+/// grupo. Do sidecar, vínculo com outra máquina só fica com `keep_remote` (a dona, e o registro pedido a ela
+/// na subida, que vem sem os vínculos): no envio da dona, o registro manda nele.
+fn linked_fields(s: &mut Sidecar, parent: Option<String>, children: Vec<String>, old: Option<&Sidecar>, keep_remote: bool) {
+    let kept = |p: &String| keep_remote || !is_remote(p);
+    s.linked_by = parent.or_else(|| old.and_then(|o| o.linked_by.clone()).filter(kept));
+    s.linked_children = if children.is_empty() {
+        old.map(|o| o.linked_children.iter().filter(|c| kept(c)).cloned().collect()).unwrap_or_default()
+    } else { children };
     s.drop_stale_links();
+}
+
+/// O pai só trocou de nome: o antigo saiu do grupo no mesmo envio em que o novo, da mesma máquina, entrou.
+/// Não é ligação nova, e o `linked_at` da filha fica.
+// ponytail: pelo envio não dá para separar a renomeação de um pai novo entrando quando o antigo sai; a dona
+// mandaria a renomeação explícita no `PushBody` se esse caso aparecer.
+fn parent_renamed(old: &Sidecar, new: &Sidecar) -> bool {
+    let (Some(was), Some(now)) = (old.linked_parent(), new.linked_by.as_deref()) else { return false };
+    let server = |p: &str| p.split_once("::").map(|(s, _)| s.to_owned());
+    server(was) == server(now) && !new.peers.iter().any(|p| p == was) && !old.peers.iter().any(|p| p == now)
 }
 
 fn orq_refusal() -> Refusal {
@@ -1083,8 +1099,8 @@ fn apply_push(dir: &PairDir, me: &str, gid: &str, body: &PushBody, renamed: &Has
             let key = m.key();
             let mut s = Sidecar { peers, task: Some(body.task.clone()), gid: gid.into(), harness: h, orq: false,
                 fed: Some(Fed { owner: body.owner.clone(), local: false, version: body.version }), lead: old.lead.clone(), ..Sidecar::default() };
-            linked_fields(&mut s, links.get(&key).map(|p| view_of(me, p)), children_of(&links, &key, me), Some(&old));
-            if links.contains_key(&key) && old.linked_parent() != s.linked_by.as_deref() { linked.push(m.name.clone()); }
+            linked_fields(&mut s, links.get(&key).map(|p| view_of(me, p)), children_of(&links, &key, me), Some(&old), body.startup);
+            if links.contains_key(&key) && old.linked_parent() != s.linked_by.as_deref() && !parent_renamed(&old, &s) { linked.push(m.name.clone()); }
             writes.push((m.name.clone(), s));
             // A ligação não manda o protocolo: viraria um turno da filha antes do pedido do pai.
             if was_loose && !links.iter().any(|(c, p)| *c == key || *p == key) { newcomers.push(m.name.clone()); }
@@ -1305,7 +1321,7 @@ pub fn spawn(st: Arc<AppState>) -> Option<tokio::task::JoinHandle<()>> {
             match st_ref.peers.call_group(&owner, reqwest::Method::GET, &format!("/api/groups/{}", segment(&gid)), None).await {
                 Ok(record) => match serde_json::from_value::<GroupRecord>({ let mut r = record; if let Some(o) = r.as_object_mut() { o.remove("server_id"); } r }) {
                     Ok(r) => {
-                        let body = PushBody { protocol: PROTOCOL, owner: r.owner, version: r.version, task: r.task, members: r.members, outside: r.outside, joining: Vec::new(), dissolved: false, convert_from_legacy: None, links: BTreeMap::new() };
+                        let body = PushBody { protocol: PROTOCOL, owner: r.owner, version: r.version, task: r.task, members: r.members, outside: r.outside, joining: Vec::new(), dissolved: false, convert_from_legacy: None, links: BTreeMap::new(), startup: true };
                         if let Err(Refusal(status, _)) = local_apply(st_ref, groups_ref, &gid, body).await {
                             tracing::warn!(code = "groups_restart_apply_failed", %owner, %status, "groups: o grupo pedido à dona não foi aplicado");
                         }

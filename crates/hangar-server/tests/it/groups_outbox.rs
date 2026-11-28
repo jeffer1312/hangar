@@ -343,7 +343,10 @@ async fn enqueue_does_not_block_wait_during_write() {
     assert_eq!(outbox.wait("lab", "g", 1, DEADLINE).await, Delivery::Confirmed);
     let fifo = tmp.path().join("groups/outbox.json.tmp");
     assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
-    let writer = { let o = outbox.clone(); tokio::task::spawn_blocking(move || o.enqueue(vec![push("vm", "g", 1, &[])])) };
+    let (started, writing) = tokio::sync::oneshot::channel();
+    let writer = { let o = outbox.clone(); tokio::task::spawn_blocking(move || { let _ = started.send(()); o.enqueue(vec![push("vm", "g", 1, &[])]) }) };
+    // As leituras só começam com a escrita já a caminho do FIFO.
+    writing.await.unwrap();
     // Sem espera fixa: lê várias vezes com a escrita presa no FIFO; a leitura que esperasse o disco estoura o prazo.
     let mut probe = Ok(());
     for _ in 0..200 {

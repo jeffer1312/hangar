@@ -242,16 +242,17 @@ impl PeerClient {
         if self.route(server) == Some(Route::Connect) { vec![connect, saved] } else { vec![saved, connect] }
     }
 
-    /// Uma tentativa por caminho, em ordem, até um decidir; sem decisão, volta o erro do último.
+    /// Uma tentativa por caminho, em ordem, até um decidir; sem decisão, volta o erro do último. O `bool` do
+    /// erro: nada chegou ao Hangar de lá.
     async fn over_routes<'a, T, Fut>(&self, server: &str, cfg: &'a PeerCfg, mut once: impl FnMut(usize, Route, &'a str, &'a str) -> Fut)
-        -> Result<T, PeerError>
+        -> Result<T, (PeerError, bool)>
     where Fut: Future<Output = Result<T, Failed>> {
         let attempts = self.attempts(server, cfg);
         let last = attempts.len() - 1;
-        let mut failure = PeerError::Unknown;
+        let mut failure = (PeerError::Unknown, true);
         for (at, (route, base, token)) in attempts.into_iter().enumerate() {
             match self.after(server, route, token, at == last, once(at, route, base, token).await).await {
-                ControlFlow::Break(result) => return result,
+                ControlFlow::Break(result) => return result.map_err(|e| (e, false)),
                 ControlFlow::Continue(error) => failure = error,
             }
         }
@@ -261,7 +262,7 @@ impl PeerClient {
     /// `Continue`: tentar o próximo caminho. Só quando o pedido não chegou ao Hangar de lá (falha de conexão, ou o
     /// proxy do Connect sem alcançá-lo) ou o Connect recusou a credencial; prazo de leitura ou outra resposta
     /// faria recado e cofre chegarem em dobro.
-    async fn after<T>(&self, server: &str, route: Route, token: &str, last: bool, outcome: Result<T, Failed>) -> ControlFlow<Result<T, PeerError>, PeerError> {
+    async fn after<T>(&self, server: &str, route: Route, token: &str, last: bool, outcome: Result<T, Failed>) -> ControlFlow<Result<T, PeerError>, (PeerError, bool)> {
         let outcome = match outcome {
             Err(Failed { error, bare_502: true, .. }) if route == Route::Connect => Err(Failed { error, unsent: true, bare_502: true }),
             other => other,
@@ -271,11 +272,11 @@ impl PeerClient {
             Err(Failed { unsent: true, error, .. }) => {
                 // Só a falha de conexão tira o Connect da frente.
                 if route == Route::Connect || last { self.remember(server, None); }
-                ControlFlow::Continue(error)
+                ControlFlow::Continue((error, true))
             }
             Err(Failed { error: error @ PeerError::Refused { status: 401, .. }, .. }) if route == Route::Connect => {
                 self.refuse_connect(server, token).await;
-                ControlFlow::Continue(error)
+                ControlFlow::Continue((error, true))
             }
             // Resposta HTTP (o 5xx do proxy incluído) prova que o caminho conecta: ele segue à frente, e a
             // próxima chamada não paga de novo o prazo de conexão do endereço salvo.
@@ -345,6 +346,13 @@ impl PeerClient {
         self.send(None, Wait::Clone, server, method, path, body).await.map(|(_, v)| v)
     }
 
+    /// Como `call`; o `bool` da falha diz se nada chegou ao Hangar de lá (a conexão nem abriu): só então repetir
+    /// não entrega em dobro.
+    pub async fn call_unsent(&self, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
+        -> Result<Option<Value>, (PeerError, bool)> {
+        self.send_flagged(None, Wait::Read, server, method, path, body).await.map(|(_, v)| v)
+    }
+
     /// Como `call`, dizendo quem pede: o `user-agent` é o `cliente` que o diário de lá grava.
     pub async fn call_as(&self, agent: &str, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<Option<Value>, PeerError> {
@@ -353,6 +361,11 @@ impl PeerClient {
 
     async fn send(&self, agent: Option<&str>, wait: Wait, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<(u16, Option<Value>), PeerError> {
+        self.send_flagged(agent, wait, server, method, path, body).await.map_err(|(e, _)| e)
+    }
+
+    async fn send_flagged(&self, agent: Option<&str>, wait: Wait, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
+        -> Result<(u16, Option<Value>), (PeerError, bool)> {
         let operation=self.diagnostics.as_ref().map(Operation::new);
         let result=self.send_inner(agent,wait,server,method,path,body,operation.as_ref()).await;
         if let Some(operation)=operation {operation.finish(result.is_err());}
@@ -360,13 +373,13 @@ impl PeerClient {
     }
 
     async fn send_inner(&self, agent: Option<&str>, wait: Wait, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>, operation:Option<&Operation>)
-        -> Result<(u16, Option<Value>), PeerError> {
+        -> Result<(u16, Option<Value>), (PeerError, bool)> {
         let book = self.book.clone();
         let key = server.to_owned();
         let cfg = tokio::task::spawn_blocking(move || book.get(&key)).await.ok().flatten();
         let Some(cfg)=cfg else {
             if let Some(operation)=operation{operation.emit(serde_json::json!({"evento":"peer.recusado","nivel":"erro","etapa":method.as_str(),"detalhe":"configuracao_ausente_ou_incompleta"}));}
-            return Err(PeerError::Unknown);
+            return Err((PeerError::Unknown, true));
         };
         let reads = method == reqwest::Method::GET || method == reqwest::Method::HEAD;
         let (slot, read, total) = match wait {
@@ -381,7 +394,7 @@ impl PeerClient {
             None => {
                 let mut builder = crate::http_client().connect_timeout(READ_TIMEOUT).read_timeout(read).timeout(total);
                 if wait != Wait::Read || !reads { builder = builder.redirect(reqwest::redirect::Policy::none()); }
-                let built = builder.build().map_err(|e| transport(server, &e))?;
+                let built = builder.build().map_err(|e| (transport(server, &e), true))?;
                 slot.get_or_init(|| built)
             }
         };
@@ -419,7 +432,7 @@ impl PeerClient {
         self.over_routes(server, &cfg, |_, _, base, token| {
             let (url, method, body) = (format!("{base}{path}"), method.clone(), body.clone());
             async move { secret_once(http, server, &url, token, method, kind, body, limit).await }
-        }).await
+        }).await.map_err(|(e, _)| e)
     }
 
     /// `call_group` de um pedido à dona que espera outras máquinas (`op: join`, `op: message`), com
