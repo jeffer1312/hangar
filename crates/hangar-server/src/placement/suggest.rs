@@ -254,12 +254,14 @@ async fn peer_facts(st: &AppState, key: String, path: &str) -> Result<(String, M
 
 /// A máquina pedida que não deu os fatos. A que respondeu recusando não é "confira se está ligada".
 fn peer_unavailable(server: &str, dropped: Option<&Dropped>) -> OpenError {
-    let msg = match dropped {
-        Some(d) if d.answered => format!("{server} não deu os fatos do balanceamento: {}", d.cause),
+    // A causa vem crua de lá (corpo, erro do serde): curta, como no diário.
+    let cause = dropped.map(|d| d.cause.chars().take(300).collect::<String>());
+    let msg = match (dropped, &cause) {
+        (Some(d), Some(cause)) if d.answered => format!("{server} não deu os fatos do balanceamento: {cause}"),
         _ => format!("{server} não respondeu aos fatos do balanceamento; confira se ela está ligada"),
     };
     OpenError::new(503, "placement_peer_unavailable", msg)
-        .with_params(json!({"server": server, "cause": dropped.map(|d| d.cause.as_str()), "detalhe": dropped.map(|d| d.code)}))
+        .with_params(json!({"server": server, "cause": cause, "detalhe": dropped.map(|d| d.code)}))
 }
 
 /// A resposta de uma máquina à rota de fatos, com a chave do `peers.json` que a alcança. O id que vale nas

@@ -1696,7 +1696,7 @@ impl NewSession {
                 }
                 None => {
                     // Noutra máquina a criação pode clonar o repositório lá: o prazo é o do pior caso (`hangar-send` CREATE_TIMEOUT).
-                    let wait = if body.get("machine").is_some_and(|m| !m.is_null()) { 900 } else { 120 };
+                    let wait = if body.get("machine").and_then(|m| m.as_str()).is_some_and(|s| !s.is_empty()) { 900 } else { 120 };
                     let result = api.server_send(reqwest::Method::POST, &["sessions"], Some(body), wait).await;
                     poll.abort();
                     opened(&born, result, &name, &cwd, requested_branch.as_deref()).await

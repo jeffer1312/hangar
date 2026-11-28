@@ -148,11 +148,11 @@ export default function PlacementSettings() {
 
       <SectionCard icon="Gauge" title={m.native_placement_limits()} subtitle={m.native_placement_limits_help()}>
         <MachineField label={`${m.native_placement_limit_memory()} (%)`} accessibilityHint={m.native_placement_limit_memory_help()} value={limits.mem}
-          onChangeText={(mem) => { setSaved(null); setLimits((l) => ({ ...l, mem })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
+          onChangeText={(mem) => { setError(''); setSaved(null); setLimits((l) => ({ ...l, mem })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
         <MachineField label={m.native_placement_limit_working()} accessibilityHint={m.native_placement_limit_working_help()} value={limits.working}
-          onChangeText={(working) => { setSaved(null); setLimits((l) => ({ ...l, working })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
+          onChangeText={(working) => { setError(''); setSaved(null); setLimits((l) => ({ ...l, working })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
         <MachineField label={`${m.native_placement_limit_cpu()} (%)`} accessibilityHint={m.native_placement_limit_cpu_help()} value={limits.cpu}
-          onChangeText={(cpu) => { setSaved(null); setLimits((l) => ({ ...l, cpu })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
+          onChangeText={(cpu) => { setError(''); setSaved(null); setLimits((l) => ({ ...l, cpu })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
       </SectionCard>
 
       <SectionCard icon="FolderGit2" title={m.native_placement_projects()} subtitle={m.native_placement_projects_help()}>
