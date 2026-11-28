@@ -48,10 +48,15 @@ pub enum Failure {
 
 impl Telemetry {
     /// `POST` ao `HANGAR_TELEMETRY_URL` do ambiente ou ao endereço padrão.
-    pub fn http_post(&self) -> reqwest::Result<Post> {
+    pub fn http_post(&self) -> reqwest::Result<Post> { self.post_to(self.batch_url()) }
+
+    pub(crate) fn batch_url(&self) -> String {
+        (self.lookup)("HANGAR_TELEMETRY_URL").filter(|url| !url.trim().is_empty()).unwrap_or_else(|| DEFAULT_URL.to_owned())
+    }
+
+    pub(crate) fn post_to(&self, url: String) -> reqwest::Result<Post> {
         // Redirecionamento não é seguido: vira resposta não 2xx e o dia espera a próxima tentativa.
         let client = hangar_core::net::http_client().timeout(TIMEOUT).redirect(reqwest::redirect::Policy::none()).build()?;
-        let url = (self.lookup)("HANGAR_TELEMETRY_URL").filter(|url| !url.trim().is_empty()).unwrap_or_else(|| DEFAULT_URL.to_owned());
         let stamp = format!("hangar-server/{}", self.batch_env.version);
         Ok(Arc::new(move |body: Vec<u8>| -> PostFuture {
             let request = client.post(&url).header("content-type", "application/json").header("x-hangar-stamp", &stamp).body(body);

@@ -1,4 +1,5 @@
-//! Receptor da telemetria: `POST /v1/batch` grava o pacote diário de cada máquina no Postgres.
+//! Receptor da telemetria: `POST /v1/batch` grava o pacote diário de cada máquina no Postgres;
+//! `POST /v1/declined` conta o aviso único de quem recusou, sem identificação.
 //! Não lê IP nem cabeçalho de origem; o limite de pedidos fica com a Cloudflare.
 mod accounts;
 mod panel;
@@ -13,13 +14,15 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use hangar_telemetry::wire::Batch;
+use hangar_telemetry::wire::{Batch, Refusal};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use tokio::signal::unix::{SignalKind, signal};
 
 // Os 200 registros de falha de até 40 campos e os 5000 passos do dia cabem com folga junto dos contadores.
 const MAX_BODY: usize = 2 * 1024 * 1024;
+/// O aviso de recusa são quatro campos curtos.
+const MAX_REFUSAL_BODY: usize = 1024;
 
 /// Aviso em processo de pacote gravado, para o painel aberto reler; e o sinal de desligar, que fecha esses canais.
 pub struct Live {
@@ -42,6 +45,7 @@ struct Ingest {
 fn app(pool: PgPool, live: Arc<Live>) -> Router {
     Router::new()
         .route("/v1/batch", post(post_batch))
+        .route("/v1/declined", post(post_declined).layer(DefaultBodyLimit::max(MAX_REFUSAL_BODY)))
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .with_state(Ingest { pool, live })
 }
@@ -81,6 +85,27 @@ async fn post_batch(State(ingest): State<Ingest>, body: Bytes) -> Response {
     }
 }
 
+/// Campo a mais (um identificador) ou tipo fora da lista é 400, como no pacote.
+async fn post_declined(State(ingest): State<Ingest>, body: Bytes) -> Response {
+    let Ok(refusal) = serde_json::from_slice::<Refusal>(&body) else {
+        return refused(StatusCode::BAD_REQUEST, "json");
+    };
+    if let Err(field) = refusal.validate() {
+        return refused(StatusCode::BAD_REQUEST, field);
+    }
+    match store::count_refusal(&ingest.pool, &refusal).await {
+        Ok(()) => {
+            // O cartão de aceite do painel aberto relê na hora.
+            let _ = ingest.live.notify.send(());
+            reply(StatusCode::OK, r#"{"ok":true}"#.to_owned())
+        }
+        Err(error) => {
+            eprintln!("telemetry-ingest: refusal: {error}");
+            refused(StatusCode::SERVICE_UNAVAILABLE, "store")
+        }
+    }
+}
+
 async fn retention(pool: PgPool) {
     let mut daily = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
     loop {
@@ -88,6 +113,9 @@ async fn retention(pool: PgPool) {
         match store::prune(&pool).await {
             Ok(removed) => eprintln!("telemetry-ingest: retention removed {removed} batches"),
             Err(error) => eprintln!("telemetry-ingest: retention: {error}"),
+        }
+        if let Err(error) = store::prune_refusals(&pool).await {
+            eprintln!("telemetry-ingest: retention (refusals): {error}");
         }
         if let Err(error) = accounts::prune(&pool).await {
             eprintln!("telemetry-ingest: retention (panel): {error}");
@@ -378,6 +406,53 @@ mod tests {
         assert!(data["active"]["machines_7d"].as_i64().unwrap() >= 2);
     }
 
+    async fn declined(pool: PgPool, body: &Value) -> (StatusCode, String) {
+        let request = Request::post("/v1/declined").header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(body).unwrap())).unwrap();
+        let response = app(pool).oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn declined_accepts_only_the_four_closed_fields() {
+        let ok = json!({"kind": "declined", "version": "0.42.0", "os": "linux", "channel": "latest"});
+        let mut with_id = ok.clone();
+        with_id["machine_id"] = json!(fresh_id());
+        let mut bad_kind = ok.clone();
+        bad_kind["kind"] = json!("later");
+        let mut bad_os = ok.clone();
+        bad_os["os"] = json!("Linux Mint");
+        let mut missing = ok.clone();
+        missing.as_object_mut().unwrap().remove("channel");
+        for (body, error) in [(with_id, "json"), (bad_kind, "json"), (missing, "json"), (bad_os, "os")] {
+            assert_eq!(declined(offline(), &body).await, (StatusCode::BAD_REQUEST, format!(r#"{{"ok":false,"error":"{error}"}}"#)), "{body}");
+        }
+        let mut big = ok.clone();
+        big["version"] = json!("x".repeat(MAX_REFUSAL_BODY));
+        assert_eq!(declined(offline(), &big).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn declined_counts_each_ping_and_the_summary_splits_by_kind() {
+        let pool = online().await;
+        let before = store::summary(&pool, 7).await.unwrap()["refusals"].clone();
+        // Versão desta rodada: o banco é dividido entre rodadas.
+        let version = format!("t-{}", fresh_id());
+        for kind in ["declined", "declined", "revoked"] {
+            let body = json!({"kind": kind, "version": version, "os": "linux", "channel": "latest"});
+            assert_eq!(declined(pool.clone(), &body).await, (StatusCode::OK, r#"{"ok":true}"#.to_owned()));
+        }
+        let rows: Vec<(String, i64)> = sqlx::query_as("SELECT kind, count FROM refusals WHERE version = $1 ORDER BY kind")
+            .bind(&version).fetch_all(&pool).await.unwrap();
+        assert_eq!(rows, vec![("declined".to_owned(), 2), ("revoked".to_owned(), 1)]);
+        let after = store::summary(&pool, 7).await.unwrap()["refusals"].clone();
+        let grew = |kind: &str| after[kind].as_i64().unwrap() - before[kind].as_i64().unwrap();
+        assert!(grew("declined") >= 2 && grew("revoked") >= 1, "{before} {after}");
+    }
+
     #[tokio::test]
     #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
     async fn the_open_panel_hears_each_new_batch() {
@@ -568,6 +643,12 @@ mod tests {
         assert_eq!(left, vec![recent]);
         let orphans: i64 = sqlx::query_scalar("SELECT count(*) FROM counters WHERE batch_id = $1").bind(&old).fetch_one(&pool).await.unwrap();
         assert_eq!(orphans, 0);
+        let version = format!("t-{}", fresh_id());
+        sqlx::query("INSERT INTO refusals (day, kind, version, os, channel) VALUES ('2000-01-01', 'declined', $1, 'linux', 'latest'), ($2::date, 'declined', $1, 'linux', 'latest')")
+            .bind(&version).bind(&yesterday).execute(&pool).await.unwrap();
+        store::prune_refusals(&pool).await.unwrap();
+        let days: Vec<String> = sqlx::query_scalar("SELECT to_char(day, 'YYYY-MM-DD') FROM refusals WHERE version = $1").bind(&version).fetch_all(&pool).await.unwrap();
+        assert_eq!(days, vec![yesterday]);
     }
 
     /// Entra com uma conta nova e devolve o cookie da sessão.

@@ -6168,6 +6168,18 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   desconhecido só a revogação. Um sim gravado sem escopo ou com o escopo 2 sai do `telemetry.json`
   na subida: o servidor com B pergunta de novo. A recusa apaga também as filas `telemetry/` e
   `telemetry-scope-2/` das versões anteriores.
+- **Aviso anônimo de recusa (28/11/2026).** Decisão do dono: contar quantas pessoas respondem "Não
+  enviar". O `PUT {"consent":false}` do dono (`Telemetry::refuse`) grava a recusa e, se a máquina nunca
+  mandou o aviso e nenhum desligamento do ambiente vale, grava `refusal_reported` antes de mandar um
+  `POST /v1/declined` com só `kind` (`declined`/`revoked`), versão, sistema e canal. Marca antes do
+  envio: no máximo um aviso por máquina, mesmo que todas as tentativas falhem (o código vai ao diário).
+  Sem identificador, o receptor guarda só a soma por dia e combinação (`refusals`), e o painel compara
+  com as máquinas que mandaram pacote no período. Limite aceito: a recusa conta no dia em que chega, e
+  as máquinas que enviam contam pelo período, então a proporção do painel é aproximada. A máquina que
+  desligou depois de aceitar pode ter mandado pacote no mesmo período: o painel mostra esse número à
+  parte, fora da barra. Outro limite aceito, raro: um binário antigo (volta de atualização) regrava o
+  `telemetry.json` sem `refusal_reported`, e o aviso pode sair de novo nessa máquina se ela recusar de
+  novo depois de voltar à versão nova. Não vale mudar o formato do arquivo por isso.
 
 ## Servidor tmux antigo vivo não ganha outro por cima (27/11/2026)
 

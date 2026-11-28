@@ -12,6 +12,8 @@ pub mod diary;
 #[cfg(feature = "runtime")]
 mod queue;
 #[cfg(feature = "runtime")]
+mod refusal;
+#[cfg(feature = "runtime")]
 mod send;
 #[cfg(feature = "runtime")]
 mod state;

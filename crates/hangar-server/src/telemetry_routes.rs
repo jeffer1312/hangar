@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use hangar_telemetry::diary::{self, DayDetail};
 use hangar_telemetry::events::{self, ClientKind, Code, Dims, Event, PeerKind};
-use hangar_telemetry::wire::Counter;
+use hangar_telemetry::wire::{Counter, Refusal};
 use hangar_telemetry::{CONSENT_SCOPE, Collection, Disabled, Failure, Telemetry};
 
 use crate::groups::peers::PeerClient;
@@ -57,7 +57,13 @@ pub fn open(home: &Path, diag: &crate::diag::DiagClient) -> Option<Arc<Telemetry
         channel: crate::update::channel(&crate::update::Layout::new(home)),
     };
     match Telemetry::new(config) {
-        Ok(telemetry) => Some(Arc::new(telemetry)),
+        Ok(telemetry) => {
+            match telemetry.http_refusal_post() {
+                Ok(post) => telemetry.set_refusal_post(post),
+                Err(_) => diag.report("telemetry.unavailable", "", "telemetry_client_failed", "telemetria sem cliente HTTP: o aviso de recusa não sai"),
+            }
+            Some(Arc::new(telemetry))
+        }
         Err(e) => {
             tracing::warn!(code = "telemetry_unavailable", kind = ?e.kind(), "telemetria desligada nesta vida: estado ilegível");
             diag.report("telemetry.unavailable", "", "telemetry_unavailable", "telemetria desligada nesta vida");
@@ -529,14 +535,22 @@ pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     } else {
         None
     };
-    let diag = st.diag.clone();
+    let (diag, worker) = (st.diag.clone(), telemetry.clone());
     let done = tokio::task::spawn_blocking(move || {
         // Gravada, a escolha vale; o que não se aplicou agora vai ao diário e a passada seguinte refaz.
-        if let Some(consent) = choice && let Some(e) = telemetry.set_consent(consent)? { report(&diag, Failure::Disk(e)); }
-        Ok::<Value, std::io::Error>(view(&telemetry))
+        let (applied, refusal) = match choice {
+            Some(true) => (worker.set_consent(true)?, None),
+            Some(false) => worker.refuse()?,
+            None => (None, None),
+        };
+        if let Some(e) = applied { report(&diag, Failure::Disk(e)); }
+        Ok::<_, std::io::Error>((view(&worker), refusal))
     }).await;
     match done {
-        Ok(Ok(body)) => private_view(body),
+        Ok(Ok((body, refusal))) => {
+            if let Some(refusal) = refusal { send_refusal(&telemetry, refusal, st.diag.clone()); }
+            private_view(body)
+        }
         Ok(Err(e)) => {
             tracing::warn!(code = "telemetry_unavailable", kind = ?e.kind(), "telemetria: escolha não guardada");
             unavailable()
@@ -546,6 +560,21 @@ pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
             unavailable()
         }
     }
+}
+
+/// O aviso único de "Não enviar", em segundo plano; o que não chegou vai ao diário e não se tenta de novo.
+fn send_refusal(telemetry: &Arc<Telemetry>, refusal: Refusal, diag: crate::diag::DiagClient) {
+    let Some(post) = telemetry.refusal_post() else {
+        diag.report("telemetry.refusal", "", "telemetry_refusal_no_client", "aviso de recusa da telemetria sem cliente HTTP: não sai");
+        return;
+    };
+    let telemetry = telemetry.clone();
+    tokio::spawn(async move {
+        if let Err(status) = telemetry.send_refusal(refusal, post).await {
+            let code = status.map_or_else(|| "telemetry_refusal_unreachable".to_owned(), |status| format!("telemetry_refusal_http_{status}"));
+            diag.report("telemetry.refusal", "", &code, "aviso de recusa da telemetria não chegou ao receptor; não volta a ser mandado");
+        }
+    });
 }
 
 /// `GET /api/telemetry/owner`: o dono desta máquina, para as outras do mesmo dono convergirem.
@@ -589,6 +618,33 @@ mod tests {
         let (status, body) = put(&st, r#"{"consent": true, "consent_scope": 3}"#, true).await;
         assert_eq!((status, &body["detail"]["code"]), (StatusCode::FORBIDDEN, &json!("telemetry_owner_only")));
         assert_eq!(st.telemetry.as_ref().unwrap().consent(), None);
+    }
+
+    /// O aviso de recusa que sairia, num canal em vez da rede.
+    fn refusal_receiver(telemetry: &Telemetry) -> tokio::sync::mpsc::UnboundedReceiver<Value> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        telemetry.set_refusal_post(Arc::new(move |body: Vec<u8>| -> hangar_telemetry::PostFuture {
+            let _ = tx.send(serde_json::from_slice(&body).unwrap());
+            Box::pin(async { Some(200) })
+        }));
+        rx
+    }
+
+    #[tokio::test]
+    async fn telemetry_no_from_the_owner_sends_one_anonymous_refusal_and_a_guest_none() {
+        let home = tempfile::tempdir().unwrap();
+        let st = test_state(home.path(), true);
+        let mut sent = refusal_receiver(st.telemetry.as_ref().unwrap());
+        assert_eq!(put(&st, r#"{"consent": false}"#, true).await.0, StatusCode::FORBIDDEN);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(sent.try_recv().is_err(), "convidado não manda aviso");
+        assert_eq!(put(&st, r#"{"consent": false}"#, false).await.0, StatusCode::OK);
+        let ping = tokio::time::timeout(Duration::from_secs(5), sent.recv()).await.unwrap().unwrap();
+        assert_eq!(ping, json!({"kind": "revoked", "version": "0.42.0", "os": std::env::consts::OS, "channel": "latest"}));
+        put(&st, r#"{"consent": true, "consent_scope": 3}"#, false).await;
+        put(&st, r#"{"consent": false}"#, false).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(sent.try_recv().is_err(), "uma vez por máquina");
     }
 
     #[tokio::test]
