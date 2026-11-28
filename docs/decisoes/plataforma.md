@@ -3,6 +3,97 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## Balanceamento de sessões entre máquinas (27/11/2026)
+
+- **Caso que motivou.** O dono tem três máquinas sempre ligadas (PC e notebook em Linux, VM em
+  Windows) e cria sessões sem escolher onde: todas nasciam na máquina em uso. Em 27/11 o notebook
+  tinha mais de 20 sessões e o PC 6. Desenho completo em
+  `docs/superpowers/specs/2026-11-27-balanceamento-de-sessoes-design.md`.
+- **Decisões do dono.** (1) Projeto = repositório, pelo `origin` normalizado
+  (`ProjectId::from_origin`, que desceu do `hangar-dream` para o `hangar-core` e junta ssh e https).
+  (2) Máquina sem o repositório entra com clone na pasta onde fica a maioria dos repositórios dela,
+  trocável por máquina na tela. (3) A tela sugere; o agente abre direto e diz onde e por quê; modo
+  separado para tela (`off`/`suggest`/`ask`) e agente (`off`/`auto`/`ask`). (4) Filha ligada vale
+  entre máquinas. (5) Mesma pasta, mesma máquina. (6) Trabalho não publicado (commit não enviado,
+  mudança não commitada, branch sem upstream) fica onde está, sem push automático. (7) Limite, não
+  pontuação: sai da escolha a máquina com menos de 15% de memória livre, 6 ou mais sessões
+  trabalhando ou processador acima de 80% nos últimos 5 min. (8) Regras do dono (projeto → máquina,
+  horário → máquina a evitar) vencem a carga; máquina da regra fora ou acima do limite cai para a
+  próxima, com aviso; 5 e 6 vencem as regras, com aviso. (9) O agente clona; a sessão nasce com a
+  nota "clone novo: instale as dependências pelo README/CLAUDE.md do projeto; `.env` não veio". O
+  Hangar não instala nada.
+- **Onde a escolha roda.** Não no `resolve_open()`: ele é síncrono, só vê fatos locais e roda também
+  com o servidor fora (`hangar-server open`). A escolha é um passo assíncrono antes do `decide()` no
+  `POST /api/sessions` (`placement::suggest::step`), e o `choose` puro mora no crate
+  `hangar-placement` (fatos + regras + hora → máquina, motivo, clone e avisos). Só o pedido com
+  `machine: "auto"` é balanceado; omitido, abre aqui como antes; id de máquina abre nela. A tela pede
+  `POST /api/placement/suggest` (a mesma escolha, sem criar nada) e cria na máquina marcada; o MCP
+  `new_session` sem `maquina` nem `servidor::nome` e o `hangar-send --new` sem `servidor::` nem
+  `--machine` mandam `auto`, e o modo do agente gravado no servidor decide.
+- **Quem nunca é balanceado.** O que não manda `machine` (terminal digitado, tarefa agendada,
+  reabrir, restaurar, retomar, `/conta`) e, com `auto`, o pedido de convidado (`guest`), a reserva
+  pré-aquecida (`prewarm`), o pedido com conta, motor ou perfil desta máquina (`local_field`:
+  `config_dir`, `engine`, `engine_account`, `codex_account`, `omp_profile`), o modo desligado
+  (`mode_off`) e a orquestração (`orq`). A resposta diz isso em `placement.reason`
+  (`not_balanced` com o `why`). Leitura que falha deixa a abertura aqui, com o código no `why`; a das
+  regras, da pasta e dos fatos daqui também vai ao diário (`rust.placement_skipped`), nunca à tela.
+- **Orquestração fica sempre aqui.** O grupo `orq` recusa membro de fora. Olhar só o grupo da
+  criadora não bastava: o árbitro abre executor e revisor antes de juntá-los ao grupo, e essas
+  aberturas iam a outra máquina. Quem conduz uma execução viva (o condutor `<gid>-orq` ou o
+  árbitro, pela mesma leitura de `groups::orq::is_orchestrator`) também fica aqui; leitura que falha
+  fica aqui (`orq_unreadable`).
+- **Id da máquina = o `CP_SERVER_ID` que ela informa.** Regras, reservas e o `machine` encaminhado
+  usam o `server_id` dos fatos de cada máquina; sem ele, a chave do `peers.json`. A chave é o nome
+  que uma máquina dá à outra (ex.: chave `notebook`, id `nb`) e pode mudar de uma para outra; a
+  regra é gravada em todas e precisa de um nome que todas leiam igual.
+- **Fatos por máquina, só na hora.** `GET /api/placement/facts?project=<id>` (só do dono): memória
+  total e livre, sessões trabalhando, processador (Linux: carga média de 5 min dividida pelos
+  núcleos; Windows: uso na hora pelo sysinfo), repositórios conhecidos (worktrees, pastas recentes
+  de 30 dias e um nível da pasta de clone, com o `origin` normalizado) e a pasta de clone. Nada roda
+  em segundo plano: a consulta só sai quando a local está acima do limite ou uma regra aponta outra
+  máquina, em paralelo, 2 s cada; quem não responde ou está `enabled: false` sai. Rota inexistente
+  lá (404 sem código) é versão sem o balanceamento: entra como incapaz, e a tela diz isso.
+- **Mesma pasta.** A raiz git do pedido igual (comparação exata) ao `git_cwd` de uma sessão aberta;
+  a pasta pessoal não conta. Pasta sem git que não é a pessoal fica aqui. Uma reserva de 30 s
+  pasta → máquina, em memória, impede que duas aberturas seguidas na mesma pasta se separem antes
+  de a lista republicar; vale também no modo "perguntar".
+- **Abrir lá.** O pedido vai pronto (`placement::forward`): `machine` fixada (lá não se escolhe de
+  novo nem volta para cá), sem criadora e sem `link` (a ligação é feita daqui) e com a pasta
+  traduzida para a raiz do mesmo projeto lá, na branch daqui. Lá a sessão abre numa worktree limpa
+  da branch, depois de buscar no remoto; a busca falha só como aviso. Sem resposta da abertura, o
+  texto é "incerto, confira em B", nunca reabertura aqui.
+- **Herança só da criadora.** O que viria da criadora é resolvido aqui e vai explícito: provedor
+  herdado e superfície (com ou sem terminal). Modelo, esforço e modo só com `inherit: true`; sem
+  ele valem os padrões salvos de lá, como numa abertura local valem os daqui. Mandar o padrão salvo
+  daqui explícito passaria por cima do de lá. Codex com terminal não leva modo, porque recusa modo
+  pedido.
+- **Clone em passo próprio.** `POST /api/placement/clone {origin, dir}` (só do dono) clona numa pasta
+  temporária e renomeia no fim; `origin` começando por `-` ou pasta relativa são recusados
+  (`placement_clone_invalid`). Clone que falha (inclusive repositório privado sem credencial lá) é
+  erro visível e a sessão não abre.
+- **Prazos.** Fatos: 2 s por máquina. Abertura lá: 150 s (`OPEN_TIMEOUT`), divididos com a busca no
+  remoto, que leva no máximo 60 s: preparar a conta, buscar e criar a worktree passa dos 30 s, e a
+  criação não manda nada antes de terminar. Clone: o `git clone` tem 600 s lá, e quem espera tem
+  660 s (`CLONE_TIMEOUT`), para não desistir com o clone ainda correndo. Cliente: o MCP passou a ser
+  registrado com 900 s (`TOOL_TIMEOUT_S` do `mcp-register`, antes 660 s, que o cofre ainda cabe) e
+  o `hangar-send --new` espera 900 s. O pior caso, 2 × 2 s + 660 s + 150 s = 814 s, fica abaixo do
+  corte do cliente; um teste do servidor confere essa soma.
+- **Perguntar.** No agente, `ask` devolve 409 `placement_ask` com a sugestão; o agente pergunta à
+  pessoa e abre de novo com a máquina escolhida. Na tela, `ask` ainda não tem desenho: a Nova
+  conversa abre sem máquina marcada.
+- **Resposta.** `placement: {server, reason, text}` e `alvo: "B::nome"`. A tool manda usar `alvo` em
+  `send`, `close_session` e `interrupt`, senão o nome cai numa homônima local. O `text` sai em
+  português; os clientes montam o motivo dos códigos no idioma do app.
+- **Regras num arquivo do servidor.** `~/.hangar/placement.json` (`GET`/`PUT /api/placement/config`,
+  só do dono). As telas do nativo e do Expo gravam em todas as máquinas ligadas e mostram a que
+  ficou com regras diferentes ou numa versão sem o balanceamento; a configuração compartilhada leva
+  o item `placement` dentro de `hangar_prefs`. Não sincroniza sozinho.
+- **Filha ligada entre máquinas.** Com `link`, a ligação é feita pela máquina do pai depois da
+  abertura lá; o vínculo, o retorno e o `interrupt` estão em
+  [Sessão filha ligada a quem a abriu](#sessão-filha-ligada-a-quem-a-abriu).
+- **Fora do escopo.** Mover sessão já aberta, favoritos de projeto e levar `.env`, dependências e
+  banco local junto.
+
 ## Portas da sessão, túnel e navegador emprestado (23/11/2026)
 
 O agente sobe um servidor na máquina da sessão (Next na 3000, Postgres na 5432), e o Hangar mostra a
@@ -434,10 +525,10 @@ Decisões:
 Do lado do Hangar (C6):
 
 - **Tool `whatsapp_draft(chat, text, file?, reply_to?)`.** Recusa em sessão compartilhada
-  (`whatsapp_shared_session`, a mesma conferência das leituras) e em sessão sem o prazo de 660 s,
+  (`whatsapp_shared_session`, a mesma conferência das leituras) e em sessão sem o prazo longo do MCP (600 s no mínimo),
   como `erro_cofre_sessao_sem_prazo`; binário com `api` menor que 2 dá `whatsapp_send_unsupported`.
   A origem é `servidor::sessao` e a pasta da sessão que chama. Ela espera o rascunho chegar ao fim,
-  com prazo próprio de 570 s desde o início da chamada, abaixo do corte do cliente MCP (660 s no Claude,
+  com prazo próprio de 570 s desde o início da chamada, abaixo do corte do cliente MCP (900 s no Claude,
   600 s no mínimo aceito): sem ele, o modelo recebia o corte sem o `id` e podia criar outro rascunho para
   uma mensagem já saindo. No prazo, rascunho ainda pendente é recusado (`expired`) e aprovado ainda
   saindo devolve `sending`. Devolve `sent`, `declined`, `expired`, `failed` ou `sending`; erro depois
@@ -4219,9 +4310,21 @@ provedor, grupos e recados. Faltavam quatro coisas, que entraram assim.
   sozinho, o pai também recebia, e na filha o texto entrava na fila como segundo turno, depois do
   `initial_prompt`. Aí a última mensagem do usuário antes da resposta final era o protocolo, e o
   retorno nunca disparava. O hook do `SessionStart` (`pair_hook.py`) também pula a filha ligada.
-- **Só o dono liga, só local, nunca em `orq`.** Convidado mandando `creator=<sessão do dono>`
-  viraria filha dela e receberia recados do dono: 403 antes de abrir. Grupo é local: 400 para
-  `servidor::nome`.
+- **Só o dono liga, nunca em `orq`.** Convidado mandando `creator=<sessão do dono>`
+  viraria filha dela e receberia recados do dono: 403 antes de abrir. A criadora é sempre desta
+  máquina: criadora `servidor::nome` é 400 `erro_link_remoto`.
+- **Filha noutra máquina (27/11/2026, com o [balanceamento](#balanceamento-de-sessões-entre-máquinas-27112026)).**
+  A filha pode nascer noutra máquina (`servidor::nome`, `machine` ou a escolha automática). A
+  abertura lá vai sem criadora, e a máquina do pai faz a ligação depois, pela federação: o registro do
+  grupo leva `links` (filha → pai, os dois `srv::nome`), só para as máquinas de uma das pontas (a
+  versão antiga recusaria o campo), e a máquina da filha grava `linked_by = "<id A>::pai"` no
+  sidecar dela; a do pai grava `linked_children`. O retorno roda na máquina da filha e entrega pela
+  `/input` do pai lá, assinado `[de: <id B>::filha]`, com a mesma fila e o mesmo prazo de 2 h; o
+  homônimo daqui não passa por pai. O `interrupt` vai a `POST /api/sessions/{name}/linked-interrupt`
+  na máquina da filha, que confere `linked_parent` no arquivo de grupo de lá antes do `/interrupt`.
+  Desfazer (pai sai ou morre) passa pela fila em disco do grupo entre máquinas. Pai com filha ligada
+  noutra máquina não adormece (`session_sleep` só via as filhas daqui), e grupo ilegível também o
+  segura.
 - **`interrupt` em vez de controle livre.** Mapeia na rota `/interrupt` que já existe e só passa
   com `linked_by == quem chama` e quem chama entre os `peers` da filha.
 - **Sem "esperar" bloqueante.** No T3 o `delegate_task` pode travar até a filha acabar. Aqui a
@@ -4913,13 +5016,14 @@ na entrada `hangar` (`--strict-mcp-config`, sem variável), aprovação em 370 s
 total. A variável global foi recusada: baixaria o teto de relógio de todos os outros servidores MCP de
 ~28 h para 11 min. O campo por servidor cobre o temporizador de 60 s e a ociosidade (o Claude Code usa
 o maior entre os dois). Por isso o `scripts/registrar-mcp.py` grava `timeout` no `mcpServers.hangar`
-do `.claude.json` de cada conta e `tool_timeout_sec = 660` no `[mcp_servers.hangar]` do `config.toml`
+do `.claude.json` de cada conta e `tool_timeout_sec = 900` no `[mcp_servers.hangar]` do `config.toml`
 (o padrão do Codex também é 60 s), e `erro_cofre_sessao_sem_prazo` confere essa configuração da conta
 da sessão. No Codex não vai por `-c`: com o `config.toml` da conta sem `[mcp_servers.hangar]`, `-c
 mcp_servers.hangar.tool_timeout_sec=660` cria o servidor sem transporte e o Codex recusa subir
 ("invalid transport in mcp_servers.hangar"). O rmcp não larga o futuro da tool no
 `notifications/cancelled`, só cancela o token: o `call_tool` das tools do cofre corre contra ele, e
-largar a espera cancela o pedido na dona.
+largar a espera cancela o pedido na dona. Desde 27/11/2026 o prazo gravado é 900 s: o `new_session`
+noutra máquina espera o clone e a abertura lá ([Balanceamento](#balanceamento-de-sessões-entre-máquinas-27112026)).
 
 **O que sai da máquina e quando a cópia tenta de novo.** O aviso de pedido do cofre leva o nome da
 senha (ou o rótulo do cadastro) e o `servidor::sessao` de quem pede aos provedores de push (Expo e

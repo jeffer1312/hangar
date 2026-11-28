@@ -12785,6 +12785,8 @@
   "integrations_validation_url_insecure": "Use HTTPS (ou localhost) quando enviar token ou cabeçalhos.",
   "native_settings_page_placement": "Balanceamento",
   "native_new_chat_machine_suggested": "Sugerida pelo balanceamento: {motivo}",
+  "native_news_placement_busy": "notebook",
+  "native_news_placement_free": "PC",
   "native_placement_intro": "Escolhe em qual máquina nasce a sessão nova quando ninguém escolheu. As regras valem para todas as máquinas ligadas.",
   "native_placement_old_here": "Este servidor está numa versão sem o balanceamento. Atualize-o para configurar.",
   "native_placement_read_failed": "Não foi possível ler as regras do balanceamento: {motivo}",

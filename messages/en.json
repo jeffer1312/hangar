@@ -12785,6 +12785,8 @@
   "integrations_validation_url_insecure": "Use HTTPS (or localhost) when sending tokens or headers.",
   "native_settings_page_placement": "Load balancing",
   "native_new_chat_machine_suggested": "Suggested by load balancing: {motivo}",
+  "native_news_placement_busy": "laptop",
+  "native_news_placement_free": "desktop",
   "native_placement_intro": "Chooses which machine a new session starts on when nobody picked one. The rules apply to every connected machine.",
   "native_placement_old_here": "This server runs a version without load balancing. Update it to configure.",
   "native_placement_read_failed": "Could not read the load balancing rules: {motivo}",

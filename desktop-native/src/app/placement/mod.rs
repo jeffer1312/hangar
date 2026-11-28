@@ -23,7 +23,7 @@ fn suggested(config: &Value, placement: &Value) -> Option<(String, String)> {
 }
 
 /// O motivo da escolha no idioma do app, montado dos códigos: o `text` do servidor sai sempre em português.
-fn reason_text(placement: &Value) -> String {
+pub(crate) fn reason_text(placement: &Value) -> String {
     let str_of = |value: &Value| value.as_str().unwrap_or_default().to_owned();
     let machine = str_of(&placement["server"]);
     let exclusion = |why: &Value| match why.as_str().unwrap_or_default() {

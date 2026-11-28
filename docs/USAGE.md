@@ -539,6 +539,37 @@ aparelho (**Mostrar as sessões dele**) e/ou se as sessões das duas trocam reca
 endereço e token de uma no `backend/peers.json` da outra, e cada uma precisa de `CP_SERVER_ID`.
 As sessões de todas aparecem numa lista só.
 
+### Balanceamento (em qual máquina a sessão nasce)
+
+Com várias máquinas ligadas como peers (acima), a sessão nova sem máquina escolhida nasce na máquina
+certa em vez de lotar a que você está usando. Fica onde está quando a pasta já tem uma sessão aberta
+nessa máquina, quando há trabalho não publicado (commit não enviado, mudança não commitada, branch sem
+upstream) ou quando a pasta não é um repositório git. Fora disso valem as suas regras e, depois, os
+limites de carga: a máquina com menos de 15% de memória livre, 6 ou mais sessões trabalhando ou
+processador acima de 80% sai da escolha, e vai a que tem menos sessões trabalhando.
+
+- **Onde configurar.** App de desktop: **Configurações → Servidor → Balanceamento**. App do
+  celular: **Configurações → Balanceamento**. A tela grava as regras em todas as máquinas ligadas e
+  avisa qual ficou diferente ou está numa versão sem o balanceamento.
+- **Quando escolher.** Separado para a tela e para o agente. Na tela: *Desligado*, *Sugerir* (padrão:
+  a Nova conversa já vem com a máquina marcada e o motivo na dica da pílula; você troca antes de
+  criar) ou *Perguntar* (por enquanto a tela abre sem máquina marcada). No agente: *Desligado*, *Automático* (padrão: abre na máquina escolhida e diz
+  onde e por quê) ou *Perguntar* (o agente recebe a sugestão e pergunta a você).
+- **Limites**, **Projeto sempre numa máquina** (o repositório pelo `origin` → a máquina dele),
+  **Horários a evitar** (dias, das/até e fuso; a máquina sai da escolha nesse horário) e **Onde
+  clonar repositório que falta** (por máquina; vazio, vale a pasta onde ficam os outros repositórios
+  dela).
+- **O que o agente faz.** `hangar-send --new <nome> <pasta>` e a tool `new_session` sem máquina pedem
+  a escolha ao servidor; a saída diz `máquina: <id> — <motivo>`, e a resposta da tool traz
+  `placement` e `alvo` (`servidor::nome` quando abriu noutra máquina): use o `alvo` para mandar
+  recado, interromper ou fechar. `--machine <id>` (`maquina` na tool) abre naquela máquina, com a
+  pasta traduzida para o mesmo projeto lá, numa worktree limpa da branch. Se nenhuma máquina com o
+  repositório sobrou, ele é clonado na escolhida e a sessão nasce avisando que precisa instalar as
+  dependências (o `.env` não vai junto).
+- **O que nunca muda de máquina.** `claude`/`codex`/… digitados no terminal, tarefas agendadas,
+  reabrir, retomar, trocar de conta, convidados, sessão com conta ou motor desta máquina e a
+  orquestração. Sessão já aberta não é movida.
+
 ### Compartilhar sessão
 
 Manda UMA sessão para outra pessoa que também usa o Hangar. Ela vê a sessão na lista dela, dentro de

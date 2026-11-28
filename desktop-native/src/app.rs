@@ -108,6 +108,7 @@ pub(crate) use whatsapp_outbox::{Draft as WhatsAppDraft, TextBlock as WhatsAppTe
     countdown_label as whatsapp_countdown_label, draft_card as whatsapp_draft_card, edit_button as whatsapp_edit_button,
     mark_invisibles as whatsapp_mark_invisibles};
 pub(crate) use create::{base_button, base_row, mode_row, provider_segment, provider_track, quiet_button, worktree_field_label, worktree_warning};
+pub(crate) use placement::reason_text as placement_reason_text;
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
