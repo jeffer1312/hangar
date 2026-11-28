@@ -1,4 +1,5 @@
-//! Receptor da telemetria: `POST /v1/batch` grava o pacote diário de cada máquina no Postgres.
+//! Receptor da telemetria: `POST /v1/batch` grava o pacote diário de cada máquina no Postgres;
+//! `POST /v1/declined` conta o aviso único de quem recusou, sem identificação.
 //! Não lê IP nem cabeçalho de origem; o limite de pedidos fica com a Cloudflare.
 mod accounts;
 mod panel;
@@ -12,17 +13,20 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use hangar_telemetry::wire::Batch;
+use hangar_telemetry::wire::{Batch, Refusal};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use tokio::signal::unix::{SignalKind, signal};
 
 // Os 200 registros de falha de até 40 campos e os 5000 passos do dia cabem com folga junto dos contadores.
 const MAX_BODY: usize = 2 * 1024 * 1024;
+/// O aviso de recusa são quatro campos curtos.
+const MAX_REFUSAL_BODY: usize = 1024;
 
 fn app(pool: PgPool) -> Router {
     Router::new()
         .route("/v1/batch", post(post_batch))
+        .route("/v1/declined", post(post_declined).layer(DefaultBodyLimit::max(MAX_REFUSAL_BODY)))
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .with_state(pool)
 }
@@ -53,6 +57,23 @@ async fn post_batch(State(pool): State<PgPool>, body: Bytes) -> Response {
         Err(error) if store::is_bad_value(&error) => refused(StatusCode::BAD_REQUEST, "value"),
         Err(error) => {
             eprintln!("telemetry-ingest: insert: {error}");
+            refused(StatusCode::SERVICE_UNAVAILABLE, "store")
+        }
+    }
+}
+
+/// Campo a mais (um identificador) ou tipo fora da lista é 400, como no pacote.
+async fn post_declined(State(pool): State<PgPool>, body: Bytes) -> Response {
+    let Ok(refusal) = serde_json::from_slice::<Refusal>(&body) else {
+        return refused(StatusCode::BAD_REQUEST, "json");
+    };
+    if let Err(field) = refusal.validate() {
+        return refused(StatusCode::BAD_REQUEST, field);
+    }
+    match store::count_refusal(&pool, &refusal).await {
+        Ok(()) => reply(StatusCode::OK, r#"{"ok":true}"#.to_owned()),
+        Err(error) => {
+            eprintln!("telemetry-ingest: refusal: {error}");
             refused(StatusCode::SERVICE_UNAVAILABLE, "store")
         }
     }
@@ -290,6 +311,53 @@ mod tests {
         // Outras rodadas no mesmo banco somam junto: confere o mínimo destas duas máquinas.
         assert!(future["count"].as_i64().unwrap() >= 14 && future["machines"].as_i64().unwrap() >= 2, "{future}");
         assert!(data["active"]["machines_7d"].as_i64().unwrap() >= 2);
+    }
+
+    async fn declined(pool: PgPool, body: &Value) -> (StatusCode, String) {
+        let request = Request::post("/v1/declined").header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(body).unwrap())).unwrap();
+        let response = app(pool).oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn declined_accepts_only_the_four_closed_fields() {
+        let ok = json!({"kind": "declined", "version": "0.42.0", "os": "linux", "channel": "latest"});
+        let mut with_id = ok.clone();
+        with_id["machine_id"] = json!(fresh_id());
+        let mut bad_kind = ok.clone();
+        bad_kind["kind"] = json!("later");
+        let mut bad_os = ok.clone();
+        bad_os["os"] = json!("Linux Mint");
+        let mut missing = ok.clone();
+        missing.as_object_mut().unwrap().remove("channel");
+        for (body, error) in [(with_id, "json"), (bad_kind, "json"), (missing, "json"), (bad_os, "os")] {
+            assert_eq!(declined(offline(), &body).await, (StatusCode::BAD_REQUEST, format!(r#"{{"ok":false,"error":"{error}"}}"#)), "{body}");
+        }
+        let mut big = ok.clone();
+        big["version"] = json!("x".repeat(MAX_REFUSAL_BODY));
+        assert_eq!(declined(offline(), &big).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn declined_counts_each_ping_and_the_summary_splits_by_kind() {
+        let pool = online().await;
+        let before = store::summary(&pool, 7).await.unwrap()["refusals"].clone();
+        // Versão desta rodada: o banco é dividido entre rodadas.
+        let version = format!("t-{}", fresh_id());
+        for kind in ["declined", "declined", "revoked"] {
+            let body = json!({"kind": kind, "version": version, "os": "linux", "channel": "latest"});
+            assert_eq!(declined(pool.clone(), &body).await, (StatusCode::OK, r#"{"ok":true}"#.to_owned()));
+        }
+        let rows: Vec<(String, i64)> = sqlx::query_as("SELECT kind, count FROM refusals WHERE version = $1 ORDER BY kind")
+            .bind(&version).fetch_all(&pool).await.unwrap();
+        assert_eq!(rows, vec![("declined".to_owned(), 2), ("revoked".to_owned(), 1)]);
+        let after = store::summary(&pool, 7).await.unwrap()["refusals"].clone();
+        let grew = |kind: &str| after[kind].as_i64().unwrap() - before[kind].as_i64().unwrap();
+        assert!(grew("declined") >= 2 && grew("revoked") >= 1, "{before} {after}");
     }
 
     #[tokio::test]
