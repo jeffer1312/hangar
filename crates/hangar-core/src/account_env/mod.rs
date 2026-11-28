@@ -6,7 +6,10 @@ use std::{
 };
 
 mod omp;
+mod paths;
+
 pub use omp::{OmpDirectories, omp_directories, valid_omp_profile};
+pub use paths::{display_account_path, resolve_account_path};
 
 /// Pasta de um usuário nomeado, consultada pelo mesmo serviço de nomes do sistema.
 #[cfg(unix)]

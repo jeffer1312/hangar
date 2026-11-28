@@ -3,6 +3,7 @@
 use super::*;
 use proptest::prelude::*;
 use regex::Regex;
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 /// `(nome, fixture)` de cada cenário de criação, em ordem.
@@ -79,22 +80,22 @@ fn link_is_decided_before_opening() {
     let owner = resolve::OpenCaller::Owner;
     let plain = parse(r#"{"name":"f","cwd":"/x","creator":"pai"}"#);
     assert!(!plain.link);
-    assert_eq!(plain.link_plan(&owner).unwrap(), LinkPlan::No);
+    assert_eq!(link_plan(&plain, &owner).unwrap(), LinkPlan::No);
     assert!(serde_json::to_value(&plain).unwrap().get("link").is_none(), "sem link, o pedido segue igual");
     assert!(SessionOpenRequest::parse(br#"{"name":"f","cwd":"/x","link":1}"#).is_err());
     let linked = parse(r#"{"name":"f","cwd":"/x","creator":"pai","link":true}"#);
-    assert_eq!(linked.link_plan(&owner).unwrap(), LinkPlan::Join("pai".into()));
+    assert_eq!(link_plan(&linked, &owner).unwrap(), LinkPlan::Join("pai".into()));
     // A filha que abre noutra máquina continua ligada à criadora daqui.
     let elsewhere = parse(r#"{"name":"f","cwd":"/x","creator":"pai","link":true,"machine":"lab"}"#);
-    assert_eq!(elsewhere.link_plan(&owner).unwrap(), LinkPlan::Join("pai".into()));
+    assert_eq!(link_plan(&elsewhere, &owner).unwrap(), LinkPlan::Join("pai".into()));
     let guest = resolve::OpenCaller::Guest { root: "/x".into() };
-    let refused = linked.link_plan(&guest).unwrap_err();
+    let refused = link_plan(&linked, &guest).unwrap_err();
     assert_eq!((refused.status, refused.code), (403, Some("erro_link_convidado")));
     for body in [r#"{"name":"srv::f","cwd":"/x","creator":"pai","link":true}"#, r#"{"name":"f","cwd":"/x","creator":"srv::pai","link":true}"#] {
-        let refused = parse(body).link_plan(&owner).unwrap_err();
+        let refused = link_plan(&parse(body), &owner).unwrap_err();
         assert_eq!((refused.status, refused.code), (400, Some("erro_link_remoto")), "{body}");
     }
-    let orphan = parse(r#"{"name":"f","cwd":"/x","link":true}"#).link_plan(&owner).unwrap();
+    let orphan = link_plan(&parse(r#"{"name":"f","cwd":"/x","link":true}"#), &owner).unwrap();
     assert_eq!(orphan, LinkPlan::Unlinked("erro_link_sem_criador", "sem sessão criadora, a sessão abriu sem ligação"));
 }
 
@@ -102,7 +103,7 @@ fn link_is_decided_before_opening() {
 fn a_linked_child_gets_the_child_line_in_the_first_prompt() {
     use hangar_delegation::guidance::child_prefix;
     let owner = resolve::OpenCaller::Owner;
-    let link = |body: &str| SessionOpenRequest::parse(body.as_bytes()).unwrap().link_plan(&owner).unwrap();
+    let link = |body: &str| link_plan(&SessionOpenRequest::parse(body.as_bytes()).unwrap(), &owner).unwrap();
     let joined = link(r#"{"name":"f","cwd":"/x","creator":"pai","link":true}"#);
     // A linha só vai quando a ligação deve dar certo: pai fora de grupo `orq` e grupos legíveis.
     assert_eq!(joined.line_parent(Some(false)), Some("pai"));
@@ -118,7 +119,7 @@ fn a_linked_child_gets_the_child_line_in_the_first_prompt() {
         let mut resolved = resolved.clone();
         resolved.spec.provider = provider;
         resolved.initial_prompt = prompt.map(str::to_owned);
-        resolved.prefix_child_line("pai");
+        prefix_child_line(&mut resolved, "pai");
         resolved.initial_prompt
     };
     for provider in [AgentProvider::Claude, AgentProvider::Codex, AgentProvider::Antigravity] {
@@ -379,6 +380,10 @@ impl resolve::OpenFacts for FixtureFacts {
 
     fn name_in_use(&self, name: &str) -> Result<bool, OpenError> {
         Ok(self.tmux.iter().any(|s| s["name"] == name) || self.sidecar("claude-headless", name).is_some() || self.sidecar("codex-sessions", name).is_some())
+    }
+
+    fn name_claimed(&self, name: &str, take_reserved: bool) -> bool {
+        facts::is_name_claimed(name, take_reserved)
     }
 
     fn name_has_leftovers(&self, _name: &str) -> Result<bool, OpenError> { Ok(false) }
