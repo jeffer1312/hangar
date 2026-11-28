@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { afterText, happened, headline, skewText, stateRows, stepText } from "../src/lib/failure.ts";
+import { afterText, happened, headline, lowerFirst, skewText, stateRows, stepText } from "../src/lib/failure.ts";
 import { CAUSES, CLIENT_CODE_LABEL } from "../src/lib/labels.ts";
 import type { FailureRecord } from "../src/lib/types.ts";
 
@@ -89,4 +89,9 @@ test("título da falha na lista: frase em português, nunca o nome técnico", ()
 
 test("título começa em maiúscula mesmo quando a descrição do servidor não", () => {
   assert.equal(headline(rec({ event: "fila.entregar", fields: { detalhe: "entrega confirmada depois de 2 leituras" } })), "Entrega confirmada depois de 2 leituras");
+});
+
+test("sigla no começo da causa não vira minúscula", () => {
+  assert.equal(lowerFirst("PC desligado"), "PC desligado");
+  assert.equal(lowerFirst("O app do PC estava fechado"), "o app do PC estava fechado");
 });

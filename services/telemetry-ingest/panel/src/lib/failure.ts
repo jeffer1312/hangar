@@ -21,10 +21,13 @@ export function happened(r: FailureRecord): Happened {
 }
 
 /** O título da falha na lista: o que houve, em português; o nome técnico fica para a linha apagada. */
+// Sigla ou nome próprio no começo da causa ("PC desligado") fica como está.
+export const lowerFirst = (s: string) => (/^[A-ZÀ-Ý]{2}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1));
+
 export function headline(r: FailureRecord): string {
   const h = happened(r);
   const bare = (s: string) => s.replace(/\.$/, "");
-  const line = h.tool ? h.tool + " falhou" + (h.cause ? ": " + bare(h.cause.charAt(0).toLowerCase() + h.cause.slice(1)) : "") : bare(h.summary);
+  const line = h.tool ? h.tool + " falhou" + (h.cause ? ": " + bare(lowerFirst(h.cause)) : "") : bare(h.summary);
   return line.charAt(0).toUpperCase() + line.slice(1);
 }
 
