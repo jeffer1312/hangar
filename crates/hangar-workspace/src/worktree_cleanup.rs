@@ -670,9 +670,8 @@ pub fn remove_candidate_with_guard(
             return Ok(false);
         }
         let st = worktrees::status_of(&candidate.path, sessions, false, bases);
-        let Some(branch) = st["branch"].as_str() else {
-            return Ok(false);
-        };
+        // Sem branch é worktree em HEAD destacado: só HEAD e index travam.
+        let branch = st["branch"].as_str().unwrap_or("");
         let _locks = git_locks(&candidate.path, branch)?;
         let Some(fresh) = self::candidate(
             &candidate.path,
@@ -696,14 +695,19 @@ pub fn remove_candidate_with_guard(
             // A admissão de fatos precede toda perda; depois dela só se lê estado local sob as travas.
             guard(&candidate.path)?;
             let (stamp, _, protected) = fingerprint(&candidate.path, &st, &settings.keep_when)?;
-            let branch_now = git::checked(
+            let branch_now = git::command(
                 Path::new(&candidate.path),
                 &["symbolic-ref", "--quiet", "--short", "HEAD"],
-                409,
             )?;
+            // Código 1 é HEAD destacado; outro erro não pode liberar a remoção.
+            let branch_now = match branch_now.code {
+                0 => branch_now.stdout.trim().to_owned(),
+                1 => String::new(),
+                _ => return Err(error(409, "não consegui ler a branch da worktree")),
+            };
             if protected
                 || stamp != candidate.fingerprint
-                || branch_now.stdout.trim() != branch
+                || branch_now != branch
                 || reference_head(&candidate.path, "HEAD")? != candidate.head
                 || reference_head(&candidate.path, &candidate.base)? != candidate.base_head
                 || git_config(&candidate.path)? != candidate.config
@@ -1628,6 +1632,37 @@ mod tests {
         assert!(remove_candidate(&c, &[], &[], dir.path(), now, None).unwrap());
         assert!(!wt.exists());
         git(&repo, &["show-ref", "--verify", "refs/heads/topic"]);
+    }
+    #[test]
+    fn automatic_removal_takes_a_merged_worktree_without_a_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = crate::real(dir.path());
+        let repo = root.join("repo");
+        let origin = root.join("origin.git");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]);
+        let commit = |at: &Path, msg: &str| git(at, &["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-m", msg]);
+        commit(&repo, "initial");
+        git(&root, &["init", "--bare", "-b", "develop", origin.to_str().unwrap()]);
+        git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        git(&repo, &["push", "origin", "main:develop"]);
+        git(&repo, &["fetch", "origin"]);
+        git(&repo, &["remote", "set-head", "origin", "develop"]);
+        let detached = |name: &str| {
+            let wt = root.join(name);
+            git(&repo, &["worktree", "add", "--detach", wt.to_str().unwrap(), "origin/develop"]);
+            commit(&wt, name);
+            git(&wt, &["push", "origin", "HEAD:develop"]);
+            wt
+        };
+        let wt = detached("mesclada");
+        detached("depois");
+        git(&repo, &["fetch", "origin"]);
+        let settings = WorktreeSettings { delete_merged: true, ..WorktreeSettings::default() };
+        settings.save_at(&root.join(".hangar/worktree-settings.json"), &root).unwrap();
+        let (c, now) = mature_candidate(wt.to_str().unwrap(), &root, &settings);
+        assert!(remove_candidate(&c, &[], &[], &root, now, None).unwrap(), "worktree sem branch já mesclada sai na limpeza");
+        assert!(!wt.exists());
     }
     #[test]
     fn final_guard_and_git_refusal_restore_removed_map_without_losing_new_tracked_data() {
