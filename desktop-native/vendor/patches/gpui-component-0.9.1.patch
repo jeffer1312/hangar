@@ -1,7 +1,7 @@
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.1/MODIFICADO.md gpui-component-0.9.1/MODIFICADO.md
 --- gpui-component-0.9.1/MODIFICADO.md
 +++ gpui-component-0.9.1/MODIFICADO.md
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,48 @@
 +# Cópia modificada do gpui-component 0.9.1
 +
 +Origem: crate `gpui-component` 0.9.1 do crates.io (repositório `longbridge/gpui-kit`), checksum `e155c4914bd809d966660610d596f7b57c5cd38979ca2c132215057a91f23f03`, licença Apache-2.0 (`LICENSE-APACHE`). Entra pelo `[patch.crates-io]` de `desktop-native/Cargo.toml`.
@@ -36,6 +36,11 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +  Na 0.7.0: o menu de contexto passou a ser montado no `DeferredMenu::build_menu` (só quando é desenhado) e a entrada
 +  foi para lá; no diálogo, a subida de 2 px vai na animação `slide-down` do `Positioner`, que substituiu o `top` do
 +  cartão.
++
++- `src/root.rs`, `src/window_ext.rs` e `src/lib.rs`: `WindowExt::open_dialog_with_id` devolve o `DialogId` do diálogo aberto, e
++  `WindowExt::close_dialog_by_id` fecha esse diálogo onde ele estiver na pilha (o mais novo fecha como o `close_dialog`;
++  um de baixo sai sem mexer no foco, e o de cima herda para onde o foco volta). Motivo: o "O que chegou para você" fecha
++  sozinho depois de um tempo parado, e o `close_dialog` fecharia o diálogo que estiver por cima dele.
 +
 +Ao atualizar gpui-kit, reaplicar na nova versão com `vendor/rebase.sh` (ver `vendor/PATCHES.md`) ou remover esta cópia
 +quando a API equivalente existir no kit.
@@ -299,6 +304,17 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                                          ))
                                      },
                                  ),
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.1/src/lib.rs gpui-component-0.9.1/src/lib.rs
+--- gpui-component-0.9.1/src/lib.rs
++++ gpui-component-0.9.1/src/lib.rs
+@@ -121,6 +121,7 @@
+ pub use title_bar::*;
+ pub use virtual_list::{VirtualList, VirtualListScrollHandle, h_virtual_list, v_virtual_list};
+ pub use window_border::{WindowBorder, window_border, window_corner_radii, window_paddings};
++pub use root::DialogId;
+ pub use window_ext::WindowExt;
+ 
+ rust_i18n::i18n!("locales", fallback = "en");
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.1/src/menu/context_menu.rs gpui-component-0.9.1/src/menu/context_menu.rs
 --- gpui-component-0.9.1/src/menu/context_menu.rs
 +++ gpui-component-0.9.1/src/menu/context_menu.rs
@@ -739,6 +755,95 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          });
      }
  
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.1/src/root.rs gpui-component-0.9.1/src/root.rs
+--- gpui-component-0.9.1/src/root.rs
++++ gpui-component-0.9.1/src/root.rs
+@@ -52,6 +52,10 @@
+     builder: Rc<dyn Fn(Sheet, &mut Window, &mut App) -> Sheet + 'static>,
+ }
+ 
++/// Identifies one opened dialog, for [`crate::WindowExt::close_dialog_by_id`].
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct DialogId(usize);
++
+ #[derive(Clone)]
+ pub(crate) struct ActiveDialog {
+     /// Stable for the dialog's lifetime, independently of its stack position.
+@@ -380,6 +384,20 @@
+     ) where
+         F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
+     {
++        self.open_dialog_with_id(build, window, cx);
++    }
++
++    /// Opens a dialog like [`WindowState::open_dialog`] and returns its id,
++    /// for [`WindowState::close_dialog_by_id`].
++    pub fn open_dialog_with_id<F>(
++        &mut self,
++        build: F,
++        window: &mut Window,
++        cx: &mut Context<'_, WindowState>,
++    ) -> DialogId
++    where
++        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
++    {
+         let mut previous_focused_handle = window.focused(cx).map(|h| h.downgrade());
+ 
+         // Use pending focus restore if available to maintain correct focus chain
+@@ -405,6 +423,53 @@
+         // selection so it cannot linger (or be copied) under the modal.
+         gpui_base::TextSelection::clear(window, cx);
+         cx.notify();
++        DialogId(id)
++    }
++
++    /// Closes the dialog with this id wherever it sits in the stack; `false`
++    /// when it is no longer open. The newest one closes like
++    /// [`WindowState::close_dialog`]. One below others leaves focus alone, and
++    /// the dialog right above it inherits where focus returns, since it was
++    /// opened from inside the one that leaves.
++    pub fn close_dialog_by_id(
++        &mut self,
++        id: DialogId,
++        window: &mut Window,
++        cx: &mut Context<'_, WindowState>,
++    ) -> bool {
++        let Some(ix) = self
++            .active_dialogs
++            .iter()
++            .position(|dialog| dialog.id == id.0 && !dialog.closing)
++        else {
++            return false;
++        };
++        if self.active_dialogs.iter().rposition(|dialog| !dialog.closing) == Some(ix) {
++            self.close_dialog(window, cx);
++            return true;
++        }
++        let leaving = self.active_dialogs[ix].focus_handle.clone();
++        let inherited = self.active_dialogs[ix].previous_focused_handle.clone();
++        if let Some(above) = self.active_dialogs[ix + 1..]
++            .iter_mut()
++            .find(|dialog| !dialog.closing)
++        {
++            let from_leaving = above
++                .previous_focused_handle
++                .as_ref()
++                .and_then(|handle| handle.upgrade())
++                .is_none_or(|handle| handle == leaving || leaving.contains(&handle, window));
++            if from_leaving {
++                above.previous_focused_handle = inherited;
++            }
++        }
++        if self.active_dialogs[ix].exit_enabled.get() {
++            Self::begin_dialog_exit(&mut self.active_dialogs[ix], window, cx);
++        } else {
++            self.active_dialogs.remove(ix);
++        }
++        cx.notify();
++        true
+     }
+ 
+     /// Closes the newest dialog that is not already closing.
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.1/src/switch.rs gpui-component-0.9.1/src/switch.rs
 --- gpui-component-0.9.1/src/switch.rs
 +++ gpui-component-0.9.1/src/switch.rs
@@ -811,6 +916,55 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Set extra style for the table container.
      ///
      /// Set `overflow_x: scroll` on the refinement for adaptive layout: cells
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.1/src/window_ext.rs gpui-component-0.9.1/src/window_ext.rs
+--- gpui-component-0.9.1/src/window_ext.rs
++++ gpui-component-0.9.1/src/window_ext.rs
+@@ -1,4 +1,4 @@
+-use crate::root::WindowState;
++use crate::root::{DialogId, WindowState};
+ use crate::{
+     Placement,
+     dialog::{AlertDialog, Dialog},
+@@ -111,6 +111,15 @@
+     /// Closes the last active Dialog.
+     fn close_dialog(&mut self, cx: &mut App);
+ 
++    /// Opens a Dialog like [`WindowExt::open_dialog`] and returns its id.
++    fn open_dialog_with_id<F>(&mut self, cx: &mut App, build: F) -> DialogId
++    where
++        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static;
++
++    /// Closes the Dialog with this id, even below others; `false` when it is
++    /// no longer open.
++    fn close_dialog_by_id(&mut self, id: DialogId, cx: &mut App) -> bool;
++
+     /// Closes all active Dialogs.
+     fn close_all_dialogs(&mut self, cx: &mut App);
+ 
+@@ -207,6 +216,23 @@
+         })
+     }
+ 
++    #[inline]
++    fn open_dialog_with_id<F>(&mut self, cx: &mut App, build: F) -> DialogId
++    where
++        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
++    {
++        WindowState::update(self, cx, move |root, window, cx| {
++            root.open_dialog_with_id(build, window, cx)
++        })
++    }
++
++    #[inline]
++    fn close_dialog_by_id(&mut self, id: DialogId, cx: &mut App) -> bool {
++        WindowState::update(self, cx, |root, window, cx| {
++            root.close_dialog_by_id(id, window, cx)
++        })
++    }
++
+     #[inline]
+     fn close_all_dialogs(&mut self, cx: &mut App) {
+         WindowState::update(self, cx, |root, window, cx| {
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.1/tests/integration/controlled_change_callbacks.rs gpui-component-0.9.1/tests/integration/controlled_change_callbacks.rs
 --- gpui-component-0.9.1/tests/integration/controlled_change_callbacks.rs
 +++ gpui-component-0.9.1/tests/integration/controlled_change_callbacks.rs

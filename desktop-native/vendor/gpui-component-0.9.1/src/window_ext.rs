@@ -1,4 +1,4 @@
-use crate::root::WindowState;
+use crate::root::{DialogId, WindowState};
 use crate::{
     Placement,
     dialog::{AlertDialog, Dialog},
@@ -111,6 +111,15 @@ pub trait WindowExt: Sized {
     /// Closes the last active Dialog.
     fn close_dialog(&mut self, cx: &mut App);
 
+    /// Opens a Dialog like [`WindowExt::open_dialog`] and returns its id.
+    fn open_dialog_with_id<F>(&mut self, cx: &mut App, build: F) -> DialogId
+    where
+        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static;
+
+    /// Closes the Dialog with this id, even below others; `false` when it is
+    /// no longer open.
+    fn close_dialog_by_id(&mut self, id: DialogId, cx: &mut App) -> bool;
+
     /// Closes all active Dialogs.
     fn close_all_dialogs(&mut self, cx: &mut App);
 
@@ -204,6 +213,23 @@ impl WindowExt for Window {
     fn close_dialog(&mut self, cx: &mut App) {
         WindowState::update(self, cx, |root, window, cx| {
             root.close_dialog(window, cx);
+        })
+    }
+
+    #[inline]
+    fn open_dialog_with_id<F>(&mut self, cx: &mut App, build: F) -> DialogId
+    where
+        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
+    {
+        WindowState::update(self, cx, move |root, window, cx| {
+            root.open_dialog_with_id(build, window, cx)
+        })
+    }
+
+    #[inline]
+    fn close_dialog_by_id(&mut self, id: DialogId, cx: &mut App) -> bool {
+        WindowState::update(self, cx, |root, window, cx| {
+            root.close_dialog_by_id(id, window, cx)
         })
     }
 

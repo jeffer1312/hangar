@@ -1,6 +1,6 @@
 //! Confirmação da atualização com os avisos e as novidades da versão nova, e "O que chegou para você" depois dela.
 
-use std::{cell::Cell, path::Path, rc::Rc, time::Instant};
+use std::{cell::{Cell, RefCell}, path::Path, rc::{Rc, Weak}, time::{Duration, Instant}};
 use gpui_kit::{assets::IconName, component::{Sizable, WindowExt, button::*, dialog::DialogFooter, radio::Radio, text::TextView}, prelude::FluentBuilder, *};
 use serde::Deserialize;
 use serde_json::Value;
@@ -398,11 +398,38 @@ pub(crate) fn stage_slot(id: &str, guess: Pixels, draw: crate::news::NewsAnimati
     }, |_, _, _, _| {}).absolute().top_0().left_0().size_full())
 }
 
-/// "O que chegou para você": uma vez, com o que o servidor diz que chegou.
+/// Sem ninguém mexer, o "O que chegou para você" fecha sozinho: num computador usado de longe, cada atualização deixava
+/// mais um aberto. O que ele mostrou continua em Configurações → Atualizações.
+const WHATS_NEW_IDLE: Duration = Duration::from_secs(10 * 60);
+
+/// O "O que chegou para você" aberto. `mounted` morre com o diálogo (o construtor guarda o `Rc`).
+struct OpenWhatsNew { window: AnyWindowHandle, items: Rc<RefCell<Vec<News>>>, touched: Rc<Cell<Instant>>, mounted: Weak<()> }
+
+thread_local! { static WHATS_NEW: RefCell<Option<OpenWhatsNew>> = const { RefCell::new(None) }; }
+
+/// "O que chegou para você": um só por janela. O que chega com ele aberto entra nele, e o prazo recomeça.
 fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window, cx: &mut App) {
+    let here = window.window_handle();
+    let mut items = Some(items);
+    WHATS_NEW.with_borrow(|open| {
+        if let Some(open) = open.as_ref().filter(|open| open.window == here && open.mounted.upgrade().is_some())
+            && let Some(newer) = items.take() {
+            let merged = merge_news(newer, &open.items.borrow());
+            *open.items.borrow_mut() = merged;
+            open.touched.set(Instant::now());
+        }
+    });
+    let Some(items) = items else { return window.refresh() };
+    let items = Rc::new(RefCell::new(items));
+    let touched = Rc::new(Cell::new(Instant::now()));
+    let mounted = Rc::new(());
+    WHATS_NEW.set(Some(OpenWhatsNew { window: here, items: items.clone(), touched: touched.clone(), mounted: Rc::downgrade(&mounted) }));
     let fixes_open = Rc::new(Cell::new(false));
     let started = Instant::now();
-    window.open_dialog(cx, move |dialog, window, cx| {
+    let watch = (touched.clone(), Rc::downgrade(&mounted));
+    let dialog = window.open_dialog_with_id(cx, move |dialog, window, cx| {
+        let _alive = &mounted;
+        let (moved, scrolled, pressed) = (touched.clone(), touched.clone(), touched.clone());
         let max = window.viewport_size().height * 0.8 - px(110.);
         let top = (window.viewport_size().height * 0.1).max(px(24.));
         let width = px(780.).min(window.viewport_size().width * 0.92);
@@ -410,11 +437,34 @@ fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window
         let stage = width - px(64.);
         crate::app::popup::dialog(dialog).w(width).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
             .child(div().id("whats-new-body").max_h(max).overflow_y_scroll()
-                .child(sections(tr_shared("update_whats_new_title", &[]), &items, Some(stage), &fixes_open, show.as_ref(), started, window, cx)))
+                .on_mouse_move(move |_, _, _| moved.set(Instant::now()))
+                .on_scroll_wheel(move |_, _, _| scrolled.set(Instant::now()))
+                .on_any_mouse_down(move |_, _, _| pressed.set(Instant::now()))
+                .child(sections(tr_shared("update_whats_new_title", &[]), &items.borrow(), Some(stage), &fixes_open, show.as_ref(), started, window, cx)))
             .footer(DialogFooter::new().child(chrome::light_button("whats-new-close", true, cx).label(tr("close"))
                 .on_click(|_, window, cx| window.close_dialog(cx))))
     });
+    let (touched, mounted) = watch;
+    window.spawn(cx, async move |cx| {
+        // Fechado pela pessoa, `mounted` morre e a espera acaba sem fechar outro diálogo.
+        while mounted.upgrade().is_some() {
+            match idle_left(touched.get().elapsed()) {
+                Some(left) => cx.background_executor().timer(left).await,
+                None => { let _ = cx.update(|window, cx| window.close_dialog_by_id(dialog, cx)); break; }
+            }
+        }
+    }).detach();
 }
+
+/// O que chegou agora vem primeiro; do que já estava aberto fica o que não se repete.
+fn merge_news(mut newer: Vec<News>, open: &[News]) -> Vec<News> {
+    let older: Vec<News> = open.iter().filter(|old| !newer.iter().any(|new| new.id == old.id)).cloned().collect();
+    newer.extend(older);
+    newer
+}
+
+/// Quanto falta para o "O que chegou para você" fechar sozinho, depois de `quiet` sem ninguém mexer nele; `None`: já.
+fn idle_left(quiet: Duration) -> Option<Duration> { WHATS_NEW_IDLE.checked_sub(quiet).filter(|left| !left.is_zero()) }
 
 fn for_desktop(news: &News) -> bool { matches!(news.platforms.as_str(), "desktop" | "all") }
 
@@ -581,6 +631,23 @@ mod tests {
         assert_eq!(arrived(Err(refused(Some(405), "Method Not Allowed")), None), Arrived::Absent);
         assert!(matches!(arrived(Err(refused(Some(503), "update_arrived_unavailable")), None), Arrived::Failed(_)));
         assert!(matches!(arrived(Ok(serde_json::json!({"news": []})), None), Arrived::Failed(_)), "sem `through` não marca nada");
+    }
+
+    #[test]
+    fn a_later_arrival_joins_the_open_whats_new_newest_first_without_repeats() {
+        let item = |id: &str, title: &str| News { id: id.into(), title: title.into(), kind: "new".into(), text: String::new(),
+            platforms: "desktop".into(), try_it: None, animation: None, anchor: None };
+        let merged = merge_news(vec![item("c", "C"), item("a", "novo A")], &[item("a", "velho A"), item("b", "B")]);
+        assert_eq!(merged.iter().map(|n| (n.id.as_str(), n.title.as_str())).collect::<Vec<_>>(),
+            [("c", "C"), ("a", "novo A"), ("b", "B")]);
+    }
+
+    #[test]
+    fn whats_new_closes_after_ten_quiet_minutes() {
+        assert_eq!(idle_left(Duration::ZERO), Some(Duration::from_secs(600)));
+        assert_eq!(idle_left(Duration::from_secs(599)), Some(Duration::from_secs(1)));
+        assert_eq!(idle_left(Duration::from_secs(600)), None);
+        assert_eq!(idle_left(Duration::from_secs(3600)), None);
     }
 
     #[test]
