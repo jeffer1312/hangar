@@ -59,21 +59,23 @@ export const seenTour = (outcome: TourOutcome): TourProgress => ({ tips: [outcom
 export const tipsSwitch = (on: boolean, now: Date = new Date()): TourProgress => ({ tips_off: { on, at: now.toISOString() } });
 
 export type TourNeed = 'emptyList' | 'sessions' | 'none';
-export interface TourStep { id: string; anchor: string; need: TourNeed }
+/** A tela onde a peça mora: a inicial (lista) ou a conversa. */
+export type TourScreen = 'home' | 'chat';
+export interface TourStep { id: string; anchor: string; need: TourNeed; screen: TourScreen }
 
 /** Os passos do tour do celular, na ordem; `anchor` é a peça que o balão aponta. */
 export const MOBILE_TOUR: readonly TourStep[] = [
-  { id: 'new', anchor: 'home-new', need: 'emptyList' },
-  { id: 'menu', anchor: 'session-row', need: 'sessions' },
-  { id: 'search', anchor: 'list-search', need: 'none' },
-  { id: 'attach', anchor: 'composer-attach', need: 'none' },
-  { id: 'dictation', anchor: 'composer-mic', need: 'none' },
-  { id: 'model', anchor: 'composer-model', need: 'none' },
+  { id: 'new', anchor: 'home-new', need: 'emptyList', screen: 'home' },
+  { id: 'menu', anchor: 'session-row', need: 'sessions', screen: 'home' },
+  { id: 'search', anchor: 'list-search', need: 'none', screen: 'home' },
+  { id: 'attach', anchor: 'composer-attach', need: 'none', screen: 'chat' },
+  { id: 'dictation', anchor: 'composer-mic', need: 'none', screen: 'chat' },
+  { id: 'model', anchor: 'composer-model', need: 'none', screen: 'chat' },
 ];
 
 /** Dicas próprias, fora do tour: cada uma aparece uma vez, quando a peça dela surge na tela. */
 export const MOBILE_TIPS: readonly TourStep[] = [
-  { id: 'media', anchor: 'chat-more', need: 'none' },
+  { id: 'media', anchor: 'chat-more', need: 'none', screen: 'chat' },
 ];
 
 /** Dica nascida de um passo que não cabia na hora: id próprio para não se confundir com as dicas. */
@@ -132,12 +134,21 @@ export function runChoice(run: TourRun, choice: TourChoice): RunStep {
 export const runStep = (run: TourRun): TourStep | null => (run.index === null ? null : run.steps[run.index] ?? null);
 
 /**
- * Passo cuja peça não apareceu a tempo (sessões ocultas, grupo recolhido, linha fora da rolagem):
- * sai da volta e vira dica que espera a peça; a volta segue no próximo passo, sem ficar presa.
+ * A pessoa está na tela do passo (outra peça dela está à vista) e a peça dele não: ela não vai aparecer
+ * (sessões ocultas, grupo recolhido, linha fora da rolagem). Fora da tela do passo, ele só espera.
  */
-export function runDropStep(run: TourRun): RunStep & { tip: TourStep | null } {
+export function stepStalled(step: TourStep, onScreen: ReadonlySet<string>): boolean {
+  if (onScreen.has(step.anchor)) return false;
+  return [...MOBILE_TOUR, ...MOBILE_TIPS].some((other) => other.screen === step.screen && other.anchor !== step.anchor && onScreen.has(other.anchor));
+}
+
+/**
+ * Passo travado na própria tela (`stepStalled`): sai da volta e vira dica que espera a peça; a volta
+ * segue no próximo passo. Fora da tela dele nada muda: o passo da conversa espera a conversa abrir.
+ */
+export function runDropStep(run: TourRun, onScreen: ReadonlySet<string>): RunStep & { tip: TourStep | null } {
   const step = runStep(run);
-  if (!step || run.index === null) return { run, outcome: null, tip: null };
+  if (!step || run.index === null || !stepStalled(step, onScreen)) return { run, outcome: null, tip: null };
   const steps = run.steps.filter((_, i) => i !== run.index);
   const index = run.index < steps.length ? run.index : null;
   const outcome: TourOutcome | null = index === null ? (run.doneAny ? 'done' : 'skipped') : null;

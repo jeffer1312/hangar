@@ -7,7 +7,7 @@ import { prefs } from '../../stores/prefs';
 import { ownServers, useServers } from '../../stores/servers';
 import { DEMO_BASE_URL } from '../../net/demo';
 import { haptic } from '../../ui/haptics';
-import { listenTourActions } from './anchors';
+import { listenTourActions, useAnchors } from './anchors';
 
 const KEY = 'tour.progress.v1';
 
@@ -131,12 +131,16 @@ export function tourAction(stepId: string) {
   settle(next);
 }
 
-/** O passo da vez ficou sem a peça na tela tempo demais: vira dica que espera a peça, e o tour segue. */
+/**
+ * O passo da vez ficou tempo demais sem a peça, com a pessoa na tela dele: vira dica que espera a peça e
+ * o tour segue. Fora da tela do passo (na lista, à espera da conversa) nada muda.
+ */
 export function dropStalledStep() {
   const { run, tips } = useTour.getState();
   if (!run) return;
-  const { tip, ...next } = runDropStep(run);
-  if (tip && !tips.some((t) => t.id === tip.id)) useTour.setState({ tips: [tip, ...tips] });
+  const { tip, ...next } = runDropStep(run, new Set(useAnchors.getState().onScreen));
+  if (!tip) return;
+  if (!tips.some((t) => t.id === tip.id)) useTour.setState({ tips: [tip, ...tips] });
   settle(next);
 }
 

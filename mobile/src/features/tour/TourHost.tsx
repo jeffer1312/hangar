@@ -3,7 +3,7 @@ import { AccessibilityInfo, AppState, Keyboard, View, useWindowDimensions } from
 import Animated, { FadeIn, FadeOut, useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { runStep, tourListsReady, tourTarget, type TourTarget } from '@hangar/core';
+import { runStep, stepStalled, tourListsReady, tourTarget, type TourTarget } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
 import { useAparencia } from '../../stores/aparencia';
@@ -19,7 +19,7 @@ const MARGIN = 16;
 const GAP = 12;
 const RING = 4;
 const MAX_WIDTH = 320;
-// Passo cuja peça não aparece por este tempo (outra tela, sessões ocultas, linha fora da rolagem) vira dica e o tour segue.
+// Passo cuja peça não aparece por este tempo na tela dele (sessões ocultas, linha fora da rolagem) vira dica e o tour segue.
 const STALL_MS = 4000;
 // Com o balão aberto a peça é medida de novo neste intervalo: um pai que se move (aviso que some, animação) a leva junto.
 const REMEASURE_MS = 500;
@@ -62,7 +62,8 @@ export function TourHost({ enabled }: { enabled: boolean }) {
   }, [enabled, listsReady, planned, synced, count, home]);
 
   const pending = run ? runStep(run) : null;
-  const waiting = !!pending && !onScreen.includes(pending.anchor);
+  // Só conta o tempo com a pessoa na tela do passo e a peça dele ausente; fora dela o passo espera.
+  const waiting = !!pending && stepStalled(pending, new Set(onScreen));
   useEffect(() => {
     if (!enabled || !waiting) return;
     const timer = setTimeout(dropStalledStep, STALL_MS);

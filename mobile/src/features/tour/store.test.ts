@@ -21,6 +21,7 @@ vi.mock('@hangar/core', async (original) => ({ ...(await original<typeof import(
 
 import { MOBILE_TOUR_DONE, MOBILE_TOUR_SKIPPED } from '@hangar/core';
 import { dropStalledStep, planTour, replayTour, syncTour, tourAction, tourChoice, useTour } from './store';
+import { useAnchors } from './anchors';
 
 const casa = { id: 'casa', label: 'Casa', baseUrl: 'https://casa.test', token: 't' };
 
@@ -30,6 +31,7 @@ beforeEach(() => {
   servers.list = [casa];
   servers.vaultRead = false;
   useTour.setState({ progress: {}, synced: false, planned: false, replay: false, run: null, tips: [] });
+  useAnchors.setState({ onScreen: [] });
 });
 
 describe('sincronização do visto', () => {
@@ -126,16 +128,22 @@ describe('volta do tour', () => {
     expect(useTour.getState().tips.map((t) => t.id)).toEqual(['tour-menu', 'tour-search', 'media']);
   });
 
-  it('passo sem peça vira dica e o tour segue; o último encerra a volta', () => {
+  it('passo sem peça na tela dele vira dica e o tour segue; fora da tela ele espera', () => {
     tourProgressFor.mockResolvedValue({});
     planTour(2);
+    const step = () => { const run = useTour.getState().run!; return run.index === null ? null : run.steps[run.index].id; };
+    useAnchors.setState({ onScreen: ['list-search'] });
     dropStalledStep();
-    expect(useTour.getState().run?.steps[useTour.getState().run!.index!].id).toBe('search');
+    expect(step()).toBe('search');
     expect(useTour.getState().tips.map((t) => t.id)).toEqual(['tour-menu', 'media']);
-    for (let i = 0; i < 4; i++) dropStalledStep();
+    useTour.setState({ run: { ...useTour.getState().run!, index: 1 } });
+    expect(step()).toBe('attach');
+    useAnchors.setState({ onScreen: ['list-search', 'session-row'] });
+    dropStalledStep();
+    expect(step()).toBe('attach');
+    for (const others of [['composer-mic'], ['composer-model'], ['composer-attach']]) { useAnchors.setState({ onScreen: others }); dropStalledStep(); }
     expect(useTour.getState().run?.index).toBeNull();
     expect(useTour.getState().progress.tips).toContain(MOBILE_TOUR_SKIPPED);
-    dropStalledStep();
     expect(useTour.getState().tips.filter((t) => t.id === 'tour-menu')).toHaveLength(1);
   });
 

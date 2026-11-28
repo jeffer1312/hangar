@@ -3,7 +3,7 @@ import { configureApi, type EventSourceLike } from './apiEnv';
 import { _limparEsfriamentoParaTestes } from './esfriamento';
 import {
   MOBILE_TOUR_DONE, MOBILE_TOUR_SKIPPED, mergeTourProgress, mobileTourOutcome, nextTip, planMobileTour, runAction,
-  runChoice, runDropStep, runStep, sameTourProgress, seenTip, seenTour, startTourRun, tipsSwitch, tourListsReady, tourProgressFor, tourTarget, tourTipsOff,
+  runChoice, runDropStep, runStep, sameTourProgress, stepStalled, seenTip, seenTour, startTourRun, tipsSwitch, tourListsReady, tourProgressFor, tourTarget, tourTipsOff,
 } from './tour';
 
 describe('junção do visto', () => {
@@ -114,26 +114,41 @@ describe('dicas', () => {
 
 describe('passo sem peça', () => {
   const steps = planMobileTour(2).steps;
+  const home = new Set(['list-search']);
 
-  it('sai da volta, vira dica com o id do passo e a volta segue no próximo', () => {
-    const dropped = runDropStep(startTourRun(steps));
+  it('na tela dele, com outra peça à vista e a dele não, sai da volta, vira dica e a volta segue', () => {
+    expect(stepStalled(steps[0], home)).toBe(true);
+    const dropped = runDropStep(startTourRun(steps), home);
     expect(dropped.tip).toEqual({ ...steps[0], id: 'tour-menu' });
     expect(dropped.outcome).toBeNull();
     expect(runStep(dropped.run)?.id).toBe('search');
     expect(dropped.run.steps).toHaveLength(steps.length - 1);
   });
 
+  it('passo da conversa com a pessoa na lista espera, sem virar dica', () => {
+    const atAttach = startTourRun(steps.slice(2));
+    expect(runStep(atAttach)?.id).toBe('attach');
+    expect(stepStalled(runStep(atAttach)!, new Set(['list-search', 'session-row']))).toBe(false);
+    expect(runDropStep(atAttach, new Set(['list-search', 'session-row']))).toEqual({ run: atAttach, outcome: null, tip: null });
+    expect(runDropStep(atAttach, new Set())).toEqual({ run: atAttach, outcome: null, tip: null });
+    expect(runDropStep(atAttach, new Set(['composer-mic'])).tip?.id).toBe('tour-attach');
+  });
+
+  it('peça à vista nunca trava', () => {
+    expect(stepStalled(steps[0], new Set(['session-row', 'list-search']))).toBe(false);
+  });
+
   it('o último passo que sai encerra a volta; com ação feita antes ela conta como feita', () => {
     const last = runAction(startTourRun(steps.slice(0, 2)), 'menu').run;
-    const dropped = runDropStep(last);
+    const dropped = runDropStep(last, new Set(['session-row']));
     expect(dropped.run.index).toBeNull();
     expect(dropped.outcome).toBe('done');
-    expect(runDropStep(startTourRun(steps.slice(0, 1))).outcome).toBe('skipped');
+    expect(runDropStep(startTourRun(steps.slice(0, 1)), home).outcome).toBe('skipped');
   });
 
   it('sem volta em curso não faz nada', () => {
     const ended = runChoice(startTourRun(steps), 'later').run;
-    expect(runDropStep(ended)).toEqual({ run: ended, outcome: null, tip: null });
+    expect(runDropStep(ended, home)).toEqual({ run: ended, outcome: null, tip: null });
   });
 });
 
