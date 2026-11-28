@@ -148,10 +148,28 @@ async fn write_io(
 }
 /// A leitura da tela pelo agente: o `agy` tem rodapé e menu próprios; os outros usam o leitor comum.
 pub(crate) fn screen(provider: hangar_transcript::Provider, pane: &str) -> crate::terminal_state::PaneAnalysis {
-    if provider == hangar_transcript::Provider::Antigravity {
-        crate::terminal_state::agy_analyze(pane)
-    } else {
-        crate::terminal_state::analyze(pane)
+    match provider {
+        hangar_transcript::Provider::Antigravity => crate::terminal_state::agy_analyze(pane),
+        // O Kimi desenha a mensagem da pessoa como `❯ texto`, no histórico e na fila da TUI: com número, `❯ 1. …` pareceria
+        // o cursor de um menu. Pergunta e aprovação dele vêm do arquivo da conversa; da tela só valem os painéis abertos.
+        hangar_transcript::Provider::Kimi => {
+            let mut analysis = crate::terminal_state::analyze(pane);
+            if analysis.state == "awaiting_input" {
+                analysis.question = None;
+                analysis.options = None;
+                analysis.label = analysis.spinner.as_deref().map(|spinner| spinner.chars().skip(2).collect::<String>().trim().to_owned());
+                analysis.state = if analysis.spinner.is_some() { "working" } else { "idle" }.into();
+            }
+            // O painel de aprovação ou de escolha (rodapé `↵ confirm`, `↵ choose`…) ocupa a caixa: nada se digita sobre ele.
+            // Só o fim da tela, abaixo da caixa: o painel aberto ocupa o lugar dela, e o rodapé citado na conversa
+            // fica acima.
+            let lines: Vec<&str> = pane.trim_end().lines().collect();
+            let after_box = lines.iter().rposition(|line| line.trim_start().starts_with('╰')).map_or(0, |at| at + 1);
+            let bottom = lines[after_box.max(lines.len().saturating_sub(8))..].join("\n");
+            analysis.overlay |= kimi_approval_open(&bottom) || kimi_picker_open(&bottom);
+            analysis
+        }
+        _ => crate::terminal_state::analyze(pane),
     }
 }
 fn blocked(target: &OtherTarget, frame: &OtherFrame) -> bool {
@@ -1785,8 +1803,9 @@ async fn open_kimi_permissions(context: &mut Control<'_>) -> Result<KimiPermissi
             // Sem o seletor, nada do comando fica para quem digitar depois: tela aberta ou o texto na caixa.
             // Escape num turno em voo o interromperia, e numa aprovação aberta a recusaria. A limpeza não
             // troca o motivo da falha.
-            let state = screen(context.target.provider, &frame.text).state;
-            let frame = if composer(context.target, &frame).is_none() && !matches!(state.as_str(), "working" | "awaiting_input") {
+            let analysis = screen(context.target.provider, &frame.text);
+            let frame = if composer(context.target, &frame).is_none() && !matches!(analysis.state.as_str(), "working" | "awaiting_input")
+                && !analysis.overlay {
                 let escaped = context.write("Escape", false, false).await.is_ok() && context.pause(SETTLE, false).await.is_ok();
                 if escaped { context.frame(false, false).await.ok() } else { None }
             } else { Some(frame) };

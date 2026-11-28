@@ -34,7 +34,7 @@ import { QueuePanel } from './QueuePanel';
 import { useReducedMotion } from 'react-native-reanimated';
 import { flightRoute } from './SendFlight';
 import { takeoff } from './sendFlight';
-import { queueSendMode, type DeliveryFeedback, type QueueSendMode } from './queueDelivery';
+import { deliveryProvider, queueSendMode, type DeliveryFeedback, type QueueSendMode } from './queueDelivery';
 import { useDeliveryMode, useQueueDelivery } from './useQueueDelivery';
 import { fromPastedFile, readClipboard, type PickedAttachment } from '../ui/attachmentPicker';
 import { AttachSheet } from '../ui/AttachSheet';
@@ -590,7 +590,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   const [focado, setFocado] = useState(false);
   const [styleMenuOpen, setStyleMenuOpen] = useState(false);
   const styleServer = useServers((s) => s.servers.find((x) => x.id === origin.serverId) ?? null);
-  const supportsDelivery = provider === 'claude' || provider === 'codex';
+  const supportsDelivery = deliveryProvider(provider);
   // Lê o Jev mesmo parado e sem fila: o toque longo no Enviar escolhe o modo a qualquer momento.
   const delivery = useQueueDelivery(styleServer ?? undefined, supportsDelivery);
   // O envio decide o modo depois do upload: lê o modo e o Jev desta hora, não os do render que começou o envio.

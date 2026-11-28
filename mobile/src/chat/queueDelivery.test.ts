@@ -14,6 +14,7 @@ const select = (text = 'sim', changes: Partial<{ mode: 'queued' | 'direct' | 'je
 
 it('a decisão usa o pedido real e a fala recente, ignorando a fila e recados', () => {
   expect(select()).toEqual({ kind: 'jev', task: 'Pedido atual:\ncriar tela\n\nFala recente do agente:\nPosso usar azul?', message: 'sim' });
+  expect(select('sim', { provider: 'kimi' })).toEqual({ kind: 'jev', task: 'Pedido atual:\ncriar tela\n\nFala recente do agente:\nPosso usar azul?', message: 'sim' });
 });
 
 it('a pergunta assíncrona substitui a fala recente', () => {
@@ -29,7 +30,7 @@ it('comandos não passam por nenhum modo automático', () => {
   expect(select('/clear', { mode: 'direct' })).toBeUndefined();
 });
 it.each([
-  ['claude', false, true], ['claude', true, false], ['codex', false, false],
+  ['claude', false, true], ['claude', true, false], ['codex', false, false], ['kimi', false, true],
 ] as const)('Direto seleciona a rota de %s (sem terminal: %s)', (provider, headless, terminalClaude) => {
   expect(select('oi', { mode: 'direct', provider, headless })).toEqual({ kind: 'direct', terminalClaude });
 });
@@ -111,7 +112,7 @@ it('opções do modo: a salva vem marcada; Jev indisponível fica desativado e m
   expect(pick('conversation', 'setup')).toEqual(['queued:off:ok', 'direct:off:ok', 'conversation:on:ok']);
 });
 
-it('"Na conversa" vale só com a sessão trabalhando, em Claude e Codex, e nunca para comando', () => {
+it('"Na conversa" vale só com a sessão trabalhando, em Claude, Codex e Kimi, e nunca para comando', () => {
   const pick = (changes: Partial<{ state: string; provider: string; headless: boolean }>, text = 'oi') => {
     const { state = 'working', provider = 'claude', headless = true } = changes;
     return queueSendMode('conversation', false, state, provider, headless, text, events, null);
@@ -122,7 +123,8 @@ it('"Na conversa" vale só com a sessão trabalhando, em Claude e Codex, e nunca
   expect(pick({ provider: 'codex', headless: false })).toEqual({ kind: 'conversation' });
   expect(pick({ provider: 'codex', headless: true })).toEqual({ kind: 'conversation' });
   expect(pick({ state: 'idle' })).toBeUndefined();
-  expect(pick({ provider: 'kimi' })).toBeUndefined();
+  // O Ctrl+S do Kimi entra no turno sem cortá-lo: lá "Na conversa" é o envio direto.
+  expect(pick({ provider: 'kimi', headless: false })).toEqual({ kind: 'direct', terminalClaude: true });
   expect(pick({}, '/clear')).toBeUndefined();
 });
 

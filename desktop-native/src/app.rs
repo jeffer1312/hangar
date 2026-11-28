@@ -3693,9 +3693,11 @@ impl Hangar {
         // Só a conversa aberta tem o painel "Na fila" à vista; a de fora vai sem histórico conhecido.
         let queued: Vec<String> = if selected { self.chat.queue_panel().entries.iter().map(|e| e.text.clone()).collect() } else { Vec::new() };
         if !self.delivery.begin_beside(key.clone(), text.clone(), known, &queued) { cx.notify(); return false; }
-        // O `/steer` do Claude com terminal ignora o texto; `/input` orienta somente a entrada deste envio.
-        let kind = self.sessions_of(&key.server).iter().find(|s| s.name == key.name).map(|s| (s.provider == "claude", s.headless))
-            .or_else(|| selected.then(|| { let (provider, headless) = self.provider(); (provider == "claude", headless) }));
+        // O `/steer` do Claude com terminal ignora o texto, e o do Kimi só aperta Ctrl+S; `/input` orienta somente a
+        // entrada deste envio.
+        let typed = |provider: &str| matches!(provider, "claude" | "kimi");
+        let kind = self.sessions_of(&key.server).iter().find(|s| s.name == key.name).map(|s| (typed(&s.provider), s.headless))
+            .or_else(|| selected.then(|| { let (provider, headless) = self.provider(); (typed(provider), headless) }));
         let terminal_claude = steer == SendTiming::Direct && kind == Some((true, false));
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
@@ -6290,7 +6292,7 @@ impl Hangar {
         let draft_hint = beta_draft.then(|| {
             // O mesmo critério do `queue_timing`: sem como entrar no turno, Na conversa e Jev caem na fila.
             let joins = queue::sends_direct(true, &self.chat.state.state, self.provider().0);
-            let key = match appearance::get().delivery_mode() {
+            let key = match self.queue_mode() {
                 appearance::DeliveryMode::Direct => "beta_draft_direct",
                 appearance::DeliveryMode::Conversation if joins => "beta_draft_conversation",
                 appearance::DeliveryMode::Jev if joins && self.queue_jev_ready() => "beta_draft_jev",
@@ -9190,8 +9192,8 @@ impl Hangar {
     fn offer_root_tips(&mut self) {
         for tip in crate::tour::steps::TIPS.iter().filter(|tip| tip.on_sight).map(|tip| tip.step) {
             // Com o envio Direto escolhido não há o que ensinar no painel.
-            if tip.id == "queue-direct" && (appearance::get().delivery_mode() == appearance::DeliveryMode::Direct
-                || !matches!(self.provider().0, "claude" | "codex")) { continue; }
+            if tip.id == "queue-direct" && (self.queue_mode() == appearance::DeliveryMode::Direct
+                || !queue::steers_by_message(self.provider().0)) { continue; }
             // Antes da âncora: lida, ela pediria outro quadro a cada movimento, mesmo de dica já vista.
             if self.tour.may_offer(tip.id) && popup::anchor_bounds(tip.anchor).is_some() { self.offer_step_tip(tip); }
         }

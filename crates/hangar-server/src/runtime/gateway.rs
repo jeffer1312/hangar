@@ -3444,7 +3444,10 @@ async fn dispatch(registry:&RuntimeRegistry,envelope:&Envelope) -> Result<Value,
         "submit"=> {
             if matches!(&handle,EntryHandle::Terminal {..}) && (command.get("steer").is_some_and(|value|!value.is_boolean())
                 || command.get("pre_transcript").is_some_and(|value|!value.is_boolean())) {return Err(failure("terminal_payload"));}
-            let kind = if command["steer"] == true && !matches!(&handle,EntryHandle::Terminal {..}) { OperationKind::Steer } else { OperationKind::Input };
+            // O `steer` do Kimi só aperta Ctrl+S e perderia o texto: lá ele é digitado.
+            let typed = matches!(&handle,EntryHandle::Terminal {..})
+                || matches!(&handle,EntryHandle::OtherTerminal {target,..} if target.provider == hangar_transcript::Provider::Kimi);
+            let kind = if command["steer"] == true && !typed { OperationKind::Steer } else { OperationKind::Input };
             let reply = handle.command(RuntimeCommand { operation_id:envelope.operation_id.clone(),kind,
                 payload:json!({"text":command["text"],"pre_transcript":command["pre_transcript"].as_bool().unwrap_or(false)}) }).await?;
             serde_json::to_value(reply).map_err(|_|failure("reply_json"))
