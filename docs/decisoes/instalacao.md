@@ -1161,10 +1161,10 @@ O que dependia do layout antigo e o que cada um fazia com a 1.100 antes do conse
 ## Cache Rust entre worktrees (28/11/2026)
 
 O Cargo calcula a identidade de um membro do workspace com o caminho absoluto do
-`RUSTC_WORKSPACE_WRAPPER`. O `cargo-pinned` usa um wrapper que só executa o compilador. Cada
-worktree conserva os próprios intermediários dos membros no cache, com a mesma identidade para
-as dependências externas. O Cargo continua verificando alterações no código e na configuração
-de cada worktree.
+`RUSTC_WORKSPACE_WRAPPER`. Cada worktree conserva os próprios intermediários dos membros no cache,
+com a mesma identidade para as dependências externas. No cache padrão, o wrapper identifica a
+worktree dona da unidade e coloca o incremental junto dela antes de passar o comando ao
+compilador. O Cargo continua verificando alterações no código e na configuração de cada worktree.
 
 No cache criado pelo script, `CARGO_BUILD_BUILD_DIR` aponta para o diretório compartilhado e
 `CARGO_TARGET_DIR` para o diretório de compilação da worktree. Os testes que executam o
