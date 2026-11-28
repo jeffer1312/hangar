@@ -3,10 +3,15 @@
 //! completa → validação. Os fatos entram por `OpenFacts`; nada aqui escreve em disco.
 use std::sync::LazyLock;
 
+use hangar_core::{
+    account_env::{resolve_account_path, valid_omp_profile},
+    fs::without_verbatim,
+};
 use regex::Regex;
 use serde::Serialize;
 use serde_json::{Value, json};
-use crate::session_write::limit_switch::{SpentAccounts,SpentMark};
+
+use crate::{Defaults, SessionOptions, SpentAccounts, SpentMark, ULTRAFAST_REFUSED, sanitize_session_name};
 
 use super::{Account, AccountSource, AgentProvider, OpenError, PermissionMode, SPEC_VERSION, ServiceTier, SessionOpenRequest,
     SessionSpec, Surface, WorktreeSpec};
@@ -59,9 +64,9 @@ pub trait OpenFacts {
     fn creator(&self, name: &str) -> Result<Option<CreatorFacts>, OpenError>;
     fn defaults(&self) -> ServerDefaults;
     /// Padrão de modelo, esforço e permissão marcado para provedor, motor e conta do motor.
-    fn saved_defaults(&self, provider: AgentProvider, engine: &str, engine_account: &str) -> Result<Option<crate::session_defaults::Defaults>, String>;
+    fn saved_defaults(&self, provider: AgentProvider, engine: &str, engine_account: &str) -> Result<Option<Defaults>, String>;
     /// Opções da tela Beta salvas no servidor (`session-options.json`); `None` = nunca gravadas.
-    fn session_options(&self) -> Result<Option<crate::session_defaults::SessionOptions>, String>;
+    fn session_options(&self) -> Result<Option<SessionOptions>, String>;
     /// Contas Codex com login conectado.
     fn codex_logins(&self) -> Result<Vec<CodexLogin>, OpenError>;
     /// Linhas de cota das contas Claude e Codex: do cache, ou depois de uma leitura curta da rede
@@ -94,6 +99,8 @@ pub trait OpenFacts {
     fn account_mode(&self, config_dir: Option<&str>) -> Result<Option<String>, String>;
     /// Terminal, sidecar Codex ou sidecar sem terminal com este nome; `Err` = o multiplexador não respondeu.
     fn name_in_use(&self, name: &str) -> Result<bool, OpenError>;
+    /// Inclui aberturas em curso; ignora só reservas pré-aquecidas quando a abertura pode tomá-las.
+    fn name_claimed(&self, name: &str, take_reserved: bool) -> bool;
     /// Grupo, `then` ou fila de uma sessão antiga com este nome que ninguém vai limpar (servidor fora).
     fn name_has_leftovers(&self, name: &str) -> Result<bool, OpenError>;
     /// Troca de agente em curso no nome, confirmada pelo registro durável.
@@ -136,7 +143,7 @@ pub struct Resolved {
 /// `model_args.ID_OK`, com o `\Z` do Python: quebra de linha no fim é recusada.
 static MODEL_OK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9._:~/\[\]-]{1,128}\z").unwrap());
 /// O id de modelo que pode ir à linha de comando: a regex e sem `-` na frente.
-pub(crate) fn valid_model(model: &str) -> bool { MODEL_OK.is_match(model) && !model.starts_with('-') }
+pub fn valid_model(model: &str) -> bool { MODEL_OK.is_match(model) && !model.starts_with('-') }
 static CODEX_EFFORT_OK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[a-z]{2,32}\z").unwrap());
 const EFFORT_CLAUDE: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 const EFFORT_PI: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -149,6 +156,12 @@ fn truthy(value: &Option<String>) -> bool { value.as_deref().is_some_and(|v| !v.
 
 fn conflict(msg: impl Into<String>) -> OpenError { OpenError::new(409, "erro_criacao_sessao", msg) }
 
+/// Decide a configuração da sessão com os fatos da abertura atual.
+///
+/// # Errors
+///
+/// Devolve a recusa da abertura quando a escolha é inválida ou um fato obrigatório
+/// não pode ser confirmado.
 pub fn resolve_open(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn OpenFacts) -> Result<Resolved, OpenError> {
     let mut used_saved_choice = false;
     let reads = QuotaReads::default();
@@ -482,7 +495,7 @@ pub fn choose_provider(catalog: &ProviderCatalog) -> AgentProvider {
 }
 
 /// `_creator_permission_mode` / `_codex_as_claude_mode`: o modo da criadora no nome do `--permission-mode`.
-pub(crate) fn creator_mode(info: &CreatorFacts) -> Option<PermissionMode> {
+pub fn creator_mode(info: &CreatorFacts) -> Option<PermissionMode> {
     let raw = info.permission_mode.as_deref()?;
     if info.provider == AgentProvider::Codex {
         // Chave exata do `PERMISSION_POLICIES`, sem a tolerância de maiúscula da abertura.
@@ -499,7 +512,7 @@ pub(crate) fn creator_mode(info: &CreatorFacts) -> Option<PermissionMode> {
 /// nome; do Claude, o inverso do `_codex_as_claude_mode` (bypass → Full Access, acceptEdits →
 /// Approve for me, manual → Ask for approval), e os modos sem imagem no Codex (auto, dontAsk, plan)
 /// vão para Ask for approval, o mais restrito.
-pub(crate) fn creator_codex_mode(info: &CreatorFacts) -> Option<PermissionMode> {
+pub fn creator_codex_mode(info: &CreatorFacts) -> Option<PermissionMode> {
     let raw = info.permission_mode.as_deref()?;
     if info.provider == AgentProvider::Codex {
         return PermissionMode::CODEX.into_iter().find(|m| m.name() == raw);
@@ -633,10 +646,10 @@ fn same_dir_on(a: &str, b: &str, windows: bool) -> bool {
         return true;
     }
     // Sem o `\\?\` antes de resolver: nele o Windows não lê `/` como separador e o canonicalize falha.
-    let input = |p: &str| crate::list::links::without_verbatim(std::path::PathBuf::from(trim(p)));
+    let input = |p: &str| without_verbatim(std::path::PathBuf::from(trim(p)));
     let (a, b) = (input(a), input(b));
     if a.canonicalize().is_ok() && b.canonicalize().is_ok() {
-        return crate::accounts::catalog::resolved(&a) == crate::accounts::catalog::resolved(&b);
+        return resolve_account_path(&a) == resolve_account_path(&b);
     }
     lexical_same(&a.to_string_lossy(), &b.to_string_lossy(), windows)
 }
@@ -653,7 +666,7 @@ fn lexical_same(a: &str, b: &str, windows: bool) -> bool {
 
 /// A grafia do catálogo da conta que `dir` nomeia: barra final, `\\?\` ou `/` no Windows não fazem
 /// outra conta, e quem segue usa o caminho como o catálogo o escreve.
-pub(crate) fn known_config_dir<'a>(known: impl IntoIterator<Item = &'a str>, dir: &str) -> Option<&'a str> {
+pub fn known_config_dir<'a>(known: impl IntoIterator<Item = &'a str>, dir: &str) -> Option<&'a str> {
     known.into_iter().find(|k| same_dir(k, dir))
 }
 
@@ -679,7 +692,7 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
     if request.service_tier == Some(ServiceTier::Ultrafast) && claude
         && !facts.supports_ultrafast(request.engine.as_deref(), request.model.as_deref(), request.engine_account.as_deref())
     {
-        return Err(OpenError::new(400, "erro_criacao_sessao", crate::engines::catalog::ULTRAFAST_REFUSED));
+        return Err(OpenError::new(400, "erro_criacao_sessao", ULTRAFAST_REFUSED));
     }
     // Antes de qualquer outra coisa da pasta: o convidado nem fica sabendo se ela existe fora da dele.
     if let OpenCaller::Guest { root } = caller && !facts.real_path(&request.cwd).starts_with(root) {
@@ -817,7 +830,7 @@ fn validate_choice(provider: AgentProvider, model: Option<&str>, effort: Option<
 /// nome em uso. Devolve o nome sanitizado.
 fn validate_name(raw: &str, provider: AgentProvider, headless: bool, request: &SessionOpenRequest, facts: &dyn OpenFacts)
     -> Result<String, OpenError> {
-    let name = crate::list::discover_other::sanitize_session_name(raw);
+    let name = sanitize_session_name(raw);
     // Um status só para o nome inválido, com ou sem `branch`.
     if name.is_empty() {
         return Err(conflict("nome invalido"));
@@ -840,7 +853,7 @@ fn validate_name(raw: &str, provider: AgentProvider, headless: bool, request: &S
     if provider == AgentProvider::Omp && let Some(profile) = request.omp_profile.as_deref().filter(|p| !p.is_empty()) {
         // A mesma regra do omp: o valor vai para o ambiente do pane como `OMP_PROFILE`.
         let profile = profile.trim();
-        if !(profile.is_empty() || profile == "default" || crate::list::discover_other::valid_omp_profile(profile)) {
+        if !(profile.is_empty() || profile == "default" || valid_omp_profile(profile)) {
             return Err(conflict("Nome de perfil OMP inválido"));
         }
     }
@@ -857,18 +870,18 @@ fn validate_name(raw: &str, provider: AgentProvider, headless: bool, request: &S
 }
 
 /// A base do nome que ninguém escolheu: a pasta saneada, ou `sessao`.
-pub(crate) fn folder_base(cwd: &str) -> String {
+pub fn folder_base(cwd: &str) -> String {
     let folder = cwd.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or_default();
-    Some(crate::list::discover_other::sanitize_session_name(folder)).filter(|n| !n.is_empty()).unwrap_or_else(|| "sessao".into())
+    Some(sanitize_session_name(folder)).filter(|n| !n.is_empty()).unwrap_or_else(|| "sessao".into())
 }
 
 /// A base (ASCII, já saneada) cede espaço ao sufixo para o nome caber no teto.
-pub(crate) fn fit_name(base: &str, suffix: &str) -> String {
+pub fn fit_name(base: &str, suffix: &str) -> String {
     format!("{}{suffix}", base[..base.len().min(NAME_MAX - suffix.len())].trim_end_matches('-'))
 }
 
 /// O nome tem a forma do que a pasta dá: a base dela ou `sessao`, com ou sem `-N`.
-pub(crate) fn folder_pattern(name: &str, cwd: &str) -> bool {
+pub fn folder_pattern(name: &str, cwd: &str) -> bool {
     let from = |base: &str| name == fit_name(base, "") || name.rsplit_once('-').is_some_and(|(_, n)|
         (1..8).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()) && name == fit_name(base, &format!("-{n}")));
     from(folder_base(cwd).as_str()) || from("sessao")
@@ -880,10 +893,9 @@ fn folder_name(cwd: &str, take_reserved: bool, facts: &dyn OpenFacts) -> Result<
     let base = folder_base(cwd);
     // Quem está abrindo agora também ocupa.
     let fit = |suffix: &str| fit_name(&base, suffix);
-    let held = |name: &str| if take_reserved { super::open::NameClaim::opening_without_reserves(name) } else { super::open::NameClaim::opening(name) };
     let mut name = fit("");
     for n in 2.. {
-        if !facts.name_in_use(&name)? && !held(&name) && !facts.name_has_leftovers(&name)? { break; }
+        if !facts.name_in_use(&name)? && !facts.name_claimed(&name, take_reserved) && !facts.name_has_leftovers(&name)? { break; }
         name = fit(&format!("-{n}"));
     }
     Ok(name)

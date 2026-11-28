@@ -1019,9 +1019,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   "negado por você".
 - **Abrir, reabrir, retomar e restaurar sessão é do Rust, por um lançador só.** Toda origem (telas,
   voz, `hangar-send`, MCP, `orq`, outro servidor, `claude`/`codex`/`pi`/`omp`/`kimi` digitados no
-  terminal) manda um `SessionOpenRequest`; `resolve_open()` decide conta, modo, modelo, plugin e
-  com/sem terminal (os padrões que as telas preenchiam moram aqui) e grava o `SessionSpec` da sessão
-  em `~/.hangar/session-specs/<chave>.json`. Modelo, esforço e permissão omitidos vêm do padrão
+  terminal) manda um `SessionOpenRequest`; `resolve_open()`, em `hangar-session-open-policy`,
+  decide conta, modo, modelo, plugin e com/sem terminal. O servidor fornece os fatos, reserva
+  o nome e grava o `SessionSpec` em `~/.hangar/session-specs/<chave>.json`. Modelo, esforço e
+  permissão omitidos vêm do padrão
   salvo no servidor (`~/.hangar/session-defaults.json`), que vence a criadora; `inherit: true` traz
   a permissão dela; convidado não recebe. Reabrir é `reopen_session(spec ⊕ SessionChange)`;
   retomar do Arquivo e `/resume` passam pelas mesmas guardas da criação. Com o servidor fora, o
