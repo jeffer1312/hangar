@@ -74,6 +74,7 @@ vi.mock('./useQueueDelivery', () => ({ setQueueDeliveryForeground: () => {} }));
 vi.mock('../net/fatalErrors', () => ({ setFatalErrorRoute: () => {}, takeFatalErrorNotice: () => false }));
 vi.mock('../features/push/expoPush', () => ({ installNotificationHandler: () => {}, pushRegistrationKey: () => '',
   registerExpoPush: async () => {}, retryExpoPushIfDenied: async () => {}, useNotificationNavigation: () => {} }));
+vi.mock('../features/tour/TourHost', () => ({ TourHost: () => null }));
 vi.mock('../features/voice/LiveVoiceRoot', () => ({ LiveVoiceRoot: () => null }));
 vi.mock('../ui/Toast', () => ({ Toaster: () => null, toast: { aviso: vi.fn(), erro: vi.fn() } }));
 vi.mock('../stores/aparencia', () => {

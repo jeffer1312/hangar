@@ -318,6 +318,11 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   `HANGAR_SEM_NOVIDADE` no próprio commit, só para o que a pessoa não percebe); toda âncora de `tour/anchors.rs` tem passo
   ou dica em `tour/steps.rs` (`every_anchor_has_a_tour_step_or_a_tip`). Quem escreve é a skill
   `hangar-novidade`. [Motivo](docs/decisoes/frontend.md#novidade-barra-o-portão-e-peça-nova-ganha-dica-28112026).
+- **Tour e dicas do Expo seguem o nativo, com o mesmo `/api/tour-progress`.** Passos e dicas em
+  `MOBILE_TOUR`/`MOBILE_TIPS` (`packages/core/src/tour.ts`); a peça se registra com `useTourAnchor`
+  e o balão é o `TourHost` (`mobile/src/features/tour/`). O visto do celular entra na lista `tips`
+  (`mobile-tour:done|skipped`, `mobile-tip:<id>`), sem campo novo no servidor; `tips_off` vale para
+  PC e celular. Recurso novo com peça própria no Expo também ganha dica.
 - **Mensagem esperando na fila do Hangar aparece no painel "Na fila", não como bolha.** A lista e a
   ordem vêm do evento `queue`; o modelo é `packages/core/src/queuePanel.ts` (o nativo repete em
   `desktop-native/src/queue_panel.rs`). Exceção: linha mandada "Na conversa" (`queued_conversation`)

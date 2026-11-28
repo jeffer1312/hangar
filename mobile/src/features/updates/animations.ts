@@ -43,6 +43,7 @@ import { TelemetryConsentAnimation } from './TelemetryConsentAnimation';
 import { PlacementSuggestAnimation } from './PlacementSuggestAnimation';
 import { AutoContinueAnimation } from './AutoContinueAnimation';
 import { LinkedChildrenAnimation } from './LinkedChildrenAnimation';
+import { TourAnimation } from './TourAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
@@ -90,6 +91,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'maquina-sugerida': PlacementSuggestAnimation,
   'continuar-depois-da-queda': AutoContinueAnimation,
   'filhas-ligadas': LinkedChildrenAnimation,
+  'tour-no-celular': TourAnimation,
 };
 
 export const animationFor = (name: string | null): ComponentType<{ width: number }> | null =>

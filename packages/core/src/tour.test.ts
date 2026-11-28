@@ -1,0 +1,222 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { configureApi, type EventSourceLike } from './apiEnv';
+import { _limparEsfriamentoParaTestes } from './esfriamento';
+import {
+  MOBILE_TOUR_DONE, MOBILE_TOUR_SKIPPED, mergeTourProgress, mobileTourOutcome, nextTip, planMobileTour, runAction,
+  runChoice, runDropStep, runStep, sameTourProgress, stepStalled, seenTip, seenTour, startTourRun, tipsSwitch, tourListsReady, tourProgressFor, tourTarget, tourTipsOff,
+} from './tour';
+
+describe('junção do visto', () => {
+  it('done vence skipped e nada perde para os dois', () => {
+    expect(mergeTourProgress({ tour: 'done' }, { tour: 'skipped' }).tour).toBe('done');
+    expect(mergeTourProgress({ tour: 'skipped' }, { tour: 'done' }).tour).toBe('done');
+    expect(mergeTourProgress({}, { tour: 'skipped' }).tour).toBe('skipped');
+    expect(mergeTourProgress({ tour: 'skipped' }, {}).tour).toBe('skipped');
+  });
+
+  it('as dicas somam e o interruptor mais novo vence pelo instante, não pelo texto', () => {
+    const ours = { tips: ['b'], tips_off: { on: true, at: '2026-10-30T12:00:00Z' } };
+    const merged = mergeTourProgress(ours, { tips: ['a', 'b'], tips_off: { on: false, at: '2026-10-30T11:00:00Z' } });
+    expect(merged.tips).toEqual(['a', 'b']);
+    expect(merged.tips_off).toEqual({ on: true, at: '2026-10-30T12:00:00Z' });
+    expect(mergeTourProgress(merged, { tips_off: { on: false, at: '2026-10-30T10:00:01-02:00' } }).tips_off)
+      .toEqual({ on: false, at: '2026-10-30T10:00:01-02:00' });
+  });
+
+  it('o tour do celular mora nas dicas e não mexe no tour do PC', () => {
+    expect(mobileTourOutcome({ tour: 'done', tips: [] })).toBeNull();
+    expect(mobileTourOutcome(seenTour('skipped'))).toBe('skipped');
+    expect(mobileTourOutcome(mergeTourProgress(seenTour('skipped'), seenTour('done')))).toBe('done');
+    expect(seenTour('done')).toEqual({ tips: [MOBILE_TOUR_DONE] });
+    expect(seenTour('skipped')).toEqual({ tips: [MOBILE_TOUR_SKIPPED] });
+  });
+
+  it('igualdade ignora a ordem das dicas', () => {
+    expect(sameTourProgress({ tips: ['b', 'a'] }, { tips: ['a', 'b'], tour: null })).toBe(true);
+    expect(sameTourProgress({ tips: ['a'] }, { tips: ['a', 'c'] })).toBe(false);
+  });
+
+  it('o interruptor das dicas leva a hora', () => {
+    const p = tipsSwitch(true, new Date('2026-11-28T12:00:00Z'));
+    expect(p).toEqual({ tips_off: { on: true, at: '2026-11-28T12:00:00.000Z' } });
+    expect(tourTipsOff(p)).toBe(true);
+  });
+});
+
+describe('plano do tour do celular', () => {
+  it('lista vazia começa pela nova conversa e guarda o menu da sessão como dica', () => {
+    const { steps, tips } = planMobileTour(0);
+    expect(steps.map((s) => s.id)).toEqual(['new', 'search', 'attach', 'dictation', 'model']);
+    expect(tips.map((t) => t.id)).toEqual(['tour-menu', 'media']);
+  });
+
+  it('no modo nova conversa as peças da lista viram dica e o tour segue pelas da conversa', () => {
+    const { steps, tips } = planMobileTour(3, 'newConversation');
+    expect(steps.map((s) => s.id)).toEqual(['attach', 'dictation', 'model']);
+    expect(tips.map((t) => t.id)).toEqual(['tour-menu', 'tour-search', 'media']);
+    expect(planMobileTour(0, 'newConversation').steps.map((s) => s.id)).toEqual(['attach', 'dictation', 'model']);
+  });
+
+  it('com sessões o primeiro passo some sem virar dica', () => {
+    const { steps, tips } = planMobileTour(3);
+    expect(steps.map((s) => s.id)).toEqual(['menu', 'search', 'attach', 'dictation', 'model']);
+    expect(tips.map((t) => t.id)).toEqual(['media']);
+  });
+});
+
+describe('volta do tour', () => {
+  const steps = planMobileTour(2).steps;
+
+  it('só a ação do passo na tela anda, e o fim com ação grava done', () => {
+    let run = startTourRun(steps.slice(0, 2));
+    expect(runAction(run, 'search').run.index).toBe(0);
+    let step = runAction(run, 'menu');
+    expect(step.outcome).toBeNull();
+    run = step.run;
+    expect(runStep(run)?.id).toBe('search');
+    step = runAction(run, 'search');
+    expect(step.outcome).toBe('done');
+    expect(runStep(step.run)).toBeNull();
+  });
+
+  it('pular cada passo até o fim grava skipped', () => {
+    let step = runChoice(startTourRun(steps.slice(0, 2)), 'next');
+    expect(step.outcome).toBeNull();
+    step = runChoice(step.run, 'next');
+    expect(step.outcome).toBe('skipped');
+  });
+
+  it('pular o tour depois de uma ação feita grava done; ver depois não grava nada', () => {
+    const afterAction = runAction(startTourRun(steps), 'menu').run;
+    expect(runChoice(afterAction, 'skipTour').outcome).toBe('done');
+    expect(runChoice(startTourRun(steps), 'skipTour').outcome).toBe('skipped');
+    const later = runChoice(startTourRun(steps), 'later');
+    expect(later.outcome).toBeNull();
+    expect(runStep(later.run)).toBeNull();
+  });
+});
+
+describe('dicas', () => {
+  const { tips } = planMobileTour(0);
+
+  it('oferece a primeira dica com a peça na tela e ainda não vista', () => {
+    expect(nextTip(tips, new Set(['chat-more']), {})?.id).toBe('media');
+    expect(nextTip(tips, new Set(['session-row', 'chat-more']), {})?.id).toBe('tour-menu');
+    expect(nextTip(tips, new Set(['chat-more']), seenTip('media'))).toBeNull();
+    expect(nextTip(tips, new Set(), {})).toBeNull();
+  });
+
+  it('dicas desligadas não aparecem', () => {
+    expect(nextTip(tips, new Set(['chat-more']), tipsSwitch(true))).toBeNull();
+    expect(nextTip(tips, new Set(['chat-more']), mergeTourProgress(tipsSwitch(true, new Date(1)), tipsSwitch(false, new Date(2))))?.id).toBe('media');
+  });
+});
+
+describe('passo sem peça', () => {
+  const steps = planMobileTour(2).steps;
+  const home = new Set(['list-search']);
+
+  it('na tela dele, com outra peça à vista e a dele não, sai da volta, vira dica e a volta segue', () => {
+    expect(stepStalled(steps[0], home)).toBe(true);
+    const dropped = runDropStep(startTourRun(steps), home);
+    expect(dropped.tip).toEqual({ ...steps[0], id: 'tour-menu' });
+    expect(dropped.outcome).toBeNull();
+    expect(runStep(dropped.run)?.id).toBe('search');
+    expect(dropped.run.steps).toHaveLength(steps.length - 1);
+  });
+
+  it('passo da conversa com a pessoa na lista espera, sem virar dica', () => {
+    const atAttach = startTourRun(steps.slice(2));
+    expect(runStep(atAttach)?.id).toBe('attach');
+    expect(stepStalled(runStep(atAttach)!, new Set(['list-search', 'session-row']))).toBe(false);
+    expect(runDropStep(atAttach, new Set(['list-search', 'session-row']))).toEqual({ run: atAttach, outcome: null, tip: null });
+    expect(runDropStep(atAttach, new Set())).toEqual({ run: atAttach, outcome: null, tip: null });
+    expect(runDropStep(atAttach, new Set(['composer-mic'])).tip?.id).toBe('tour-attach');
+  });
+
+  it('peça à vista nunca trava', () => {
+    expect(stepStalled(steps[0], new Set(['session-row', 'list-search']))).toBe(false);
+  });
+
+  it('o último passo que sai encerra a volta; com ação feita antes ela conta como feita', () => {
+    const last = runAction(startTourRun(steps.slice(0, 2)), 'menu').run;
+    const dropped = runDropStep(last, new Set(['session-row']));
+    expect(dropped.run.index).toBeNull();
+    expect(dropped.outcome).toBe('done');
+    expect(runDropStep(startTourRun(steps.slice(0, 1)), home).outcome).toBe('skipped');
+  });
+
+  it('sem volta em curso não faz nada', () => {
+    const ended = runChoice(startTourRun(steps), 'later').run;
+    expect(runDropStep(ended, home)).toEqual({ run: ended, outcome: null, tip: null });
+  });
+});
+
+describe('balão da vez', () => {
+  const { steps, tips } = planMobileTour(2);
+  const run = startTourRun(steps);
+
+  it('passo com a peça na tela vence a dica', () => {
+    expect(tourTarget(run, tips, new Set(['session-row', 'chat-more']), {}, false)).toEqual({ kind: 'step', step: steps[0], n: 1, total: 5 });
+  });
+
+  it('na tela do passo sem a peça dele, ele segura as dicas até travar', () => {
+    expect(tourTarget(run, tips, new Set(['list-search', 'chat-more']), {}, false)).toBeNull();
+    expect(tourTarget(run, tips, new Set(['list-search', 'chat-more']), {}, true)).toEqual({ kind: 'tip', step: tips[0] });
+  });
+
+  it('noutra tela, as dicas dela aparecem enquanto o passo espera', () => {
+    expect(tourTarget(run, tips, new Set(['chat-more']), {}, false)).toEqual({ kind: 'tip', step: tips[0] });
+  });
+
+  it('sem volta em curso, a dica da peça na tela', () => {
+    expect(tourTarget(null, tips, new Set(['chat-more']), {}, false)?.step.id).toBe('media');
+    expect(tourTarget(runChoice(run, 'later').run, tips, new Set(['chat-more']), {}, false)?.step.id).toBe('media');
+  });
+});
+
+describe('listas prontas para contar sessões', () => {
+  const bucket = (loaded: boolean, error: string | null = null, invite = false) => ({ loaded, error, server: { invite: invite || undefined } });
+
+  it('espera todas as máquinas responderem', () => {
+    expect(tourListsReady([bucket(true), bucket(false)])).toBe(false);
+    expect(tourListsReady([bucket(true), bucket(true)])).toBe(true);
+  });
+
+  it('máquina em queda e convite não seguram; nenhuma lista lida, sim', () => {
+    expect(tourListsReady([bucket(true), bucket(false, 'offline')])).toBe(true);
+    expect(tourListsReady([bucket(true), bucket(false, null, true)])).toBe(true);
+    expect(tourListsReady([bucket(false, 'offline')])).toBe(false);
+    expect(tourListsReady([])).toBe(false);
+    // Só convites: a primeira lista lida basta; nenhuma lida ainda espera.
+    expect(tourListsReady([bucket(true, null, true)])).toBe(true);
+    expect(tourListsReady([bucket(false, null, true)])).toBe(false);
+  });
+});
+
+describe('rota', () => {
+  const server = { id: 's', label: 'casa', baseUrl: 'http://casa.test', token: 't' };
+  beforeEach(() => {
+    _limparEsfriamentoParaTestes();
+    configureApi({ getBaseUrl: () => 'http://casa.test', getToken: () => 't', onUnauthorized: () => {}, origin: 'http://app.test',
+      createEventSource: () => ({ addEventListener() {}, removeEventListener() {}, close() {}, onerror: null, onopen: null, readyState: 0 }) as unknown as EventSourceLike });
+  });
+
+  it('lê e grava pelo mesmo caminho, mandando só o que acrescentar', async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ tour: null, tips: ['mobile-tip:media'] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    expect(await tourProgressFor(server as never, undefined, fetcher)).toEqual({ tour: null, tips: ['mobile-tip:media'] });
+    await tourProgressFor(server as never, seenTip('media'), fetcher);
+    expect(calls.map((c) => c.url.endsWith('/api/tour-progress'))).toEqual([true, true]);
+    expect(calls[1].init?.method).toBe('PUT');
+    expect(JSON.parse(String(calls[1].init?.body))).toEqual({ tips: ['mobile-tip:media'] });
+  });
+
+  it('servidor sem a rota devolve null', async () => {
+    const fetcher = (async () => new Response('{"detail":"Not Found"}', { status: 404 })) as unknown as typeof fetch;
+    expect(await tourProgressFor(server as never, undefined, fetcher)).toBeNull();
+  });
+});

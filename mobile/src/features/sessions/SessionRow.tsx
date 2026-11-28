@@ -19,6 +19,7 @@ import { problemLabel } from '../../chat/SessionProblem';
 import { useWorkReviewSummary } from '../workReview/summaries';
 import { WorkReviewChip } from '../workReview/WorkReviewChip';
 import * as m from '../../paraglide/messages';
+import { reportTourAction } from '../tour/anchors';
 
 // LOOP_TONE_COLOR do core é CSS var (`var(--accent)`) — não serve em RN; o tom vira `Chip tone`.
 const TOM_DO_LOOP: Record<'ok' | 'warn' | 'attention' | 'muted', Tone> = {
@@ -225,6 +226,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   // iOS: o menu de contexto (MenuView) engolia o toque simples da linha dentro da gaveta; a folha de
   // ações nativa abre pelo próprio toque longo e não disputa o toque. Android segue com o PopupMenu.
   const abrirAcoesIOS = () => {
+    reportTourAction('menu');
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     const destructive = acoesMenu.findIndex((a) => a.id === 'delete' || a.id === 'stop-following');
     ActionSheetIOS.showActionSheetWithOptions(
@@ -244,7 +246,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         shouldOpenOnLongPress
         actions={acoesMenu}
         onPressAction={({ nativeEvent }: NativeActionEvent) => acao(nativeEvent.event)}
-        onOpenMenu={vibrarAoAbrir}
+        onOpenMenu={() => { reportTourAction('menu'); vibrarAoAbrir?.(); }}
       >
         {linha}
       </MenuView>

@@ -54,6 +54,8 @@ import { useNoticeClock } from './useNoticeClock';
 import { RenameSheet } from './RenameSheet';
 import { WorktreeSheet } from '../worktrees/WorktreeSheet';
 import * as m from '../../paraglide/messages';
+import { TourAnchor, useTourAnchor } from '../tour/TourAnchor';
+import { anchorsScrolled, reportTourAction, setHomeRows } from '../tour/anchors';
 import { superficie } from '../../theme/superficie';
 
 // Erro LANÇADO pelo apiFetch — já vem com mensagem pronta. O `formataErro` é pro envelope do
@@ -76,6 +78,8 @@ interface Props {
 
 export function SessionList({ onClose, onOpenServers, onNewConversation = onClose, variant = 'drawer' }: Props) {
   const home = variant === 'home';
+  // O tour aponta as peças da lista da tela inicial; a da gaveta pode estar montada fora da vista.
+  const searchAnchor = useTourAnchor(home ? 'list-search' : null);
   const { theme } = useUnistyles();
   const router = useRouter();
   const todos = useServers((s) => s.servers);
@@ -399,6 +403,13 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   const hiddenOpen = useHiddenSectionOpen();
   const sections = useMemo(() => buildSessionSections(rows, hiddenOpen ? 'expanded' : 'collapsed', modo, busca, recolhidos, undefined, pairGroups),
     [rows, hiddenOpen, busca, modo, recolhidos, pairGroups]);
+  // O tour conta as linhas que esta lista desenha: as seções já trazem só o que aparece (grupo recolhido é a cabeça dele).
+  const drawnRows = useMemo(() => sections.reduce((n, section) => n + section.data.length, 0), [sections]);
+  useEffect(() => {
+    if (!home) return;
+    setHomeRows(drawnRows);
+    return () => setHomeRows(null);
+  }, [home, drawnRows]);
   const variosServidores = servers.length > 1;
 
   // Sessão que entra ou sai do topo desliza para o lugar novo em vez de pular. A chave ignora a
@@ -477,9 +488,10 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
 
   // Campo sempre à vista, como Claude/ChatGPT: buscar é o primeiro gesto de quem tem muitas sessões.
   const campoBusca = (
-    <View style={[styles.campo, { backgroundColor: superficie(theme, 0.6) }]}>
+    <View ref={searchAnchor.ref} onLayout={searchAnchor.onLayout} collapsable={false} style={[styles.campo, { backgroundColor: superficie(theme, 0.6) }]}>
       <Icon name="Search" size={16} color={theme.tokens.text.muted} />
       <TextInput
+        onFocus={home ? () => reportTourAction('search') : undefined}
         value={filtro}
         onChangeText={setFiltro}
         placeholder={m.lista_buscar()}
@@ -598,6 +610,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
         onLayout={home ? restoreHomeOffset : undefined}
         onContentSizeChange={home ? restoreHomeOffset : undefined}
         onScroll={home ? ({ nativeEvent: { contentOffset } }) => {
+          anchorsScrolled();
           const target = pendingHomeOffset.current;
           // A lista virtualizada pode ainda não ter altura para chegar à posição guardada.
           if (target && (Math.abs(contentOffset.x - target.x) >= 1 || Math.abs(contentOffset.y - target.y) >= 1)) return;
@@ -625,7 +638,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
           return (
           <SessionSectionCard index={index} total={section.data.length}>
             {head ? <GroupBlockHeader head={head} onToggle={alternarGrupo} /> : null}
-            {head?.collapsed ? null : <SessionRow
+            {head?.collapsed ? null : <TourAnchor id={home && section === sections[0] && index === 0 ? 'session-row' : null}><SessionRow
               session={item}
               compact={home}
               // No topo as linhas vêm de máquinas diferentes, então dizem de qual são; no bloco do grupo, a de outra máquina também.
@@ -644,7 +657,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               onAutoContinue={proprios.has(item.serverId) && !item.outside ? toggleAutoContinue : undefined}
               crossBadgeText={crossBadges.get(pickKey(item.serverId, item.name))?.text}
               crossBadgeMachines={crossBadges.get(pickKey(item.serverId, item.name))?.machines}
-            />}
+            /></TourAnchor>}
           </SessionSectionCard>
           );
         }}

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Linking, Text } from 'react-native';
+import { Linking, Switch, Text } from 'react-native';
+import { useRouter } from 'expo-router';
 import { StyleSheet } from 'react-native-unistyles';
 import Constants from 'expo-constants';
-import { getConfig } from '@hangar/core';
+import { getConfig, tourTipsOff } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader } from '../../src/features/config/PageHeader';
 import { SectionCard } from '../../src/features/config/SectionCard';
@@ -11,7 +12,7 @@ import { LastErrorSection } from '../../src/features/config/LastErrorSection';
 import { toast } from '../../src/ui/Toast';
 import { useServers } from '../../src/stores/servers';
 import * as m from '../../src/paraglide/messages';
-
+import { replayTour, setTipsOff, useTour } from '../../src/features/tour/store';
 const REPO = 'https://github.com/jeffer1312/hangar';
 const PRIVACY_URL = 'https://hangar.dev.br/privacy';
 // O backend expõe a versão dele em `somente_leitura`, mas o nome da chave já mudou de mão:
@@ -19,6 +20,8 @@ const PRIVACY_URL = 'https://hangar.dev.br/privacy';
 const CHAVES_VERSAO = ['versao', 'version', 'commit'] as const;
 
 export default function Sobre() {
+  const router = useRouter();
+  const tipsOn = useTour((s) => !tourTipsOff(s.progress));
   const ativo = useServers((s) => s.servers.find((x) => x.id === s.activeId) ?? null);
   const [servidor, setServidor] = useState<string | null>(null);
   const [falhou, setFalhou] = useState(false);
@@ -62,6 +65,12 @@ export default function Sobre() {
           <SettingsRow title={m.mobile_privacy_policy()} onPress={() => abrirLink(PRIVACY_URL)} />
         </SectionCard>
       ) : null}
+      <SectionCard icon="Sparkles" title={m.native_tour_replay()}>
+        <SettingsRow title={m.native_tour_replay_start()} description={m.native_tour_replay_desc()}
+          onPress={() => { replayTour(); router.navigate('/' as never); }} />
+        <SettingsRow title={m.native_tour_tips_show()} description={m.mobile_tour_tips_desc()}
+          right={<Switch accessibilityLabel={m.native_tour_tips_show()} value={tipsOn} onValueChange={(on) => setTipsOff(!on)} />} />
+      </SectionCard>
       <LastErrorSection />
       <SectionCard icon="Server" title={m.native_settings_about_server_group()}>
         <SettingsRow

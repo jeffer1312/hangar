@@ -11,6 +11,8 @@ import { RecordingWave } from '../ui/RecordingWave';
 import { Icon } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 import { haptic } from '../ui/haptics';
+import { useTourAnchor } from '../features/tour/TourAnchor';
+import { reportTourAction } from '../features/tour/anchors';
 import { deliveryModeLabel, deliveryOptions, type DeliveryControls, type DeliveryMode } from './queueDelivery';
 
 const ComposerSpace = createContext<number | null>(null);
@@ -102,25 +104,31 @@ export function modeMenuHandlers(menu: ModeMenu | undefined) {
   return { pick, openIOS, actions, a11yActions, current: options.find((o) => o.checked)!.mode };
 }
 
-export function ComposerActions({ attach, mic, send, settings, beforeMic, afterMic, afterSettings, modeMenu }: {
+export function ComposerActions({ attach, mic, send, settings, beforeMic, afterMic, afterSettings, modeMenu, tour = false }: {
   attach: Action;
   mic: Action & { recording: boolean; styleLabel: string; onStyle: () => void };
   send: Action & { label: string; hint?: string; editing?: boolean; count?: number; visible?: boolean };
   settings: ReactNode; beforeMic?: ReactNode; afterMic?: ReactNode; afterSettings?: ReactNode; modeMenu?: ModeMenu;
+  /** Só o compositor da conversa: as miniaturas das novidades usam as mesmas peças sem registrar no tour. */
+  tour?: boolean;
 }) {
   const { theme } = useUnistyles();
+  const attachAnchor = useTourAnchor(tour ? 'composer-attach' : null);
+  const micAnchor = useTourAnchor(tour ? 'composer-mic' : null);
   const count = send.count ?? 0;
   const menu = useMemo(() => modeMenuHandlers(modeMenu), [modeMenu]);
   const ios = Platform.OS === 'ios';
   return <View style={styles.row}>
-    <Pressable onPress={attach.onPress} disabled={attach.disabled} hitSlop={5}
+    <Pressable ref={attachAnchor.ref} onLayout={attachAnchor.onLayout} collapsable={false}
+      onPress={tour ? () => { reportTourAction('attach'); attach.onPress(); } : attach.onPress} disabled={attach.disabled} hitSlop={5}
       accessibilityState={{ disabled: attach.disabled, busy: attach.busy }}
       style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed, attach.disabled && styles.disabled]}
       accessibilityLabel={m.composer_adicionar_ao_chat()} accessibilityRole="button">
       {attach.busy ? <ActivityIndicator size="small" color={theme.tokens.text.secondary} /> : <Icon name="Plus" size={22} color={theme.tokens.text.secondary} />}
     </Pressable>
     {beforeMic}
-    <Pressable onPress={mic.onPress} disabled={mic.disabled} hitSlop={5}
+    <Pressable ref={micAnchor.ref} onLayout={micAnchor.onLayout} collapsable={false}
+      onPress={tour ? () => { reportTourAction('dictation'); mic.onPress(); } : mic.onPress} disabled={mic.disabled} hitSlop={5}
       accessibilityState={{ disabled: mic.disabled, busy: mic.busy }}
       style={({ pressed }) => [styles.iconBtn, mic.recording && styles.recordingBtn, pressed && styles.pressed, mic.disabled && styles.disabled]}
       accessibilityLabel={mic.recording ? m.composer_parar_gravacao() : m.composer_gravar_audio()} accessibilityRole="button"

@@ -1699,10 +1699,11 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   // fecham a linha. Com o Orientar, o chip encolhe o nome do modelo mas nada sai, como no PWA.
   const actions = (
     <ComposerActions
+      tour
       attach={{ onPress: () => setAttachMenuOpen(true), disabled: attachBlocked, busy: uploading }}
       mic={{ onPress: () => void handleMicPress(), disabled: micBlocked, busy: busyVoice, recording: gravando,
         styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
-      settings={<SessionSettingsButton serverId={serverId} name={name} provider={provider} headless={headless} openRequest={selectorRequest} />}
+      settings={<SessionSettingsButton tourAnchor="composer-model" serverId={serverId} name={name} provider={provider} headless={headless} openRequest={selectorRequest} />}
       afterSettings={<>
         {/* Parar: só o quadrado vermelho, sem círculo em volta, como no PC. */}
         {showStop ? (

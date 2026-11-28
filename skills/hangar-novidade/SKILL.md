@@ -127,7 +127,9 @@ aponta a peça uma vez, também para quem já viu o tour. Sem peça própria (s�
 O teste `every_anchor_has_a_tour_step_or_a_tip` falha se uma âncora ficar sem passo nem dica. Não
 abra o app ligado ao servidor do dono só para ver a dica: o visto vai ao servidor
 (`/api/tour-progress`, que nunca desfaz) e a dica some para ele antes do lançamento.
-Expo: sem tour por enquanto; quando existir, a dica entra nele pelo mesmo id.
+Expo (`onde` = `celular` ou `todos`): a peça usa `useTourAnchor(<id>)` (`mobile/src/features/tour/TourAnchor.tsx`), a
+dica entra em `MOBILE_TIPS` (`packages/core/src/tour.ts`) e o texto em `tourText` (`TourBalloon.tsx`), com
+chaves `mobile_tour_*` em `messages/pt.json` e `en.json`.
 
 ## 6. Conferir com o autor (obrigatório em `novo`)
 

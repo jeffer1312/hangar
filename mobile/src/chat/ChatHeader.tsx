@@ -3,6 +3,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useLocalSearchParams } from 'expo-router';
 import { cwdParts, rotuloEstado, type State, type ThemeTokens } from '@hangar/core';
 import * as m from '../paraglide/messages';
+import { TourAnchor } from '../features/tour/TourAnchor';
 import { Icon } from '../ui/Icon';
 import { EdgeButton } from '../ui/EdgeButton';
 import { SessionAvatar } from '../features/sessions/SessionAvatar';
@@ -115,15 +116,17 @@ export function ChatHeader({
             <Icon name="PanelRight" size={18} color={theme.tokens.text.secondary} />
           </Pressable>
         ) : null}
-        <Pressable
-          onPress={onMore}
-          hitSlop={8}
-          style={styles.more}
-          accessibilityRole="button"
-          accessibilityLabel={m.navbar_mais_acoes()}
-        >
-          <Icon name="Ellipsis" size={18} color={theme.tokens.text.secondary} />
-        </Pressable>
+        <TourAnchor id="chat-more">
+          <Pressable
+            onPress={onMore}
+            hitSlop={8}
+            style={styles.more}
+            accessibilityRole="button"
+            accessibilityLabel={m.navbar_mais_acoes()}
+          >
+            <Icon name="Ellipsis" size={18} color={theme.tokens.text.secondary} />
+          </Pressable>
+        </TourAnchor>
       </View>
       {chipLoop ? <View style={[styles.chips, header === 'tablet' && styles.chipsTablet, header === 'phone' && onHome && styles.chipsHome]}>{chipLoop}</View> : null}
     </View>
