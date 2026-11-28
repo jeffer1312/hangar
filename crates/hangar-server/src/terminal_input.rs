@@ -1,4 +1,6 @@
 //! Escritor Claude terminal; a fila e a política pertencem ao executor do runtime.
+use hangar_other_terminal_policy::compact;
+pub use hangar_other_terminal_policy::unstyle;
 use regex::Regex;
 use crate::interactions::{ExpectedInteraction, InteractionError, InteractionKind, InteractionStore};
 use serde_json::{Value, json};
@@ -399,7 +401,6 @@ static AGENT_ROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:❯\s+)
 static ARG_HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:\[[^\[\]#]*\]|<[^<>#]*>)$").unwrap());
 static NEXT_BUFFER: AtomicU64 = AtomicU64::new(0);
 const CLEANUP_CEILING: usize = 200;
-fn compact(text: &str) -> String { text.chars().filter(|c| !c.is_whitespace() && !"│┃║".contains(*c)).collect() }
 /// O Claude marca `› stashed` na linha de dicas acima do composer enquanto guarda um rascunho.
 fn stash_held(screen: &str) -> bool {
     let lines: Vec<_> = screen.split('\n').collect();
@@ -475,38 +476,6 @@ impl ComposerSnapshot {
         }
         !self.placeholders.is_empty() && self.placeholders.is_disjoint(&before.placeholders) && residual.trim().is_empty()
     }
-}
-/// Tira as sequências SGR da captura `-e`. Sem `keep_dim`, some também o texto esmaecido: é a
-/// sugestão que o Claude desenha no composer vazio, e ninguém a digitou.
-pub fn unstyle(styled: &str, keep_dim: bool) -> String {
-    let mut out = String::with_capacity(styled.len());
-    let mut dim = false;
-    let mut chars = styled.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            if keep_dim || !dim || c == '\n' { out.push(c); }
-            continue;
-        }
-        if chars.next_if_eq(&'[').is_none() { continue; }
-        let mut params = String::new();
-        let mut last = None;
-        for n in chars.by_ref() {
-            if ('@'..='~').contains(&n) { last = Some(n); break; }
-            params.push(n);
-        }
-        if last != Some('m') { continue; }
-        let mut codes = params.split([';', ':']).map(|p| p.parse::<u32>().unwrap_or(0));
-        while let Some(code) = codes.next() {
-            match code {
-                0 | 22 => dim = false,
-                2 => dim = true,
-                // O `2` de `38;2;r;g;b` é truecolor, não esmaecido.
-                38 | 48 | 58 => match codes.next() { Some(5) => { codes.next(); } Some(2) => { codes.nth(2); } _ => {} },
-                _ => {}
-            }
-        }
-    }
-    out
 }
 fn valid_text(text: &str) -> bool { !text.chars().any(|c| c.is_control() && c != '\n' && c != '\t') }
 fn cursor(screen: &str) -> Option<usize> { CURSOR.captures_iter(screen).last()?.get(1)?.as_str().parse().ok() }

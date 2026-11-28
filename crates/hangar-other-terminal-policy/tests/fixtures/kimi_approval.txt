@@ -1,0 +1,6 @@
+  ▶ Run this command?
+
+  ▶ 1. Approve once
+    2. Reject
+
+  ↑/↓ select · 1/2 choose · ↵ confirm

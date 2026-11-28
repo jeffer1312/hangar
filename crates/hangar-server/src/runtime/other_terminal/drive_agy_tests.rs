@@ -121,14 +121,6 @@ async fn the_bypass_reopen_check_refuses_a_draft_and_presses_nothing() {
     }
 }
 
-/// A tarefa em segundo plano (`1 task(s)`) aparece entre linhas abaixo da caixa: lida como rascunho, a fila parava.
-#[test]
-fn a_background_task_panel_below_the_box_is_not_a_draft() {
-    assert_eq!(super::drive::agy_draft(&screen("background_task.txt")).as_deref(), Some(""));
-    assert_eq!(super::drive::agy_draft(&screen("background_task_draft.txt")).as_deref(), Some("arrumar o teste do login"));
-    assert_eq!(super::drive::agy_draft(&screen("draft.txt")).as_deref(), Some("arrumar o teste do login"));
-}
-
 /// Os Termos do Google: o Hangar só aperta as teclas da opção que a pessoa tocou, relendo a tela a cada uma.
 #[tokio::test(start_paused = true)]
 async fn the_terms_card_unchecks_the_data_box_and_presses_done_only_for_the_chosen_option() {
@@ -170,36 +162,8 @@ async fn run_kimi(io: &Screens, kind: &str, payload: Value) -> RuntimeReply {
     assert!(result.is_ok(), "o controle do Kimi precisa atender {kind}: {:?}", result.as_ref().err());
     result.unwrap().reply }
 }
-/// O painel de aprovação do Kimi e a fila da TUI com uma mensagem numerada da pessoa esperando o fim do turno.
-const KIMI_APPROVAL: &str = "  ▶ Run this command?\n\n  ▶ 1. Approve once\n    2. Reject\n\n  ↑/↓ select · 1/2 choose · ↵ confirm\n";
-const KIMI_QUEUED: &str = "  ⠋ Working for 6s\n   ❯ 1. corrige o parser\n   2. roda os testes\n   ↑ to edit · ctrl-s to steer immediately\n ╭──╮\n │ > │\n ╰──╯\n";
-
-#[test]
-fn kimi_numbered_message_of_the_person_is_not_a_question() {
-    let analysis = super::drive::screen(hangar_transcript::Provider::Kimi, KIMI_QUEUED);
-    assert!(matches!(analysis.state.as_str(), "working" | "idle"), "estado que o fim de turno do arquivo da conversa corrige: {}", analysis.state);
-    assert_eq!((analysis.question, analysis.options, analysis.overlay), (None, None, false));
-    let stopped = KIMI_QUEUED.replace("  ⠋ Working for 6s\n", "");
-    assert_eq!(super::drive::screen(hangar_transcript::Provider::Kimi, &stopped).state, "idle", "sem spinner, a sessão parada");
-    assert_eq!(super::drive::screen(hangar_transcript::Provider::Claude, KIMI_QUEUED).state, "awaiting_input", "no Claude Code é menu");
-}
-
-#[test]
-fn kimi_open_panel_occupies_the_box_without_becoming_a_question() {
-    let analysis = super::drive::screen(hangar_transcript::Provider::Kimi, KIMI_APPROVAL);
-    assert!(analysis.overlay);
-    assert_ne!(analysis.state, "awaiting_input", "a aprovação é publicada pelo arquivo da conversa");
-}
-
-#[test]
-fn kimi_panel_footer_quoted_in_the_conversation_does_not_occupy_the_box() {
-    let history = format!("  ↑/↓ select · 1/2 choose · ↵ confirm\n  type answer\n{}", "  linha da conversa\n".repeat(10));
-    assert!(!super::drive::screen(hangar_transcript::Provider::Kimi, &(history + KIMI_IDLE)).overlay);
-    let just_above = format!("  ↑/↓ select · 1/2 choose · ↵ confirm\n{KIMI_IDLE}");
-    assert!(!super::drive::screen(hangar_transcript::Provider::Kimi, &just_above).overlay, "citado logo acima da caixa");
-}
-
-const KIMI_IDLE: &str = "╭────────────────────────────────────╮\n│ >                                  │\n╰────────────────────────────────────╯\n Never Ask  K3.1 Pro thinking: high  /help: show commands\n context: 6% (60k/1M)";
+const KIMI_APPROVAL: &str = include_str!("../../../../hangar-other-terminal-policy/tests/fixtures/kimi_approval.txt");
+const KIMI_IDLE: &str = include_str!("../../../../hangar-other-terminal-policy/tests/fixtures/kimi_idle.txt");
 const KIMI_MENU: &str = " ────────────────────────────────────\nSelect permission mode\n   Always Ask\n   Auto-read only; everything else needs your approval first.\n ❯ Ask When Needed ← current\n   Routine edits and commands run automatically.\n   Never Ask\n   Everything runs and is decided automatically.\n ↑/↓ navigate · ↵ choose · esc cancel\n ────────────────────────────────────";
 
 #[tokio::test(start_paused = true)]

@@ -10,7 +10,10 @@ use crate::runtime::protocol::{Disposition as RuntimeDisposition, RuntimeError, 
 use crate::terminal_input::{
     Cleanup, ComposerSnapshot, DeliveryResult, DeliveryStage, Disposition, Proof,
 };
-use regex::Regex;
+use hangar_other_terminal_policy::{
+    CapturedPane, KimiPermissionMenu, allowed_key, codex_menu_open, compact, kimi_permission_menu,
+    menu_cursor, multiple_choice, own_residue, pi_cursor, same_question, screen,
+};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeSet, HashSet},
@@ -23,34 +26,10 @@ const SETTLE: Duration = Duration::from_millis(300);
 const OPEN_SETTLE: Duration = Duration::from_millis(700);
 const INPUT_SETTLE: Duration = Duration::from_millis(200);
 const PROOF_INTERVAL: Duration = Duration::from_millis(50);
-static QUESTION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*\?\s+(\S.*?)\s*$").unwrap());
-static PLACEHOLDER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[(?:Pasted\s*text|paste)\s*#(\d+)|\[Image\s*#(\d+)\]").unwrap());
-/// Colagem longa que o Codex recolhe na caixa: o texto não aparece, só o marcador com o tamanho.
-static CODEX_PASTE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[Pasted Content (\d+) chars\]").unwrap());
-static PI_CURSOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*>\s*(\d+)\.").unwrap());
-static AGENT_ROW: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*(?:❯\s+)?[●◯]\s+(\S+)").unwrap());
-static PI_NOTICE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"Subagentasyncgroupedresultintercomdeliverywasnotacknowledgedfor.*?/tmp/pi-subagents-[^']*'?\.?").unwrap()
-});
-/// A caixa vazia do `agy` mostra a dica do modo (`Auto mode: … (shift+tab to cycle)`), não um rascunho.
-/// Até onde a caixa do `agy` pode estar do fim da tela: abaixo dela ficam o rodapé e o painel de tarefas de fundo.
-const AGY_BOX_FROM_END: usize = 24;
-static AGY_MODE_HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Z][\w-]* mode: .*\(shift\+tab to cycle\)\z").unwrap());
-static MULTIPLE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*[❯>]?\s*\d+\.\s*\[.?\]\s").unwrap());
-static CURSOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*[>❯›]\s*(\d+)\.").unwrap());
 static READY_WARNED: LazyLock<Mutex<HashSet<(String, u64, String)>>> =
     LazyLock::new(Default::default);
-/// Marcas de TUI pronta do `_wait_input_ready` do Python, procuradas só no rodapé.
-const CODEX_READY: [&str; 5] = ["⏵⏵", "⏸", "bypass permissions", "? for shortcuts", "for shortcuts"];
-const CODEX_READY_LINES: usize = 12;
+
 const CODEX_READY_WAIT: Duration = Duration::from_secs(12);
-const CODEX_PLACEHOLDER: &str = "Ask Codex to do anything";
-const CODEX_MENU_FOOTERS: [&str; 5] = ["enter select", "enter to confirm", "enter to continue", "enter confirm", "enter continue"];
 
 pub struct OtherControlOutcome {
     pub reply: RuntimeReply,
@@ -86,11 +65,6 @@ fn binding(target: &OtherTarget) -> InteractionBinding {
 fn valid_text(text: &str, newlines: bool) -> bool {
     text.chars()
         .all(|c| u32::from(c) >= 32 || c == '\t' || newlines && c == '\n')
-}
-fn compact(text: &str) -> String {
-    text.chars()
-        .filter(|c| !c.is_whitespace() && !"│┃║".contains(*c))
-        .collect()
 }
 fn result(
     disposition: Disposition,
@@ -146,32 +120,6 @@ async fn write_io(
 ) -> Result<(), RuntimeError> {
     io.write(target, value, literal, guard).await
 }
-/// A leitura da tela pelo agente: o `agy` tem rodapé e menu próprios; os outros usam o leitor comum.
-pub(crate) fn screen(provider: hangar_transcript::Provider, pane: &str) -> crate::terminal_state::PaneAnalysis {
-    match provider {
-        hangar_transcript::Provider::Antigravity => crate::terminal_state::agy_analyze(pane),
-        // O Kimi desenha a mensagem da pessoa como `❯ texto`, no histórico e na fila da TUI: com número, `❯ 1. …` pareceria
-        // o cursor de um menu. Pergunta e aprovação dele vêm do arquivo da conversa; da tela só valem os painéis abertos.
-        hangar_transcript::Provider::Kimi => {
-            let mut analysis = crate::terminal_state::analyze(pane);
-            if analysis.state == "awaiting_input" {
-                analysis.question = None;
-                analysis.options = None;
-                analysis.label = analysis.spinner.as_deref().map(|spinner| spinner.chars().skip(2).collect::<String>().trim().to_owned());
-                analysis.state = if analysis.spinner.is_some() { "working" } else { "idle" }.into();
-            }
-            // O painel de aprovação ou de escolha (rodapé `↵ confirm`, `↵ choose`…) ocupa a caixa: nada se digita sobre ele.
-            // Só o fim da tela, abaixo da caixa: o painel aberto ocupa o lugar dela, e o rodapé citado na conversa
-            // fica acima.
-            let lines: Vec<&str> = pane.trim_end().lines().collect();
-            let after_box = lines.iter().rposition(|line| line.trim_start().starts_with('╰')).map_or(0, |at| at + 1);
-            let bottom = lines[after_box.max(lines.len().saturating_sub(8))..].join("\n");
-            analysis.overlay |= kimi_approval_open(&bottom) || kimi_picker_open(&bottom);
-            analysis
-        }
-        _ => crate::terminal_state::analyze(pane),
-    }
-}
 pub(super) fn blocked(target: &OtherTarget, frame: &OtherFrame) -> bool {
     let analysis = screen(target.provider, &frame.text);
     analysis.overlay || analysis.state == "awaiting_input"
@@ -180,148 +128,25 @@ fn codex(target: &OtherTarget) -> bool {
     target.provider == hangar_transcript::Provider::Codex
 }
 pub(super) fn ready(target: &OtherTarget, frame: &OtherFrame) -> bool {
-    if codex(target) {
-        // No pane inteiro a marca casaria com o texto da conversa.
-        return frame
-            .text
-            .trim_end_matches('\n')
-            .split('\n')
-            .rev()
-            .take(CODEX_READY_LINES)
-            .any(|line| CODEX_READY.iter().any(|mark| line.contains(mark)));
-    }
-    frame
-        .text
-        .trim_end_matches('\n')
-        .lines()
-        .rev()
-        .take(20)
-        .any(|line| line.chars().any(|c| "─━═╰│".contains(c)))
+    hangar_other_terminal_policy::ready(target.provider, &frame.text)
 }
+
 fn composer(target: &OtherTarget, frame: &OtherFrame) -> Option<ComposerSnapshot> {
     composer_for(target.provider, frame)
 }
-/// O rascunho na caixa do `agy` (vazio = caixa vazia ou só a dica do modo); `None` sem caixa legível.
-pub(crate) fn agy_draft(screen: &str) -> Option<String> {
-    let frame = OtherFrame { text: screen.to_owned(), typed: None, styled: None, editor: None };
-    composer_for(hangar_transcript::Provider::Antigravity, &frame).map(|composer| composer.content)
-}
+
 fn composer_for(provider: hangar_transcript::Provider, frame: &OtherFrame) -> Option<ComposerSnapshot> {
-    if provider == hangar_transcript::Provider::Codex {
-        return codex_composer(frame);
-    }
-    if matches!(
-        provider,
-        hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp
-    ) && let Some(editor) = &frame.editor
-    {
-        return Some(ComposerSnapshot {
-            content: editor.clone(),
-            placeholders: BTreeSet::new(),
-            stashed: false,
-        });
-    }
-    let styled;
-    let text = if let Some(typed) = &frame.typed {
-        typed.as_str()
-    } else if let Some(value) = &frame.styled {
-        styled = crate::terminal_input::unstyle(value, false);
-        &styled
-    } else {
-        &frame.text
+    let pane = CapturedPane {
+        text: &frame.text,
+        typed: frame.typed.as_deref(),
+        styled: frame.styled.as_deref(),
+        editor: frame.editor.as_deref(),
     };
-    let mut lines: Vec<_> = text.lines().collect();
-    while lines.last().is_some_and(|line| line.trim().is_empty()) {
-        lines.pop();
-    }
-    let panel = lines
-        .iter()
-        .rev()
-        .take_while(|line| AGENT_ROW.is_match(line))
-        .count();
-    let rows = &lines[lines.len() - panel..];
-    if rows.iter().any(|line| line.contains('◯'))
-        && rows
-            .iter()
-            .any(|line| AGENT_ROW.captures(line).is_some_and(|c| &c[1] == "main"))
-    {
-        lines.truncate(lines.len() - panel);
-        while lines.last().is_some_and(|line| line.trim().is_empty()) {
-            lines.pop();
-        }
-    }
-    let rules: Vec<_> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.matches('─').count() >= 20)
-        .map(|(n, _)| n)
-        .collect();
-    let last = *rules.last()?;
-    let (top, bottom) = if provider == hangar_transcript::Provider::Antigravity {
-        // O `agy` desenha o painel de tarefas em segundo plano entre linhas, abaixo da caixa: a caixa é a que abre com `>`.
-        rules
-            .windows(2)
-            .rev()
-            .map(|pair| (pair[0], pair[1]))
-            // A caixa é o último par ou o de cima do painel de tarefas: um pedido antigo repetido mais acima não conta.
-            .take(2)
-            .take_while(|(_, bottom)| lines.len() - bottom <= AGY_BOX_FROM_END)
-            .find(|(top, bottom)| *bottom > top + 1
-                && lines[top + 1].trim().trim_start_matches(['│', '┃', '║']).trim_start().starts_with(['>', '❯']))?
-    } else {
-        (*rules.get(rules.len().checked_sub(2)?)?, last)
-    };
-    if lines.len() - last > 8 || bottom - top > 15 {
-        return None;
-    }
-    let mut content = lines[top + 1..bottom]
-        .iter()
-        .map(|line| {
-            let line = line
-                .trim()
-                .trim_start_matches(['│', '┃', '║'])
-                .trim_end_matches(['│', '┃', '║'])
-                .trim();
-            line.strip_prefix('>')
-                .or_else(|| line.strip_prefix('❯'))
-                .unwrap_or(line)
-                .trim()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if matches!(
-        provider,
-        hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp
-    ) {
-        content = PI_NOTICE.replace_all(&compact(&content), "").into_owned();
-    }
-    if provider == hangar_transcript::Provider::Antigravity && AGY_MODE_HINT.is_match(content.trim()) {
-        content.clear();
-    }
-    let placeholders = PLACEHOLDER
-        .captures_iter(&content)
-        .map(|captures| match captures.get(1) {
-            Some(paste) => paste.as_str().to_owned(),
-            None => format!("img{}", &captures[2]),
-        })
-        .collect();
-    Some(ComposerSnapshot {
-        content,
-        placeholders,
+    hangar_other_terminal_policy::composer(provider, pane).map(|composer| ComposerSnapshot {
+        content: composer.content,
+        placeholders: composer.placeholders,
         stashed: false,
     })
-}
-/// Menu ou diálogo do Codex na tela: o seletor que a lista reconhece (`codex_menu_of`) ou opções
-/// numeradas com o cursor e o rodapé de escolha. O de modelo e esforço ("enter select") fica só aqui:
-/// em `CODEX_FOOTERS` ele viraria pergunta para o app.
-fn codex_menu_open(frame: &OtherFrame) -> bool {
-    if crate::terminal_state::codex_menu_of(&frame.text).is_some() {
-        return true;
-    }
-    // A captura traz o resto do pane em branco: o rodapé é das últimas linhas com texto.
-    let footer = frame.text.trim_end().lines().rev().take(8)
-        .any(|line| { let line = line.to_lowercase(); CODEX_MENU_FOOTERS.iter().any(|mark| line.contains(mark)) });
-    footer && CURSOR.is_match(&frame.text)
 }
 /// Codex cru só recebe com a caixa vazia: com menu ou diálogo aberto, popup de barra ou texto de alguém
 /// nada é digitado (as teclas cairiam dentro deles).
@@ -329,55 +154,11 @@ fn codex_busy(target: &OtherTarget, frame: &OtherFrame) -> Option<DeliveryResult
     if !codex(target) {
         return None;
     }
-    if codex_menu_open(frame) {
+    if codex_menu_open(&frame.text) {
         return Some(result(Disposition::Deferred, DeliveryStage::Ready, Cleanup::NotNeeded, "codex_menu_open"));
     }
     composer(target, frame).filter(|current| !current.is_empty())
         .map(|_| result(Disposition::Deferred, DeliveryStage::Composer, Cleanup::NotNeeded, "composer_busy"))
-}
-/// A caixa de digitar do Codex: a última linha `›` e as que continuam o texto. Parágrafo deixa linha em
-/// branco dentro da caixa, então ela vai até a última linha em branco: o bloco depois dessa é a barra de
-/// estado. A sugestão vem esmaecida e sai do `typed`; a captura sem estilo traz a sugestão padrão por extenso.
-fn codex_composer(frame: &OtherFrame) -> Option<ComposerSnapshot> {
-    let text = frame.typed.as_deref().unwrap_or(&frame.text);
-    let lines: Vec<&str> = text.lines().collect();
-    let at = lines.iter().rposition(|line| line.trim_start().starts_with('›'))?;
-    let below = &lines[at + 1..];
-    let below = &below[..below.iter().rposition(|line| !line.trim().is_empty()).map_or(0, |last| last + 1)];
-    let below = &below[..below.iter().rposition(|line| line.trim().is_empty()).unwrap_or(below.len())];
-    let mut content = vec![lines[at].trim_start().trim_start_matches('›').trim()];
-    content.extend(below.iter().map(|line| line.trim()));
-    let mut content = content.join("\n").trim_end().to_owned();
-    if content == CODEX_PLACEHOLDER {
-        content.clear();
-    }
-    let placeholders = CODEX_PASTE.captures_iter(&content).map(|found| format!("pasted{}", &found[1])).collect();
-    Some(ComposerSnapshot {
-        content,
-        placeholders,
-        stashed: false,
-    })
-}
-fn own_residue(current: &ComposerSnapshot, text: &str, before: &ComposerSnapshot) -> bool {
-    let visible = compact(&current.content);
-    let wanted = compact(text);
-    if !visible.is_empty()
-        && (visible == wanted || visible.chars().count() >= 12 && wanted.starts_with(&visible))
-    {
-        return true;
-    }
-    let mut rest = current.content.clone();
-    for marker in PLACEHOLDER.find_iter(&current.content) {
-        if let Some(end) = current.content[marker.start()..].find(']') {
-            rest = rest.replace(
-                &current.content[marker.start()..marker.start() + end + 1],
-                "",
-            );
-        }
-    }
-    !current.placeholders.is_empty()
-        && current.placeholders.is_disjoint(&before.placeholders)
-        && compact(&rest).is_empty()
 }
 async fn cleanup_own(
     target: &OtherTarget,
@@ -410,7 +191,7 @@ async fn cleanup_own(
                 Cleanup::Unproved
             };
         }
-        if !own_residue(&current, text, before) {
+        if !own_residue(&current.content, &current.placeholders, text, &before.placeholders) {
             return Cleanup::Unproved;
         }
         if life(target, io).await.is_err() {
@@ -774,7 +555,7 @@ async fn prompt_inner(
             // qualquer outra tela (seletor do `/model`, lista do `/resume`, ainda carregando) ele escolheria
             // a linha sob o cursor.
             if codex(target) && slash && submit == 0 {
-                let still_typed = !codex_menu_open(&current)
+                let still_typed = !codex_menu_open(&current.text)
                     && composer(target, &current).is_some_and(|box_now| compact(&box_now.content) == compact(text));
                 if still_typed {
                     break;
@@ -1198,56 +979,6 @@ fn answers(payload: &Value, questions: &[Value], kimi: bool) -> Result<Vec<Answe
         })
         .collect()
 }
-fn same_question(frame: &OtherFrame, question: &str) -> bool {
-    if question.is_empty() {
-        return true;
-    }
-    let Some(capture) = QUESTION.captures(&frame.text) else {
-        return false;
-    };
-    let visible = capture[1].split_whitespace().collect::<Vec<_>>().join(" ");
-    let expected = question.split_whitespace().collect::<Vec<_>>().join(" ");
-    let head_visible: String = visible.chars().take(40).collect();
-    let head_expected: String = expected.chars().take(40).collect();
-    !visible.is_empty()
-        && !expected.is_empty()
-        && (visible.starts_with(&head_expected) || expected.starts_with(&head_visible))
-}
-fn pi_cursor(target: &OtherTarget, frame: &OtherFrame) -> Option<usize> {
-    if target.provider != hangar_transcript::Provider::Omp {
-        return PI_CURSOR
-            .captures_iter(&frame.text)
-            .last()
-            .and_then(|c| c[1].parse().ok());
-    }
-    let lines: Vec<_> = frame.text.lines().collect();
-    let top = lines
-        .iter()
-        .rposition(|line| line.contains('╭') && line.contains('─'))
-        .or_else(|| {
-            lines
-                .iter()
-                .rposition(|line| line.contains('┌') && line.contains('─'))
-        })?;
-    let mut position = 0;
-    for line in &lines[top + 1..] {
-        if line.trim_start().starts_with(['╰', '└']) && line.contains('─') {
-            break;
-        }
-        let Some(line) = line.trim().strip_prefix('│') else {
-            continue;
-        };
-        let line = line.trim();
-        let selected = line.strip_prefix('\u{f054}').map(str::trim_start);
-        if selected.unwrap_or(line).starts_with('\u{f10c}') {
-            position += 1;
-            if selected.is_some() {
-                return Some(position);
-            }
-        }
-    }
-    None
-}
 async fn fallback(
     control: &mut Control<'_>,
     answer: &Answer,
@@ -1309,7 +1040,7 @@ async fn kimi_answer(
                 frame = control.frame(false, false).await?;
             }
             for attempt in 0..6 {
-                if same_question(&frame, &answer.question) {
+                if same_question(&frame.text, &answer.question) {
                     break;
                 }
                 if attempt == 5 {
@@ -1321,7 +1052,7 @@ async fn kimi_answer(
             for step in &answer.steps {
                 let (value, literal) = (&step.value, step.literal);
                 frame = control.frame(false, false).await?;
-                if !kimi_picker_open(&frame.text) || !same_question(&frame, &answer.question) {
+                if !kimi_picker_open(&frame.text) || !same_question(&frame.text, &answer.question) {
                     return Err(failure("other_terminal_wrong_question"));
                 }
                 let numeric = literal && !step.text;
@@ -1440,12 +1171,12 @@ async fn pi_answer(
         .map_err(|_| failure("invalid_answers"))?;
     let mut frame = control.frame(true, false).await?;
     if !crate::terminal_state::analyze(&frame.text).overlay
-        || pi_cursor(control.target, &frame).is_none()
+        || pi_cursor(control.target.provider, &frame.text).is_none()
     {
         return Err(failure("other_terminal_picker_unavailable"));
     }
     for attempt in 0..4 {
-        let row = pi_cursor(control.target, &frame)
+        let row = pi_cursor(control.target.provider, &frame.text)
             .ok_or_else(|| failure("other_terminal_cursor_unavailable"))?;
         if row == target {
             break;
@@ -1478,7 +1209,7 @@ async fn pi_answer(
         return Ok(control.unknown("erro_sem_confirmacao_resposta"));
     }
     if crate::terminal_state::analyze(&after.text).overlay
-        && pi_cursor(control.target, &after).is_some()
+        && pi_cursor(control.target.provider, &after.text).is_some()
     {
         control.submitted = false;
         return fallback(control, answer).await;
@@ -1523,22 +1254,6 @@ async fn pi_select(
     .await
 }
 
-fn allowed_key(value: &str, interactive: bool) -> Option<&str> {
-    match value {
-        "Up" | "Down" | "Left" | "Right" | "Enter" | "Escape" | "Tab" | "BTab" | "Space" => {
-            Some(value)
-        }
-        "PageUp" | "PageDown" => Some(value),
-        "Backspace" | "Delete" if interactive => Some(value),
-        "Home" | "End" | "C-c" | "C-d" | "C-r" | "C-u" | "C-k" | "C-w" | "C-a" | "C-e" | "C-l"
-        | "C-z" | "C-p" | "C-n" | "C-b" | "C-f" | "C-g"
-            if interactive =>
-        {
-            Some(value)
-        }
-        _ => None,
-    }
-}
 async fn generic_select(
     control: &mut Control<'_>,
     payload: &Value,
@@ -1601,7 +1316,7 @@ async fn generic_select(
             continue;
         }
         if submit {
-            if !MULTIPLE.is_match(&frame.text) {
+            if !multiple_choice(&frame.text) {
                 return Err(failure("other_terminal_submit_unavailable"));
             }
             control.write("Right", false, false).await?;
@@ -1613,12 +1328,9 @@ async fn generic_select(
             break;
         }
         let row = (if control.target.provider == hangar_transcript::Provider::Omp {
-            pi_cursor(control.target, &frame)
+            pi_cursor(control.target.provider, &frame.text)
         } else {
-            CURSOR
-                .captures_iter(&frame.text)
-                .last()
-                .and_then(|c| c[1].parse().ok())
+            menu_cursor(&frame.text)
         })
         .ok_or_else(|| failure("other_terminal_cursor_unavailable"))?;
         let option = option.unwrap();
@@ -1636,11 +1348,11 @@ async fn generic_select(
         }
         frame = control.frame(false, false).await?;
     }
-    let multiple = MULTIPLE.is_match(&frame.text) && !submit;
+    let multiple = multiple_choice(&frame.text) && !submit;
     control.write("Enter", false, !multiple).await?;
     control.pause(SETTLE, true).await?;
     let frame = control.frame(false, true).await?;
-    if multiple && !frame.text.trim().is_empty() && MULTIPLE.is_match(&frame.text) {
+    if multiple && !frame.text.trim().is_empty() && multiple_choice(&frame.text) {
         return Ok(control.reply(
             RuntimeDisposition::Accepted,
             json!({"ok":true,"submitted":false}),
@@ -1749,36 +1461,6 @@ async fn agy_permission(context: &mut Control<'_>, payload: &Value, set: bool) -
 
 
 const KIMI_MODES: [&str; 3] = ["manual", "yolo", "auto"];
-const KIMI_MODE_LABELS: [&str; 3] = ["Always Ask", "Ask When Needed", "Never Ask"];
-
-fn kimi_mode_row(line: &str) -> Option<usize> {
-    let label = line.trim().trim_start_matches('❯').trim();
-    KIMI_MODE_LABELS.iter().position(|name| label == *name || label.strip_prefix(name).is_some_and(|tail| tail.trim() == "← current"))
-}
-
-struct KimiPermissionMenu { selected: usize, current: usize }
-
-fn kimi_permission_menu(pane: &str) -> Option<KimiPermissionMenu> {
-    let lines: Vec<_> = pane.lines().collect();
-    let title = lines.iter().rposition(|line| line.trim() == "Select permission mode")?;
-    let rule = |line: &&str| line.matches('─').count() >= 10 && line.trim().chars().all(|ch| ch == '─');
-    if !lines[..title].iter().rev().find(|line| !line.trim().is_empty()).is_some_and(rule) { return None; }
-    let bottom = title + 1 + lines[title + 1..].iter().position(rule)?;
-    // O seletor substitui a caixa: um título citado no histórico acima da caixa não é menu aberto.
-    if lines[bottom + 1..].iter().any(|line| line.trim_start().starts_with('╭')) { return None; }
-    let mut selected = None;
-    let mut current = None;
-    let mut present = [false; 3];
-    for line in &lines[title + 1..bottom] {
-        if let Some(index) = kimi_mode_row(line) {
-            present[index] = true;
-            if line.trim_start().starts_with('❯') { selected = Some(index); }
-            if line.trim_end().ends_with("← current") { current = Some(index); }
-        }
-    }
-    present.into_iter().all(|seen| seen).then_some(KimiPermissionMenu { selected: selected?, current: current? })
-}
-
 async fn close_kimi_permissions(context: &mut Control<'_>) -> Result<(), RuntimeError> {
     context.write("Escape", false, false).await?;
     let until = Instant::now() + Duration::from_secs(5);
@@ -2042,6 +1724,11 @@ pub async fn control(
 #[cfg(test)]
 mod codex_screens {
     use super::*;
+    use hangar_transcript::Provider;
+
+    fn codex_composer(frame: &OtherFrame) -> Option<ComposerSnapshot> {
+        composer_for(Provider::Codex, frame)
+    }
 
     fn frame(text: &str) -> OtherFrame {
         OtherFrame { text: text.to_owned(), typed: None, styled: None, editor: None }
@@ -2053,25 +1740,8 @@ mod codex_screens {
         let text = "Oi, tudo bem?\n\nSegue o plano completo.";
         let empty = codex_composer(&frame(include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_idle.txt"))).unwrap();
         assert_eq!(empty.content, "");
-        let typed = codex_composer(&frame(include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_paragraphs.txt"))).unwrap();
+        let typed = codex_composer(&frame(include_str!("../../../../hangar-other-terminal-policy/tests/fixtures/pane_codex_paragraphs.txt"))).unwrap();
         assert_eq!(typed.content, text);
         assert!(typed.proves(text, &empty) == Proof::Present);
-    }
-
-    // A caixa de uma linha continua sem a barra de estado.
-    #[test]
-    fn composer_of_one_line_stops_before_the_status_bar() {
-        let typed = codex_composer(&frame(include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_composer_text.txt"))).unwrap();
-        assert!(!typed.content.is_empty() && !typed.content.contains('\n'), "{:?}", typed.content);
-    }
-
-    // Depois do Enter no `/resume` a tela não é a caixa com o comando: outro Enter retomaria uma conversa.
-    #[test]
-    fn resume_selector_is_not_the_composer_with_the_command() {
-        for screen in [include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_resume_loading.txt"),
-            include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_resume_list.txt")] {
-            let still_typed = codex_composer(&frame(screen)).is_some_and(|now| compact(&now.content) == compact("/resume"));
-            assert!(!still_typed);
-        }
     }
 }

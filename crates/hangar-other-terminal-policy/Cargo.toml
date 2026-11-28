@@ -1,0 +1,10 @@
+[package]
+name = "hangar-other-terminal-policy"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+hangar-core.workspace = true
+hangar-transcript.workspace = true
+regex.workspace = true
