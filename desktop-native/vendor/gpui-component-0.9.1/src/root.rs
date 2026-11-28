@@ -52,6 +52,10 @@ pub(crate) struct ActiveSheet {
     builder: Rc<dyn Fn(Sheet, &mut Window, &mut App) -> Sheet + 'static>,
 }
 
+/// Identifies one opened dialog, for [`crate::WindowExt::close_dialog_by_id`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DialogId(usize);
+
 #[derive(Clone)]
 pub(crate) struct ActiveDialog {
     /// Stable for the dialog's lifetime, independently of its stack position.
@@ -380,6 +384,20 @@ impl WindowState {
     ) where
         F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
     {
+        self.open_dialog_with_id(build, window, cx);
+    }
+
+    /// Opens a dialog like [`WindowState::open_dialog`] and returns its id,
+    /// for [`WindowState::close_dialog_by_id`].
+    pub fn open_dialog_with_id<F>(
+        &mut self,
+        build: F,
+        window: &mut Window,
+        cx: &mut Context<'_, WindowState>,
+    ) -> DialogId
+    where
+        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
+    {
         let mut previous_focused_handle = window.focused(cx).map(|h| h.downgrade());
 
         // Use pending focus restore if available to maintain correct focus chain
@@ -405,6 +423,60 @@ impl WindowState {
         // selection so it cannot linger (or be copied) under the modal.
         gpui_base::TextSelection::clear(window, cx);
         cx.notify();
+        DialogId(id)
+    }
+
+    /// Whether the dialog with this id is open and not playing its exit.
+    pub fn is_dialog_open(&self, id: DialogId) -> bool {
+        self.active_dialogs
+            .iter()
+            .any(|dialog| dialog.id == id.0 && !dialog.closing)
+    }
+
+    /// Closes the dialog with this id wherever it sits in the stack; `false`
+    /// when it is no longer open. The newest one closes like
+    /// [`WindowState::close_dialog`]. One below others leaves focus alone, and
+    /// the dialog right above it inherits where focus returns, since it was
+    /// opened from inside the one that leaves.
+    pub fn close_dialog_by_id(
+        &mut self,
+        id: DialogId,
+        window: &mut Window,
+        cx: &mut Context<'_, WindowState>,
+    ) -> bool {
+        let Some(ix) = self
+            .active_dialogs
+            .iter()
+            .position(|dialog| dialog.id == id.0 && !dialog.closing)
+        else {
+            return false;
+        };
+        if self.active_dialogs.iter().rposition(|dialog| !dialog.closing) == Some(ix) {
+            self.close_dialog(window, cx);
+            return true;
+        }
+        let leaving = self.active_dialogs[ix].focus_handle.clone();
+        let inherited = self.active_dialogs[ix].previous_focused_handle.clone();
+        if let Some(above) = self.active_dialogs[ix + 1..]
+            .iter_mut()
+            .find(|dialog| !dialog.closing)
+        {
+            let from_leaving = above
+                .previous_focused_handle
+                .as_ref()
+                .and_then(|handle| handle.upgrade())
+                .is_none_or(|handle| handle == leaving || leaving.contains(&handle, window));
+            if from_leaving {
+                above.previous_focused_handle = inherited;
+            }
+        }
+        if self.active_dialogs[ix].exit_enabled.get() {
+            Self::begin_dialog_exit(&mut self.active_dialogs[ix], window, cx);
+        } else {
+            self.active_dialogs.remove(ix);
+        }
+        cx.notify();
+        true
     }
 
     /// Closes the newest dialog that is not already closing.

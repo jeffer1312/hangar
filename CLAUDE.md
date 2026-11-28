@@ -312,6 +312,11 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   e em `/api/tour-progress` de cada servidor (junção que nunca desfaz). O primeiro acesso de um
   celular chega pelo parâmetro `device` da lista ao vivo do dono, lido só no ramo do dono; o aparelho
   que entra pelo Connect com credencial própria também é registrado. Evidência em [frontend.md](docs/decisoes/frontend.md#tour-de-primeiro-uso-do-nativo-30102026).
+- **Mudança visível ou commit `feat` sem novidade barra o portão, e peça nova do nativo ganha dica.**
+  `scripts/check-novidade.sh` falha sem arquivo novo em `docs/novidades/` (escape:
+  `HANGAR_SEM_NOVIDADE` no próprio commit, só para o que a pessoa não percebe); toda âncora de `tour/anchors.rs` tem passo
+  ou dica em `tour/steps.rs` (`every_anchor_has_a_tour_step_or_a_tip`). Quem escreve é a skill
+  `hangar-novidade`. [Motivo](docs/decisoes/frontend.md#novidade-barra-o-portão-e-peça-nova-ganha-dica-28112026).
 - **Mensagem esperando na fila do Hangar aparece no painel "Na fila", não como bolha.** A lista e a
   ordem vêm do evento `queue`; o modelo é `packages/core/src/queuePanel.ts` (o nativo repete em
   `desktop-native/src/queue_panel.rs`). Exceção: linha mandada "Na conversa" (`queued_conversation`)
@@ -1019,9 +1024,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   "negado por você".
 - **Abrir, reabrir, retomar e restaurar sessão é do Rust, por um lançador só.** Toda origem (telas,
   voz, `hangar-send`, MCP, `orq`, outro servidor, `claude`/`codex`/`pi`/`omp`/`kimi` digitados no
-  terminal) manda um `SessionOpenRequest`; `resolve_open()` decide conta, modo, modelo, plugin e
-  com/sem terminal (os padrões que as telas preenchiam moram aqui) e grava o `SessionSpec` da sessão
-  em `~/.hangar/session-specs/<chave>.json`. Modelo, esforço e permissão omitidos vêm do padrão
+  terminal) manda um `SessionOpenRequest`; `resolve_open()`, em `hangar-session-open-policy`,
+  decide conta, modo, modelo, plugin e com/sem terminal. O servidor fornece os fatos, reserva
+  o nome e grava o `SessionSpec` em `~/.hangar/session-specs/<chave>.json`. Modelo, esforço e
+  permissão omitidos vêm do padrão
   salvo no servidor (`~/.hangar/session-defaults.json`), que vence a criadora; `inherit: true` traz
   a permissão dela; convidado não recebe. Reabrir é `reopen_session(spec ⊕ SessionChange)`;
   retomar do Arquivo e `/resume` passam pelas mesmas guardas da criação. Com o servidor fora, o

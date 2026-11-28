@@ -88,11 +88,12 @@ jobs:
       - name: CLIENT_API
         if: always() && steps.base.outputs.sha != ''
         run: bash scripts/check-client-api.sh "${{ steps.base.outputs.sha }}..$HEAD_SHA"
-      # Mudança visível no app sem novidade em docs/novidades/: só avisa, nunca falha.
+      # Mudança visível no app ou commit feat sem novidade em docs/novidades/ (nem HANGAR_SEM_NOVIDADE).
       - name: novidade
         if: always() && steps.base.outputs.sha != ''
-        continue-on-error: true
-        run: bash scripts/check-novidade.sh "${{ steps.base.outputs.sha }}..$HEAD_SHA" || true
+        run: |
+          bash scripts/test-check-novidade.sh
+          bash scripts/check-novidade.sh "${{ steps.base.outputs.sha }}..$HEAD_SHA"
       - uses: actions/setup-node@v4
         if: always()
         with:

@@ -93,7 +93,7 @@ const fn sighted(step: Step) -> Tip { Tip { step, on_sight: true } }
 const fn called(step: Step) -> Tip { Tip { step, on_sight: false } }
 
 /// As dicas próprias, fora do tour: cada uma aparece uma vez, presa à peça dela.
-pub const TIPS: [Tip; 11] = [
+pub const TIPS: [Tip; 16] = [
     sighted(step("queue-direct", anchors::QUEUE_PANEL, "tour_tip_queue_title", "tour_tip_queue_body")),
     sighted(step("cite", anchors::CITE, "tour_tip_cite_title", "tour_tip_cite_body")),
     called(step("history", anchors::COMPOSER, "tour_tip_history_title", "tour_tip_history_body")),
@@ -105,6 +105,11 @@ pub const TIPS: [Tip; 11] = [
     sighted(step("pick-element", anchors::PICK_ELEMENT, "tour_tip_pick_title", "tour_tip_pick_body")),
     called(step(PRESENCE, anchors::TOPBAR_PRESENCE, "tour_tip_presence_title", "tour_tip_presence_body")),
     called(step("slash", anchors::COMPOSER, "tour_tip_slash_title", "tour_tip_slash_body")),
+    sighted(step("model", anchors::CTL_MODEL, "tour_tip_model_title", "tour_tip_model_body")),
+    sighted(step("scheduled", anchors::SCHEDULED_TASKS, "tour_tip_scheduled_title", "tour_tip_scheduled_body")),
+    sighted(step("reviews", anchors::TOPBAR_REVIEWS, "tour_tip_reviews_title", "tour_tip_reviews_body")),
+    sighted(step("side-review", anchors::SIDE_REVIEW, "tour_tip_side_review_title", "tour_tip_side_review_body")),
+    sighted(step("media", anchors::SIDE_MEDIA, "tour_tip_media_title", "tour_tip_media_body")),
 ];
 
 pub fn tip(id: &str) -> Option<Step> { TIPS.into_iter().find(|tip| tip.step.id == id).map(|tip| tip.step) }
@@ -273,5 +278,13 @@ mod tests {
         assert_eq!(ids.len(), TIPS.len());
         assert!(TIPS.iter().all(|tip| anchors::ALL.contains(&tip.step.anchor)));
         assert_eq!(tip("presence").map(|t| t.anchor), Some(anchors::TOPBAR_PRESENCE));
+    }
+
+    /// Peça que ganhou âncora (para o "Mostrar no app" de uma novidade) também ganha um passo do tour ou uma dica.
+    #[test]
+    fn every_anchor_has_a_tour_step_or_a_tip() {
+        let used: BTreeSet<_> = TOUR.iter().map(|(step, _)| step.anchor).chain(TIPS.iter().map(|tip| tip.step.anchor)).collect();
+        let missing: Vec<_> = anchors::ALL.iter().filter(|anchor| !used.contains(*anchor)).collect();
+        assert!(missing.is_empty(), "âncora sem passo nem dica em tour::steps: {missing:?}");
     }
 }

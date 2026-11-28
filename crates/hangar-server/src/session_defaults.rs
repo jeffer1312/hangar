@@ -3,11 +3,9 @@ use axum::{body::to_bytes, extract::{ConnectInfo, Query, Request, State}, http::
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, io, net::SocketAddr, path::Path, sync::Arc};
-use crate::{routes::{AppState, gate}, session_open::PermissionMode, session_write::{detail_body, json_response}};
+pub use hangar_session_open_policy::{Defaults, SessionOptions};
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Defaults { pub model: String, pub effort: String, pub permission: String }
+use crate::{routes::{AppState, gate}, session_open::PermissionMode, session_write::{detail_body, json_response}};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,13 +87,6 @@ fn selection(path: &Path, key: &str, save: Option<Save>) -> io::Result<Selection
     }
     Ok(Selection { configured: entries.contains_key(key), defaults: entries.remove(key).flatten() })
 }
-
-/// As opções da tela Beta que a abertura aplica ao que o pedido não disse. Arquivo próprio: o
-/// `session-defaults.json` é lido estrito pela versão anterior, e uma chave nova nele a faria recusar
-/// toda criação depois de voltar a atualização.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SessionOptions { pub conversation_beta: bool, pub code_mode: bool }
 
 fn options_path(home: &Path) -> std::path::PathBuf { home.join(".hangar").join("session-options.json") }
 
