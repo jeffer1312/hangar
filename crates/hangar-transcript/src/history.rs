@@ -228,46 +228,101 @@ pub fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEv
 
 /// Bloco lido por vez na busca de limites de linha de trás para frente.
 const BACK_BLOCK: u64 = 1024 * 1024;
+/// Começo da linha que diz o tipo dela: linha maior que isso só é lida inteira se o começo puder ser pedido.
+const LINE_HEAD: usize = 16 * 1024;
 
-/// O último evento que `want` aceita nas linhas inteiras de `[0, before)`, da última para a primeira. Só a linha
-/// que pode ser mensagem do usuário passa pelo parser; resultado de ferramenta e imagem só são percorridos por
-/// uma leitura que não guarda o conteúdo. A memória é a da maior linha, nunca a do arquivo. Pi, omp e Kimi: `None`.
-pub fn last_event_before(provider: Provider, jsonl: &Path, before: u64, want: impl Fn(&ChatEvent) -> bool) -> io::Result<Option<ChatEvent>> {
-    if !matches!(provider, Provider::Claude | Provider::ClaudeHeadless | Provider::Codex | Provider::Antigravity) { return Ok(None); }
+/// Provedores cuja linha de pedido a varredura de trás para frente reconhece.
+pub fn scans(provider: Provider) -> bool {
+    matches!(provider, Provider::Claude | Provider::ClaudeHeadless | Provider::Codex | Provider::Antigravity)
+}
+
+/// O último evento que `want` aceita nas linhas inteiras de `[floor, before)`, da última para a primeira. Só a
+/// linha que pode ser mensagem do usuário passa pelo parser; de resultado de ferramenta e imagem só o começo é
+/// lido. A memória é um bloco e a maior linha de pedido, nunca o arquivo. Provedor sem varredura: `None`.
+pub fn last_event_before(provider: Provider, jsonl: &Path, floor: u64, before: u64, want: impl Fn(&ChatEvent) -> bool) -> io::Result<Option<ChatEvent>> {
+    if !scans(provider) { return Ok(None); }
     let mut f = match File::open(jsonl) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
     let before = before.min(f.metadata()?.len());
+    let floor = floor.min(before);
     let mut agy = super::AgyStream::for_transcript(Some(jsonl));
-    let (mut block, mut line) = (Vec::new(), Vec::new());
+    let (mut block, mut spill) = (Vec::new(), Vec::new());
     let (mut pos, mut end) = (before, before);
-    let mut found = |f: &mut File, start: u64, end: u64| -> io::Result<Option<ChatEvent>> {
-        if end <= start { return Ok(None); }
-        line.resize((end - start) as usize, 0);
-        f.seek(SeekFrom::Start(start))?;
-        f.read_exact(&mut line)?;
-        Ok(user_line_event(provider, &line, &mut agy, &want).map(|mut ev| { ev.offset.get_or_insert(start); ev }))
-    };
     loop {
-        let from = pos.saturating_sub(BACK_BLOCK);
+        let from = pos.saturating_sub(BACK_BLOCK).max(floor);
         block.resize((pos - from) as usize, 0);
         f.seek(SeekFrom::Start(from))?;
         f.read_exact(&mut block)?;
         let mut cut = block.len();
-        while let Some(nl) = memchr::memrchr(b'\n', &block[..cut]) {
-            let start = from + nl as u64 + 1;
-            if let Some(ev) = found(&mut f, start, end)? { return Ok(Some(ev)); }
-            end = from + nl as u64;
-            cut = nl;
+        loop {
+            let nl = memchr::memrchr(b'\n', &block[..cut]);
+            let start = match nl {
+                Some(nl) => from + nl as u64 + 1,
+                None if from == 0 => 0,
+                // A linha começa antes do bloco (ou antes do teto): o próximo bloco a fecha.
+                None => break,
+            };
+            if end > start {
+                let event = if end <= pos {
+                    event_of_line(provider, &block[(start - from) as usize..(end - from) as usize], &mut agy, &want)
+                } else {
+                    // A linha passa do bloco: o resto dela só é lido se o começo puder ser pedido.
+                    let len = end - start;
+                    read_at(&mut f, start, len.min(LINE_HEAD as u64), &mut spill)?;
+                    let big = len > LINE_HEAD as u64;
+                    if big && !sniff_head(provider, &spill) { None } else {
+                        if big { read_at(&mut f, start, len, &mut spill)?; }
+                        event_of_line(provider, &spill, &mut agy, &want)
+                    }
+                };
+                if let Some(mut event) = event {
+                    event.offset.get_or_insert(start);
+                    return Ok(Some(event));
+                }
+            }
+            match nl {
+                Some(nl) => { end = from + nl as u64; cut = nl; }
+                None => return Ok(None),
+            }
         }
-        if from == 0 { return found(&mut f, 0, end); }
+        if from <= floor { return Ok(None); }
         pos = from;
     }
 }
 
-fn user_line_event(provider: Provider, raw: &[u8], agy: &mut super::AgyStream, want: &impl Fn(&ChatEvent) -> bool) -> Option<ChatEvent> {
+fn read_at(f: &mut File, at: u64, len: u64, buf: &mut Vec<u8>) -> io::Result<()> {
+    buf.resize(len as usize, 0);
+    f.seek(SeekFrom::Start(at))?;
+    f.read_exact(buf)
+}
+
+/// Pelo começo de uma linha grande: `false` só quando ele mostra que ela não é pedido (resposta, saída de ferramenta).
+fn sniff_head(provider: Provider, head: &[u8]) -> bool {
+    let has = |p: &str| memchr::memmem::find(head, p.as_bytes()).is_some();
+    match provider {
+        Provider::Claude | Provider::ClaudeHeadless => {
+            if has(r#""type":"user""#) {
+                return !has(r#""content":[{"tool_use_id""#) && !has(r#""content":[{"type":"tool_result""#);
+            }
+            if has(r#""type":"attachment""#) { return has(r#""queued_command""#) || !has(r#""attachment":{"type":""#); }
+            !has(r#""type":"assistant""#)
+        }
+        Provider::Codex => {
+            if has(r#""type":"response_item""#) {
+                return (has(r#""payload":{"type":"message""#) && has(r#""role":"user""#)) || !has(r#""payload":{"type":""#);
+            }
+            !has(r#""type":"event_msg""#)
+        }
+        Provider::Antigravity => has(r#""type":"USER_INPUT""#) || has(r#""type":"SYSTEM_MESSAGE""#) || !has(r#""type":""#),
+        _ => false,
+    }
+}
+
+fn event_of_line(provider: Provider, raw: &[u8], agy: &mut super::AgyStream, want: &impl Fn(&ChatEvent) -> bool) -> Option<ChatEvent> {
+    if raw.len() > LINE_HEAD && !sniff_head(provider, &raw[..LINE_HEAD]) { return None; }
     let text = String::from_utf8_lossy(raw);
     let text = text.trim_end_matches('\r');
     if !maybe_user_line(provider, text) { return None; }
@@ -275,6 +330,7 @@ fn user_line_event(provider: Provider, raw: &[u8], agy: &mut super::AgyStream, w
     let events = match provider {
         Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(value.as_object()?, peer::name_of_pid),
         Provider::Codex => codex::parse_rollout_obj(&value),
+        // Só pedido e recado passam por aqui: os dois não usam o pareamento de ferramentas, que a ordem invertida quebraria.
         Provider::Antigravity => agy.feed(&value),
         _ => return None,
     };

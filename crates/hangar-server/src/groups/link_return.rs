@@ -256,6 +256,8 @@ struct Watcher {
     parked: HashMap<String, Resolving>,
     /// Pais Claude nesta rodada: só eles repassam por `AskUserQuestion` com a marca.
     claude_parents: HashSet<String>,
+    /// Pedido achado pela varredura, por filha, para a resposta (`last_reply_at`) e o transcript em que foi achado.
+    scans: HashMap<String, (f64, PathBuf, Scanned)>,
 }
 
 impl Watcher {
@@ -287,6 +289,7 @@ impl Watcher {
         self.closed.retain(|n, _| present(n));
         self.closing.retain(|n, _| present(n));
         self.parked.retain(|n, _| present(n));
+        self.scans.retain(|n, _| present(n));
         self.rate.forget_old(now);
         self.question_rate.forget_old(now);
         // Já na primeira vista: o registro criado aqui só deixa voltar resposta posterior a ele.
@@ -358,7 +361,7 @@ impl Watcher {
             self.handled.insert(row.name.clone(), reply_at);
             if !settled(&check) { continue; }
             check.continues = continues_alone(st, row).await;
-            let outcome = give_back(st, row, &check, reply_at, &mut self.rate, current).await;
+            let outcome = give_back(st, row, &check, reply_at, &mut self.rate, &mut self.scans, current).await;
             self.finish(&row.name, outcome, now);
         }
     }
@@ -1030,7 +1033,15 @@ enum TurnRead {
     Found(Turn),
     /// Nem a varredura achou o pedido do turno: só a cauda, para o aviso ao pai.
     Unchecked(Vec<ChatEvent>),
+    /// Pedido fora do teto num provedor sem varredura: fica no diário.
+    Unknown,
 }
+
+/// O que a varredura achou antes da cauda; guardado para a mesma resposta, a tentativa seguinte não varre de novo.
+type Scanned = Option<ChatEvent>;
+
+/// A varredura vai até esta vezes o teto antes da cauda; depois, o turno é dado como não conferido.
+const SCAN_REACH: u64 = 8;
 
 /// Critério 4: a última mensagem do usuário veio do pai, ou é a primeira da conversa (o
 /// `initial_prompt`). Turno dado à mão na filha não volta.
@@ -1076,12 +1087,26 @@ fn decide<'a>(c: &Check, turn: &'a Turn) -> Result<(&'a str, String), Refusal> {
     Ok((answer.text.as_deref().unwrap_or_default(), key))
 }
 
-/// Turno cujo pedido não foi achado: o pai recebe um aviso, uma vez por resposta.
+/// Turno cujo pedido não foi achado: o pai recebe um aviso, uma vez por resposta. Sem ler desde o começo, o
+/// turno de antes da ligação nunca é o prompt inicial, como no `decide`.
 fn unchecked(c: &Check, tail: &[ChatEvent]) -> Refusal {
-    if c.continues && final_answer(tail).is_some_and(|(answer, _)| api_error(answer)) { return Refusal::ApiError; }
-    let key = format!("{UNCHECKED_KEY}{}", reply_key(tail));
+    if before_link(c) { return Refusal::NotAsked; }
+    let answer = final_answer(tail).map(|(answer, _)| answer);
+    if c.continues && answer.is_some_and(api_error) { return Refusal::ApiError; }
+    let at = answer.and_then(|a| a.ts).filter(|&t| t != 0.0).or(c.last_reply_at).unwrap_or(0.0);
+    if c.now - at >= MAX_AGE { return Refusal::TooOld; }
+    let key = unchecked_key(tail);
     if c.link.as_ref().and_then(|l| l.returned_key.as_deref()) == Some(key.as_str()) { return Refusal::AlreadyReturned; }
     Refusal::Unchecked(key)
+}
+
+/// A chave do aviso de turno não conferido: a do último evento da cauda, única por turno mesmo sem resposta final
+/// (a do turno sem resposta, sem o pedido lido, seria a mesma para todos). O `child_status` a recalcula pela cauda.
+pub(crate) fn unchecked_key(tail: &[ChatEvent]) -> String {
+    let mark = tail.iter().rev().find(|e| !e.id.is_empty()).map(|e| e.id.clone())
+        .or_else(|| tail.iter().rev().find_map(|e| e.ts.filter(|&t| t != 0.0)).map(|t| format!("ts:{t}")))
+        .unwrap_or_else(|| reply_key(tail));
+    format!("{UNCHECKED_KEY}{mark}")
 }
 
 /// A linha `isApiErrorMessage` do Claude chega como resposta do modelo, marcada pelo parser com
@@ -1191,39 +1216,68 @@ fn report(st: &AppState, child: &str, code: &str, reason: &'static str, detail: 
     st.diag.report(EVENT, child, &code, reason);
 }
 
-fn read_history(provider: Provider, jsonl: &Path, max_read: u64) -> io::Result<TurnRead> {
+/// `known`: a varredura já feita para esta mesma resposta. Volta a feita agora, para ser guardada.
+fn read_history(provider: Provider, jsonl: &Path, max_read: u64, known: Option<&Scanned>) -> io::Result<(TurnRead, Option<Scanned>)> {
     let file_len = std::fs::metadata(jsonl).map_or(u64::MAX, |m| m.len());
     let tail = match read_turn(|limit| merged_history_capped(&HistoryRequest {
         provider, jsonl: jsonl.to_path_buf(), queue: None, limit: Some(limit), tail_window: TAIL_WINDOW,
     }, max_read), file_len, max_read)? {
-        Ok(turn) => return Ok(TurnRead::Found(turn)),
+        Ok(turn) => return Ok((TurnRead::Found(turn), None)),
         Err(tail) => tail,
     };
+    if !history::scans(provider) { return Ok((TurnRead::Unknown, None)); }
     // Turno maior que o teto (horas de prints): só o pedido é procurado antes da cauda, sem ler o resto.
-    let before = history::tail_offset(jsonl, max_read);
-    Ok(match history::last_event_before(provider, jsonl, before, user_request)? {
+    let scanned = match known {
+        Some(scanned) => scanned.clone(),
+        None => {
+            let before = history::tail_offset(jsonl, max_read);
+            history::last_event_before(provider, jsonl, before.saturating_sub(max_read.saturating_mul(SCAN_REACH)), before, user_request)?
+        }
+    };
+    let read = match scanned.clone() {
         Some(asked) => TurnRead::Found(Turn { events: std::iter::once(asked).chain(tail).collect(), whole: false }),
         None => TurnRead::Unchecked(tail),
+    };
+    Ok((read, Some(scanned)))
+}
+
+/// O fim da conversa da filha pela mesma leitura do retorno, para o `child_status`: os eventos e se o pedido do
+/// turno foi achado. `None` = provedor sem varredura e pedido fora do teto.
+pub(crate) fn child_turn(provider: Provider, jsonl: &Path) -> io::Result<Option<(Vec<ChatEvent>, bool)>> {
+    Ok(match read_history(provider, jsonl, MAX_READ, None)?.0 {
+        TurnRead::Found(turn) => Some((turn.events, true)),
+        TurnRead::Unchecked(tail) => Some((tail, false)),
+        TurnRead::Unknown => None,
     })
 }
 
 /// Lê o turno, decide e entrega; `returned_at` só depois da entrega: perder um retorno é pior que
 /// repetir um após queda no meio.
 async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at: f64, rate: &mut RateLimit,
-    current: &Rows<'_>) -> Outcome {
+    scans: &mut HashMap<String, (f64, PathBuf, Scanned)>, current: &Rows<'_>) -> Outcome {
     let child = row.name.as_str();
     let (Some(provider), Some(jsonl)) = (Provider::parse(&row.provider), row.jsonl.as_deref().filter(|j| !j.is_empty())) else {
         report(st, child, "link_return_no_transcript", "filha parada sem transcript", "");
         return Outcome::Done;
     };
     let jsonl = PathBuf::from(jsonl);
-    let read = match blocking(move || read_history(provider, &jsonl, MAX_READ)).await {
+    let known = scans.get(child).filter(|(at, path, _)| *at == reply_at && *path == jsonl).map(|(_, _, scanned)| scanned.clone());
+    let path = jsonl.clone();
+    let (read, scanned) = match blocking(move || read_history(provider, &path, MAX_READ, known.as_ref())).await {
         Ok(read) => read,
         Err(e) => { report(st, child, "link_return_history_failed", "histórico da filha ilegível", &io_kind(&e)); return Outcome::Retry }
     };
+    match scanned {
+        Some(scanned) => { scans.insert(child.to_owned(), (reply_at, jsonl, scanned)); }
+        None => { scans.remove(child); }
+    }
     let found = match &read {
         TurnRead::Found(turn) => decide(check, turn),
         TurnRead::Unchecked(tail) => Err(unchecked(check, tail)),
+        TurnRead::Unknown => {
+            report(st, child, "link_return_turn_unknown", "começo do turno da filha fora do teto de leitura; resposta não volta", "");
+            return Outcome::Done;
+        }
     };
     match &found {
         Err(Refusal::TooOld) => {
@@ -1252,7 +1306,7 @@ async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at:
             return if transient(status) { Outcome::Retry } else { Outcome::Done };
         }
     }
-    if dropped.is_none() { rate.record(child, Instant::now()); }
+    if dropped.is_none() || dropped == Some(UNCHECKED) { rate.record(child, Instant::now()); }
     let (dir, name, notice) = (st.hangar_dir.clone(), child.to_owned(), dropped.is_some());
     let written = blocking(move || link_state::update(&dir, |all| {
         if let Some(entry) = all.get_mut(&name) { entry.returned_at = Some(reply_at); entry.returned_key = Some(key); entry.returned_notice = notice; }
@@ -1318,20 +1372,18 @@ const UNCHECKED: (&str, &str) = ("link_return_turn_unknown", "começo do turno d
 const UNCHECKED_KEY: &str = "sem-conferir:";
 
 /// Resposta pedida pelo pai e descartada vira aviso, com a mesma identidade: avisa uma vez e não relê.
-/// `allow` só é consultado com resposta inteira (conta no limite quando deixa passar).
+/// `allow` só é consultado com resposta inteira ou aviso de turno não conferido (conta no limite quando deixa passar).
 fn reply(child: &str, found: Result<(&str, String), Refusal>, allow: impl FnOnce() -> bool) -> Option<Reply> {
+    let limited = |key| Reply { text: not_returned(child, "respostas demais em 10 minutos, parece um laço entre vocês"), key, dropped: Some(RATE_LIMITED) };
     match found {
-        Ok((answer, key)) if allow() => Some(Reply { text: message(child, answer, &key), key, dropped: None }),
-        Ok((_, key)) => Some(Reply {
-            text: not_returned(child, "respostas demais em 10 minutos, parece um laço entre vocês"), key, dropped: Some(RATE_LIMITED),
-        }),
+        Ok((answer, key)) => Some(if allow() { Reply { text: message(child, answer, &key), key, dropped: None } } else { limited(key) }),
         Err(Refusal::NoAnswer(key)) => Some(Reply {
             text: not_returned(child, "o turno terminou sem resposta em texto (interrompido ou parado em ferramenta)"), key, dropped: Some(NO_ANSWER),
         }),
-        Err(Refusal::Unchecked(key)) => Some(Reply {
-            text: format!("[de: {child}] a resposta de {child} não pôde ser conferida: turno longo demais; veja a conversa dela"),
-            key, dropped: Some(UNCHECKED),
-        }),
+        // Conta no limite como uma resposta: sem saber quem pediu, dois turnos longos em laço também giram.
+        Err(Refusal::Unchecked(key)) => Some(if allow() {
+            Reply { text: format!("[de: {child}] a resposta de {child} não pôde ser conferida: turno longo demais; veja a conversa dela"), key, dropped: Some(UNCHECKED) }
+        } else { limited(key) }),
         Err(_) => None,
     }
 }
@@ -1606,7 +1658,7 @@ mod tests {
         (dir, path)
     }
 
-    fn claude_turn(request: Option<&str>) -> Vec<serde_json::Value> {
+    fn claude_turn(request: Option<&str>, tools: usize) -> Vec<serde_json::Value> {
         use serde_json::json;
         let at = |s: usize| format!("2026-11-28T10:{:02}:{:02}Z", s / 60, s % 60);
         let user = |uuid: &str, s, text: &str| json!({"type": "user", "uuid": uuid, "timestamp": at(s), "message": {"role": "user", "content": text}});
@@ -1614,7 +1666,7 @@ mod tests {
             "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}});
         let mut lines = vec![user("u0", 0, "tarefa inicial"), said("a0", 1, "ok")];
         lines.extend(request.map(|text| user("u1", 2, text)));
-        lines.extend((0..20).map(|i| json!({"type": "user", "uuid": format!("t{i}"), "timestamp": at(3 + i),
+        lines.extend((0..tools).map(|i| json!({"type": "user", "uuid": format!("t{i}"), "timestamp": at(3 + i),
             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": format!("x{i}"),
                 "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "A".repeat(1024)}}]}]}})));
         lines.push(said("a9", 30, "pronto"));
@@ -1622,19 +1674,19 @@ mod tests {
     }
 
     fn found(read: TurnRead) -> Turn {
-        match read { TurnRead::Found(turn) => turn, TurnRead::Unchecked(_) => panic!("pedido não achado") }
+        match read { TurnRead::Found(turn) => turn, _ => panic!("pedido não achado") }
     }
 
     #[test]
     fn a_claude_request_behind_the_cap_is_found_by_the_backward_scan() {
-        let (_dir, path) = transcript(claude_turn(Some("[de: pai] tira os prints")));
-        let turn = found(read_history(Provider::Claude, &path, SMALL_CAP).unwrap());
+        let (_dir, path) = transcript(claude_turn(Some("[de: pai] tira os prints"), 20));
+        let turn = found(read_history(Provider::Claude, &path, SMALL_CAP, None).unwrap().0);
         assert!(!turn.whole);
         assert!(turn.events.len() < 20, "só a cauda e o pedido, nunca o meio do turno");
         assert_eq!(decide(&check(), &turn).map(|(a, _)| a), Ok("pronto"));
         // A varredura para no último pedido: o dado à mão na filha não vira o do pai de antes dele.
-        let (_dir, path) = transcript(claude_turn(Some("tira os prints")));
-        assert_eq!(decide(&check(), &found(read_history(Provider::Claude, &path, SMALL_CAP).unwrap())), Err(Refusal::NotAsked));
+        let (_dir, path) = transcript(claude_turn(Some("tira os prints"), 20));
+        assert_eq!(decide(&check(), &found(read_history(Provider::Claude, &path, SMALL_CAP, None).unwrap().0)), Err(Refusal::NotAsked));
     }
 
     #[test]
@@ -1648,7 +1700,7 @@ mod tests {
             "payload": {"type": "function_call_output", "call_id": format!("c{i}"), "output": "x".repeat(1024)}})));
         lines.push(message(30, "assistant", "output_text", "pronto"));
         let (_dir, path) = transcript(lines);
-        let turn = found(read_history(Provider::Codex, &path, SMALL_CAP).unwrap());
+        let turn = found(read_history(Provider::Codex, &path, SMALL_CAP, None).unwrap().0);
         assert_eq!(decide(&check(), &turn).map(|(a, _)| a), Ok("pronto"));
     }
 
@@ -1663,25 +1715,64 @@ mod tests {
                 "source": {"type": "base64", "media_type": "image/png", "data": "A".repeat(5 * 1024 * 1024 / 2)}}]}]}});
         let (_dir, path) = transcript(vec![user("u1", "primeiro"), user("u2", "[de: pai] tira os prints"), image]);
         let len = std::fs::metadata(&path).unwrap().len();
-        let last = history::last_event_before(Provider::Claude, &path, len, user_request).unwrap().expect("pedido");
+        let last = history::last_event_before(Provider::Claude, &path, 0, len, user_request).unwrap().expect("pedido");
         assert_eq!(last.text.as_deref(), Some("[de: pai] tira os prints"));
-        let first = history::last_event_before(Provider::Claude, &path, last.offset.unwrap(), user_request).unwrap().expect("primeira linha");
+        let first = history::last_event_before(Provider::Claude, &path, 0, last.offset.unwrap(), user_request).unwrap().expect("primeira linha");
         assert_eq!(first.text.as_deref(), Some("primeiro"));
-        assert!(history::last_event_before(Provider::Claude, &path, 0, user_request).unwrap().is_none());
+        assert!(history::last_event_before(Provider::Claude, &path, 0, 0, user_request).unwrap().is_none());
+        assert!(history::last_event_before(Provider::Claude, &path, first.offset.unwrap() + 1, len, user_request).unwrap()
+            .is_some_and(|e| e.text.as_deref() == Some("[de: pai] tira os prints")), "a linha que começa antes do teto não conta");
+        assert!(history::last_event_before(Provider::Claude, &path, last.offset.unwrap() + 1, len, user_request).unwrap().is_none());
     }
 
     #[test]
     fn a_turn_whose_request_is_not_found_tells_the_parent_once() {
-        let (_dir, path) = transcript(claude_turn(None).split_off(2));
-        let TurnRead::Unchecked(tail) = read_history(Provider::Claude, &path, SMALL_CAP).unwrap() else { panic!("sem pedido no arquivo") };
+        let (_dir, path) = transcript(claude_turn(None, 20).split_off(2));
+        let (TurnRead::Unchecked(tail), Some(None)) = read_history(Provider::Claude, &path, SMALL_CAP, None).unwrap() else { panic!("sem pedido no arquivo") };
         let Refusal::Unchecked(key) = unchecked(&check(), &tail) else { panic!("aviso ao pai") };
         assert!(key.starts_with(UNCHECKED_KEY), "{key}");
-        let notice = reply("f", Err(Refusal::Unchecked(key.clone())), || panic!("aviso não conta no limite")).unwrap();
+        let notice = reply("f", Err(Refusal::Unchecked(key.clone())), || true).unwrap();
         assert_eq!(notice.text, "[de: f] a resposta de f não pôde ser conferida: turno longo demais; veja a conversa dela");
         assert_eq!((notice.key.as_str(), notice.dropped), (key.as_str(), Some(UNCHECKED)));
+        let limited = reply("f", Err(Refusal::Unchecked(key.clone())), || false).unwrap();
+        assert_eq!((limited.key.as_str(), limited.dropped), (key.as_str(), Some(RATE_LIMITED)), "o aviso também respeita o limite");
         // Gravado o aviso, a mesma resposta relida não avisa de novo.
         let told = Check { link: Some(LinkReturn { linked_at: NOW - 600.0, returned_key: Some(key), ..LinkReturn::default() }), ..check() };
         assert_eq!(unchecked(&told, &tail), Refusal::AlreadyReturned);
+    }
+
+    /// Dois turnos longos seguidos, os dois sem resposta final: cada um tem a própria chave e os dois avisam.
+    #[test]
+    fn two_unchecked_turns_in_a_row_are_both_told() {
+        let tail = |id: &str| vec![ChatEvent { id: format!("r{id}"), ..ev(ChatKind::ToolResult, "") }, ChatEvent { id: id.into(), ..ev(ChatKind::ToolUse, "") }];
+        let Refusal::Unchecked(first) = unchecked(&check(), &tail("a")) else { panic!("primeiro aviso") };
+        let told = Check { link: Some(LinkReturn { linked_at: NOW - 600.0, returned_key: Some(first.clone()), ..LinkReturn::default() }), ..check() };
+        let Refusal::Unchecked(second) = unchecked(&told, &tail("b")) else { panic!("segundo aviso") };
+        assert_ne!(first, second);
+    }
+
+    /// Sem o pedido, nada avisa o que o turno lido não aceitaria: resposta de antes da ligação, velha ou de provedor sem varredura.
+    #[test]
+    fn an_unchecked_turn_keeps_the_age_link_and_provider_rules() {
+        let tail = vec![ev(ChatKind::AssistantMsg, "pronto")];
+        let early = Check { last_reply_at: Some(NOW - 700.0), ..check() };
+        assert_eq!(unchecked(&early, &tail), Refusal::NotAsked, "de antes da ligação");
+        let old = Check { last_reply_at: Some(NOW - MAX_AGE - 1.0),
+            link: Some(LinkReturn { linked_at: NOW - MAX_AGE - 100.0, ..LinkReturn::default() }), ..check() };
+        assert_eq!(unchecked(&old, &tail), Refusal::TooOld);
+        let (_dir, path) = transcript(claude_turn(Some("[de: pai] x"), 20));
+        assert!(matches!(read_history(Provider::Pi, &path, SMALL_CAP, None).unwrap(), (TurnRead::Unknown, None)), "Pi fica no diário");
+    }
+
+    /// Pedido além do alcance da varredura (`SCAN_REACH` tetos) não é procurado mais longe; o achado volta guardado.
+    #[test]
+    fn the_scan_stops_at_its_reach_and_a_known_scan_is_reused() {
+        let (_dir, path) = transcript(claude_turn(Some("[de: pai] tira os prints"), 40));
+        assert!(matches!(read_history(Provider::Claude, &path, SMALL_CAP, None).unwrap(), (TurnRead::Unchecked(_), Some(None))));
+        let asked = ev(ChatKind::UserMsg, "[de: pai] tira os prints");
+        let (read, scanned) = read_history(Provider::Claude, &path, SMALL_CAP, Some(&Some(asked.clone()))).unwrap();
+        assert_eq!(scanned, Some(Some(asked)), "a varredura guardada não se refaz");
+        assert_eq!(decide(&check(), &found(read)).map(|(a, _)| a), Ok("pronto"));
     }
 
     #[test]
