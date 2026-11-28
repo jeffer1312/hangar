@@ -1381,7 +1381,8 @@ fn settings_values(a: &appearance::Appearance, seen: &crate::tour::state::Seen) 
 /// Um evento no lote do diário, com o tipo do cliente.
 fn telemetry_batch(mut event: Value) -> Value {
     event["cliente"] = Value::from("native");
-    if matches!(event["evento"].as_str(), Some("settings.snapshot" | "chat.opened")) {
+    // Sem `ts`, o servidor não marca a linha para a coleta do dono.
+    if matches!(event["evento"].as_str(), Some("settings.snapshot" | "chat.opened" | "app.crash")) {
         event["ts"] = Value::from(chrono::Utc::now().to_rfc3339());
     }
     serde_json::json!({"eventos": [event]})
@@ -1552,7 +1553,10 @@ mod telemetry_tests {
     fn telemetry_crash_event_never_carries_the_panic_text() {
         let panic = "[2026-11-26 10:00:00] pânico na thread main (v1.2.3): called `Option::unwrap()` on a `None` value at src/app.rs:42";
         let mut telemetry = ClientTelemetry::new(Some(panic));
-        assert_eq!(telemetry.take_crash(), Some(serde_json::json!({"eventos": [{"evento": "app.crash", "codigo": "panic", "cliente": "native"}]})));
+        let mut crash = telemetry.take_crash().unwrap();
+        let ts = crash["eventos"][0].as_object_mut().unwrap().remove("ts").expect("o servidor só marca a linha com horário");
+        assert!(chrono::DateTime::parse_from_rfc3339(ts.as_str().unwrap()).is_ok());
+        assert_eq!(crash, serde_json::json!({"eventos": [{"evento": "app.crash", "codigo": "panic", "cliente": "native"}]}));
         assert_eq!(telemetry.take_crash(), None, "um por queda");
         assert_eq!(ClientTelemetry::new(None).take_crash(), None);
     }
