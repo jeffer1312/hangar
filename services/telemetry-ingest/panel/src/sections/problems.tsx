@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { fieldsOf, recordKey, recordMarkdown, SAMPLE_TIME, sparkNote, sparkSlots, type Derived } from "@/lib/derive";
-import { afterText, happened, stateRows, stepText, type StateRow } from "@/lib/failure";
+import { afterText, happened, headline, stateRows, stepText, type StateRow } from "@/lib/failure";
 import { ago, compact, dayMonth, fmt, fullDay, when } from "@/lib/format";
 import { section } from "@/lib/sections";
 import type { FailureRecord, LogLine, Summary } from "@/lib/types";
@@ -217,8 +217,7 @@ function Detail({ r, days, skipToday }: { r: FailureRecord; days: number; skipTo
 }
 
 function Issue({ id, r, days, skipToday, open, onToggle }: { id: string; r: FailureRecord; days: number; skipToday: boolean; open: boolean; onToggle: () => void }) {
-  const codeLine = [r.action, r.codigo, r.etapa, r.erro_tipo].filter(Boolean).join(" · ");
-  const detail = typeof r.fields?.detalhe === "string" ? r.fields.detalhe : null;
+  const technical = [r.event, r.action, r.codigo, typeof r.fields?.causa === "string" ? r.fields.causa : null, r.etapa, r.erro_tipo].filter(Boolean).join(" · ");
   const slots = sparkSlots(r.daily, days, skipToday);
   return (
     <li className={cn("border-b last:border-b-0", open && "bg-[color-mix(in_srgb,var(--foreground)_2.5%,transparent)]")}>
@@ -226,9 +225,8 @@ function Issue({ id, r, days, skipToday, open, onToggle }: { id: string; r: Fail
         className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-3 text-left transition-colors hover:bg-accent/40 sm:px-5 md:grid-cols-[auto_minmax(0,1fr)_120px_64px_64px_84px_auto]">
         <LevelIcon level={r.level} className="self-start mt-0.5 md:self-center md:mt-0" />
         <span className="min-w-0">
-          <span className="block font-mono text-[13px] font-medium break-all">{r.event}</span>
-          {codeLine ? <span className="block font-mono text-[12px] text-muted-foreground break-all">{codeLine}</span> : null}
-          {detail ? <span className="mt-0.5 block text-[12.5px] text-muted-foreground line-clamp-2">{detail}</span> : null}
+          <span className="block text-[13.5px] font-medium">{headline(r)}</span>
+          <span className="mt-0.5 block font-mono text-[11px] text-faint break-all">{technical}</span>
           <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-muted-foreground md:hidden">
             <span><b className="font-medium text-foreground tabular">{compact.format(r.count)}</b> {r.count === 1 ? "vez" : "vezes"}</span>
             <span><b className="font-medium text-foreground tabular">{fmt.format(r.machines)}</b> {r.machines === 1 ? "máquina" : "máquinas"}</span>

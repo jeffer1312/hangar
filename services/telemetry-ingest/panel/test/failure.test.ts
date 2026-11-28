@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { afterText, happened, skewText, stateRows, stepText } from "../src/lib/failure.ts";
+import { afterText, happened, headline, skewText, stateRows, stepText } from "../src/lib/failure.ts";
 import { CAUSES, CLIENT_CODE_LABEL } from "../src/lib/labels.ts";
 import type { FailureRecord } from "../src/lib/types.ts";
 
@@ -76,4 +76,17 @@ test("toda causa de events.rs tem frase", () => {
   assert.ok(causes.length > 100 && mcp.length > 50 && client.length > 10);
   assert.deepEqual([...causes, ...mcp].filter(c => !Object.hasOwn(CAUSES, c)), []);
   assert.deepEqual(client.filter(c => !Object.hasOwn(CLIENT_CODE_LABEL, c)), []);
+});
+
+test("título da falha na lista: frase em português, nunca o nome técnico", () => {
+  const tool = rec({ level: "error", event: "mcp.tool", action: "browser", codigo: "tool_failed", fields: { codigo: "tool_failed", causa: "desktop_app_closed" } });
+  assert.equal(headline(tool), "Navegador falhou: o app do PC estava fechado");
+  const health = rec({ fields: { codigo: "terminal_observacao_falhou", causa: "capture_timeout" } });
+  assert.equal(headline(health), "A tela do terminal da sessão não pôde ser lida");
+  const unknown = rec({ event: "algo.novo", fields: {} });
+  assert.equal(headline(unknown), "Falha em algo.novo");
+});
+
+test("título começa em maiúscula mesmo quando a descrição do servidor não", () => {
+  assert.equal(headline(rec({ event: "fila.entregar", fields: { detalhe: "entrega confirmada depois de 2 leituras" } })), "Entrega confirmada depois de 2 leituras");
 });

@@ -20,6 +20,14 @@ export function happened(r: FailureRecord): Happened {
   return { summary, tool, cause: said, technical: [r.event, action, code, cause].filter(Boolean).join(" · ") };
 }
 
+/** O título da falha na lista: o que houve, em português; o nome técnico fica para a linha apagada. */
+export function headline(r: FailureRecord): string {
+  const h = happened(r);
+  const bare = (s: string) => s.replace(/\.$/, "");
+  const line = h.tool ? h.tool + " falhou" + (h.cause ? ": " + bare(h.cause.charAt(0).toLowerCase() + h.cause.slice(1)) : "") : bare(h.summary);
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
 export function stepText(step: string): { text: string; known: boolean } {
   const [name, screen] = step.split(":");
   const where = screen ? say(SCREEN_LABEL, screen) : null;
