@@ -1,5 +1,8 @@
 //! Versão mínima do `agy`. Testado em 1.5.13 e 1.5.15; abaixo de 1.5 o protocolo e o transcript são outros.
 pub const MIN: (u32, u32, u32) = (1, 5, 13);
+/// A partir daqui a barra padrão continua com o `statusLine` do Hangar (`stack_with_default`), medido no 1.5.19; abaixo,
+/// a statusline sem saída poderia apagar o rodapé de onde o pane lê modo e modelo.
+pub const STATUS_LINE_MIN: (u32, u32, u32) = (1, 5, 19);
 
 /// O primeiro `x.y.z` da saída de `agy --version`.
 pub fn parse(text: &str) -> Option<(u32, u32, u32)> {

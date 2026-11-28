@@ -68,16 +68,23 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   identidade do ambiente que o `agy` repassa ao filho (`CP_SESSION_KEY`, `TMUX_PANE`, `CP_SESSION_NAME`,
   `HANGAR_JEV`). No `settings.json` do `agy` entram só as regras de `settings::HANGAR_RULES`: as quatro
   tools de recado (`mcp(hangar/send)`…) e o CLI de recado e do navegador, nunca `command(hangar-send)`
-  inteiro (o `--new` escaparia da aprovação). No sandbox do terminal (modo `auto`, o padrão) o `~/.hangar`
+  inteiro (o `--new` escaparia da aprovação), e o `statusLine` da cota. No sandbox do terminal (modo `auto`, o padrão) o `~/.hangar`
   some e IP direto é recusado: `hangar-send`/`hangar-preview` só rodam com `BypassSandbox`, e o
   `SessionStart` avisa isso ao modelo. O `agy-state-hook` injeta por `injectSteps` (`systemMessage`, fora
   do chat): no `SessionStart` o aviso do sandbox e o protocolo do grupo; no `PreInvocation` com
   `invocationNum` 0 (cada mensagem) a dica do navegador. A guarda `agy-guard-tmux` (`run_command|view_file|
   grep_search`) sempre sai 0 com `decision`: `{}` ou saída diferente de zero barram a ferramenta. A
   confirmação da fila tira o `/plan ` que o modo plano põe na mensagem e aceita o carimbo em segundos
-  inteiros do mesmo segundo do despacho. A cota da conta padrão sai de `agy -p /usage --output-format json`
-  numa pasta neutra (sem turno nem token), pelo cache das cotas (`TTL`, 429), nunca em laço próprio: o grupo
-  do Gemini vira `5h`/`7d` gerais e os outros grupos janelas por modelo. A tela dos Termos e a das cores do
+  inteiros do mesmo segundo do despacho. A cota da conta padrão vem da statusline do `agy`
+  (`agy-statusline`, `hangar-antigravity/src/quota.rs`): o Hangar ocupa o `statusLine` vazio com
+  `stack_with_default` (a barra padrão, de onde o pane lê modo e modelo, continua), o `agy` passa a `quota` a
+  cada mudança de estado e o comando grava `hangar-quota.json` na pasta da conta sem imprimir nada; a lista
+  de cotas lê esse arquivo a cada pedido, e janela com `reset_time` vencido volta zerada. Statusline da
+  pessoa fica, e a conta fica sem cota. Nunca `agy -p` para ler a cota, nem a pedido. O grupo do Gemini
+  vira `5h`/`7d` gerais e os outros grupos janelas por modelo (sem ele, todos ficam por modelo); sair da conta pelo
+  Hangar apaga a cota guardada. Só com `agy` 1.5.19 ou mais novo (`version::STATUS_LINE_MIN`, a versão medida) e só na
+  conta padrão: o comando grava sempre nela, porque o `agy` com terminal ignora `GEMINI_HOME`. Ver
+  [Cota do Antigravity pela statusline](#cota-do-antigravity-pela-statusline-28112026). A tela dos Termos e a das cores do
   primeiro uso viram cartão (`agy_terms`, `agy_onboarding_list`), e a tecla só sai da opção que a pessoa
   tocou; o Hangar nunca aceita os Termos sozinho. Na página de contas o aceite é pelo painel (desktop e
   Expo): o servidor abre o `agy` numa janela escondida (`term-agy-terms-`, `@cp_hidden` antes do comando),
@@ -1414,6 +1421,25 @@ Medido no `agy` 1.5.16, Linux, em sessões abertas pelo Hangar desta máquina.
 - **Regras globais:** o `agy` corta cada arquivo de regras em 24.000 bytes; o `~/.claude/CLAUDE.md` desta
   máquina tem ~37 KB, então o `AGENTS.md` ligado a ele chega cortado (o fim, com o bloco das sessões-irmãs,
   fica de fora). O aviso de `SessionStart` cobre o que o `agy` precisa do Hangar.
+
+## Cota do Antigravity pela statusline (28/11/2026)
+
+- **Por que saiu o `agy -p /usage`:** no fórum do Google (discuss.ai.google.dev, tópico 203779, 23/11/2026),
+  quem fala pela empresa respondeu ao caso exato de um app de terceiro que roda `agy -p /usage --output-format
+  json` para mostrar a cota: "wrapping `agy -p` inside third-party applications is not supported under
+  consumer plans", não há API pública nem método ACP de cota, e a cota se confere no cliente oficial. O FAQ do
+  Antigravity diz o mesmo do `agy -p` ("direct scripting and CI workflows"). Houve relato de suspensão de
+  conta depois de um único `agy --print` lançado por outro programa local (tópico 197943, 03/11, sem
+  confirmação). O Hangar rodava o `/usage` a cada 5 min com qualquer tela de cotas aberta.
+- **Medido no agy 1.5.19:** com um `statusLine` de teste (`stack_with_default: true`, comando que só guarda o
+  stdin), abrir o `agy` numa pasta confiada, sem mandar mensagem, chamou o comando 10 vezes em 20 s. Cada
+  chamada trouxe `quota` com as quatro janelas (`gemini-5h`, `gemini-weekly`, `3p-5h`, `3p-weekly`), cada
+  uma com `remaining_fraction`, `reset_time` e `reset_in_seconds`; janela sem uso vem com a data zero do
+  Unix. Com o comando sem saída, a barra de baixo continuou a padrão (`auto · Orchestrator · Gemini 4 Neon ·
+  high`), a mesma que o `agy_footer` lê.
+- **Desenho:** o comando regrava o arquivo só quando a cota muda ou depois de 60 s (o "visto há" da tela anda),
+  porque a statusline roda a cada poucos segundos. A cota só atualiza com o `agy` aberto com terminal; o
+  `agy acp` sem terminal e as contas adicionais não foram medidos e não entram na lista de cotas.
 
 ## Orientar pela fila da CLI (22/11/2026)
 

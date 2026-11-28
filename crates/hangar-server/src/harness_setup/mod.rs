@@ -48,7 +48,7 @@ pub fn sync_startup(service: &AccountService) {
         Err(error) => tracing::warn!(code = "harness_startup_kimi_engines_failed", %error, "motores antigos do Kimi não conferidos na subida"),
     }
     // O hook do Antigravity é o que liga o pane à conversa: sem ele a sessão com terminal não acha o transcript.
-    if let Err(error) = agy_hooks::sync(&service.env.home) {
+    if let Err(error) = agy_hooks::sync(&service.env.home, agy_hooks::installed_version(&service.env)) {
         tracing::warn!(code = "harness_startup_agy_hooks_failed", %error, "hooks do Antigravity não conferidos na subida");
     }
     persona::sync_agy(&service.env.home);
@@ -63,7 +63,7 @@ pub fn sync_hooks(service: &AccountService, repo: &Path) -> Value {
             result["kimi"] = serde_json::json!([]);
         }
     }
-    match agy_hooks::sync(&service.env.home) {
+    match agy_hooks::sync(&service.env.home, agy_hooks::installed_version(&service.env)) {
         Ok(paths) => result["antigravity"] = serde_json::json!(paths),
         Err(error) => {
             tracing::warn!(%error, "Hooks Antigravity não atualizados");

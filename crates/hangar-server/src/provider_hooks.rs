@@ -41,6 +41,7 @@ pub fn run(mode: &str) -> ExitCode {
     match mode {
         "agy-state-hook" => return agy_state(read.map(|_| input.as_slice())),
         "agy-guard-tmux" => return agy_guard(read.map(|_| input.as_slice())),
+        "agy-statusline" => return agy_statusline(read.map(|_| input.as_slice())),
         _ => {}
     }
     let result = read
@@ -247,6 +248,24 @@ fn agy_state(input: Result<&[u8], &'static str>) -> ExitCode {
         _ => Vec::new(),
     };
     let _ = writeln!(std::io::stdout().lock(), "{}", agy_output(steps));
+    ExitCode::SUCCESS
+}
+
+/// A statusline do `agy`: guarda a cota que ele passa e não imprime nada, para a barra padrão seguir sozinha.
+fn agy_statusline(input: Result<&[u8], &'static str>) -> ExitCode {
+    let recorded: Result<bool, String> = input.map_err(str::to_owned)
+        .and_then(|bytes| serde_json::from_slice::<Value>(bytes).map_err(|_| "invalid_json".to_owned()))
+        .and_then(|value| {
+            let home = std::env::home_dir().ok_or("home_unavailable")?;
+            // Sempre a conta padrão: o `agy` com terminal ignora `GEMINI_HOME` (login e dados ficam no `~/.gemini`).
+            let account = hangar_antigravity::Account::default();
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| "clock_before_epoch")?;
+            hangar_antigravity::quota::record(&value, &account.quota_path(&home), now.as_secs_f64())
+                .map_err(|error| format!("quota_write_failed:{:?}", error.kind()))
+        });
+    if let Err(code) = recorded {
+        log_failure("agy_statusline_error.log", &code);
+    }
     ExitCode::SUCCESS
 }
 

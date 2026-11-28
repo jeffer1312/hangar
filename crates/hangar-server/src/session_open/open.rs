@@ -973,7 +973,7 @@ async fn antigravity_headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, 
     let mut warnings = host.leave_old_group(&spec.name).await?;
     spec.conversation = resume.map(str::to_owned);
     diary.step("confiar_pasta");
-    agents::agy_pretrust(host.home(), &spec.account, &spec.cwd);
+    agents::agy_pretrust(host.home(), host.env(), &spec.account, &spec.cwd);
     host.release_name(&spec.name).await?;
     if let Some(text) = initial_prompt.filter(|p| !p.is_empty()) {
         progress_step(&spec.name, "recado", json!({}));
@@ -1078,7 +1078,7 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
             agents::kimi_pretrust(&agents::kimi_home(host.home(), host.env()), &spec.cwd, now);
         }
-        AgentProvider::Antigravity => agents::agy_pretrust(host.home(), &spec.account, &spec.cwd),
+        AgentProvider::Antigravity => agents::agy_pretrust(host.home(), host.env(), &spec.account, &spec.cwd),
         // A conta adicional confia pelo preparo que o lançador pede antes da TUI.
         AgentProvider::Codex if matches!(&spec.account, Account::Codex { account_id } if account_id == "default") => {
             super::codex::pretrust(Path::new(codex_home.unwrap_or_default()), &spec.cwd);

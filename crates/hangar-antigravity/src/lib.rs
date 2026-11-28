@@ -9,9 +9,9 @@ pub mod inbox;
 pub mod login;
 pub mod paths;
 pub mod probe;
+pub mod quota;
 pub mod settings;
 pub mod terms;
-pub mod usage;
 pub mod version;
 
 pub use paths::Account;

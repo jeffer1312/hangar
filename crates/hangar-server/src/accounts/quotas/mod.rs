@@ -89,12 +89,10 @@ enum Origin {
     Account(Provider, Account),
     Other(other::Reader),
     CliProxy(String),
-    /// A conta padrão do `agy`, pelo `/usage` do próprio CLI.
-    Antigravity(std::path::PathBuf),
+    /// A conta padrão do `agy`, pelo que a statusline dele gravou.
+    Antigravity,
 }
 
-/// O `/usage` responde em ~4 s; mais que isso é o `agy` preso.
-const AGY_USAGE_LIMIT: Duration = Duration::from_secs(20);
 
 /// A leitura curta de cota da abertura sai pela rede; os testes de integração a desligam, porque as
 /// contas deles têm token falso e ela iria à Anthropic. Do processo inteiro, como o `use_cano_binary`.
@@ -276,27 +274,43 @@ impl AccountService {
         }
     }
 
-    /// A cota do `agy` pelo comando `/usage` do binário oficial, numa pasta neutra: sem ler o login, sem chamar
-    /// o Google. O cache (`TTL`) é quem espaça as leituras; nunca há laço próprio.
-    async fn read_agy_quota(&self, program: std::path::PathBuf) -> Value {
-        let account = hangar_antigravity::Account::default();
-        let env = hangar_antigravity::env::process_env(&account, self.env.base.keys().cloned());
-        let cwd = std::env::temp_dir();
-        let read = tokio::task::spawn_blocking(move || hangar_antigravity::usage::read(&program, &cwd, &env, AGY_USAGE_LIMIT)).await;
-        let failed = |code: &'static str, detail: String| {
-            tracing::warn!(code, %detail, "cota do Antigravity não lida");
-            if let Some(diag) = self.quotas.diag.get() {
-                diag.report("rust.quota_sources_partial", "cotas:antigravity", code, "cota do Antigravity não lida pelo /usage");
+    /// A cota do `agy` pela última statusline que ele passou ao Hangar (`hangar_antigravity::quota`). Arquivo local,
+    /// lido a cada pedido e fora do cache das cotas; sem leitura ainda, a conta fica sem cota.
+    fn agy_quota(&self) -> Option<Value> {
+        // Diário só quando o problema muda: a lista relê a cota a cada pedido.
+        static LAST: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+        let problem = |code: Option<&'static str>| {
+            let mut last = LAST.lock().unwrap_or_else(|p| p.into_inner());
+            if *last == code { return false; }
+            *last = code;
+            if let (Some(code), Some(diag)) = (code, self.quotas.diag.get()) {
+                diag.report("rust.quota_sources_partial", "cotas:antigravity", code, "cota do Antigravity gravada não lida");
+            }
+            code.is_some()
+        };
+        let path = hangar_antigravity::Account::default().quota_path(&self.env.home);
+        let saved = match hangar_antigravity::quota::read(&path) {
+            Ok(saved) => saved?,
+            Err(error) => {
+                if problem(Some("agy_quota_unreadable")) {
+                    tracing::warn!(code = "agy_quota_unreadable", file = %path.display(), ?error, "cota do Antigravity gravada não lida");
+                }
+                let reason = if matches!(error, hangar_antigravity::quota::ReadError::Format) { "formato-desconhecido" } else { "leitura-falhou" };
+                return Some(reading("indisponivel", vec![], Some(reason)));
             }
         };
-        match read {
-            Ok(Ok(Some(Ok(groups)))) => reading("lida", hangar_antigravity::usage::windows(&groups), None),
-            Ok(Ok(Some(Err(reason)))) if reason.to_lowercase().contains("sign in") => reading("sem_credencial", vec![], Some("agy-sem-login")),
-            Ok(Ok(Some(Err(reason)))) => { failed("agy_usage_unreadable", reason); reading("indisponivel", vec![], Some("agy-usage-ilegivel")) }
-            Ok(Ok(None)) => { failed("agy_usage_timeout", String::new()); reading("indisponivel", vec![], Some("agy-usage-prazo")) }
-            Ok(Err(error)) => { failed("agy_usage_spawn_failed", error.to_string()); reading("indisponivel", vec![], Some("agy-usage-ilegivel")) }
-            Err(error) => { failed("agy_usage_task_failed", error.to_string()); reading("indisponivel", vec![], Some("agy-usage-ilegivel")) }
+        let windows = hangar_antigravity::quota::windows(&saved, now());
+        // Cota gravada sem nenhuma janela legível: o agy mudou o formato, não é cota cheia.
+        if windows.is_empty() {
+            if problem(Some("agy_quota_unparsed")) {
+                tracing::warn!(code = "agy_quota_unparsed", file = %path.display(), "cota do Antigravity gravada sem janela legível");
+            }
+            return Some(reading("indisponivel", vec![], Some("formato-desconhecido")));
         }
+        problem(None);
+        let mut value = reading("lida", windows, None);
+        value["ts"] = saved["seen"].clone();
+        Some(value)
     }
 
     async fn read_cliproxy_quota(&self, binding: &str) -> Value {
@@ -369,14 +383,12 @@ impl AccountService {
             sources.push((json!({"id":format!("codex:{}",path.to_string_lossy()),
                 "label":if account.is_default {"Codex"} else {&account.id},"provedor":"codex","ativa":false}),Origin::Account(Provider::Codex,account)));
         }
-        // Com terminal o `agy` só usa a conta padrão; sem o agy instalado ou usado, nada a ler.
+        // Com terminal o `agy` só usa a conta padrão; sem o agy usado, nada a ler.
         let agy = hangar_antigravity::Account::default();
-        if agy.data_dir(&self.env.home).is_dir()
-            && let Some(program) = crate::cli_probe::resolve_program("agy", &self.env)
-        {
+        if agy.data_dir(&self.env.home).is_dir() {
             let dir = crate::accounts::catalog::resolved(&agy.gemini_dir(&self.env.home));
             sources.push((json!({"id":format!("antigravity:{}", dir.to_string_lossy()),"label":crate::accounts::antigravity::label(&agy),
-                "provedor":"antigravity","ativa":false}), Origin::Antigravity(program)));
+                "provedor":"antigravity","ativa":false}), Origin::Antigravity));
         }
         match crate::engines::proxy::quota_bindings(&self.env) {
             Ok(bindings) => sources.extend(bindings.into_iter().map(|(binding, label)| (
@@ -424,8 +436,9 @@ impl AccountService {
             let at = now();
             sources
                 .iter()
-                .filter(|(row, _)| {
+                .filter(|(row, origin)| {
                     !cached_only
+                        && !matches!(origin, Origin::Antigravity)
                         && row["id"]
                             .as_str()
                             .is_some_and(|id| cache.needs_refresh(id, at, force))
@@ -457,7 +470,8 @@ impl AccountService {
                                 (value, signature, None)
                             }
                             Origin::CliProxy(binding) => (service.read_cliproxy_quota(&binding).await, None, None),
-                            Origin::Antigravity(program) => (service.read_agy_quota(program).await, None, None),
+                            // Fica fora da leitura de rede (filtro acima): a cota sai do arquivo, na saída.
+                            Origin::Antigravity => (reading("indisponivel", vec![], None), None, None),
                             Origin::Other(reader) => {
                                 let outcome = other::read(
                                     &other_client,
@@ -533,6 +547,9 @@ impl AccountService {
             let mut value = if management_paused && matches!(origin, Origin::CliProxy(_)) {
                 let mut value = cached.unwrap_or_else(|| reading("indisponivel", vec![], None));
                 value["motivo"] = json!("cliproxy-gerenciamento-http-429");
+                value
+            } else if matches!(origin, Origin::Antigravity) {
+                let Some(value) = self.agy_quota() else { continue };
                 value
             } else if let Some(value) = cached { value } else { continue };
             for field in ["id", "label", "provedor", "ativa"] {
@@ -849,6 +866,37 @@ mod tests {
         assert_eq!(reads.load(Ordering::SeqCst), 1);
         assert_eq!(row(&rows, "chave:test").unwrap()["label"], "Chave");
         server.abort();
+    }
+
+    /// A cota do `agy` sai do arquivo que a statusline dele gravou, sem rodar o `agy`; a idade é a da última statusline.
+    #[tokio::test]
+    async fn agy_quota_comes_from_the_statusline_file() {
+        let (temp, service) = service_with_engine("http://127.0.0.1:9/v1");
+        let data = temp.path().join(".gemini/antigravity-cli");
+        std::fs::create_dir_all(&data).unwrap();
+        let id = format!("antigravity:{}", crate::accounts::catalog::resolved(&temp.path().join(".gemini")).to_string_lossy());
+        let rows = service.quotas(None, false, true).await.unwrap();
+        assert!(row(&rows, &id).is_none(), "sem statusline ainda, a conta fica sem cota");
+        let seen = now() - 600.0;
+        std::fs::write(data.join(hangar_antigravity::quota::FILE), json!({"seen": seen, "buckets": {
+            "gemini-5h": {"remaining_fraction": 0.25, "reset_time": "2999-01-01T00:00:00Z"}}}).to_string()).unwrap();
+        let rows = service.quotas(None, false, true).await.unwrap();
+        let agy = row(&rows, &id).expect("cota da statusline");
+        assert_eq!(agy["estado"], "lida");
+        assert_eq!(agy["provedor"], "antigravity");
+        assert_eq!(agy["janelas"][0]["rotulo"], "5h");
+        assert_eq!(agy["janelas"][0]["pct"], 75.0);
+        assert!(agy["idade_s"].as_f64().is_some_and(|age| (590.0..660.0).contains(&age)), "{agy}");
+        // Arquivo corrompido não some da lista: sai indisponível.
+        std::fs::write(data.join(hangar_antigravity::quota::FILE), "{ quebrado").unwrap();
+        let rows = service.quotas(None, false, true).await.unwrap();
+        assert_eq!(row(&rows, &id).unwrap()["motivo"], "formato-desconhecido");
+        // Formato que o Hangar não entende não vira cota lida e vazia.
+        std::fs::write(data.join(hangar_antigravity::quota::FILE), json!({"seen": now(), "buckets": {
+            "gemini-5h": {"remaining_amount": 3}}}).to_string()).unwrap();
+        let rows = service.quotas(None, false, true).await.unwrap();
+        let agy = row(&rows, &id).unwrap();
+        assert_eq!((agy["estado"].as_str(), agy["motivo"].as_str()), (Some("indisponivel"), Some("formato-desconhecido")));
     }
 
     /// Catálogo de contas ilegível derruba só aquela origem: as chaves de API seguem com cota.

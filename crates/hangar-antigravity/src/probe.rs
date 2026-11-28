@@ -19,10 +19,6 @@ fn command(program: &Path, cwd: &Path, env: &ProcessEnv) -> Command {
     cmd
 }
 
-pub(crate) fn run_args(program: &Path, cwd: &Path, env: &ProcessEnv, args: &[&str], limit: Duration) -> std::io::Result<Option<(bool, String)>> {
-    run(program, cwd, env, args, limit)
-}
-
 /// Roda o agy com os argumentos e devolve (saiu com sucesso, stdout+stderr); None se passou do prazo.
 fn run(program: &Path, cwd: &Path, env: &ProcessEnv, args: &[&str], limit: Duration) -> std::io::Result<Option<(bool, String)>> {
     let mut child = command(program, cwd, env).args(args).spawn()?;
@@ -47,6 +43,11 @@ fn run(program: &Path, cwd: &Path, env: &ProcessEnv, args: &[&str], limit: Durat
         if std::time::Instant::now() >= deadline { let _ = child.kill(); let _ = child.wait(); return Ok(None); }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// A versão do `agy` instalado (`agy --version`); None sem resposta no prazo ou sem versão na saída.
+pub fn version(program: &Path, cwd: &Path, env: &ProcessEnv, limit: Duration) -> std::io::Result<Option<(u32, u32, u32)>> {
+    Ok(run(program, cwd, env, &["--version"], limit)?.and_then(|(ok, text)| ok.then(|| crate::version::parse(&text)).flatten()))
 }
 
 /// Some(true) com login, Some(false) sem; None quando o agy não respondeu no prazo ou falhou de outro jeito.
