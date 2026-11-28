@@ -169,6 +169,19 @@ describe('linha de telemetria', () => {
     expect(mocks.erro).toHaveBeenCalledWith(m.telemetry_doc_open_failed());
   });
 
+  it('outra identidade do servidor com a leitura anterior em curso faz a leitura nova', async () => {
+    let answer: (response: Response) => void = () => {};
+    mocks.fetch.mockImplementation((url) => String(url).startsWith(server.baseUrl)
+      ? new Promise<Response>((resolve) => { answer = resolve; }) : Promise.resolve(view(true, null, 3)));
+    await render();
+    const moved = { ...server, baseUrl: other.baseUrl };
+    await act(async () => root.render(<TelemetrySetting server={moved} />));
+    await act(async () => answer(view(false, null, 3)));
+    expect(mocks.fetch.mock.calls.map(([url]) => String(url))).toEqual([`${server.baseUrl}/api/telemetry`, `${other.baseUrl}/api/telemetry`]);
+    expect(row()?.textContent).toContain(m.auto_report_on());
+    expect(row()?.disabled).toBe(false);
+  });
+
   it.each([404, 503])('servidor sem telemetria (%i) não mostra a linha nem erro', async (status) => {
     mocks.fetch.mockImplementation(async () => status === 404 ? json({ detail: 'Not Found' }, 404) : refused(503, 'telemetry_unavailable'));
     await render();
@@ -194,6 +207,17 @@ describe('aviso da abertura', () => {
     await asked;
     expect(alert).toHaveBeenCalledTimes(3);
     expect(puts().map(([, init]) => JSON.parse(init.body))).toEqual([{ consent: true, consent_scope: 3 }, { consent: true, consent_scope: 2 }, { consent: true }]);
+  });
+
+  it('mesmo nome em avisos diferentes leva o endereço nos dois', async () => {
+    const alert = vi.spyOn(Alert, 'alert');
+    const asked = askTelemetry([pending(server, 3), pending({ ...other, label: server.label }, 2)]);
+    expect(alert.mock.calls[0][1]).toBe(m.telemetry_b_question_body({ machines: 'fixture-a (tel-a.test)' }));
+    alert.mock.calls[0][3]!.onDismiss!();
+    await vi.waitFor(() => expect(alert).toHaveBeenCalledTimes(2));
+    expect(alert.mock.calls[1][1]).toBe(m.telemetry_question_body({ machines: 'fixture-a (tel-b.test)' }));
+    alert.mock.calls[1][3]!.onDismiss!();
+    await asked;
   });
 
   it('fechar sem tocar não grava nada', async () => {

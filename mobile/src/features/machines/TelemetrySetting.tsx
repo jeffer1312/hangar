@@ -6,7 +6,12 @@ import { confirmTelemetry, openTelemetryDoc, saveTelemetryChoice } from './start
 import * as m from '../../paraglide/messages';
 
 // Contagens anônimas desta máquina. Servidor sem telemetria (404/503) não mostra a linha.
+// Outra identidade remonta a linha: a leitura em curso da anterior é cancelada e a nova sempre sai.
 export function TelemetrySetting({ server }: { server: Server }) {
+  return <TelemetryRow key={`${server.id}\n${server.baseUrl}\n${server.token}`} server={server} />;
+}
+
+function TelemetryRow({ server }: { server: Server }) {
   // `undefined` = ainda sem leitura boa.
   const [loaded, setLoaded] = useState<{ server: Server; value: Telemetry | undefined }>();
   const read = useMachineAction();

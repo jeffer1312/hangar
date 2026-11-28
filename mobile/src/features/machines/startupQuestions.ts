@@ -50,7 +50,8 @@ export async function askTelemetry(pending: readonly PendingTelemetry[]): Promis
   for (const scope of [TELEMETRY_CONSENT_SCOPE, SETTINGS_CONSENT_SCOPE, undefined]) {
     const group = pending.filter(({ shown }) => shown.consent_scope === scope && !shown.disabled_by);
     if (!group.length) continue;
-    const labels = group.map(({ server }) => group.filter((item) => item.server.label === server.label).length > 1
+    // O nome repetido em outro aviso também confunde: o endereço desambigua contra todas as máquinas.
+    const labels = group.map(({ server }) => pending.filter((item) => item.server.label === server.label).length > 1
       ? `${server.label} (${new URL(server.baseUrl).host})` : server.label);
     await confirmTelemetry(labels.join(', '), scope, (value) => {
       void Promise.allSettled(group.map(({ server, shown }) => saveTelemetryChoice(server, value, shown.consent_scope))).then((results) => {
