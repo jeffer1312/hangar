@@ -66,8 +66,8 @@ pub fn health(code: &str, detail: Option<&str>) -> Option<(&'static str, &'stati
         "erro_interacao_desatualizada" | "state_binding_changed" | "permission_binding_changed" => Some("binding_changed"),
         _ => None,
     };
-    let (code, cause) = if code == UNAVAILABLE {
-        (UNAVAILABLE, binding.unwrap_or(match detail {
+    let (code, cause) = match code {
+        UNAVAILABLE => (UNAVAILABLE, match detail {
             "plugin_store_unavailable" => "plugin_store_unavailable",
             "plugin_facts_invalid" => "plugin_facts_invalid",
             "plugin_question_invalid" => "plugin_question_invalid",
@@ -86,9 +86,8 @@ pub fn health(code: &str, detail: Option<&str>) -> Option<(&'static str, &'stati
             "state_plugin_binding_changed" | "state_feed_binding_changed" => "feed_binding_changed",
             lifecycle if lifecycle.starts_with("lifecycle_") => "dead_unproven",
             _ => "other",
-        }))
-    } else if code == OBSERVATION_FAILED {
-        (OBSERVATION_FAILED, binding.unwrap_or(match detail {
+        }),
+        OBSERVATION_FAILED => (OBSERVATION_FAILED, match detail {
             "permission_store_unavailable" => "permission_store_poisoned",
             "terminal capture timeout" | "capture_timeout" => "capture_timeout",
             "terminal startup timeout" | "terminal acquire timeout" => "startup_timeout",
@@ -107,18 +106,18 @@ pub fn health(code: &str, detail: Option<&str>) -> Option<(&'static str, &'stati
             "cannot start terminal observer" | "cannot start terminal watch" | "capture_spawn_failed" => "observer_spawn_failed",
             "terminal watch without output" | "psmux_direct_panicked" => "mux_process_failed",
             _ => "other",
-        }))
-    } else if code == PERMISSION_FAILED {
-        (PERMISSION_FAILED, binding.unwrap_or(match detail {
+        }),
+        PERMISSION_FAILED => (PERMISSION_FAILED, match detail {
             "permission_frame_unavailable" => "frame_lock_poisoned",
             "permission_store_unavailable" => "store_poisoned",
             "permission_capture_stale" => "capture_stale",
             "permission_mode_missing" => "mode_unconfirmed",
             "permission_mode_unknown" => "mode_unknown",
             _ => "other",
-        }))
-    } else { return None };
-    Some((code, cause))
+        }),
+        _ => return None,
+    };
+    Some((code, binding.unwrap_or(cause)))
 }
 
 /// A entrega incerta segura a fila com ou sem texto no campo: a troca do motivo não é problema novo.

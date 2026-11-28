@@ -4,7 +4,8 @@ import { AFTER_LABEL, AGENTS, CAUSES, CLI_LABEL, CLIENT_CODE_LABEL, CONTEXT_LABE
   SCREEN_LABEL, STEP_LABEL, TOOLS, VALUES } from "./labels.ts";
 import type { FailureRecord } from "./types";
 
-const has = (o: object, k: string) => Object.hasOwn(o, k);
+export const has = (o: object, k: string) => Object.hasOwn(o, k);
+const say = (values: Record<string, string> | null, v: string) => (values && has(values, v) ? values[v] : v);
 const text = (v: unknown) => (typeof v === "string" && v ? v : null);
 
 export interface Happened { summary: string; tool: string | null; cause: string | null; technical: string }
@@ -21,7 +22,7 @@ export function happened(r: FailureRecord): Happened {
 
 export function stepText(step: string): { text: string; known: boolean } {
   const [name, screen] = step.split(":");
-  const where = screen ? (has(SCREEN_LABEL, screen) ? SCREEN_LABEL[screen] : screen) : null;
+  const where = screen ? say(SCREEN_LABEL, screen) : null;
   if (name === "tela.ver") return { text: "Abriu a tela" + (where ? ": " + where : ""), known: true };
   let said: string | null = null;
   if (has(STEP_LABEL, name)) said = STEP_LABEL[name];
@@ -31,20 +32,20 @@ export function stepText(step: string): { text: string; known: boolean } {
   return { text: said + (where ? " (tela: " + where + ")" : ""), known: true };
 }
 
-export const afterText = (after: string | null | undefined) => (after ? (has(AFTER_LABEL, after) ? AFTER_LABEL[after] : after) : null);
+export const afterText = (after: string | null | undefined) => (after ? say(AFTER_LABEL, after) : null);
 
 export function skewText(s: number | null | undefined) {
   if (s == null) return "sem a hora do envio (versão antiga)";
-  // A ida pela rede soma alguns segundos: abaixo de um minuto conta como certo.
-  if (Math.abs(s) < 60) return "certo";
   const a = Math.abs(s);
+  // A ida pela rede soma alguns segundos: abaixo de um minuto conta como certo.
+  if (a < 60) return "certo";
   const size = a < 3600 ? Math.round(a / 60) + " min" : a < 2 * 86400 ? Math.round(a / 3600) + " h" : Math.round(a / 86400) + " dias";
   return size + (s > 0 ? " atrasado" : " adiantado");
 }
 
 export interface StateRow { key: string; label: string; value: string; first?: string }
 
-const say = (values: Record<string, string> | null, v: string) => (values && has(values, v) ? values[v] : v);
+const CONTEXT_ORDER = Object.keys(CONTEXT_LABEL);
 
 // Retrato da falha (primeira e última vez) e o ambiente da máquina no lote da amostra.
 export function stateRows(r: FailureRecord) {
@@ -80,7 +81,7 @@ export function stateRows(r: FailureRecord) {
     if (k.startsWith("sessions.") && p) return ["Sessões " + (has(AGENTS, p) ? AGENTS[p] : p) + " " + (VALUES.surface[surface] ?? surface), CONTEXT_LABEL.sessions[1]];
     return [k, null];
   };
-  const order = (k: string) => { const i = Object.keys(CONTEXT_LABEL).indexOf(k.startsWith("sessions.") ? "sessions" : k); return i < 0 ? 99 : i; };
+  const order = (k: string) => { const i = CONTEXT_ORDER.indexOf(k.startsWith("sessions.") ? "sessions" : k); return i < 0 ? 99 : i; };
   const moment: StateRow[] = keys.sort((x, y) => order(x) - order(y) || x.localeCompare(y)).map(k => {
     const [name, values] = label(k);
     const now = has(last, k) ? say(values, last[k]) : "não informado", before = has(first, k) ? say(values, first[k]) : "não informado";

@@ -280,7 +280,7 @@ async fn read_only_prefix(host: &dyn OpenHost, cwd: &str, config_dir: Option<&st
 pub(crate) async fn read_only_envelope<'a>(env: &BTreeMap<String, String>, home: &Path, cwd: &str, config_dir: Option<&str>,
     run: &'a (dyn Fn(Vec<String>, Duration) -> BoxFuture<'a, MuxOutput> + Sync)) -> Result<Vec<String>, OpenError> {
     let refuse = |msg: String| OpenError::new(400, "erro_criacao_sessao", msg).because("read_only_unavailable");
-    let refused = |msg: String| refuse(msg).because("read_only_refused");
+    let refused = |msg: String| OpenError::new(400, "erro_criacao_sessao", msg).because("read_only_refused");
     if !cfg!(target_os = "linux") { return Err(refuse("read-only exige Linux com bubblewrap (bwrap)".into())); }
     let bwrap = crate::runtime::process::resolve_program("bwrap", env)
         .ok_or_else(|| refuse("read-only exige bubblewrap: instale bwrap antes de criar a sessão".into()))?;

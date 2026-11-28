@@ -486,6 +486,8 @@ impl<P: Page> Controller<P> {
     }
 
     /// `text`, a recusa do verbo, com a causa `code` guardada para a resposta.
+    fn no_ref(&self, r: &str) -> String { self.failed("ref_invalid", format!("erro: ref {r} nao existe (rode snapshot de novo)")) }
+
     fn failed(&self, code: &'static str, text: String) -> String {
         self.failure.set(Some(code));
         text
@@ -853,7 +855,7 @@ impl<P: Page> Controller<P> {
         if let Err(why) = self.resolve(verb, r).await? { return Ok(why); }
         self.mark(verb, r).await;
         if let Some(why) = self.blocked() { self.unmark().await; return Ok(why.into()); }
-        let Some((x, y)) = self.measured(r).await? else { return Ok(self.failed("ref_invalid", format!("erro: ref {r} nao existe (rode snapshot de novo)"))) };
+        let Some((x, y)) = self.measured(r).await? else { return Ok(self.no_ref(r)) };
         // A medida esperou a página: o modo de escolha pode ter ligado nesse meio-tempo.
         if let Some(why) = self.blocked() { self.unmark().await; return Ok(why.into()); }
         let base = |t: &str| json!({"type": t, "x": x, "y": y, "button": "left", "clickCount": 1});
@@ -924,7 +926,7 @@ impl<P: Page> Controller<P> {
         if let Some(focus) = self.not_editable().await? {
             return Ok(format!("erro: fill-secret {r}: o clique nao deixou um campo de texto com foco (foco em {focus}) — rode snapshot"));
         }
-        let Some(id) = self.state.borrow().refs.get(r).copied() else { return Ok(self.failed("ref_invalid", format!("erro: ref {r} nao existe (rode snapshot de novo)"))) };
+        let Some(id) = self.state.borrow().refs.get(r).copied() else { return Ok(self.no_ref(r)) };
         self.enable("DOM").await?;
         let node = self.call("DOM.resolveNode", json!({"backendNodeId": id})).await?;
         let object = node["object"]["objectId"].as_str().ok_or("fill-secret: o alvo nao tem objeto na pagina")?;
@@ -1013,7 +1015,7 @@ impl<P: Page> Controller<P> {
         if let Err(why) = self.resolve("hover", r).await? { return Ok(why); }
         self.mark("hover", r).await;
         if let Some(why) = self.blocked() { self.unmark().await; return Ok(why.into()); }
-        let Some((x, y)) = self.measured(r).await? else { return Ok(self.failed("ref_invalid", format!("erro: ref {r} nao existe (rode snapshot de novo)"))) };
+        let Some((x, y)) = self.measured(r).await? else { return Ok(self.no_ref(r)) };
         self.call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": x, "y": y})).await?;
         self.frame().await;
         Ok(format!("ok: hover {r}"))

@@ -247,7 +247,7 @@ pub fn decide(spec:&SessionSpec,current:&str,catalog:&Value,quotas:&[Value],spen
 /// Por que nenhuma conta serviu (`events::HEALTH` de `limit_switch_no_room`) e, em faixas, quantas havia em cada
 /// situação. Cada conta fora a atual para na primeira etapa que a barra (login, gasta, cota lida, janela, cheia); a
 /// causa é a etapa mais adiante a que alguma chegou.
-pub fn no_room(current:&str,catalog:&Value,quotas:&[Value],logged_in:impl Fn(&str)->bool,spent:&Spent,now:f64) -> (&'static str,Vec<(&'static str,String)>) {
+fn no_room(current:&str,catalog:&Value,quotas:&[Value],logged_in:impl Fn(&str)->bool,spent:&Spent,now:f64) -> (&'static str,Vec<(&'static str,String)>) {
     let current = crate::list::discover::real(current);
     let others:Vec<String> = catalog.as_array().into_iter().flatten().filter_map(|row|row["path"].as_str().map(crate::list::discover::real))
         .filter(|path|*path != current).collect();

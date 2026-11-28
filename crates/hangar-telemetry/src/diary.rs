@@ -172,7 +172,8 @@ pub fn build(mut entries: Vec<Entry>) -> DayDetail {
     entries.sort_by_key(|entry| entry.at);
     let mut detail = DayDetail::default();
     let mut signatures = HashMap::<_, usize>::new();
-    let mut recent = VecDeque::<String>::with_capacity(MAX_RECORD_TRAIL);
+    // O texto do passo só é montado quando uma falha o copia.
+    let mut recent = VecDeque::<(&str, Option<&str>)>::with_capacity(MAX_RECORD_TRAIL);
     let mut trail = VecDeque::<Step>::new();
     // Passos do dono na ordem, e de cada registro o índice em `steps` da última vez.
     let mut steps = Vec::<(DateTime<Utc>, &str, &str)>::new();
@@ -209,7 +210,8 @@ pub fn build(mut entries: Vec<Entry>) -> DayDetail {
         }
         if level != "ok" {
             let signature = (event, action, level, code, stage, cause);
-            let before: Vec<String> = recent.iter().cloned().collect();
+            let before: Vec<String> = recent.iter()
+                .map(|(step, screen)| screen.map_or_else(|| (*step).to_owned(), |screen| format!("{step}:{screen}"))).collect();
             let at_step = (!health).then(|| steps.len() - 1);
             match signatures.get(&signature) {
                 Some(&index) => {
@@ -238,7 +240,7 @@ pub fn build(mut entries: Vec<Entry>) -> DayDetail {
         }
         if !health {
             if recent.len() == MAX_RECORD_TRAIL { recent.pop_front(); }
-            recent.push_back(screen.map_or_else(|| step.to_owned(), |screen| format!("{step}:{screen}")));
+            recent.push_back((step, screen));
         }
     }
     for (record, last) in detail.records.iter_mut().zip(last_step) {

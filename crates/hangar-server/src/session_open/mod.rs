@@ -366,6 +366,9 @@ impl OpenError {
         Self { status, code: Some(code), msg: msg.into(), params: json!({}), cause: None }
     }
 
+    /// A tarefa da abertura caiu antes de responder.
+    pub fn unfinished(msg: &'static str) -> Self { Self::new(500, "erro_criacao_sessao", msg).because("task_panic") }
+
     pub fn because(mut self, cause: &'static str) -> Self {
         self.cause = Some(cause);
         self

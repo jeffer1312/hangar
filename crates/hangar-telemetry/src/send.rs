@@ -307,7 +307,7 @@ impl Telemetry {
             partial: !file.sealed,
             records: Vec::new(),
             trail: Vec::new(),
-            sent_at: Some((self.clock)().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+            sent_at: Some((self.clock)().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
             machine: self.machine(),
         })
     }

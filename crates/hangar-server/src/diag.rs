@@ -59,7 +59,7 @@ async fn reply(st: &AppState, peer: SocketAddr, req: Request, base: Option<PathB
         let telemetry = st.telemetry.clone().filter(|_| !guest && crate::telemetry_hooks::eligible_request(&req))
             .and_then(screen_telemetry);
         let telemetry = if telemetry.is_some() && matches!(st.edge().gate(peer, &req).await, Ok((_, true))) { telemetry } else { None };
-        let ctx = if telemetry.is_some() { crate::telemetry_ctx::machine(st) } else { Vec::new() };
+        let ctx = telemetry.is_some().then(|| crate::telemetry_ctx::machine_later(st));
         return record_screen_events(base, req, telemetry, ctx, now).await;
     }
     // O pedido não atravessa a espera: `&Request` tiraria o `Send` do handler.
@@ -88,9 +88,9 @@ fn screen_telemetry(telemetry: Arc<Telemetry>) -> Option<(Arc<Telemetry>, hangar
     (telemetry.consent_epoch() == epoch).then_some((telemetry, period, epoch))
 }
 
-/// `ctx`: o retrato da máquina que acompanha as falhas do dono.
+/// `ctx`: lê o retrato da máquina que acompanha as falhas do dono, fora da thread do runtime.
 async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Option<(Arc<Telemetry>, hangar_telemetry::Collection, u64)>,
-                              ctx: Vec<(&'static str, String)>, now: chrono::DateTime<chrono::FixedOffset>) -> Response {
+                              ctx: Option<impl FnOnce() -> Vec<(&'static str, String)> + Send + 'static>, now: chrono::DateTime<chrono::FixedOffset>) -> Response {
     let body = match hangar_core::http_body_limit::read(req.into_body()).await {
         Ok(body) => body,
         Err(error) if hangar_core::http_body_limit::is_limit(&error) => return hangar_core::http_body_limit::rejected(),
@@ -99,6 +99,7 @@ async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Op
     };
     let started = now - chrono::TimeDelta::from_std(crate::telemetry_hooks::uptime()).unwrap_or_default();
     let written = tokio::task::spawn_blocking(move || {
+        let ctx = ctx.map(|read| read()).unwrap_or_default();
         let written = match base {
             Some(base) => hangar_usage_diary::record_screen_with_owner(&base, &body, now, telemetry.as_ref().map(|(_, period, _)| (period.id.as_str(), &ctx[..], started))),
             None => Ok(0),

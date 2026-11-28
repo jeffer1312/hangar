@@ -2,11 +2,10 @@
 import { AGENT_ORDER, agentKey, type AgentKey } from "./agents";
 import { BAD, BUCKET_LABEL, BUCKETS, EFFORTS, EVENTS, FIELD_LABEL, FLAGS, KEYS, SETTING_GROUPS, SETTINGS, SETTING_VALUES, AGENTS, VALUES } from "./labels";
 import { fmt, quantity } from "./format";
-import { afterText, happened, stateRows, stepText } from "./failure";
+import { afterText, happened, has, stateRows, stepText } from "./failure";
 import { SPEED_EVENTS } from "./speed";
 import type { Dims, FailureRecord, Summary } from "./types";
 
-const has = (o: object, k: string) => Object.hasOwn(o, k);
 
 export function dimsLabel(dims: Dims | null | undefined) {
   const parts: string[] = [];

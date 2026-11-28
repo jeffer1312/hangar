@@ -380,8 +380,10 @@ fn take_panic(hangar_dir: &Path, pid: Option<u32>) -> Option<String> {
     let path = hangar_dir.join(PANIC_FILE);
     let raw = std::fs::read(&path).ok()?;
     let _ = std::fs::remove_file(&path);
+    let pid = pid?;
     let value: Value = serde_json::from_slice(&raw).ok()?;
-    (pid.is_some() && value["pid"].as_u64() == pid.map(u64::from)).then(|| value["at"].as_str().map(str::to_owned)).flatten()
+    if value["pid"].as_u64() != Some(u64::from(pid)) { return None; }
+    value["at"].as_str().map(str::to_owned)
 }
 
 /// A causa fechada da queda (`events::HEALTH` de `server_exit`) e o lugar do pânico que a explica. O journal vê o

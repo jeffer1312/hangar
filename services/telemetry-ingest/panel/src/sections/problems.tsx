@@ -61,6 +61,7 @@ function CopyForAgent({ r }: { r: FailureRecord }) {
 const Tech = ({ children, className }: { children: ReactNode; className?: string }) =>
   <span className={cn("font-mono text-[11px] text-faint [overflow-wrap:anywhere]", className)}>{children}</span>;
 const H4 = ({ children }: { children: ReactNode }) => <h4 className="mb-2 text-[12.5px] font-medium text-muted-foreground">{children}</h4>;
+const Caption = ({ children }: { children: ReactNode }) => <p className="mb-1 text-[11.5px] font-medium uppercase tracking-[0.06em] text-faint">{children}</p>;
 
 function WhatHappened({ r }: { r: FailureRecord }) {
   const h = happened(r);
@@ -84,7 +85,7 @@ function StateGroup({ title, rows }: { title: string; rows: StateRow[] }) {
   if (!rows.length) return null;
   return (
     <div>
-      <p className="mb-1 text-[11.5px] font-medium uppercase tracking-[0.06em] text-faint">{title}</p>
+      <Caption>{title}</Caption>
       <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border">
         {rows.map((row, i) => (
           <div key={row.key} title={row.key} className={cn("min-w-0 bg-card px-3 py-2", rows.length % 2 && i === rows.length - 1 && "col-span-2")}>
@@ -144,12 +145,12 @@ function Reproduce({ r }: { r: FailureRecord }) {
     <div className="space-y-3">
       <H4>Como reproduzir</H4>
       <div>
-        <p className="mb-1 text-[11.5px] font-medium uppercase tracking-[0.06em] text-faint">{showLast ? "Antes da primeira vez" : "Passos antes da falha"}</p>
+        <Caption>{showLast ? "Antes da primeira vez" : "Passos antes da falha"}</Caption>
         {first.length ? <Steps steps={first} r={r} /> : <p className="text-[13px] text-muted-foreground">O diário não guardou passos antes desta falha.</p>}
       </div>
       {showLast ? (
         <div>
-          <p className="mb-1 text-[11.5px] font-medium uppercase tracking-[0.06em] text-faint">Antes da última vez</p>
+          <Caption>Antes da última vez</Caption>
           <Steps steps={last} r={r} />
         </div>
       ) : null}
@@ -198,7 +199,7 @@ function Detail({ r, days, skipToday }: { r: FailureRecord; days: number; skipTo
           </div>
         </div>
         <div className="min-w-0">
-          <h4 className="mb-2 text-[12.5px] font-medium text-muted-foreground">Campos da amostra</h4>
+          <H4>Campos da amostra</H4>
           {fields.length ? (
             <dl className="grid gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-2">
               {fields.map(f => (

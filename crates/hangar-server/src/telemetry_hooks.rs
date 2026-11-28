@@ -189,16 +189,15 @@ impl TurnClock {
     }
 }
 
-/// `feature_used`, decidido depois do handler: modelo de rota da lista, resposta 2xx e só o dono. O MCP
-/// chama o roteador interno, que não passa por esta camada.
 /// O `{name}` das rotas `/api/sessions/{name}/…`, já decodificado.
 fn session_of(req: &Request) -> Option<String> {
     let template = req.extensions().get::<MatchedPath>()?.as_str();
     if !template.starts_with("/api/sessions/{name}") { return None; }
-    let raw = req.uri().path().split('/').nth(3)?;
-    Some(percent_encoding::percent_decode_str(raw).decode_utf8_lossy().into_owned())
+    crate::session_write::session_name(req.uri().path())
 }
 
+/// `feature_used`, decidido depois do handler: modelo de rota da lista, resposta 2xx e só o dono. O MCP
+/// chama o roteador interno, que não passa por esta camada.
 pub(crate) async fn count_feature(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
     let Some(telemetry) = st.counting() else { return next.run(req).await };
     let epoch = telemetry.consent_epoch();
@@ -236,15 +235,16 @@ pub(crate) async fn record_action(st: &AppState, period: Collection, origin: Own
     if st.counting().and_then(Telemetry::collection).is_none_or(|current| current.id != period.id) { return; }
     let Some(base) = crate::diag::diary_base(st) else { return };
     let now = chrono::Local::now().fixed_offset();
-    let mut ctx = Vec::new();
-    if code.is_some() {
-        ctx = crate::telemetry_ctx::machine(st);
-        if let Some(name) = session { ctx.extend(crate::telemetry_ctx::session(st, name)); }
-    }
+    // O retrato lê memória e discos: a leitura vai junto da gravação, fora da thread do runtime.
+    let machine = code.is_some().then(|| crate::telemetry_ctx::machine_later(st));
+    let session = session.filter(|_| code.is_some()).map(|name| crate::telemetry_ctx::session(st, name)).unwrap_or_default();
     let (action, code, cause) = (action.to_owned(), code.map(str::to_owned), cause.map(str::to_owned));
     let ms = took.as_millis().min(3_600_000) as u64;
-    match tokio::task::spawn_blocking(move || hangar_usage_diary::record_owner_action(
-        &base, origin, &period.id, now, &action, stage, code.as_deref(), ms, cause.as_deref(), &ctx)).await {
+    match tokio::task::spawn_blocking(move || {
+        let mut ctx = machine.map(|read| read()).unwrap_or_default();
+        ctx.extend(session);
+        hangar_usage_diary::record_owner_action(&base, origin, &period.id, now, &action, stage, code.as_deref(), ms, cause.as_deref(), &ctx)
+    }).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::warn!(code = "telemetry_diary_write_failed", ?error, "falha ao gravar ação no diário da telemetria"),
         Err(_) => crate::telemetry_routes::task_failed(&st.diag),
@@ -266,7 +266,7 @@ pub(crate) fn report_health(code: &'static str, cause: &str, severity: hangar_us
     let Some(base) = crate::diag::diary_base(&st) else { return };
     // A falha de uma vida anterior (`at`) vai no lote do binário dela e sem o retrato de agora, que seria de outra máquina.
     let previous = at.is_some();
-    let build = previous.then(|| installed().map(|t| t.previous_build().to_owned())).flatten();
+    let build = installed().filter(|_| previous).map(|t| t.previous_build().to_owned());
     let (event, cause, session) = (health.event, cause.to_owned(), session.map(str::to_owned));
     let now = chrono::Local::now().fixed_offset();
     // O retrato lê memória e discos: fora da thread do runtime, junto da gravação.

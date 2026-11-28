@@ -287,7 +287,7 @@ async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> 
     let info = crate::placement::forward::open(peers, server, &a.create_body(cwd), false).await
         .map_err(|e| {
             let text = crate::placement::forward::failure_text(server, &e);
-            fail(if text.starts_with("placement_uncertain") { "placement_uncertain" } else { e.code() });
+            fail(if crate::placement::forward::certain(&e) { e.code() } else { "placement_uncertain" });
             text
         })?;
     created(&info, Some(server))

@@ -417,7 +417,7 @@ async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller
             }
             decision => decision,
         }
-    }).await.unwrap_or_else(|_| Decision::Refused(OpenError::new(500, "erro_criacao_sessao", "a abertura não terminou").because("task_panic")))
+    }).await.unwrap_or_else(|_| Decision::Refused(OpenError::unfinished("a abertura não terminou")))
 }
 
 /// O pai cuja linha a filha recebe (`LinkPlan::line_parent`), com o grupo dele lido agora.
@@ -482,7 +482,7 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
         let facts = super::facts::LocalFacts::shared(facts_env, &accounts, runtime);
         super::resolve_open(&request_for_facts, &caller_for_facts, &facts)
     }).await;
-    let mut resolved = match resolved.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou").because("task_panic"))) {
+    let mut resolved = match resolved.unwrap_or_else(|_| Err(OpenError::unfinished("a resolução da abertura não terminou"))) {
         Ok(resolved) => resolved,
         Err(error) => {
             if let Some(events) = super::open::refusal_diary(crate::mods::state::random_hex(8), request.name.as_deref().unwrap_or(""), super::open::requested_provider(request), &error) {
@@ -561,7 +561,7 @@ pub(crate) async fn creator_here(st: &Arc<AppState>, name: &str) -> Result<Optio
     tokio::task::spawn_blocking(move || {
         use super::OpenFacts;
         super::facts::LocalFacts::shared(accounts.env.clone(), &accounts, runtime).creator(&name)
-    }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a leitura da sessão criadora não terminou").because("task_panic")))
+    }).await.unwrap_or_else(|_| Err(OpenError::unfinished("a leitura da sessão criadora não terminou")))
 }
 
 /// A abertura que a escolha mandou a outra máquina: a resposta é a de lá, com `target`, `placement` e, com
@@ -773,12 +773,12 @@ pub async fn resume_archived(st: &Arc<AppState>, project: &str, sid: &str, body:
             let plan = super::archive::plan(&w, &facts, &p, &s, body)?;
             let resolved = super::resolve_open(&plan.request, &OpenCaller::Owner, &facts)?;
             Ok::<_, OpenError>((plan, resolved))
-        }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da retomada não terminou").because("task_panic")));
+        }).await.unwrap_or_else(|_| Err(OpenError::unfinished("a resolução da retomada não terminou")));
         let (plan, resolved) = planned?;
         let _progress = super::open::Progress::track(&resolved.spec.name);
         let project = plan.project.clone();
         super::archive::open(&host, plan, resolved, &project, &sid).await
-    }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a retomada não terminou").because("task_panic")))
+    }).await.unwrap_or_else(|_| Err(OpenError::unfinished("a retomada não terminou")))
 }
 
 /// A rota pública do Arquivo: só o dono; o resto segue ao Python, que recusa.

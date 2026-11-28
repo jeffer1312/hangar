@@ -31,23 +31,26 @@ const HOST_FRESH: std::time::Duration = std::time::Duration::from_secs(15);
 fn host() -> Option<HostBlock> {
     const NONE: DirSize = DirSize { bytes: None, computing: false };
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((at, block)) = last.as_ref().filter(|(at, _)| at.elapsed() < HOST_FRESH) { let _ = at; return block.clone(); }
+    if let Some((_, block)) = last.as_ref().filter(|(at, _)| at.elapsed() < HOST_FRESH) { return block.clone(); }
     let block = HOST.lock().unwrap_or_else(|e| e.into_inner()).read(NONE, NONE);
     *last = Some((std::time::Instant::now(), block.clone()));
     block
 }
 
 /// Servidor de pé há, memória e disco livres, carga e sessões vivas por provedor e superfície.
-pub(crate) fn machine(st: &AppState) -> Vec<(&'static str, String)> {
+pub(crate) fn machine(st: &AppState) -> Vec<(&'static str, String)> { machine_later(st)() }
+
+/// O mesmo retrato, com a lista lida agora e memória e discos lidos por quem chamar: fora da thread do runtime.
+pub(crate) fn machine_later(st: &AppState) -> impl FnOnce() -> Vec<(&'static str, String)> + Send + 'static {
     let rows = st.list.last_rows();
-    machine_from(crate::telemetry_hooks::uptime().as_secs(), host().as_ref(), cpu_pct(), rows.as_deref().map(Vec::as_slice))
+    move || machine_from(crate::telemetry_hooks::uptime().as_secs(), host().as_ref(), cpu_pct(), rows.as_deref().map(Vec::as_slice))
 }
 
 /// Provedor, superfície, modelo, estado e versão da CLI da sessão `name`, pela última lista boa.
 pub(crate) fn session(st: &AppState, name: &str) -> Vec<(&'static str, String)> {
     let Some(rows) = st.list.last_rows() else { return Vec::new() };
     let Some(row) = rows.iter().find(|row| row.name == name) else { return Vec::new() };
-    let cli = CLI.lock().unwrap_or_else(|e| e.into_inner()).get(&provider_of(row)).cloned();
+    let cli = CLI.lock().unwrap_or_else(|e| e.into_inner()).get(&kind_of(row).0).cloned();
     session_from(row, cli.as_deref())
 }
 
@@ -77,11 +80,10 @@ pub(crate) async fn environment(st: &AppState) -> Vec<(&'static str, String)> {
     }
     *CLI.lock().unwrap_or_else(|e| e.into_inner()) = clis;
     let accounts = st.accounts.clone();
-    let counted = tokio::task::spawn_blocking(move || {
+    let (claude, codex, connect) = tokio::task::spawn_blocking(move || {
         let connect = crate::connect::state::read(&accounts.env.home.join(".hangar").join("connect")).ok().map(|linked| linked.is_some());
         (accounts.claude_listed().ok().map(|a| a.len()), accounts.snapshot(crate::accounts::types::Provider::Codex).ok().map(|a| a.len()), connect)
     }).await.unwrap_or_default();
-    let (claude, codex, connect) = counted;
     for (key, count) in [("accounts.claude", claude), ("accounts.codex", codex)] {
         if let Some(count) = count { facts.push((key, events::count_band(count as u64).as_str().to_owned())); }
     }
@@ -91,8 +93,7 @@ pub(crate) async fn environment(st: &AppState) -> Vec<(&'static str, String)> {
     facts
 }
 
-fn provider_of(row: &SessionRow) -> Provider { Provider::parse(&row.provider).unwrap_or(Provider::Other) }
-fn surface_of(row: &SessionRow) -> Surface { if row.headless { Surface::Headless } else { Surface::Terminal } }
+fn kind_of(row: &SessionRow) -> (Provider, Surface) { crate::session_write::input::wire_session(&row.provider, !row.headless) }
 
 /// Só o que `events::CONTEXT` conhece sai, já na lista dele.
 fn closed(facts: Vec<(&'static str, String)>) -> Vec<(&'static str, String)> {
@@ -115,7 +116,7 @@ fn machine_from(up: u64, host: Option<&HostBlock>, cpu: Option<f32>, rows: Optio
         facts.push(("working", band(events::count_band(rows.iter().filter(|row| row.state == "working").count() as u64))));
         let mut by_kind: BTreeMap<&'static str, u64> = BTreeMap::new();
         for row in rows {
-            let kind = (provider_of(row), surface_of(row));
+            let kind = kind_of(row);
             if let Some((_, key)) = SESSION_KEYS.iter().find(|(known, _)| *known == kind) { *by_kind.entry(key).or_default() += 1; }
         }
         facts.extend(by_kind.into_iter().map(|(key, n)| (key, band(events::count_band(n)))));
@@ -124,9 +125,9 @@ fn machine_from(up: u64, host: Option<&HostBlock>, cpu: Option<f32>, rows: Optio
 }
 
 fn session_from(row: &SessionRow, cli: Option<&str>) -> Vec<(&'static str, String)> {
-    let provider = provider_of(row);
+    let (provider, surface) = kind_of(row);
     let engine = row.engine.as_deref().is_some_and(|engine| !engine.is_empty());
-    let mut facts = vec![("provider", provider.as_str().to_owned()), ("surface", surface_of(row).as_str().to_owned()),
+    let mut facts = vec![("provider", provider.as_str().to_owned()), ("surface", surface.as_str().to_owned()),
         ("model", events::model(provider, row.model.as_deref().unwrap_or_default(), engine).as_str().to_owned()),
         ("state", row.state.clone())];
     if let Some(cli) = cli { facts.push(("cli", cli.to_owned())); }
