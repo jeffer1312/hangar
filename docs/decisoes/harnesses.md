@@ -81,7 +81,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   cada mudança de estado e o comando grava `hangar-quota.json` na pasta da conta sem imprimir nada; a lista
   de cotas lê esse arquivo a cada pedido, e janela com `reset_time` vencido volta zerada. Statusline da
   pessoa fica, e a conta fica sem cota. Nunca `agy -p` para ler a cota, nem a pedido. O grupo do Gemini
-  vira `5h`/`7d` gerais e os outros grupos janelas por modelo. Ver
+  vira `5h`/`7d` gerais (sem ele, o primeiro grupo) e os outros grupos janelas por modelo; sair da conta pelo
+  Hangar apaga a cota guardada. Ver
   [Cota do Antigravity pela statusline](#cota-do-antigravity-pela-statusline-28112026). A tela dos Termos e a das cores do
   primeiro uso viram cartão (`agy_terms`, `agy_onboarding_list`), e a tecla só sai da opção que a pessoa
   tocou; o Hangar nunca aceita os Termos sozinho. Na página de contas o aceite é pelo painel (desktop e

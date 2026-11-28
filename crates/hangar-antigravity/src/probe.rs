@@ -19,10 +19,6 @@ fn command(program: &Path, cwd: &Path, env: &ProcessEnv) -> Command {
     cmd
 }
 
-pub(crate) fn run_args(program: &Path, cwd: &Path, env: &ProcessEnv, args: &[&str], limit: Duration) -> std::io::Result<Option<(bool, String)>> {
-    run(program, cwd, env, args, limit)
-}
-
 /// Roda o agy com os argumentos e devolve (saiu com sucesso, stdout+stderr); None se passou do prazo.
 fn run(program: &Path, cwd: &Path, env: &ProcessEnv, args: &[&str], limit: Duration) -> std::io::Result<Option<(bool, String)>> {
     let mut child = command(program, cwd, env).args(args).spawn()?;

@@ -26,7 +26,7 @@ pub fn status_line(home: &Path, account: &hangar_antigravity::Account) -> Result
         StatusLine::Written => Ok(true),
         StatusLine::Unchanged => Ok(false),
         StatusLine::Taken => {
-            tracing::info!(code = "agy_statusline_taken", file = %path.display(),
+            tracing::warn!(code = "agy_statusline_taken", file = %path.display(),
                 "statusline do Antigravity é da pessoa; a cota da conta não chega ao Hangar");
             Ok(false)
         }

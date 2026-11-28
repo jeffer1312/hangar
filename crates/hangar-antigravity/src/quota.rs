@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 pub const FILE: &str = "hangar-quota.json";
 /// A statusline roda a cada poucos segundos; com a cota igual, só regrava para o "visto há" andar.
 const SEEN_REFRESH_S: f64 = 60.0;
-/// O grupo que a sessão Gemini usa: vira as janelas gerais da conta.
+/// O grupo que a sessão Gemini usa: vira as janelas gerais da conta. Sem ele, o primeiro grupo faz esse papel.
 const MAIN_GROUP: &str = "gemini";
 
 /// Guarda a `quota` da statusline em `path`; `false` quando ela não veio ou nada mudou.
@@ -42,6 +42,9 @@ pub fn read(path: &Path) -> Option<Value> {
 /// As janelas no formato da cota do Hangar: o grupo do Gemini como as gerais (`5h`, `7d`) e os outros como janelas
 /// por modelo, com o nome do grupo. Janela cujo `reset_time` já passou renovou: volta zerada, sem horário.
 pub fn windows(saved: &Value, now: f64) -> Vec<Value> {
+    let groups: Vec<&str> = saved["buckets"].as_object().into_iter().flatten()
+        .filter_map(|(id, _)| id.rsplit_once('-').map(|(group, _)| group)).collect();
+    let main_group = if groups.contains(&MAIN_GROUP) { MAIN_GROUP } else { groups.iter().min().copied().unwrap_or(MAIN_GROUP) };
     let mut rows: Vec<(bool, String, u8, Value)> = saved["buckets"].as_object().into_iter().flatten()
         .filter(|(_, bucket)| bucket["disabled"] != true)
         .filter_map(|(id, bucket)| {
@@ -52,7 +55,7 @@ pub fn windows(saved: &Value, now: f64) -> Vec<Value> {
             let reset_ts = bucket["reset_time"].as_str().and_then(unix_seconds).filter(|ts| *ts > 0.0);
             let renewed = reset_ts.is_some_and(|ts| ts <= now);
             let pct = if renewed { 0.0 } else { ((1.0 - remaining) * 100.0).clamp(0.0, 100.0) };
-            let main = group == MAIN_GROUP;
+            let main = group == main_group;
             let label = if main { window.to_owned() } else { format!("{} {window}", group_label(group)) };
             let order = match window { "5h" => 0, "7d" => 1, _ => 2 };
             Some((!main, group.to_owned(), order,
@@ -163,6 +166,16 @@ mod tests {
         assert!(read(&path).is_none());
         std::fs::write(&path, r#"{"seen":"ontem","buckets":{}}"#).unwrap();
         assert!(read(&path).is_none());
+    }
+
+    #[test]
+    fn without_the_gemini_group_the_first_group_gives_the_general_windows() {
+        let saved = json!({"seen": NOW, "buckets": {
+            "3p-5h": {"remaining_fraction": 0.5, "reset_time": "1970-01-01T00:00:00Z"},
+            "3p-weekly": {"remaining_fraction": 0.5, "reset_time": "1970-01-01T00:00:00Z"}}});
+        let windows = windows(&saved, NOW);
+        assert_eq!(windows.iter().map(|w| w["rotulo"].clone()).collect::<Vec<_>>(), [json!("5h"), json!("7d")]);
+        assert!(windows.iter().all(|w| w["por_modelo"] == false));
     }
 
     #[test]
