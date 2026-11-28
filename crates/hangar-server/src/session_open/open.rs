@@ -469,7 +469,7 @@ async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCal
                 branch_created: made.branch_created });
         }
         if fresh {
-            let (path, branch, created) = (made.path.clone(), spec.worktree.as_ref().map(|w| w.branch.clone()).unwrap_or_default(), made.created);
+            let (path, branch, created) = (made.path.clone(), made.branch.clone(), made.created);
             let updated = tokio::task::spawn_blocking(move || fresh_update(Path::new(&path), &branch, created)).await
                 .unwrap_or_else(|_| Err(creation("a atualização da worktree não terminou")));
             match updated {
