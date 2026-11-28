@@ -93,7 +93,7 @@ async fn placement_clone_clones_by_a_temporary_folder_and_reuses_the_same_origin
 async fn placement_clone_refuses_a_folder_of_another_repository() {
     let fixture = Fixture::start().await;
     let origin = remote(&fixture);
-    let taken = fixture.path("Projetos/remote");
+    let taken = fixture.path("Projetos").join("remote");
     std::fs::create_dir_all(&taken).unwrap();
     git(&taken, &["init"]);
     git(&taken, &["remote", "add", "origin", "https://github.com/outro/remote.git"]);
