@@ -211,7 +211,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   tmux confere sessão/pane a cada leitura; a análise acompanha esse quadro. Em Claude com
   terminal e o Rust de pé, o estado temporal é do `Monitor` do Rust, que pega o quadro do pool em
   processo; Pi, omp e Kimi usam o quadro compartilhado do ator em `runtime/other_terminal/`,
-  sem observador Python ou HTTP para os fatos. O cliente da ponte do observador usa somente HTTP sem proxy/redirect
+  sem observador Python ou HTTP para os fatos. O `hangar-other-terminal-policy` interpreta o quadro
+  e a caixa de digitação. O ator confere a identidade, escreve e confirma a entrega. O cliente da
+  ponte do observador usa somente HTTP sem proxy/redirect
   e não carrega certificados por pedido (a ponte ficou sem consumidor desde a parte 4; vale se
   voltar a ser usada). Medição:
   [custo da observação terminal](#custo-da-observação-terminal).
@@ -1337,7 +1339,8 @@ Medido no `agy` 1.5.13 a 1.5.15, Linux, num servidor isolado (HOME, `TMUX_TMPDIR
 - **A conversa só nasce no primeiro prompt:** a mensagem inicial ficava presa na abertura; agora a
   adoção (`gateway/other.rs`) entrega a fila. O Kimi tem o mesmo desenho e não foi testado.
 - **A caixa vazia mostra a dica do modo** (`Auto mode: … (shift+tab to cycle)`); lida como rascunho,
-  ela travava a entrega (`composer_busy`). `drive.rs` a reconhece (`AGY_MODE_HINT`).
+  ela travava a entrega (`composer_busy`). A leitura da caixa em `hangar-other-terminal-policy`
+  a reconhece (`AGY_MODE_HINT`).
 - **Modos da TUI:** `--mode accept-edits|auto|plan` e `--dangerously-skip-permissions`; sem flag, a
   TUI abre em `auto`. Não há flag para o modo que pergunta, e por isso abrir em "manual" com
   terminal é recusado (decisão do dono).

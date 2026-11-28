@@ -361,7 +361,7 @@ pub async fn agy_switch(io: &dyn Io, id: &str, timing: Timing) -> Result<Value, 
     if analysis.state == "working" {
         return Err(refused("erro_sessao_trabalhando", "a sessão está trabalhando — espere ela terminar"));
     }
-    match crate::runtime::other_terminal::drive::agy_draft(&first) {
+    match hangar_other_terminal_policy::agy_draft(&first) {
         Some(draft) if draft.trim().is_empty() => {}
         Some(_) => return Err(refused("erro_caixa_com_rascunho", "há texto na caixa de digitar; envie ou apague antes de trocar")),
         None => return Err(refused("erro_caixa_ilegivel", "não consegui ler a caixa de digitar do Antigravity")),
