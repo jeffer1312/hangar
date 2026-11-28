@@ -26,24 +26,26 @@ export function SectionCard({
   extra?: ReactNode;
   children?: ReactNode;
   onLayout?: (e: LayoutChangeEvent) => void;
-  /** `danger`: o quadradinho do ícone na cor de erro, para o cartão que conta uma falha. */
-  tone?: 'danger';
+  /** `danger`: o quadradinho do ícone na cor de erro, para o cartão que conta uma falha. `warning`: borda e ícone de
+   *  aviso, para o que espera uma resposta da pessoa. */
+  tone?: 'danger' | 'warning';
   /** Girando no lugar do ícone: algo em andamento. */
   busy?: boolean;
 }) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
   const danger = tone === 'danger';
+  const toneColor = danger ? theme.tokens.status.error : tone === 'warning' ? theme.tokens.status.warning : null;
   return (
     <View
       onLayout={onLayout}
-      style={[styles.box, { borderColor: c.border, backgroundColor: superficie(theme, 0.6) }]}
+      style={[styles.box, { borderColor: tone === 'warning' ? withAlpha(theme.tokens.status.warning, 0.5) : c.border, backgroundColor: superficie(theme, 0.6) }]}
     >
       {icon && title ? (
         <View style={styles.head}>
-          <View style={[styles.square, { backgroundColor: danger ? withAlpha(theme.tokens.status.error, 0.14) : c.accentDim }]}>
+          <View style={[styles.square, { backgroundColor: toneColor ? withAlpha(toneColor, 0.14) : c.accentDim }]}>
             {busy ? <ActivityIndicator size="small" color={c.accent} />
-              : <Icon name={icon} size={17} color={danger ? theme.tokens.status.error : c.accentText} />}
+              : <Icon name={icon} size={17} color={toneColor ?? c.accentText} />}
           </View>
           <View style={styles.texts}>
             <Text style={[styles.title, { color: c.text }]} accessibilityRole="header">{title}</Text>

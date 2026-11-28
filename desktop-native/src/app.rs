@@ -132,6 +132,8 @@ pub(crate) use controls::{picker as model_picker, providers as provider_picker};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
     search_scope_summary, search_status_line, search_who};
+pub(crate) use connect::{COMPUTER_MENU_WIDTH, ComputerLook, computer_add_button, computer_block, computer_columns,
+    computer_menu_button, computer_remove_item, computers_grid, computers_head, this_computer_off_button};
 pub(crate) use sidebar::{Sub as RowSub, group_header_look, menu_item_height, menu_item_look, menu_label, menu_list_look, menu_surface_look};
 mod shortcuts;
 mod shortcut_transfer;

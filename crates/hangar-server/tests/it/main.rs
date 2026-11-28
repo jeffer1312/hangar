@@ -19,6 +19,7 @@ mod port_tunnel;
 #[cfg(unix)]
 mod port_stop;
 mod connect_account_devices;
+mod connect_machine_remove;
 mod cli_probe;
 mod provider_discovery;
 mod json_body;

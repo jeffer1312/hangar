@@ -33,6 +33,8 @@ pub enum Failure {
     DeviceRefused,
     DeviceUnknown,
     DeviceRevoked,
+    /// 404 na remoção de máquina sem o corpo do serviço: quem respondeu não foi ele.
+    MachineRemoveUnavailable,
     Busy,
     Failed(u16),
     /// Ligação gravada fora da forma ou gravação local que falhou.
@@ -78,6 +80,8 @@ impl From<Failure> for ConnectError {
             Failure::DeviceRefused => Self::new(StatusCode::FORBIDDEN, "connect_account_device_refused", "o serviço do Connect recusou o pedido para esse aparelho"),
             Failure::DeviceUnknown => Self::new(StatusCode::NOT_FOUND, "connect_account_device_unknown", "esse aparelho não está na conta"),
             Failure::DeviceRevoked => Self::new(StatusCode::CONFLICT, "connect_account_device_revoked", "esse aparelho foi revogado na conta"),
+            Failure::MachineRemoveUnavailable => Self::new(StatusCode::BAD_GATEWAY, "connect_machine_remove_unavailable",
+                "o serviço do Connect não atendeu a remoção"),
             Failure::Busy => Self::new(StatusCode::TOO_MANY_REQUESTS, "connect_service_busy", "o serviço do Connect pediu para esperar; tente mais tarde"),
             Failure::Failed(status) => Self::new(StatusCode::BAD_GATEWAY, "connect_service_failed", format!("o serviço do Connect falhou (HTTP {status})")),
             Failure::Local(error) => error,
@@ -126,6 +130,22 @@ pub async fn revoke(linked: &Linked, id: &str) -> Result<(), Failure> {
     match client.revoke_account_device(&session, id).await.map_err(Failure::from) {
         Err(Failure::DeviceRevoked | Failure::DeviceUnknown) => Ok(()),
         other => other,
+    }
+}
+
+/// Outra máquina da conta. Já apagada vale como feito: quem pediu só quer que ela suma da lista.
+pub async fn remove_machine(linked: &Linked, id: &str) -> Result<(), Failure> {
+    checked(id)?;
+    let (client, session) = connect(linked)?;
+    client.remove_machine(&session, id).await.or_else(removal_outcome)
+}
+
+/// Só o 404 do próprio serviço diz que a máquina já saiu; o de quem está no caminho não diz nada sobre a conta.
+fn removal_outcome(error: Error) -> Result<(), Failure> {
+    match error.status() {
+        Some(404) if error.from_service() => Ok(()),
+        Some(404) => Err(Failure::MachineRemoveUnavailable),
+        _ => Err(error.into()),
     }
 }
 

@@ -277,6 +277,15 @@ impl Service {
         }
         self.store.remove(id)
     }
+    /// O `DELETE /api/peers/{id}` inteiro: também a revogação do caminho do Connect lá, sem segurar quem chama.
+    /// Bloqueia (fsync): fora do executor assíncrono, dentro do runtime do tokio.
+    pub(crate) fn remove_peer_entry(&self, id: &str) -> Result<Value, Error> {
+        // A entrada como saiu, sob a trava da remoção: a revogação usa o endereço e a senha dela.
+        let (rows, removed) = self.remove_peer(id)?;
+        // Fora do ar lá, a remoção daqui não espera.
+        if let Some(revoke) = network::connect_device_revoke(&removed, id) { tokio::spawn(revoke); }
+        Ok(rows)
+    }
     pub fn proof(&self, challenge: &str) -> Result<Value, Error> {
         if !(16..=128).contains(&challenge.chars().count()) {
             return Err(Error {
@@ -584,11 +593,7 @@ pub async fn dispatch(
                     {
                         service.store.token(id)
                     } else if method == Method::DELETE {
-                        // A entrada como saiu, sob a trava da remoção: a revogação usa o endereço e a senha dela.
-                        let (rows, removed) = service.remove_peer(decoded)?;
-                        // Fora do ar lá, a remoção daqui não espera.
-                        if let Some(revoke) = network::connect_device_revoke(&removed, decoded) { tokio::spawn(revoke); }
-                        Ok(rows)
+                        service.remove_peer_entry(decoded)
                     } else {
                         Err(Error {
                             status: 405,

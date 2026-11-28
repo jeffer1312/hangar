@@ -68,15 +68,17 @@ impl<T: Transport> ConnectClient<T> {
         }
         if !(200..300).contains(&status) {
             // Do corpo do erro só sai o motivo conhecido, nunca o texto: ele pode ecoar o que recebeu.
-            let reason = serde_json::from_slice::<Value>(&response.body).ok()
-                .and_then(|body| body.get("reason").and_then(Value::as_str).map(str::to_owned));
-            let code = match reason.as_deref() {
+            let answer = serde_json::from_slice::<Value>(&response.body).ok();
+            let reason = answer.as_ref().and_then(|body| body.get("reason").and_then(Value::as_str));
+            let code = match reason {
                 Some("device_required") => Code::ConnectDeviceRequired,
                 Some("device_pending") => Code::ConnectDevicePending,
                 Some("device_revoked") => Code::ConnectDeviceRevoked,
                 _ => Code::ConnectRequestFailed,
             };
-            return Err(fail_with(code, status));
+            // O serviço responde sempre `{"error", "reason"}` (reason nulo inclusive); proxy com JSON próprio não traz o par.
+            let service_body = answer.as_ref().is_some_and(|body| body.get("error").is_some_and(Value::is_string) && body.get("reason").is_some());
+            return Err(fail_with(code, status).with_service_body(service_body));
         }
         if status == 204 {
             return Ok(Value::Null);

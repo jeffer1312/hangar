@@ -22,6 +22,8 @@ export interface ApiEnv {
   rememberLan?(serverId: string, lan: import('./servers').LanInfo, source?: import('./servers').Server): void;
   /** Aparelho que abre a lista ao vivo; o servidor registra o primeiro acesso. Ausente ou null = não manda. */
   deviceIdentity?(): { kind: 'ios' | 'android' | 'pwa'; id: string } | null;
+  /** Nome que o dono dá ao aparelho; aparece na lista de quem entra na máquina. */
+  deviceName?(): string | null;
   /** Resolve quando a identidade guardada já foi lida (o cofre do Expo é assíncrono). Ausente = já pronta. */
   deviceReady?(): Promise<void>;
   /** Segredo aleatório de gerador seguro, para onde não há `crypto`. Ausente ou null = sem gerador. */
