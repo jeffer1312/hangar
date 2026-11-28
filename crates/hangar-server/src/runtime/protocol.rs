@@ -2,7 +2,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
-pub use hangar_core::{clock::ClockSample, net::MAX_FRAME};
+pub use hangar_core::{
+    clock::ClockSample,
+    net::MAX_FRAME,
+    runtime_reply::{Disposition, RuntimeError, RuntimeReply},
+};
 pub const MAX_ENVELOPE: usize = 2 * MAX_FRAME + 1024;
 
 /// Identidade estável do trabalho em andamento; prévias e alterações da fila não a modificam.
@@ -47,10 +51,6 @@ impl FormatGate {
 }
 
 pub use hangar_codex::proto::RequestId;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Disposition { Accepted, Deferred, Rejected, Unknown }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -192,14 +192,6 @@ impl DiagEvent {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeReply {
-    pub operation_id: String,
-    pub disposition: Disposition,
-    pub payload: Value,
-}
-
 /// Último valor da sessão sem terminal para o hub dela (`RuntimeRegistry::live`): a prévia sai
 /// só por aqui, fora do `events`, e o feed do hub a publica coalescida.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -296,22 +288,3 @@ impl CanoSnapshot {
 /// O ator recebeu o comando e saiu sem responder: o efeito pode ter acontecido. Ator que já tinha
 /// saído antes do envio continua `runtime_closed`.
 pub const REPLY_LOST: &str = "runtime_reply_lost";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RuntimeError {
-    pub code: String,
-    pub message: String,
-}
-
-impl RuntimeError {
-    pub fn new(code: &str, message: &str) -> Self {
-        Self { code: code.to_owned(), message: message.to_owned() }
-    }
-}
-
-impl std::fmt::Display for RuntimeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
-    }
-}
-impl std::error::Error for RuntimeError {}

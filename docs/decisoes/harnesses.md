@@ -5,6 +5,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **O condutor dos agentes com terminal é do `hangar-terminal-drive`.** Pi, omp, Kimi e
+  Antigravity usam o mesmo condutor de envio e controle. O Codex aberto diretamente no terminal
+  usa a entrada física desse condutor. O `hangar-server` mantém a descoberta, a fila, a observação
+  e a implementação de `OtherIo` que fala com o terminal. A identidade das perguntas, permissões
+  e menus fica no `hangar-interactions`, compartilhado com os outros atores. Ver
+  [condutor de terminal em crate próprio](#condutor-de-terminal-em-crate-próprio-28112026).
+
 - **O Kimi segue os modos de entrega de Claude e Codex.** Com a sessão trabalhando, Direto e a escolha do
   Jev entram no turno pelo Ctrl+S da fila da TUI, que não corta o trabalho; por isso, no Kimi, "Na conversa"
   também sai como envio direto. A tela do Kimi não cria pergunta: `❯ 1. …` é a mensagem da pessoa (no
@@ -6101,3 +6108,22 @@ Costuras verificadas: controle público do ator com E/S externa simulada e reló
 leitura incremental de eventos reais em arquivo temporário; comando público de abertura e
 retomada; opções compartilhadas; seleção na folha real de ajustes do Expo. As simulações não
 comprovam o tempo de resposta do serviço do modelo nem executam um turno de produção.
+
+## Condutor de terminal em crate próprio (28/11/2026)
+
+O `hangar-terminal-drive` recebe o alvo da sessão e a implementação de `OtherIo`. Ele decide
+quando digitar, como comprovar o texto e como responder ao menu ou à interação nativa. Os testes
+usam a mesma implementação do condutor com capturas e E/S controladas. A implementação real de
+`OtherIo` continua no `hangar-server`.
+
+A identidade das interações tem testes no `hangar-interactions`. O servidor continua conferindo
+o envelope HTTP desses erros. As provas do texto visível no compositor ficam com os leitores de
+tela em `hangar-other-terminal-policy`.
+
+**Medição incremental no Linux com Cargo 1.100, perfil de desenvolvimento, dois jobs.** Em cada
+lado, o alvo foi aquecido e a mesma edição temporária de uma linha foi feita no condutor. Rodaram
+os mesmos 39 casos. No `d426003f7`, `cargo test -p hangar-server --test other_terminal_drive`
+levou **288,972 s** e compilou seis unidades do servidor. Com a extração,
+`cargo test -p hangar-terminal-drive --lib -- --skip drive_agy_tests` levou **0,922 s** e compilou
+uma unidade do crate novo. Os 15 casos adicionais de controle do Antigravity e do Kimi também rodam no alvo normal
+`cargo test -p hangar-terminal-drive --lib`.

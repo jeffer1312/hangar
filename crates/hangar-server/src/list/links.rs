@@ -23,14 +23,7 @@ pub fn blank_row(name: &str) -> SessionRow {
     serde_json::from_value(serde_json::json!({ "name": name })).expect("SessionRow só exige name")
 }
 
-/// `share_life.session_life` sem a parte de transferência (vem dos fatos): a chave do sidecar
-/// vence; sem ela, o nascimento do terminal.
-pub fn session_life(key: Option<&str>, birth: Option<u64>) -> Option<String> {
-    if let Some(key) = key.filter(|k| !k.is_empty()) {
-        return Some(format!("k:{key}"));
-    }
-    birth.filter(|b| *b > 0).map(|b| format!("t:{b}"))
-}
+pub use hangar_core::ids::session_life;
 
 /// A identidade da vida pode carregar a geração; arquivos e specs continuam pertencendo à chave.
 pub fn runtime_key(lifecycle: Option<&str>) -> Option<&str> {

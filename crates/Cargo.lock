@@ -1991,6 +1991,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-interactions"
+version = "0.1.0"
+dependencies = [
+ "hangar-api",
+ "http",
+ "ring",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hangar-local-server"
 version = "0.1.0"
 dependencies = [
@@ -2336,6 +2347,7 @@ dependencies = [
  "hangar-http-file",
  "hangar-install-setup",
  "hangar-integrations",
+ "hangar-interactions",
  "hangar-local-server",
  "hangar-mcp-stdio",
  "hangar-mission",
@@ -2366,6 +2378,7 @@ dependencies = [
  "hangar-sidecar-prune",
  "hangar-status",
  "hangar-telemetry",
+ "hangar-terminal-drive",
  "hangar-ticket-actions",
  "hangar-transcript",
  "hangar-update-news",
@@ -2522,6 +2535,24 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "hangar-terminal-drive"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "hangar-core",
+ "hangar-interactions",
+ "hangar-other-terminal-policy",
+ "hangar-transcript",
+ "proptest",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
