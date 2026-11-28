@@ -1581,7 +1581,8 @@ fn pretrust_leaves_a_stale_lock_alone() {
     std::fs::write(&file, r#"{"projects": {}}"#).unwrap();
     let lock = home.path().join(".claude.json.lock");
     std::fs::create_dir(&lock).unwrap();
-    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+    // Instante fixo bem além dos 10 s de `STALE`: a trava vale como largada sem ler o relógio.
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
     std::fs::File::open(&lock).unwrap().set_modified(old).unwrap();
     claude::pretrust(&file, "/x", false).unwrap();
     let data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
@@ -1599,8 +1600,9 @@ fn the_folder_is_pretrusted_and_a_foreign_default_model_is_dropped() {
     claude::pretrust(&file, "/x", false).unwrap();
     let data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     assert_eq!(data, json!({"numStartups": 3, "projects": {"/x": {"allowedTools": [], "hasTrustDialogAccepted": true}}}));
-    let before = std::fs::metadata(&file).unwrap().modified().unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(20));
+    // mtime fixo no passado: qualquer regravação (tmp+rename) o troca pelo de agora.
+    let before = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    std::fs::OpenOptions::new().write(true).open(&file).unwrap().set_modified(before).unwrap();
     claude::pretrust(&file, "/x", false).unwrap();
     assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), before, "já confiada não reescreve");
     claude::pretrust(&file, "C:\\x\\y", true).unwrap();
@@ -2683,12 +2685,16 @@ fn the_account_guard_covers_the_preparation() {
     let mut holder = None;
     let (raw, _dir, root) = run_contract_with("create_claude_terminal_hangar_account", |_| {}, |root| {
         let home = root.join("home");
-        let script = format!(concat!("exec 9>>'{h}/.hangar-contas.lock'; flock -x 9; touch '{h}/segurando'; i=0\n",
+        let script = format!(concat!("exec 9>>'{h}/.hangar-contas.lock'; flock -x 9; echo segurando; i=0\n",
             "while [ $i -lt 600 ]; do for f in '{h}'/.hangar/account-locks/*.lock; do\n",
             "  [ -e \"$f\" ] && ! flock -n -x \"$f\" true && {{ echo presa > '{h}/guarda'; exit 0; }}\n",
             "done; i=$((i+1)); sleep 0.05; done; echo livre > '{h}/guarda'\n"), h = home.display());
-        holder = Some(std::process::Command::new("sh").arg("-c").arg(script).spawn().unwrap());
-        while !home.join("segurando").exists() { std::thread::sleep(std::time::Duration::from_millis(10)); }
+        let mut child = std::process::Command::new("sh").arg("-c").arg(script).stdout(std::process::Stdio::piped()).spawn().unwrap();
+        // A linha só sai com a trava já presa: é o sinal de que a abertura pode começar.
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut std::io::BufReader::new(child.stdout.take().unwrap()), &mut line).unwrap();
+        assert_eq!(line, "segurando\n");
+        holder = Some(child);
     });
     holder.unwrap().wait().unwrap();
     assert_eq!(raw["steps"][0]["status"], 200, "{}", raw["steps"][0]["body"]);
@@ -2766,23 +2772,25 @@ fn the_hangar_account_reconciles_in_process() {
     assert_eq!(raw["diary"][1]["conta_id"].as_str(), Some(&digest[..16]), "conta_id = sha256 do caminho, como o Python");
 }
 
-/// A trava das contas presa por outro dono até ele soltar `released` (marcado logo antes de soltar); devolve
-/// se as guardas de conta estavam livres nesse momento.
+/// A trava das contas presa por outro dono até o teste mandar soltar (`released` marcado logo antes de
+/// soltar); a thread devolve se as guardas de conta estavam livres nesse momento.
 #[cfg(target_os = "linux")]
 fn hold_accounts_lock(root: &std::path::Path, released: std::sync::Arc<std::sync::atomic::AtomicBool>)
-    -> std::thread::JoinHandle<bool> {
+    -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<bool>) {
+    let (release, wait) = std::sync::mpsc::channel();
     let lock = std::fs::OpenOptions::new().read(true).append(true).create(true).open(root.join("home/.hangar-contas.lock")).unwrap();
     lock.lock().unwrap();
     let guards = root.join("home/.hangar/account-locks");
-    std::thread::spawn(move || {
-        // Teto generoso: a abertura recusa aos 0,3 s e a tarefa da reconciliação para no mesmo prazo.
-        std::thread::sleep(std::time::Duration::from_millis(1500));
+    let holder = std::thread::spawn(move || {
+        // O teste solta depois da recusa; o teto só estoura se a abertura esperar a trava, e aí `released` acusa.
+        let _ = wait.recv_timeout(std::time::Duration::from_secs(10));
         let free = std::fs::read_dir(&guards).into_iter().flatten().flatten()
             .all(|e| std::fs::File::open(e.path()).unwrap().try_lock().is_ok());
         released.store(true, std::sync::atomic::Ordering::SeqCst);
         lock.unlock().unwrap();
         free
-    })
+    });
+    (release, holder)
 }
 
 /// Nada da reconciliação na conta nem no `~/.claude`: nem a memória do projeto ligada.
@@ -2811,7 +2819,9 @@ fn a_stuck_reconciliation_refuses_the_open_at_the_limit() {
         (json!(500), json!("erro_conta_reconciliacao_falhou"),
          json!({"nome_conta": "conta2", "erro": "a reconciliação da conta passou do limite de 0.3 s"})), "{body}");
     assert!(!raw["subprocesses"].as_array().unwrap().iter().any(|p| p["argv"][0] == "new-session"), "nenhum pane");
-    assert!(holder.unwrap().join().unwrap(), "a guarda da conta seguiu presa depois da recusa");
+    let (release, holder) = holder.unwrap();
+    release.send(()).unwrap();
+    assert!(holder.join().unwrap(), "a guarda da conta seguiu presa depois da recusa");
     assert_not_reconciled(&root);
     // D23: a reconciliação que passou do limite deixa o fim dela no diário da abertura.
     let ends: Vec<&Value> = raw["diary"].as_array().unwrap().iter().filter(|e| e["evento"] == "conta.reconciliar.fim").collect();
@@ -2826,7 +2836,7 @@ fn a_stuck_reconciliation_refuses_the_open_at_the_limit() {
 fn the_terminal_command_stops_a_stuck_reconciliation_at_the_limit() {
     let (scenario, _dir, root, env) = contract_setup("create_claude_terminal_hangar_account", |_| {});
     let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let holder = hold_accounts_lock(&root, released.clone());
+    let (release, holder) = hold_accounts_lock(&root, released.clone());
     let host = local::LocalHost::new(env.clone(), None).with_reconcile_limit(std::time::Duration::from_millis(300));
     let step: Value = serde_json::from_str(&contract::place(&scenario["steps"][0]["json"].to_string(), &root)).unwrap();
     let request = SessionOpenRequest::parse(step.to_string().as_bytes()).unwrap();
@@ -2840,6 +2850,7 @@ fn the_terminal_command_stops_a_stuck_reconciliation_at_the_limit() {
     assert!(!released.load(std::sync::atomic::Ordering::SeqCst), "o comando esperou a trava presa para terminar");
     let error = opened.err().expect("a reconciliação presa devia recusar");
     assert_eq!((error.status, error.code), (500, Some("erro_conta_reconciliacao_falhou")), "{:?}", error.body());
+    release.send(()).unwrap();
     assert!(holder.join().unwrap(), "a guarda da conta seguiu presa depois da recusa");
     assert_not_reconciled(&root);
     // D23: o fim no limite vai ao diário do comando sem esperar a trava das contas, que é a presa.
