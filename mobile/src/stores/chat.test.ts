@@ -766,6 +766,18 @@ test('comando de barra aceito não fica como eco: o servidor não o põe na fila
   chat.release();
 });
 
+test('comando de barra com a rede caindo no POST também não deixa eco: nada na conversa o confirmaria', async () => {
+  historyResponses = [[]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed'); }));
+  await chat.send('/compact').catch(() => undefined);
+  expect(chat.use.getState().pending).toEqual([]);
+  expect(readDraft('srv1', 'sess')?.submission?.status).toBe('unknown');
+  chat.release();
+});
+
 test('(c) preview some quando o assistant_msg real chega', async () => {
   historyResponses = [[]];
   const chat = chatStore('srv1', 'sess');

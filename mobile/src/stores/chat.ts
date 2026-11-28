@@ -1219,7 +1219,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           // O 503 com código só é recusa no `/input`: o do `/steer` continua incerto.
           if (steer && status === 503) throw Object.assign(new Error((err as Error).message, { cause: err }), { status });
           // A linha local do painel sai em qualquer falha: se a mensagem entrou na fila mesmo assim, o servidor a lista.
-          if (queue || isInputRefusal(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
+          // Comando também: nenhuma mensagem da conversa confirmaria o eco dele depois.
+          if (queue || command || isInputRefusal(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
           throw err;
         }
       }, draftRevision).catch((error: unknown) => {
