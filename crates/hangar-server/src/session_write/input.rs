@@ -112,7 +112,8 @@ pub fn was_steered(operation_id: &str, kimi: bool, promoted: &Result<RuntimeRepl
 
 /// O resultado da escolha do Jev. No Kimi, entregue sem orientar é a mensagem esperando na fila da TUI.
 pub fn timing_outcome(steer: bool, kimi: bool, body: &Value, note: &'static str) -> &'static str {
-    if steer && body["delivered"] != true { "refused" }
+    if kimi && body["waiting"] == true { "queue" }
+    else if steer && body["delivered"] != true { "refused" }
     else if kimi && body["steered"] != true { if steer { "queue" } else { note } }
     else if !steer && body["delivered"] == true { "delivered" } else { note }
 }
@@ -370,7 +371,8 @@ async fn send_with_entry(st: &AppState, name: &str, target: &WriteTarget, text: 
         unconfirmed = params.kimi && !steered && !matches!(&promoted, Ok(reply) if reply.disposition == Disposition::Accepted);
     }
     let mut answer=input_answer(&sent, steered);
-    if unconfirmed { answer.1["delivered"] = json!(false); }
+    // `waiting`: digitada na fila da TUI, que roda no fim do turno; sem fila à vista (`sem_fila`), ela já abriu o turno.
+    if unconfirmed { answer.1["delivered"] = json!(false); answer.1["waiting"] = json!(true); }
     if uncertain {answer.1["uncertain"]=json!(true);}
     (answer, operation_id)
 }
@@ -931,6 +933,7 @@ mod broadcast_tests {
         assert_eq!(timing_outcome(true, true, &json!({"delivered": true, "steered": true}), "direct"), "direct");
         assert_eq!(timing_outcome(true, false, &json!({"delivered": true, "steered": false}), "direct"), "direct");
         assert_eq!(timing_outcome(true, true, &json!({"delivered": false}), "direct"), "refused");
+        assert_eq!(timing_outcome(true, true, &json!({"delivered": false, "waiting": true}), "direct"), "queue", "Ctrl+S sem confirmação");
         assert_eq!(timing_outcome(false, true, &json!({"delivered": true}), "queue"), "queue", "na fila da TUI, não no turno");
         assert_eq!(timing_outcome(false, false, &json!({"delivered": true}), "queue"), "delivered");
     }
