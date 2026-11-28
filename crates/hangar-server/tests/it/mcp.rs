@@ -1499,12 +1499,17 @@ async fn placement_maquina_opens_there_with_its_id_fixed_and_answers_the_target(
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!((&sent[0]["machine"], &sent[0]["cwd"], &sent[0]["provider"]), (&json!("lab-id"), &json!("~"), &json!("claude")), "{}", sent[0]);
     assert!(sent[0].get("creator").is_none() && sent[0].get("inherit").is_none(), "lá a criadora não existe: {}", sent[0]);
+    // O id que ela informa (o que a sugestão e as mensagens citam) também abre lá, pela chave daqui.
+    let by_id = mcp.call("new_session", json!({"nome": "filha2", "cwd": s.home, "maquina": "lab-id", "provider": "claude", "inherit": false})).await;
+    assert!(!failed(&by_id), "{by_id}");
+    assert_eq!(by_id["structuredContent"]["alvo"], "lab::filha", "{by_id}");
+    assert_eq!(seen.lock().unwrap().get(1).map(|b| b["machine"].clone()), Some(json!("lab-id")));
     let both = mcp.call("new_session", json!({"nome": "lab::x", "maquina": "lab"})).await;
     assert!(failed(&both) && first_text(&both).contains("não os dois"), "{both}");
-    // Nome fora do `peers.json`: recusa clara, nada pedido a ninguém.
+    // Nem chave do `peers.json` nem id informado: recusa clara, nada aberto.
     let unknown = mcp.call("new_session", json!({"nome": "outra", "cwd": s.home, "maquina": "nada", "provider": "claude", "inherit": false})).await;
     assert!(failed(&unknown) && first_text(&unknown).starts_with("placement_machine_unknown:"), "{unknown}");
-    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
 /// As contas e as regras do balanceamento na pasta pessoal da cena, nunca na de quem roda o teste.

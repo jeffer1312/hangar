@@ -29,7 +29,11 @@ a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
   `machine: "auto"` é balanceado; omitido, abre aqui como antes; id de máquina abre nela. A tela pede
   `POST /api/placement/suggest` (a mesma escolha, sem criar nada) e cria na máquina marcada; o MCP
   `new_session` sem `maquina` nem `servidor::nome` e o `hangar-send --new` sem `servidor::` nem
-  `--machine` mandam `auto`, e o modo do agente gravado no servidor decide.
+  `--machine`, rodando dentro de uma sessão, mandam `auto`, e o modo do agente gravado no servidor
+  decide. O `hangar-send` sem sessão de origem (terminal fora de sessão, o vigia da orquestração)
+  abre local: não manda `machine`. `--machine`/`maquina` aceitam a chave do `peers.json` ou o id
+  que a máquina informa (o `CP_SERVER_ID` de lá, achado nos fatos); valor que não é nenhum dos dois
+  recebe `placement_machine_unknown`.
 - **Quem nunca é balanceado.** O que não manda `machine` (terminal digitado, tarefa agendada,
   reabrir, restaurar, retomar, `/conta`) e, com `auto`, o pedido de convidado (`guest`), a reserva
   pré-aquecida (`prewarm`), o pedido com conta, motor ou perfil desta máquina (`local_field`:
@@ -43,7 +47,8 @@ a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
   árbitro, pela mesma leitura de `groups::orq::is_orchestrator`) também fica aqui; leitura que falha
   fica aqui (`orq_unreadable`).
 - **Id da máquina = o `CP_SERVER_ID` que ela informa.** Regras, reservas e o `machine` encaminhado
-  usam o `server_id` dos fatos de cada máquina; sem ele, a chave do `peers.json`. A chave é o nome
+  usam o `server_id` dos fatos de cada máquina; sem ele a máquina entra como incapaz e não é
+  candidata (a regra não teria por onde achá-la). A chave é o nome
   que uma máquina dá à outra (ex.: chave `notebook`, id `nb`) e pode mudar de uma para outra; a
   regra é gravada em todas e precisa de um nome que todas leiam igual.
 - **Fatos por máquina, só na hora.** `GET /api/placement/facts?project=<id>` (só do dono): memória

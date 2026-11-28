@@ -106,11 +106,13 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  a filha abre lá pelo servidor daqui, que faz a ligação; a resposta
                                  volta como [de: servidor::filha]. Não combina com --resume. Com o backend em modo python,
                                  volta 422. Sessão aberta sem a ligação = linha "erro:" e saída 1.
-                                 Sem servidor:: nem --machine, o servidor escolhe a máquina
-                                 (balanceamento) e a saída diz "máquina: <id> — <motivo>"; fale
+                                 Sem servidor:: nem --machine, rodando dentro de uma sessão, o
+                                 servidor escolhe a máquina (balanceamento) e a saída diz
+                                 "máquina: <id> — <motivo>"; fora de sessão abre aqui. Fale
                                  com a sessão pelo nome da linha "sessão criada" (servidor::nome
-                                 quando abriu noutra). --machine <id> abre naquela máquina, com a
-                                 pasta traduzida para o mesmo projeto lá.
+                                 quando abriu noutra). --machine <id> abre naquela máquina (chave
+                                 do peers.json ou o CP_SERVER_ID dela), com a pasta traduzida
+                                 para o mesmo projeto lá.
   hangar-send --whoami               imprime o nome desta sessão (a identidade que assina os recados)
   hangar-send --help                esta ajuda (o cabeçalho deste arquivo).
 

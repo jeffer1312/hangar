@@ -343,10 +343,14 @@ fn run_case(case: &Value, change: Option<&Override>) -> Vec<String> {
             }
         }
     }
-    // Balanceamento: o `--new` sem servidor:: pede a escolha da máquina ao servidor daqui.
+    // Balanceamento: o `--new` sem servidor:: pede a escolha da máquina ao servidor daqui, só com a criadora
+    // identificada; fora de sessão (sem `creator`) abre aqui sem `machine`.
     if let Some(requests) = wanted.get_mut("local").and_then(Value::as_array_mut) {
         for request in requests.iter_mut().filter(|request| request["method"] == "POST" && request["path"] == "/api/sessions") {
             let mut body: Value = serde_json::from_str(request["body"].as_str().unwrap()).unwrap();
+            if body["creator"].as_str().is_none_or(str::is_empty) {
+                continue;
+            }
             body["machine"] = json!("auto");
             request["body"] = Value::String(body.to_string());
         }

@@ -559,10 +559,13 @@ processador acima de 80% sai da escolha, e vai a que tem menos sessões trabalha
   **Horários a evitar** (dias, das/até e fuso; a máquina sai da escolha nesse horário) e **Onde
   clonar repositório que falta** (por máquina; vazio, vale a pasta onde ficam os outros repositórios
   dela).
-- **O que o agente faz.** `hangar-send --new <nome> <pasta>` e a tool `new_session` sem máquina pedem
-  a escolha ao servidor; a saída diz `máquina: <id> — <motivo>`, e a resposta da tool traz
+- **O que o agente faz.** `hangar-send --new <nome> <pasta>` rodando dentro de uma sessão e a tool
+  `new_session` sem máquina pedem a escolha ao servidor (o `hangar-send` sem sessão de origem, num
+  terminal fora de sessão ou no vigia da orquestração, abre nesta máquina); a saída diz
+  `máquina: <id> — <motivo>`, e a resposta da tool traz
   `placement` e `alvo` (`servidor::nome` quando abriu noutra máquina): use o `alvo` para mandar
-  recado, interromper ou fechar. `--machine <id>` (`maquina` na tool) abre naquela máquina, com a
+  recado, interromper ou fechar. `--machine <id>` (`maquina` na tool; o nome dela no `peers.json` ou o
+  `CP_SERVER_ID` dela) abre naquela máquina, com a
   pasta traduzida para o mesmo projeto lá, numa worktree limpa da branch. Se nenhuma máquina com o
   repositório sobrou, ele é clonado na escolhida e a sessão nasce avisando que precisa instalar as
   dependências (o `.env` não vai junto).

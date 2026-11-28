@@ -65,11 +65,16 @@ async fn choose_step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &
     if !auto && machine == local { return Step::Here(None) }
     let kept = local_only(st, request, caller).await;
     let here = |why: &str| Step::Here(Some(wire(&not_balanced(&local, why))));
-    // O nome fora do `peers.json` não chega a ser consultado: sem ele não há como saber se a máquina existe.
-    if !auto && kept.is_none() && !st.peers.addressable().await.contains(machine) {
-        return Step::Refused(OpenError::new(400, "placement_machine_unknown",
-            format!("a máquina '{machine}' não está no peers.json (ou sem base_url/token)")).with_params(json!({"server": machine})));
-    }
+    // Daqui em diante `machine` explícita é a chave do `peers.json`, que alcança a máquina.
+    let key;
+    let machine = if !auto && kept.is_none() {
+        match machine_key(st, machine).await {
+            Some(found) => { key = found; key.as_str() }
+            None => return Step::Refused(OpenError::new(400, "placement_machine_unknown",
+                format!("a máquina '{machine}' não está no peers.json (ou sem base_url/token) nem é o id informado por uma delas"))
+                .with_params(json!({"server": machine}))),
+        }
+    } else { machine };
     match (auto, kept) {
         (true, Some(why)) => return here(why),
         (false, Some(why)) => return Step::Refused(OpenError::new(400, "placement_not_here",
@@ -215,18 +220,29 @@ async fn gather(st: &Arc<AppState>, project: Option<&ProjectId>, local: &str) ->
         .filter(|(_, f)| f.server_id != local).collect()
 }
 
+/// A chave do `peers.json` de `machine`: ela mesma, ou a da máquina cujo id informado (o `CP_SERVER_ID` de lá, nos
+/// fatos) é esse; a escolha e as mensagens dão o id, que pode diferir da chave daqui.
+async fn machine_key(st: &AppState, machine: &str) -> Option<String> {
+    let keys = st.peers.addressable().await;
+    if keys.contains(machine) { return Some(machine.to_owned()) }
+    let path = facts_path(None);
+    join_all(keys.into_iter().map(|key| peer_facts(st, key, &path))).await.into_iter().flatten()
+        .find_map(|(key, f)| (f.server_id == machine).then_some(key))
+}
+
 async fn peer_facts(st: &AppState, key: String, path: &str) -> Option<(String, MachineFacts)> {
     let answer = tokio::time::timeout(FACTS_WAIT, st.peers.call(&key, Method::GET, path, None)).await.ok()?;
     read_facts(key, answer)
 }
 
 /// A resposta de uma máquina à rota de fatos, com a chave do `peers.json` que a alcança. O id que vale nas
-/// regras, nas reservas e no `machine` encaminhado é o que ela informa (o `CP_SERVER_ID` de lá); sem ele, a
-/// chave. A rota inexistente lá (404 sem código) é versão sem a escolha: entra como incapaz, para o aviso dizer isso.
+/// regras, nas reservas e no `machine` encaminhado é o que ela informa (o `CP_SERVER_ID` de lá); sem ele ela entra
+/// como incapaz, com a chave no lugar do id: as regras são gravadas pelo id e a chave daqui pode não ser a dela.
+/// A rota inexistente lá (404 sem código) é versão sem a escolha: entra como incapaz, para o aviso dizer isso.
 fn read_facts(key: String, answer: Result<Option<Value>, PeerError>) -> Option<(String, MachineFacts)> {
     let facts = match answer {
         Ok(Some(value)) => serde_json::from_value::<MachineFacts>(value).ok()
-            .map(|f| if f.server_id.is_empty() { MachineFacts { server_id: key.clone(), ..f } } else { f })?,
+            .map(|f| if f.server_id.is_empty() { MachineFacts { server_id: key.clone(), capable: false, ..f } } else { f })?,
         Err(PeerError::Refused { status: 404, detail }) if detail.get("code").is_none() => MachineFacts {
             server_id: key.clone(), version: String::new(), capable: false, mem_total: 0, mem_available: 0, working: 0, cpu_pct: None,
             repos: Vec::new(), clone_dir: None,
@@ -331,8 +347,10 @@ fn skipped(st: &AppState, code: &str) {
 }
 
 fn ask(placement: &Placement) -> OpenError {
-    OpenError::new(409, "placement_ask", format!("o balanceamento pede confirmação: a sugestão é abrir em {} ({}). Pergunte à \
-        pessoa e abra de novo com a máquina escolhida (`maquina` no new_session, `--machine` no hangar-send)", placement.server, text(placement)))
+    let server = &placement.server;
+    OpenError::new(409, "placement_ask", format!("o balanceamento pede confirmação: a sugestão é abrir em {server} ({}). Pergunte à \
+        pessoa e abra de novo com a máquina escolhida (`maquina: \"{server}\"` no new_session, `--machine {server}` no hangar-send)",
+        text(placement)))
         .with_params(json!({"placement": wire(placement)}))
 }
 
@@ -449,8 +467,9 @@ mod tests {
             "working": 0, "cpu_pct": null, "repos": [], "clone_dir": null});
         let (key, nb) = read_facts("notebook".into(), Ok(Some(facts("nb")))).unwrap();
         assert_eq!((key.as_str(), nb.server_id.as_str()), ("notebook", "nb"));
-        // Sem `CP_SERVER_ID` lá, a chave.
-        assert_eq!(read_facts("notebook".into(), Ok(Some(facts("")))).unwrap().1.server_id, "notebook");
+        // Sem `CP_SERVER_ID` lá, a chave, e incapaz: não entra na escolha.
+        let (_, blank) = read_facts("notebook".into(), Ok(Some(facts("")))).unwrap();
+        assert_eq!((blank.server_id.as_str(), blank.capable), ("notebook", false));
     }
 
     #[test]
@@ -515,9 +534,11 @@ mod tests {
         let error = ask(&p);
         assert_eq!((error.status, error.code), (409, Some("placement_ask")));
         assert_eq!(error.params["placement"]["server"], "nb");
-        assert!(error.msg.contains("--machine"), "{}", error.msg);
+        // O id da sugestão é aceito pelo `--machine`/`maquina` (`machine_key`): a mensagem o cita pronto.
+        assert!(error.msg.contains("--machine nb") && error.msg.contains(r#"maquina: "nb""#), "{}", error.msg);
         let error = clone_unavailable("vm", None);
         assert_eq!((error.status, error.code), (409, Some("placement_clone_unavailable")));
+        assert!(error.msg.starts_with("vm "), "{}", error.msg);
     }
 
     #[test]

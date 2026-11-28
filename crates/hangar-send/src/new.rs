@@ -44,7 +44,7 @@ struct Options {
     resume: String,
     link: bool,
     force_account: bool,
-    /// Id da máquina onde abrir, ou `auto`; vazio = o servidor escolhe (`auto`).
+    /// Id da máquina onde abrir, ou `auto`; vazio = `auto` quando a criadora foi identificada, senão abre aqui.
     machine: String,
 }
 
@@ -301,7 +301,8 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
         return resume(cx, &endpoint, &remote, &name, &options, out, err);
     }
     // Sem servidor:: nem --machine, o servidor daqui escolhe a máquina; o modo do agente gravado nele diz se balanceia.
-    if remote.is_empty() && options.machine.is_empty() {
+    // Sem sessão de origem (terminal fora de sessão, vigia da orquestração) abre aqui: não há agente a balancear.
+    if remote.is_empty() && options.machine.is_empty() && !creator.is_empty() {
         options.machine = "auto".into();
     }
     let body = creation_body(&name, &options, &creator, customizations);
