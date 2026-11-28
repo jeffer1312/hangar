@@ -43,6 +43,7 @@ pub fn body(request: &SessionOpenRequest, ctx: &OpenContext, dest: &MachineFacts
         None => "~".into(),
     };
     out.machine = Some(dest.server_id.clone());
+    out.placed = true;
     // A ligação é feita daqui, onde a criadora existe; lá a filha nasce solta.
     out.link = false;
     out.creator = None;
@@ -137,7 +138,7 @@ mod tests {
         let body = body(&request("/home/j/pessoal/hangar-wt"), &ctx, &nb(), &Inherited::default()).unwrap();
         assert_eq!((&body["cwd"], &body["branch"]), (&json!("/home/j/Projetos/hangar"), &json!("feat")));
         // A máquina fixada impede escolher de novo lá; a criadora e o `inherit` não existem lá.
-        assert_eq!(body["machine"], "nb");
+        assert_eq!((&body["machine"], &body["placed"]), (&json!("nb"), &json!(true)));
         assert!(body.get("creator").is_none() && body.get("inherit").is_none(), "{body}");
         // A ligação é feita daqui: lá, sem criadora, ela viraria `erro_link_sem_criador`.
         assert!(body.get("link").is_none(), "{body}");

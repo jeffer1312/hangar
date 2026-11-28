@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use hangar_core::project::ProjectId;
 use hangar_workspace::{git, process, worktrees};
 
+use crate::diag::DiagClient;
 use crate::groups::peers::{PeerClient, PeerError};
 use crate::routes::{AppState, owner_gate};
 use crate::session_open::OpenError;
@@ -37,7 +38,8 @@ pub async fn clone(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         return json_response(StatusCode::UNPROCESSABLE_ENTITY, detail_body("erro_corpo_invalido", "pedido de clone inválido", json!({})));
     };
     let dir = crate::worktree_context::expanded(asked.dir.trim(), &st.accounts.env);
-    let result = tokio::task::spawn_blocking(move || clone_into(&asked.origin, &dir, CLONE_WAIT)).await
+    let diag = st.diag.clone();
+    let result = tokio::task::spawn_blocking(move || clone_into(&asked.origin, &dir, CLONE_WAIT, &diag)).await
         .unwrap_or_else(|_| Err(refusal(500, "placement_clone_failed", "o clone não terminou", json!({}))));
     match result {
         Ok(root) => json_response(StatusCode::OK, json!({"root": root})),
@@ -50,7 +52,7 @@ pub async fn clone(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 
 /// Clona `origin` em `<dir>/<nome>` por uma pasta temporária ao lado, renomeada só no fim: clone pela metade
 /// nunca parece repositório. A pasta que já existe com o mesmo `origin` é a resposta.
-pub fn clone_into(origin: &str, dir: &Path, wait: Duration) -> Result<String, OpenError> {
+pub fn clone_into(origin: &str, dir: &Path, wait: Duration, diag: &DiagClient) -> Result<String, OpenError> {
     let origin = origin.trim();
     let name = folder_name(origin).filter(|_| !origin.starts_with('-'))
         .ok_or_else(|| refusal(422, "placement_clone_invalid", "origin sem nome de repositório", json!({})))?;
@@ -74,15 +76,28 @@ pub fn clone_into(origin: &str, dir: &Path, wait: Duration) -> Result<String, Op
             json!({"name": name}))),
     };
     if let Some(failure) = failure {
-        let _ = std::fs::remove_dir_all(&tmp);
+        discard(&tmp, diag);
         return Err(failure);
     }
-    if std::fs::rename(&tmp, &target).is_err() {
-        let _ = std::fs::remove_dir_all(&tmp);
-        // Outro pedido terminou o mesmo clone antes deste.
-        return existing(&target, origin);
+    settle(&tmp, &target, origin, diag)
+}
+
+/// O clone de `tmp` passa a `target`. Com o nome já ocupado (outro pedido terminou o mesmo clone antes) a
+/// resposta é a de `existing`; sem ele, a troca que falhou é falha do clone, com o erro de E/S.
+fn settle(tmp: &Path, target: &Path, origin: &str, diag: &DiagClient) -> Result<String, OpenError> {
+    let Err(error) = std::fs::rename(tmp, target) else { return Ok(target.to_string_lossy().into_owned()) };
+    discard(tmp, diag);
+    if target.symlink_metadata().is_ok() { return existing(target, origin) }
+    Err(refusal(500, "placement_clone_failed", format!("não consegui pôr o clone em {}: {error}", target.display()),
+        json!({"root": target.to_string_lossy()})))
+}
+
+/// Apaga a pasta temporária do clone; a que fica no disco vai ao diário (a que nunca nasceu não conta).
+fn discard(tmp: &Path, diag: &DiagClient) {
+    if let Err(error) = std::fs::remove_dir_all(tmp) && error.kind() != std::io::ErrorKind::NotFound {
+        diag.report_with("rust.placement_clone_leftover", "", "placement_clone_tmp_left", "pasta temporária do clone ficou no disco",
+            json!({"io": format!("{:?}", error.kind())}));
     }
-    Ok(target.to_string_lossy().into_owned())
 }
 
 /// A pasta que já ocupa o nome: serve se for o mesmo repositório.
@@ -188,9 +203,32 @@ mod tests {
     #[test]
     fn an_invalid_origin_or_a_relative_dir_is_refused_before_anything() {
         let base = tempfile::tempdir().unwrap();
-        assert_eq!(clone_into("--upload-pack=x", base.path(), CLONE_WAIT).unwrap_err().code, Some("placement_clone_invalid"));
-        assert_eq!(clone_into("https://github.com/a/b", Path::new("rel"), CLONE_WAIT).unwrap_err().code, Some("placement_clone_invalid"));
+        let diag = DiagClient::new().with_diary(None);
+        assert_eq!(clone_into("--upload-pack=x", base.path(), CLONE_WAIT, &diag).unwrap_err().code, Some("placement_clone_invalid"));
+        assert_eq!(clone_into("https://github.com/a/b", Path::new("rel"), CLONE_WAIT, &diag).unwrap_err().code, Some("placement_clone_invalid"));
         assert_eq!(std::fs::read_dir(base.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_rename_that_fails_with_the_name_free_is_a_clone_failure_not_a_conflict() {
+        let base = tempfile::tempdir().unwrap();
+        let diag = DiagClient::new().with_diary(None);
+        // A pasta temporária sumiu: a troca falha e o destino continua livre.
+        let failed = settle(&base.path().join(".b.tmp-1"), &base.path().join("b"), "https://github.com/a/b", &diag).unwrap_err();
+        assert_eq!((failed.status, failed.code), (500, Some("placement_clone_failed")));
+        assert!(failed.msg.contains("não consegui pôr o clone"), "{}", failed.msg);
+        // O nome ocupado por outra coisa continua sendo conflito.
+        let tmp = base.path().join(".c.tmp-1");
+        std::fs::create_dir(&tmp).unwrap();
+        std::fs::write(base.path().join("c"), "").unwrap();
+        let taken = settle(&tmp, &base.path().join("c").join("x"), "https://github.com/a/c", &diag).unwrap_err();
+        assert_eq!(taken.code, Some("placement_clone_failed"), "pai que é arquivo: o nome não está ocupado");
+        std::fs::create_dir(&tmp).ok();
+        std::fs::create_dir(base.path().join("d")).unwrap();
+        std::fs::write(base.path().join("d").join("f"), "").unwrap();
+        let conflict = settle(&tmp, &base.path().join("d"), "https://github.com/a/d", &diag).unwrap_err();
+        assert_eq!(conflict.code, Some("placement_clone_conflict"));
+        assert!(!tmp.exists(), "a temporária sai também no conflito");
     }
 
     #[test]

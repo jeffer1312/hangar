@@ -1114,6 +1114,8 @@ export interface CreateSessionBody {
   base?: string | null;
   // Reserva pré-aquecida da tela de nova conversa (`PUT /api/sessions/prewarm`) que esta abertura adota.
   prewarm?: string | null;
+  // `auto` ou o id da máquina onde abrir (`placementElsewhereBody`); omitido, abre no servidor do pedido.
+  machine?: string | null;
 }
 
 export type SessionOpeningExtras = Pick<CreateSessionBody, 'engine_account' | 'service_tier' | 'claude_customizations'>;
@@ -1303,6 +1305,8 @@ export function autoHideDiverges(results: readonly AutoHideResult[]): string[] {
 // Abrir ou retomar sessão leva bem mais que o prazo padrão: estourar antes faz a tela acusar erro
 // com a sessão nascendo e o reenvio duplicá-la.
 const SESSION_BIRTH_MS = 120_000;
+// Com `machine` a criação pode clonar o repositório na outra máquina: o pior caso, o mesmo do `hangar-send`.
+const PLACED_BIRTH_MS = 900_000;
 
 // Criação e reabertura (modo, recarregar, conta, motor, bypass) podem trazer `avisos` no sucesso.
 function withSessionWarnings<T extends object>(result: T): T {
@@ -1392,7 +1396,8 @@ export function setClaudeDefaultsForServer(s: Server, body: ClaudeDefaultsBody):
 }
 
 export function createSessionForServer(server: Server, body: CreateSessionBody): Promise<SessionInfo> {
-  return apiFetchForServer<SessionInfo>(server, '/api/sessions', { method: 'POST', body: JSON.stringify(buildCreateSessionBody(body)) }, SESSION_BIRTH_MS)
+  return apiFetchForServer<SessionInfo>(server, '/api/sessions', { method: 'POST', body: JSON.stringify(buildCreateSessionBody(body)) },
+    body.machine ? PLACED_BIRTH_MS : SESSION_BIRTH_MS)
     .then(withSessionWarnings);
 }
 

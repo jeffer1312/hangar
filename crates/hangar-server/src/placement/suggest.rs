@@ -110,19 +110,18 @@ async fn choose_step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &
         if let Some(root) = &ctx.cwd_root { st.placement_reservations.reserve(root, &placement.server); }
         if config.agent_mode == AgentMode::Ask { return Step::Refused(ask(&placement)) }
         if placement.server == ctx.local_id { return Step::Here(Some(wire(&placement))) }
-        let dest = facts.into_iter().find(|(_, f)| f.server_id == placement.server);
+        let dest = facts.into_iter().find(|(_, f)| f.server_id == placement.server).ok_or(None);
         (Some(placement), dest)
     } else {
-        (None, peer_facts(st, machine.to_owned(), &facts_path(ctx.cwd_project.as_ref())).await)
+        (None, peer_facts(st, machine.to_owned(), &facts_path(ctx.cwd_project.as_ref())).await.map_err(Some))
     };
     // `server` é a chave do `peers.json`, que alcança a máquina; `dest.server_id`, o id que ela informou.
     let fallback = placement.as_ref().map_or(machine, |p| p.server.as_str()).to_owned();
     let (server, mut dest) = match dest {
-        Some((key, dest)) if dest.capable => (key, dest),
-        Some((server, _)) => return Step::Refused(OpenError::new(409, "placement_peer_old",
+        Ok((key, dest)) if dest.capable => (key, dest),
+        Ok((server, _)) => return Step::Refused(OpenError::new(409, "placement_peer_old",
             format!("{server} está numa versão sem a escolha de máquina: abra com `{server}::<nome>`")).with_params(json!({"server": server}))),
-        None => return Step::Refused(OpenError::new(503, "placement_peer_unavailable",
-            format!("{fallback} não respondeu aos fatos do balanceamento; confira se ela está ligada")).with_params(json!({"server": fallback}))),
+        Err(dropped) => return Step::Refused(peer_unavailable(&fallback, dropped.as_ref())),
     };
     if placement.is_none() && let Some(root) = &ctx.cwd_root { st.placement_reservations.reserve(root, &dest.server_id); }
     let inherited = match inherited(st, request).await {
@@ -156,7 +155,10 @@ async fn clone_there(st: &AppState, server: &str, ctx: &OpenContext, dest: &Mach
     -> Result<String, OpenError> {
     let dir = match placement.and_then(|p| p.clone.as_ref()) {
         Some(target) => Some(target.dir.clone()),
-        None => load_config(st).await.ok().and_then(|c| c.clone_dirs.get(&dest.server_id).cloned()).or_else(|| dest.clone_dir.clone()),
+        None => match load_config(st).await {
+            Ok(config) => config.clone_dirs.get(&dest.server_id).cloned(),
+            Err(code) => { skipped(st, code); None }
+        }.or_else(|| dest.clone_dir.clone()),
     };
     let root_here = ctx.cwd_root.clone();
     let origin = tokio::task::spawn_blocking(move || root_here.and_then(|r| hangar_workspace::worktrees::origin_url(&r))).await.ok().flatten();
@@ -230,23 +232,58 @@ async fn machine_key(st: &AppState, machine: &str) -> Option<String> {
         .find_map(|(key, f)| (f.server_id == machine).then_some(key))
 }
 
-async fn peer_facts(st: &AppState, key: String, path: &str) -> Option<(String, MachineFacts)> {
-    let answer = tokio::time::timeout(FACTS_WAIT, st.peers.call(&key, Method::GET, path, None)).await.ok()?;
-    read_facts(key, answer)
+/// Por que uma máquina ficou fora da escolha: o código do diário e a causa. `answered`: ela respondeu, recusando
+/// ou com corpo que não serve.
+#[derive(Debug)]
+struct Dropped { code: &'static str, cause: String, answered: bool }
+
+/// Os fatos de `key`; a máquina descartada vai ao diário com o código e a causa, nunca à tela.
+async fn peer_facts(st: &AppState, key: String, path: &str) -> Result<(String, MachineFacts), Dropped> {
+    let read = match tokio::time::timeout(FACTS_WAIT, st.peers.call(&key, Method::GET, path, None)).await {
+        Ok(answer) => read_facts(key.clone(), answer),
+        Err(_) => Err(Dropped { code: "placement_peer_timeout", cause: format!("{key} não respondeu em {} s", FACTS_WAIT.as_secs()),
+            answered: false }),
+    };
+    if let Err(dropped) = &read {
+        let cause = dropped.cause.chars().take(300).collect::<String>();
+        st.diag.report_with("rust.placement_peer_dropped", "", dropped.code, "máquina fora da escolha do balanceamento",
+            json!({"server": key, "cause": cause}));
+    }
+    read
+}
+
+/// A máquina pedida que não deu os fatos. A que respondeu recusando não é "confira se está ligada".
+fn peer_unavailable(server: &str, dropped: Option<&Dropped>) -> OpenError {
+    let msg = match dropped {
+        Some(d) if d.answered => format!("{server} não deu os fatos do balanceamento: {}", d.cause),
+        _ => format!("{server} não respondeu aos fatos do balanceamento; confira se ela está ligada"),
+    };
+    OpenError::new(503, "placement_peer_unavailable", msg)
+        .with_params(json!({"server": server, "cause": dropped.map(|d| d.cause.as_str()), "detalhe": dropped.map(|d| d.code)}))
 }
 
 /// A resposta de uma máquina à rota de fatos, com a chave do `peers.json` que a alcança. O id que vale nas
 /// regras, nas reservas e no `machine` encaminhado é o que ela informa (o `CP_SERVER_ID` de lá); sem ele ela entra
 /// como incapaz, com a chave no lugar do id: as regras são gravadas pelo id e a chave daqui pode não ser a dela.
 /// A rota inexistente lá (404 sem código) é versão sem a escolha: entra como incapaz, para o aviso dizer isso.
-fn read_facts(key: String, answer: Result<Option<Value>, PeerError>) -> Option<(String, MachineFacts)> {
+fn read_facts(key: String, answer: Result<Option<Value>, PeerError>) -> Result<(String, MachineFacts), Dropped> {
+    let unreadable = |cause: String| Dropped { code: "placement_peer_unreadable", cause, answered: true };
     let facts = match answer {
-        Ok(Some(value)) => serde_json::from_value::<MachineFacts>(value).ok()
+        Ok(Some(value)) => serde_json::from_value::<MachineFacts>(value).map_err(|e| unreadable(format!("{key}: fatos ilegíveis ({e})")))
             .map(|f| if f.server_id.is_empty() { MachineFacts { server_id: key.clone(), capable: false, ..f } } else { f })?,
+        Ok(None) => return Err(unreadable(format!("{key}: resposta dos fatos vazia"))),
         Err(error) if error.missing_route() => MachineFacts { server_id: key.clone(), ..Default::default() },
-        _ => return None,
+        Err(error) => {
+            let (code, answered) = match &error {
+                PeerError::Refused { .. } => ("placement_peer_refused", true),
+                PeerError::IdentityMismatch { .. } => ("placement_peer_identity", true),
+                PeerError::Unknown => ("placement_machine_unknown", false),
+                _ => ("placement_peer_unreachable", false),
+            };
+            return Err(Dropped { code, cause: error.text(&key), answered });
+        }
     };
-    Some((key, facts))
+    Ok((key, facts))
 }
 
 fn facts_path(project: Option<&ProjectId>) -> String {
@@ -454,8 +491,30 @@ mod tests {
         let (key, old) = read_facts("vm".into(), Err(PeerError::Refused { status: 404, detail: json!("Not Found") })).unwrap();
         assert!(!old.capable && old.server_id == "vm" && key == "vm");
         // 404 com código é recusa da rota de lá, não versão antiga.
-        assert_eq!(read_facts("vm".into(), Err(PeerError::Refused { status: 404, detail: json!({"code": "x"}) })), None);
-        assert_eq!(read_facts("vm".into(), Err(PeerError::Transport("prazo".into()))), None);
+        let refused = read_facts("vm".into(), Err(PeerError::Refused { status: 404, detail: json!({"code": "x"}) })).unwrap_err();
+        assert_eq!((refused.code, refused.answered), ("placement_peer_refused", true));
+        let silent = read_facts("vm".into(), Err(PeerError::Transport("prazo".into()))).unwrap_err();
+        assert_eq!((silent.code, silent.answered, silent.cause.as_str()), ("placement_peer_unreachable", false, "prazo"));
+    }
+
+    #[test]
+    fn a_dropped_machine_keeps_the_cause_and_one_that_answered_is_not_told_to_be_on() {
+        for (status, detail) in [(401, json!("token")), (403, json!("proibido")), (503, json!({"code": "placement_facts_list_unavailable"}))] {
+            let dropped = read_facts("vm".into(), Err(PeerError::Refused { status, detail })).unwrap_err();
+            assert_eq!(dropped.code, "placement_peer_refused");
+            assert!(dropped.cause.contains(&format!("HTTP {status}")), "{}", dropped.cause);
+            let error = peer_unavailable("vm", Some(&dropped));
+            assert_eq!((error.status, error.code), (503, Some("placement_peer_unavailable")));
+            assert_eq!(error.params["cause"], json!(dropped.cause));
+            assert!(!error.msg.contains("ligada") && error.msg.contains(&format!("HTTP {status}")), "{}", error.msg);
+        }
+        let garbled = read_facts("vm".into(), Ok(Some(json!({"server_id": 3})))).unwrap_err();
+        assert_eq!((garbled.code, garbled.answered), ("placement_peer_unreadable", true));
+        assert_eq!(read_facts("vm".into(), Ok(None)).unwrap_err().code, "placement_peer_unreadable");
+        let silent = Dropped { code: "placement_peer_timeout", cause: "vm não respondeu em 2 s".into(), answered: false };
+        let error = peer_unavailable("vm", Some(&silent));
+        assert!(error.msg.contains("confira se ela está ligada"), "{}", error.msg);
+        assert_eq!((&error.params["cause"], &error.params["detalhe"]), (&json!("vm não respondeu em 2 s"), &json!("placement_peer_timeout")));
     }
 
     #[test]

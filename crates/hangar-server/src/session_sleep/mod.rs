@@ -97,7 +97,14 @@ async fn round(st: &Arc<AppState>) {
 /// também segura: na dúvida, a sessão fica acordada.
 async fn holds_remote_child(st: &AppState, name: &str) -> bool {
     let Some(groups) = &st.groups else { return false };
-    groups.link(name).await.map_or(true, |link| link.is_some_and(|s| s.has_remote_child()))
+    match groups.link(name).await {
+        Ok(link) => link.is_some_and(|s| s.has_remote_child()),
+        Err(_) => {
+            st.diag.report("rust.session_sleep_group_unreadable", name, "session_sleep_group_unreadable",
+                "grupo ilegível: a sessão oculta ficou acordada");
+            true
+        }
+    }
 }
 
 #[cfg(test)]

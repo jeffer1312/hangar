@@ -245,6 +245,10 @@ pub struct SessionOpenRequest {
     /// A reserva pré-aquecida (`PUT /api/sessions/prewarm`) que esta abertura adota se couber.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prewarm: Option<String>,
+    /// O corpo que outra máquina encaminhou pela escolha (`placement::forward::body`): a worktree nasce do remoto
+    /// e não abre por cima de mudança local. `machine` igual ao id daqui, pedido direto, não é isso.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub placed: bool,
     /// Fora do fio: o nome derivado da pasta que só uma reserva pré-aquecida segura fica para esta
     /// abertura (a reserva sai). A abertura do dono liga; a resolução da própria reserva não.
     #[serde(skip)]

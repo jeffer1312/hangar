@@ -78,6 +78,7 @@ export default function PlacementSettings() {
     if (saving || !draft) return;
     setDraft(change(draft));
     setError('');
+    setSaved(null);
   };
   const addRule = () => {
     const { project, server } = rule;
@@ -147,11 +148,11 @@ export default function PlacementSettings() {
 
       <SectionCard icon="Gauge" title={m.native_placement_limits()} subtitle={m.native_placement_limits_help()}>
         <MachineField label={`${m.native_placement_limit_memory()} (%)`} accessibilityHint={m.native_placement_limit_memory_help()} value={limits.mem}
-          onChangeText={(mem) => setLimits((l) => ({ ...l, mem }))} keyboardType="number-pad" maxLength={3} editable={!saving} />
+          onChangeText={(mem) => { setSaved(null); setLimits((l) => ({ ...l, mem })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
         <MachineField label={m.native_placement_limit_working()} accessibilityHint={m.native_placement_limit_working_help()} value={limits.working}
-          onChangeText={(working) => setLimits((l) => ({ ...l, working }))} keyboardType="number-pad" maxLength={3} editable={!saving} />
+          onChangeText={(working) => { setSaved(null); setLimits((l) => ({ ...l, working })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
         <MachineField label={`${m.native_placement_limit_cpu()} (%)`} accessibilityHint={m.native_placement_limit_cpu_help()} value={limits.cpu}
-          onChangeText={(cpu) => setLimits((l) => ({ ...l, cpu }))} keyboardType="number-pad" maxLength={3} editable={!saving} />
+          onChangeText={(cpu) => { setSaved(null); setLimits((l) => ({ ...l, cpu })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
       </SectionCard>
 
       <SectionCard icon="FolderGit2" title={m.native_placement_projects()} subtitle={m.native_placement_projects_help()}>

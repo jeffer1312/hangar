@@ -983,6 +983,25 @@ fn fast_recognizes_cliproxy_client_keys_in_both_config_formats() {
     assert_eq!(spec.service_tier, None, "Normal num motor sem Fast não vira `service_tier` no provedor");
 }
 
+/// Só o corpo encaminhado por outra máquina nasce do remoto: o pedido direto com o id daqui (`machine`) é uma abertura comum.
+#[test]
+fn only_the_forwarded_body_opens_a_fresh_worktree() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    for dir in ["work", ".claude"] { std::fs::create_dir_all(home.join(dir)).unwrap(); }
+    let facts = local_facts(&home, &runtime);
+    let fresh = |extra: Value| {
+        let mut body = json!({"name": "s1", "cwd": home.join("work"), "provider": "claude", "headless": false, "branch": "feat"});
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
+        resolve::resolve_open(&request, &OWNER, &facts).unwrap().spec.worktree.unwrap().fresh
+    };
+    assert!(!fresh(json!({})));
+    assert!(!fresh(json!({"machine": "pc"})), "id desta máquina: Step::Here, sem o 409 placement_branch_busy");
+    assert!(fresh(json!({"machine": "pc", "placed": true})));
+}
+
 /// Sessão que já existe e perdeu o suporte volta mais devagar em vez de não voltar: Ultra Fast em Fast, Fast na normal.
 #[test]
 fn a_saved_speed_without_support_falls_back_on_relaunch() {

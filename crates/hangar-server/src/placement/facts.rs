@@ -47,7 +47,9 @@ pub(crate) async fn local(st: &Arc<AppState>, project: Option<&ProjectId>, with_
         roots.extend(worktrees::main_repos(folders.iter().map(String::as_str)));
         roots.sort();
         roots.dedup();
-        roots.into_iter()
+        // Um `git config` por raiz, em paralelo (pool do rayon): em série, centenas de raízes passariam dos 2 s de quem pergunta.
+        use rayon::prelude::*;
+        roots.into_par_iter()
             .filter_map(|root| Some(KnownRepo { project: ProjectId::from_origin(&worktrees::origin_url(&root)?)?, root }))
             .filter(|repo| project.as_ref().is_none_or(|p| &repo.project == p))
             .collect::<Vec<_>>()
@@ -70,7 +72,12 @@ fn scan(st: &AppState) -> Result<Scan, &'static str> {
     let recent = crate::archive_list::worktree_activities(st, &bases, now).into_iter()
         .filter(|(_, mtime)| *mtime >= now - crate::worktree_context::RECENT_SECS).map(|(cwd, _)| cwd).collect::<Vec<_>>();
     let mut roots = worktrees::main_repos(recent.iter().map(String::as_str));
-    roots.extend(worktrees::discover_repositories(&scan_roots).repos);
+    let discovery = worktrees::discover_repositories(&scan_roots);
+    if discovery.partial {
+        // A varredura parou no teto de pastas ou de tempo: `repos` pode faltar um repositório que esta máquina tem.
+        st.diag.report("rust.placement_facts_partial", "", "placement_facts_scan_partial", "varredura de repositórios incompleta");
+    }
+    roots.extend(discovery.repos);
     let configured = match hangar_placement::store::load(&st.accounts.env.home) {
         Ok(config) => config.clone_dirs.get(&st.current_server_id()).cloned(),
         Err(_) => {
