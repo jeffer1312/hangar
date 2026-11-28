@@ -318,7 +318,7 @@ function reportAppReady() {
   const slot = server && slots.get(server.id);
   if (!server || !slot || (!slot.error && !slot.sessions)) return;
   appReadySettled = true;
-  if (!slot.error) registrarDiag({ evento: 'app.pronto', ms: Date.now() - appStartedAt }, server.baseUrl);
+  if (!slot.error) registrarDiag({ evento: 'app.pronto', ms: Math.round(performance.now() - appStartedAt) }, server.baseUrl);
 }
 
 // Os pares nas linhas próprias dizem quando reler `/api/external-pairs`; o laço é o do core.

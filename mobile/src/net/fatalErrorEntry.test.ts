@@ -12,6 +12,7 @@ it('instala captura antes de carregar rotas e identifica o bundle OTA', () => {
   runInContext(entry, createContext({
     ErrorUtils: errorUtils, RN$registerExceptionListener: listener,
     require: (path: string) => {
+      if (path === './src/net/appStart') { order.push('start'); return {}; }
       if (path === 'expo') { order.push('expo'); return {}; }
       if (path === 'react-native') return { Platform: { OS: 'ios' } };
       if (path === 'expo-constants') return { default: { expoConfig: { version: '0.1.0', runtimeVersion: 'native-2' } } };
@@ -22,7 +23,7 @@ it('instala captura antes de carregar rotas e identifica o bundle OTA', () => {
       throw Error(`unexpected-module:${path}`);
     },
   }));
-  expect(order).toEqual(['expo', 'capture', 'router']);
+  expect(order).toEqual(['start', 'expo', 'capture', 'router']);
   expect(install).toHaveBeenCalledWith({ errorUtils, exceptions, registerExceptionListener: listener,
     metadata: { platform: 'ios', version: '0.1.0', runtime: 'native-2', updateId: 'ota-one', embedded: false } });
 });

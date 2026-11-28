@@ -48,7 +48,7 @@ function Card({ card, index }: { card: SpeedCard; index: number }) {
   const t = TEXT[card.event];
   const v = VERDICT[card.verdict];
   return (
-    <div className="speed-card flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4" style={{ "--i": index } as React.CSSProperties}>
+    <div data-block data-hits={useQ() ? 1 : undefined} className="speed-card flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4" style={{ "--i": index } as React.CSSProperties}>
       <div className="flex items-start gap-2.5">
         <span className="grid size-8 shrink-0 place-items-center rounded-[9px] bg-[color-mix(in_srgb,var(--hue)_16%,transparent)] text-(--hue)">
           <t.icon className="size-[18px]" strokeWidth={1.9} />
@@ -110,7 +110,8 @@ const SHORT: Record<string, string> = { lt100ms: "<0,1s", lt300ms: "<0,3s", lt1s
 export function Speed({ data, d }: { data: Summary; d: Derived }) {
   const s = section("speed");
   const [system, setSystem] = useState<System>("all");
-  const q = useQ();
+  const outer = useQ();
+  const q = matches(outer, s.name) ? "" : outer;
   const cards = speedCards(data.speed ?? [], system).filter(c => !q || matches(q, TEXT[c.event].title + " " + TEXT[c.event].explain + " " + c.event));
   const others = d.speed.filter(c => !SPEED_EVENTS.includes(c.event));
   if (q && !cards.length && !others.length) return null;

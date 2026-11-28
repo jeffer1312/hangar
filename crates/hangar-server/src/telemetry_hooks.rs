@@ -63,7 +63,8 @@ fn provider_of(list: &ListBridge, sid: &str) -> Provider {
         .and_then(|row| Provider::parse(&row.provider))).unwrap_or(Provider::Other)
 }
 
-static SPEED: LazyLock<Mutex<SpeedClock>> = LazyLock::new(Default::default);
+/// O relógio e a época de consentimento em que ele começou: aceite novo zera o que ficou pendente.
+static SPEED: LazyLock<Mutex<(u64, SpeedClock)>> = LazyLock::new(Default::default);
 /// O instante e a hora de parede da âncora: a hora do envio gravada na fila vira o mesmo relógio.
 static ANCHOR: LazyLock<(Instant, f64)> = LazyLock::new(|| (Instant::now(), epoch_now()));
 /// Desde quando o `Monitor` de cada sessão lê a tela: sinal dele só vale para o que aconteceu depois.
@@ -75,8 +76,19 @@ fn epoch_to_anchor(epoch: f64) -> Duration { Duration::try_from_secs_f64(epoch -
 
 fn speed(change: impl FnOnce(&mut SpeedClock, Duration) -> Option<Measure>) {
     let Some(telemetry) = installed() else { return };
-    let measure = change(&mut SPEED.lock().unwrap_or_else(|e| e.into_inner()), since_anchor(Instant::now()));
-    if let Some(m) = measure { telemetry.duration(m.event, m.dims, m.took); }
+    let epoch = telemetry.consent_epoch();
+    let measure = {
+        let mut guard = SPEED.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.0 != epoch { guard.1.clear(); guard.0 = epoch; }
+        change(&mut guard.1, since_anchor(Instant::now()))
+    };
+    if let Some(m) = measure { telemetry.duration_in(epoch, m.event, m.dims, m.took); }
+}
+
+/// Marca do texto, só em memória: liga a linha confirmada na fila à mensagem que o dono mandou.
+fn message_mark(text: &str) -> u64 {
+    use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+    BuildHasherDefault::<DefaultHasher>::default().hash_one(text.trim())
 }
 
 /// Abertura do dono, antes do lançamento, do `started` da abertura.
@@ -89,17 +101,17 @@ pub(crate) fn speed_forget(name: &str) { speed(|clock, _| { clock.forget(name); 
 /// Mensagem do dono pela API; comando (`/cost`) não tem resposta para medir.
 pub(crate) fn speed_touch(name: &str, provider: Provider, surface: Surface, text: &str) {
     if text.trim_start().starts_with('/') { return; }
-    speed(|clock, now| { clock.touch(name, Session { provider, surface }, now); None });
+    speed(|clock, now| { clock.touch(name, Session { provider, surface }, message_mark(text), now); None });
 }
 
 /// Barato e sem o motor: quem paga para juntar o sinal (fila) pergunta antes.
 pub(crate) fn speed_knows(name: &str) -> bool {
-    installed().is_some() && SPEED.lock().unwrap_or_else(|e| e.into_inner()).knows(name)
+    installed().is_some() && SPEED.lock().unwrap_or_else(|e| e.into_inner()).1.knows(name)
 }
 
 /// Quem paga para ler a tela pergunta antes.
 pub(crate) fn speed_awaits_ready(name: &str) -> bool {
-    installed().is_some() && SPEED.lock().unwrap_or_else(|e| e.into_inner()).awaits_ready(name)
+    installed().is_some() && SPEED.lock().unwrap_or_else(|e| e.into_inner()).1.awaits_ready(name)
 }
 
 /// Pronta vista por quem observa a sessão desde sempre (ator do runtime, captura dos outros com terminal).
@@ -111,7 +123,7 @@ pub(crate) fn speed_delivered(name: &str, text: &str, steered: bool, sent: Optio
     if text.trim_start().starts_with('/') { return; }
     speed(|clock, now| {
         let sent = sent.map_or(now, epoch_to_anchor);
-        clock.delivered(name, crate::session_write::input::is_relay(text), steered, sent, now)
+        clock.delivered(name, message_mark(text), crate::session_write::input::is_relay(text), steered, sent, now)
     });
 }
 

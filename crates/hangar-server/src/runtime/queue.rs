@@ -585,7 +585,7 @@ impl Store {
 /// Mensagem da pessoa ou de outra sessão que passou a confirmada nesta ação: chegou ao agente.
 fn speed_confirmed(before: &State, after: &State) {
     for row in newly_confirmed(before, after) {
-        let sent = row["claimed_ts"].as_f64().or_else(|| row["ts"].as_f64());
+        let sent = row_clock(row);
         crate::telemetry_hooks::speed_delivered(&after.name, row["text"].as_str().unwrap_or(""), row["steered"] == true, sent);
     }
 }

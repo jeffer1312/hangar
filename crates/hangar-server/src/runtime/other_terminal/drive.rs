@@ -172,7 +172,7 @@ pub(crate) fn screen(provider: hangar_transcript::Provider, pane: &str) -> crate
         _ => crate::terminal_state::analyze(pane),
     }
 }
-fn blocked(target: &OtherTarget, frame: &OtherFrame) -> bool {
+pub(super) fn blocked(target: &OtherTarget, frame: &OtherFrame) -> bool {
     let analysis = screen(target.provider, &frame.text);
     analysis.overlay || analysis.state == "awaiting_input"
 }

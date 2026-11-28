@@ -1258,6 +1258,8 @@ impl Hangar {
         // estava rodando reabre onde parou.
         let resume = setup::saved_run();
         let probe = saved.is_none() && resume.is_none() && !setup::demo() && setup::supported();
+        // O assistente aberto cobre a lista: a primeira lista que chegar não é a tela que a pessoa vê.
+        if resume.is_some() || setup::demo() || setup::interrupted_fix() { client_telemetry.take_app_ready(false); }
         match resume {
             Some(state) => cx.defer_in(window, move |this: &mut Self, window, cx| {
                 setup::opening_at_launch();
