@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import {
   mergeTourProgress, mobileTourOutcome, planMobileTour, registrarDiag, runAction, runChoice, sameTourProgress, seenTip, seenTour,
-  startRun, tipsSwitch, tourProgressFor, type Server, type TourChoice, type TourProgress, type TourRun, type TourStep,
+  startTourRun, tipsSwitch, tourProgressFor, type Server, type TourChoice, type TourProgress, type TourRun, type TourStep,
 } from '@hangar/core';
 import { prefs } from '../../stores/prefs';
 import { ownServers, useServers } from '../../stores/servers';
@@ -82,7 +82,7 @@ export function planTour(sessions: number, replay = false) {
   const { progress, planned } = useTour.getState();
   if (planned && !replay) return;
   const { steps, tips } = planMobileTour(sessions);
-  const run = replay || mobileTourOutcome(progress) === null ? startRun(steps) : null;
+  const run = replay || mobileTourOutcome(progress) === null ? startTourRun(steps) : null;
   useTour.setState({ planned: true, run, tips });
 }
 

@@ -99,7 +99,7 @@ export interface TourRun { steps: TourStep[]; index: number | null; doneAny: boo
 
 export type TourChoice = 'next' | 'skipTour' | 'later';
 
-export const startRun = (steps: TourStep[]): TourRun => ({ steps, index: steps.length ? 0 : null, doneAny: false });
+export const startTourRun = (steps: TourStep[]): TourRun => ({ steps, index: steps.length ? 0 : null, doneAny: false });
 
 /** Fim da volta: `outcome` é o que gravar; `null` = ainda andando ou adiado. */
 export interface RunStep { run: TourRun; outcome: TourOutcome | null }

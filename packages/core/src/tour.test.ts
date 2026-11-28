@@ -3,7 +3,7 @@ import { configureApi, type EventSourceLike } from './apiEnv';
 import { _limparEsfriamentoParaTestes } from './esfriamento';
 import {
   MOBILE_TOUR_DONE, MOBILE_TOUR_SKIPPED, mergeTourProgress, mobileTourOutcome, nextTip, planMobileTour, runAction,
-  runChoice, runStep, sameTourProgress, seenTip, seenTour, startRun, tipsSwitch, tourProgressFor, tourTipsOff,
+  runChoice, runStep, sameTourProgress, seenTip, seenTour, startTourRun, tipsSwitch, tourProgressFor, tourTipsOff,
 } from './tour';
 
 describe('junção do visto', () => {
@@ -61,7 +61,7 @@ describe('volta do tour', () => {
   const steps = planMobileTour(2).steps;
 
   it('só a ação do passo na tela anda, e o fim com ação grava done', () => {
-    let run = startRun(steps.slice(0, 2));
+    let run = startTourRun(steps.slice(0, 2));
     expect(runAction(run, 'search').run.index).toBe(0);
     let step = runAction(run, 'menu');
     expect(step.outcome).toBeNull();
@@ -73,17 +73,17 @@ describe('volta do tour', () => {
   });
 
   it('pular cada passo até o fim grava skipped', () => {
-    let step = runChoice(startRun(steps.slice(0, 2)), 'next');
+    let step = runChoice(startTourRun(steps.slice(0, 2)), 'next');
     expect(step.outcome).toBeNull();
     step = runChoice(step.run, 'next');
     expect(step.outcome).toBe('skipped');
   });
 
   it('pular o tour depois de uma ação feita grava done; ver depois não grava nada', () => {
-    const afterAction = runAction(startRun(steps), 'menu').run;
+    const afterAction = runAction(startTourRun(steps), 'menu').run;
     expect(runChoice(afterAction, 'skipTour').outcome).toBe('done');
-    expect(runChoice(startRun(steps), 'skipTour').outcome).toBe('skipped');
-    const later = runChoice(startRun(steps), 'later');
+    expect(runChoice(startTourRun(steps), 'skipTour').outcome).toBe('skipped');
+    const later = runChoice(startTourRun(steps), 'later');
     expect(later.outcome).toBeNull();
     expect(runStep(later.run)).toBeNull();
   });
