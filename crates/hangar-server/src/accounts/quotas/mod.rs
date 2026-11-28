@@ -279,7 +279,13 @@ impl AccountService {
     fn agy_quota(&self) -> Option<Value> {
         let path = hangar_antigravity::Account::default().quota_path(&self.env.home);
         let saved = hangar_antigravity::quota::read(&path)?;
-        let mut value = reading("lida", hangar_antigravity::quota::windows(&saved, now()), None);
+        let windows = hangar_antigravity::quota::windows(&saved, now());
+        // Cota gravada sem nenhuma janela legível: o agy mudou o formato, não é cota cheia.
+        if windows.is_empty() {
+            tracing::warn!(code = "agy_quota_unparsed", "cota do Antigravity gravada sem janela legível");
+            return Some(reading("indisponivel", vec![], Some("formato-desconhecido")));
+        }
+        let mut value = reading("lida", windows, None);
         value["ts"] = saved["seen"].clone();
         Some(value)
     }
@@ -858,6 +864,12 @@ mod tests {
         assert_eq!(agy["janelas"][0]["rotulo"], "5h");
         assert_eq!(agy["janelas"][0]["pct"], 75.0);
         assert!(agy["idade_s"].as_f64().is_some_and(|age| (590.0..660.0).contains(&age)), "{agy}");
+        // Formato que o Hangar não entende não vira cota lida e vazia.
+        std::fs::write(data.join(hangar_antigravity::quota::FILE), json!({"seen": now(), "buckets": {
+            "gemini-5h": {"remaining_amount": 3}}}).to_string()).unwrap();
+        let rows = service.quotas(None, false, true).await.unwrap();
+        let agy = row(&rows, &id).unwrap();
+        assert_eq!((agy["estado"].as_str(), agy["motivo"].as_str()), (Some("indisponivel"), Some("formato-desconhecido")));
     }
 
     /// Catálogo de contas ilegível derruba só aquela origem: as chaves de API seguem com cota.

@@ -253,8 +253,8 @@ fn agy_state(input: Result<&[u8], &'static str>) -> ExitCode {
 
 /// A statusline do `agy`: guarda a cota que ele passa e não imprime nada, para a barra padrão seguir sozinha.
 fn agy_statusline(input: Result<&[u8], &'static str>) -> ExitCode {
-    let recorded = input
-        .and_then(|bytes| serde_json::from_slice::<Value>(bytes).map_err(|_| "invalid_json"))
+    let recorded: Result<bool, String> = input.map_err(str::to_owned)
+        .and_then(|bytes| serde_json::from_slice::<Value>(bytes).map_err(|_| "invalid_json".to_owned()))
         .and_then(|value| {
             let home = std::env::home_dir().ok_or("home_unavailable")?;
             // Conta adicional roda com `GEMINI_HOME`; a padrão, sem ele.
@@ -262,10 +262,10 @@ fn agy_statusline(input: Result<&[u8], &'static str>) -> ExitCode {
                 .map_or_else(hangar_antigravity::Account::default, |dir| hangar_antigravity::Account::extra(PathBuf::from(dir)));
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| "clock_before_epoch")?;
             hangar_antigravity::quota::record(&value, &account.quota_path(&home), now.as_secs_f64())
-                .map_err(|_| "quota_write_failed")
+                .map_err(|error| format!("quota_write_failed:{:?}", error.kind()))
         });
     if let Err(code) = recorded {
-        log_failure("agy_statusline_error.log", code);
+        log_failure("agy_statusline_error.log", &code);
     }
     ExitCode::SUCCESS
 }

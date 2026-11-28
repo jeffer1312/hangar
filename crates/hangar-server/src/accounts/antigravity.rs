@@ -510,14 +510,14 @@ async fn logout(program: &Path, home: &Path, env: hangar_antigravity::env::Proce
     let (program, cwd) = (program.to_owned(), home.to_owned());
     let done = tokio::task::spawn_blocking(move || probe::logout(&program, &cwd, &env, PROBE_LIMIT)).await;
     forget_signed(account, home);
-    // A cota guardada é da conta que saiu; a próxima statusline grava a da conta que entrar.
-    match std::fs::remove_file(account.quota_path(home)) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound =>
-            tracing::warn!(code = "agy_quota_forget_failed", %error, "cota do Antigravity da conta que saiu não apagada"),
-        _ => {}
-    }
     match done {
-        Ok(Ok(true)) => Json(json!({"ok": true})).into_response(),
+        Ok(Ok(true)) => {
+            // A cota guardada é da conta que saiu; a próxima statusline grava a da conta que entrar.
+            if let Err(error) = std::fs::remove_file(account.quota_path(home)) && error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(code = "agy_quota_forget_failed", %error, "cota do Antigravity da conta que saiu não apagada");
+            }
+            Json(json!({"ok": true})).into_response()
+        }
         Ok(Ok(false)) => fail(502, "erro_logout_recusado", "o agy não confirmou a saída da conta"),
         Ok(Err(e)) => fail(500, "erro_logout_nao_rodou", &e.to_string()),
         Err(_) => fail(500, "erro_logout_nao_rodou", "a saída da conta não terminou"),
