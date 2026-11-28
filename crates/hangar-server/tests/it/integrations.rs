@@ -1019,13 +1019,19 @@ async fn google_credential_reuse_copies_only_the_pair_between_official_integrati
     let (status, patched, _) = call_owner(srv.addr, Method::PATCH, "/api/integrations/drive", Some(json!({"preset": null}))).await;
     assert_eq!(status, 200);
     assert_eq!(patched["integration"]["can_reuse_google_credentials"], true, "o preset não decide");
+    let new_id = json!({ "kind": "oauth_manual_client", "client_id": "another-client", "scopes": [] });
+    let (status, refused, _) = call_owner(srv.addr, Method::PATCH, "/api/integrations/drive", Some(json!({ "auth": new_id }))).await;
+    assert_eq!(status, 422, "{refused}");
+    assert_eq!(refused["detail"]["code"], "integration_client_secret_required");
+    let drive = srv.state.integrations.secrets.get("drive").await.unwrap().unwrap();
+    assert_eq!(drive.client_secret.as_deref().map(String::as_str), Some(pair_secret), "a recusa não mexe no segredo salvo");
     let (status, patched, _) = call_owner(srv.addr, Method::PATCH, "/api/integrations/drive", Some(json!({
-        "auth": { "kind": "oauth_manual_client", "client_id": "another-client", "scopes": [] }
+        "auth": new_id,
+        "secrets": { "oauth_client_secret": "fixture-another-secret" }
     }))).await;
-    assert_eq!(status, 200);
-    assert_ne!(patched["integration"]["can_reuse_google_credentials"], true);
-    let drive = srv.state.integrations.secrets.get("drive").await.unwrap();
-    assert!(drive.is_none_or(|s| s.client_secret.is_none()), "segredo do Client ID anterior sai junto");
+    assert_eq!(status, 200, "{patched}");
+    let drive = srv.state.integrations.secrets.get("drive").await.unwrap().unwrap();
+    assert_eq!(drive.client_secret.as_deref().map(String::as_str), Some("fixture-another-secret"));
 }
 
 #[tokio::test]

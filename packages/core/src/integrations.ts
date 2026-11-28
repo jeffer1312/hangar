@@ -417,6 +417,7 @@ const ERROR_TEXT: Record<string, () => string> = {
   integration_disabled: m.integrations_err_disabled,
   integration_already_exists: m.integrations_err_already_exists,
   integration_google_credentials_unavailable: m.integrations_google_credentials_unavailable,
+  integration_client_secret_required: m.integrations_client_secret_required,
   integration_secrets_key_lost: m.integrations_err_keyring,
   integration_secrets_unavailable: m.integrations_err_keyring,
   approval_stale: m.integrations_err_stale,

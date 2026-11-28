@@ -2738,6 +2738,9 @@ pub(super) fn integrations_failure(error: &Failure) -> String {
         Some("integration_google_credentials_unavailable") => {
             tr_shared("integrations_google_credentials_unavailable", &[])
         }
+        Some("integration_client_secret_required") => {
+            tr_shared("integrations_client_secret_required", &[])
+        }
         Some("integration_secrets_key_lost" | "integration_secrets_unavailable") => {
             tr_shared("integrations_err_keyring", &[])
         }

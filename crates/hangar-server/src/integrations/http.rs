@@ -826,32 +826,40 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         || existing.auth != candidate_config.auth;
     let should_invalidate =
         body.enabled == Some(false) || destination_changed || body.secrets.is_some();
-    // O segredo antigo pertence ao Client ID antigo: mantê-lo forma um par que o Google recusa e que o reaproveitamento copiaria.
-    let drop_client_secret = !remote_url_changed
-        && manual_client_id(&existing.auth) != manual_client_id(&candidate_config.auth)
-        && !matches!(&body.secrets, Some(Some(p)) if p.oauth_client_secret.is_some() || p.client_secret.is_some());
-    let clear_old = move |slot: &mut Option<IntegrationSecrets>| {
-        if remote_url_changed {
-            clear_remote_endpoint_secrets(slot, None);
-        }
-        if drop_client_secret && let Some(entry) = slot.as_mut() {
-            entry.client_secret = None;
-            if entry.is_empty() {
-                *slot = None;
-            }
-        }
+    // O segredo salvo pertence ao Client ID antigo: nem mantê-lo calado nem apagá-lo calado; quem troca o ID manda o segredo.
+    let client_id_changed = !remote_url_changed
+        && manual_client_id(&existing.auth) != manual_client_id(&candidate_config.auth);
+    let sends_client_secret = match &body.secrets {
+        None => false,
+        Some(None) => true,
+        Some(Some(p)) => p.oauth_client_secret.is_some() || p.client_secret.is_some(),
     };
+    let has_saved_secret = previous_secrets
+        .as_ref()
+        .is_some_and(|saved| saved.client_secret.is_some());
+    if client_id_changed && has_saved_secret && !sends_client_secret {
+        return detail(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "integration_client_secret_required",
+            "Ao trocar o Client ID, informe também o Client Secret dele.",
+            json!({}),
+        );
+    }
 
     let candidate_secrets = match &body.secrets {
         None => {
             let mut next = previous_secrets.clone();
-            clear_old(&mut next);
+            if remote_url_changed {
+                clear_remote_endpoint_secrets(&mut next, None);
+            }
             next
         }
         Some(None) => None,
         Some(Some(patch)) => {
             let mut next = previous_secrets.clone();
-            clear_old(&mut next);
+            if remote_url_changed {
+                clear_remote_endpoint_secrets(&mut next, None);
+            }
             let clone_patch = SecretsPatch {
                 bearer_token: patch.bearer_token.clone(),
                 headers: patch.headers.clone(),
@@ -893,12 +901,12 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
     // Troca de URL/destino limpa segredos remotos ANTES de gravar o novo destino em config.json,
     // impedindo que `ensure_connected` combine URL nova com credenciais do servidor anterior.
     let mut cleared_old_remote_secrets = false;
-    if (remote_url_changed || drop_client_secret) && previous_secrets.is_some() {
+    if remote_url_changed && previous_secrets.is_some() {
         if let Err(err) = state
             .integrations
             .secrets
             .update_with(id, move |slot| {
-                clear_old(slot);
+                clear_remote_endpoint_secrets(slot, None);
                 Ok(())
             })
             .await

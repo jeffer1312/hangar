@@ -12742,6 +12742,7 @@
   "integrations_google_credential_source": "Use saved Google credentials",
   "integrations_google_credential_manual": "Enter credentials manually",
   "integrations_google_credentials_unavailable": "The selected credentials are no longer available. Choose another integration or enter the credentials manually.",
+  "integrations_client_secret_required": "When you change the Client ID, also enter its Client Secret.",
   "integrations_field_scopes": "OAuth scopes",
   "integrations_field_bearer": "Bearer token",
   "integrations_field_headers": "Extra headers (Name: Value)",

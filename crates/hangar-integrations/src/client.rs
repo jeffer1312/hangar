@@ -1457,7 +1457,7 @@ impl SessionFingerprint {
     }
 }
 
-// O cliente sobe pelo `initialize`; a versão mais nova do rmcp já não tem esse passo e servidores reais a recusam.
+// O cliente sobe pelo `initialize`: declarar versão sem esse passo faz servidores reais recusarem a conexão.
 fn client_info() -> McpClientInfo {
     McpClientInfo::new(
         ClientCapabilities::default(),
@@ -2015,7 +2015,6 @@ mod tests {
 
     #[test]
     fn initialize_declares_a_protocol_version_that_still_has_initialize() {
-        // O Google recusa `initialize` declarado na 2026-07-28 com "Method not supported".
         let version = super::client_info().protocol_version;
         assert!(version.has_initialize(), "versão declarada: {version}");
     }

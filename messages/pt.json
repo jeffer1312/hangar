@@ -12742,6 +12742,7 @@
   "integrations_google_credential_source": "Usar as credenciais do Google já salvas",
   "integrations_google_credential_manual": "Informar credenciais manualmente",
   "integrations_google_credentials_unavailable": "As credenciais escolhidas não estão mais disponíveis. Escolha outra integração ou informe as credenciais manualmente.",
+  "integrations_client_secret_required": "Ao trocar o Client ID, informe também o Client Secret dele.",
   "integrations_field_scopes": "Escopos OAuth",
   "integrations_field_bearer": "Token Bearer",
   "integrations_field_headers": "Cabeçalhos extras (Nome: Valor)",
