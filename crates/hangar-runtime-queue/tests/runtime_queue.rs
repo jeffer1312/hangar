@@ -7,6 +7,13 @@ fn fill(store:&mut Store, count:usize, prefix:&str) {
 }
 fn receipts(state:&State) -> usize { state.operations.keys().filter(|key|key.starts_with("call::")).count() }
 
+fn assert_confirmed_batch_members(batch: &serde_json::Value) {
+    let members: Vec<_> = batch["batch_entries"].as_array().unwrap().iter()
+        .map(|entry| (entry["id"].as_str(), entry["confirmed"].as_bool()))
+        .collect();
+    assert_eq!(members, [(Some("a"), Some(true)), (Some("b"), Some(true))]);
+}
+
 #[test]
 fn queued_batch_store_combines_all_waiting_in_one_durable_entry() {
     let dir=tempfile::tempdir().unwrap();
@@ -103,7 +110,7 @@ fn queued_batch_receipt_requires_the_full_prompt_and_confirms_every_member() {
     assert_eq!(store.exec(1,"proof-again",clock(),Action::ConfirmOccurrence {id:"delivery".into(),proof}).unwrap(),false);
     for member in ["a","b"] {assert!(store.state().operations[member].status==Status::Confirmed);}
     let batch=store.state().rows.iter().find(|row|row["id"]==id).unwrap();
-    assert!(batch["batch_entries"].as_array().unwrap().iter().all(|entry|entry["confirmed"]==true));
+    assert_confirmed_batch_members(batch);
     assert!(index.match_after(&path,&after_partial,&json!({"text":"ok\nok\ncontinua"}),&store.state().used_occurrences).unwrap().is_none(),"a mesma ocorrência não confirma outra entrada");
     drop(store);
     let mut reopened=Store::open(&state_path,dir.path(),State::new("key",1,"session",vec![])).unwrap();
@@ -151,7 +158,10 @@ fn queued_batch_store_refuses_oversized_text_before_claiming_any_member() {
         store.exec(1,id,clock(),Action::Append {text:"x".repeat(MAX_FRAME/2),delivered:false,ts:None,pre_transcript:false,entry_id:Some(id.into())}).unwrap();
     }
     assert!(store.exec(1,"claim:batch",clock(),Action::ClaimBatch {min_ts:0.0}).is_err(),"o separador faz o texto ultrapassar o limite do transporte");
-    assert!(store.state().rows.iter().all(|row|row["delivered"]==false && row.get("batch_entries").is_none()));
+    let rows: Vec<_> = store.state().rows.iter()
+        .map(|row| (row["id"].as_str(), row["delivered"].as_bool(), row.get("batch_entries").is_none()))
+        .collect();
+    assert_eq!(rows, [(Some("a"), Some(false), true), (Some("b"), Some(false), true)]);
 }
 
 #[test]
@@ -255,7 +265,7 @@ fn queued_batch_store_review_cli_echo_confirms_all_member_ids() {
     let batch=store.exec(1,"claim:batch",clock(),Action::ClaimBatch {min_ts:0.0}).unwrap();let id=batch[0]["id"].as_str().unwrap().to_owned();
     assert_eq!(store.exec(1,"echo",clock(),Action::Confirm {entry_ids:vec![id.clone()]}).unwrap(),1);
     for member in ["a","b"] {assert!(store.state().operations[member].status==Status::Confirmed,"o eco confirma {member}");}
-    assert!(store.state().rows[0]["batch_entries"].as_array().unwrap().iter().all(|row|row["confirmed"]==true));
+    assert_confirmed_batch_members(&store.state().rows[0]);
     assert_eq!(store.exec(1,"echo-again",clock(),Action::Confirm {entry_ids:vec![id]}).unwrap(),0);
 }
 
@@ -521,8 +531,18 @@ fn terminal_runtime_finish_is_atomic_and_recover_does_not_repeat_retry_accountin
         store.exec(1,"dispatch",clock,Action::BeginDispatch {id:"attempt".into(),wire_id:"terminal:1:attempt".into(),staged:false}).unwrap();
         let status=if rejected{Status::Rejected}else{Status::Deferred}; let result=json!({"operation_id":"attempt","disposition":if rejected{"rejected"}else{"deferred"},"payload":{"cleanup":"proved"}});
         store.exec(1,"finish",clock,Action::Finish {id:"attempt".into(),status,result:result.clone()}).unwrap();
-        let expected_abandoned=rejected||attempts==2; assert_eq!(store.state().rows[0]["delivered"],expected_abandoned,"claimed={claimed} attempts={attempts} rejected={rejected}");
-        if expected_abandoned {assert_eq!(store.state().rows[0]["desistiu"],true);} else {assert_eq!(store.state().rows[0]["attempts"],attempts+1);}
+        let expected_abandoned = rejected || attempts == 2;
+        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["operations"]["attempt"]["status"], if rejected { "rejected" } else { "deferred" });
+        for row in [&store.state().rows[0], &persisted["rows"][0]] {
+            assert_eq!(row["id"], "entry");
+            assert_eq!(row["delivered"], expected_abandoned, "claimed={claimed} attempts={attempts} rejected={rejected}");
+            if expected_abandoned {
+                assert_eq!(row["desistiu"], true);
+            } else {
+                assert_eq!(row["attempts"], attempts + 1);
+            }
+        }
         let row=store.state().rows[0].clone(); drop(store);
         let mut store=Store::open(&path,&projection,State::new("key",1,"session",vec![])).unwrap(); store.exec(1,"recover1",clock,Action::Recover).unwrap();
         store.exec(1,"finish-new-id",clock,Action::Finish {id:"attempt".into(),status,result}).unwrap(); store.exec(1,"recover2",clock,Action::Recover).unwrap(); assert_eq!(store.state().rows[0],row);
@@ -647,21 +667,34 @@ fn unchanged_projection_is_not_rewritten() {
 fn write_failure_heals_on_next_operation_once_disk_is_writable() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("runtime");
+    let path = state_dir.join("key.json");
     let saved = dir.path().join("runtime-reserva");
     let mut store = Store::open(
-        &state_dir.join("key.json"),
+        &path,
         &dir.path().join("projection"),
         State::new("key", 1, "session", vec![]),
     )
     .unwrap();
 
+    let entry = |id: &str| Action::Append {
+        text: "Olá".into(),
+        delivered: false,
+        ts: None,
+        pre_transcript: false,
+        entry_id: Some(id.into()),
+    };
     std::fs::rename(&state_dir, &saved).unwrap();
-    let failed = store.exec(1, "blocked", clock(), append());
+    let failed = store.exec(1, "blocked", clock(), entry("blocked-entry"));
     std::fs::rename(&saved, &state_dir).unwrap();
     assert!(failed.is_err());
 
-    store.exec(1, "after", clock(), append()).expect("pasta disponível: a fila volta sem ação de reparo");
-    assert_eq!(store.state().rows.len(), 1, "a entrada que falhou não ficou");
+    store.exec(1, "after", clock(), entry("recovered-entry"))
+        .expect("pasta disponível: a fila volta sem ação de reparo");
+    let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for rows in [&store.state().rows, persisted["rows"].as_array().unwrap()] {
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], "recovered-entry");
+    }
 }
 
 #[test]
