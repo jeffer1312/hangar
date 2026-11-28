@@ -84,14 +84,31 @@ test("título da falha na lista: frase em português, nunca o nome técnico", ()
   const health = rec({ fields: { codigo: "terminal_observacao_falhou", causa: "capture_timeout" } });
   assert.equal(headline(health), "A tela do terminal da sessão não pôde ser lida");
   const unknown = rec({ event: "algo.novo", fields: {} });
-  assert.equal(headline(unknown), "Falha em algo.novo");
+  assert.equal(headline(unknown), "Falha sem frase neste painel");
 });
 
 test("título começa em maiúscula mesmo quando a descrição do servidor não", () => {
-  assert.equal(headline(rec({ event: "fila.entregar", fields: { detalhe: "entrega confirmada depois de 2 leituras" } })), "Entrega confirmada depois de 2 leituras");
+  assert.equal(headline(rec({ event: "sse.caiu", fields: { detalhe: "fluxo interrompido" } })), "A atualização ao vivo caiu no app");
 });
 
 test("sigla no começo da causa não vira minúscula", () => {
   assert.equal(lowerFirst("PC desligado"), "PC desligado");
   assert.equal(lowerFirst("O app do PC estava fechado"), "o app do PC estava fechado");
+});
+
+test("toda falha que o servidor projeta tem título próprio, nunca o texto do diário", () => {
+  const diary = readFileSync(new URL("../../../../crates/hangar-telemetry/src/diary.rs", import.meta.url), "utf8");
+  const screen = [...diary.slice(diary.indexOf("SCREEN_EVENTS"), diary.indexOf("];", diary.indexOf("SCREEN_EVENTS"))).matchAll(/"([a-z_.]+)"/g)].map(m => m[1]);
+  assert.ok(screen.length > 20);
+  for (const event of [...screen, "other"]) {
+    const title = headline(rec({ event, level: "error", fields: { detalhe: "texto cru do diário" } }));
+    assert.ok(!title.includes("texto cru") && !title.startsWith("Falha sem frase"), event + ": " + title);
+  }
+  const events = readFileSync(new URL("../../../../crates/hangar-telemetry/src/events.rs", import.meta.url), "utf8");
+  for (const [, code] of events.matchAll(/Health \{ code: "([a-z_]+)"/g)) {
+    assert.ok(!headline(rec({ event: "health.x", fields: { codigo: code } })).includes("sem frase"), code);
+  }
+  for (const [, feature] of events.matchAll(/\("(?:GET|POST|PUT|PATCH|DELETE)", "[^"]+", "([a-z_.]+)"\)/g)) {
+    assert.ok(!headline(rec({ event: "http.action", action: feature, fields: { codigo: "http_409" } })).startsWith("Uma ação"), feature);
+  }
 });

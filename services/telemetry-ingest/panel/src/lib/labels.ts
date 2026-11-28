@@ -433,6 +433,23 @@ export const STEP_LABEL: Record<string, string> = {
   "sse.retentativa": "Tentou o canal ao vivo de novo", "sse.voltou": "O canal ao vivo voltou", "tela.ver": "Abriu a tela",
   "update.arrived_failed": "Não leu as novidades da atualização", other: "Outra ação",
 };
+// Título de cada falha da tela na lista do painel: o que a pessoa sentiu.
+export const SCREEN_FAILURE_TITLE: Record<string, string> = {
+  "app.abriu": "O app não abriu direito", "app.crash": "O app fechou sozinho", "app.oculto": "O app deu erro ao ir para segundo plano",
+  "app.visivel": "O app deu erro ao voltar à tela", "app.pronto": "O app demorou ou falhou ao ficar pronto",
+  "api.sem_rede": "O app ficou sem conexão com o servidor", "api.voltou": "A conexão com o servidor voltou com erro",
+  "chat.opened": "A conversa não abriu", "chat.sincronia_falhou": "A conversa ficou desatualizada no app",
+  "dictation.recording_failed": "O ditado não gravou", "dictation.upload_failed": "O áudio do ditado não chegou ao servidor",
+  "js.fatal": "O app quebrou por um erro interno", "lista.falhou": "A lista de sessões não carregou",
+  "lista.retentativa": "A lista de sessões precisou tentar de novo", "lista.voltou": "A lista de sessões voltou com erro",
+  "login.falhou": "A entrada no app falhou", "machines.request_failed": "O app não conseguiu falar com as máquinas",
+  "rota.escolhida": "O app teve problema ao escolher o caminho até o servidor", "rota.falhou": "O app não achou caminho até o servidor",
+  "servidor.parado": "O app viu o servidor parar de responder", "servidor.voltou": "O servidor voltou com erro",
+  "sse.abrir": "A atualização ao vivo não abriu", "sse.caiu": "A atualização ao vivo caiu no app",
+  "sse.reconectando": "O app ficou reconectando a atualização ao vivo", "sse.retentativa": "A atualização ao vivo precisou tentar de novo",
+  "sse.voltou": "A atualização ao vivo voltou com erro", "tela.ver": "Uma tela do app deu erro ao abrir",
+  "update.arrived_failed": "O app não mostrou as novidades da atualização", other: "Uma tela do app falhou num ponto sem nome",
+};
 export const SCREEN_LABEL: Record<string, string> = { chat: "conversa", lista: "lista de sessões", sessions: "sessões", settings: "configurações",
   machines: "máquinas", servers: "servidores", login: "entrada", board: "quadro", canvas: "canvas", archive: "arquivo", search: "busca",
   status: "status", mobile: "celular", desktop: "PC", celular: "celular", other: "outra tela" };

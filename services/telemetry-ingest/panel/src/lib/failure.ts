@@ -1,7 +1,7 @@
 // Cada falha com detalhe em português: o que aconteceu, em que estado a máquina estava e os passos até ela.
 // Importa com a extensão: o teste roda direto no node, sem bundler.
 import { AFTER_LABEL, AGENTS, CAUSES, CLI_LABEL, CLIENT_CODE_LABEL, CONTEXT_LABEL, HEALTH_CODES, INSTALL_LABEL, MACHINE_LABEL, OS_LABEL,
-  SCREEN_LABEL, STEP_LABEL, TOOLS, VALUES } from "./labels.ts";
+  SCREEN_FAILURE_TITLE, SCREEN_LABEL, STEP_LABEL, TOOLS, VALUES } from "./labels.ts";
 import type { FailureRecord } from "./types";
 
 export const has = (o: object, k: string) => Object.hasOwn(o, k);
@@ -25,9 +25,18 @@ export function happened(r: FailureRecord): Happened {
 export const lowerFirst = (s: string) => (/^[A-ZÀ-Ý]{2}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1));
 
 export function headline(r: FailureRecord): string {
-  const h = happened(r);
+  const f = r.fields ?? {};
+  const code = text(f.codigo), cause = text(f.causa), action = r.action ?? text(f.action);
+  const why = cause && has(CAUSES, cause) ? CAUSES[cause] : null;
   const bare = (s: string) => s.replace(/\.$/, "");
-  const line = h.tool ? h.tool + " falhou" + (h.cause ? ": " + bare(lowerFirst(h.cause)) : "") : bare(h.summary);
+  const withWhy = (title: string, reason: string | null) => title + (reason ? ": " + bare(lowerFirst(reason)) : "");
+  let line: string;
+  if (r.event === "mcp.tool") line = withWhy((action && has(TOOLS, action) ? TOOLS[action][0] : "Uma ferramenta do agente") + " falhou", why);
+  else if (r.event === "http.action") {
+    line = withWhy((action && has(VALUES.feature, action) ? VALUES.feature[action] : "Uma ação no app") + " falhou", code && has(CAUSES, code) ? CAUSES[code] : null);
+  } else if (r.event.startsWith("health.")) line = code && has(HEALTH_CODES, code) ? bare(HEALTH_CODES[code]) : "O servidor teve uma falha sem frase neste painel";
+  else if (has(SCREEN_FAILURE_TITLE, r.event)) line = SCREEN_FAILURE_TITLE[r.event];
+  else line = "Falha sem frase neste painel";
   return line.charAt(0).toUpperCase() + line.slice(1);
 }
 
