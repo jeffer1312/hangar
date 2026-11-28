@@ -130,6 +130,14 @@ fn revision_of(stamp: &str, bytes: &[u8]) -> String {
     digest.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// A marca de repasse do registro do hook, só se ele é da chamada `call`: a pergunta segurada pelo plugin traz a
+/// chamada no ID do pedido, e outra pergunta gravada por cima não empresta a dela.
+pub fn source_of_call(jsonl: &Path, call: &str) -> Option<String> {
+    let sidecar: serde_json::Value = serde_json::from_slice(&std::fs::read(sidecar_path(jsonl)?).ok()?).ok()?;
+    if sidecar["tool_use_id"].as_str() != Some(call) { return None; }
+    sidecar["tool_input"]["metadata"]["source"].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
 /// A chamada (`tool_use_id`) e a marca de repasse (`metadata.source`, que o dono não vê) da pergunta publicada.
 #[derive(Debug, Default, PartialEq)]
 pub struct Marks { pub tool_use_id: Option<String>, pub source: Option<String> }
@@ -710,6 +718,11 @@ mod tests {
         // Outra pergunta gravada por cima não empresta as marcas à publicada.
         std::fs::write(&askq, sidecar(r#"{"source":"hangar-child:toolu_fonte_2"}"#).replace("toolu_fonte_1", "toolu_fonte_2")).unwrap();
         assert_eq!(marks(&jsonl, &revision), None);
+        std::fs::write(&askq, sidecar("5")).unwrap();
+        // A pergunta segurada pelo plugin acha a marca pela chamada; outra chamada não a empresta.
+        std::fs::write(&askq, sidecar(r#"{"source":"hangar-child:toolu_fonte_1"}"#)).unwrap();
+        assert_eq!(source_of_call(&jsonl, "toolu_fonte_1").as_deref(), Some("hangar-child:toolu_fonte_1"));
+        assert_eq!(source_of_call(&jsonl, "toolu_outra"), None);
         std::fs::write(&askq, sidecar("5")).unwrap();
         let (question, revision) = read_revision(&jsonl).unwrap().expect("a pergunta segue sem a marca");
         assert_eq!((question.questions.len(), marks(&jsonl, &revision).unwrap().source), (1, None));

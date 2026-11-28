@@ -248,13 +248,12 @@ struct Watcher {
     unrecorded: HashMap<String, Unrecorded>,
     /// Desde quando a filha está sem interação com a chave de um aviso ainda gravada.
     closed: HashMap<String, Instant>,
-    /// Pergunta (`tool_use_id`) já contada ao pai: a gravação que falha não conta de novo nesta vigia.
-    told: HashMap<String, String>,
-    answered_retry_at: HashMap<String, Instant>,
-    /// Desde quando a pergunta avisada espera o resultado no transcript.
-    closing: HashMap<String, (String, Instant)>,
-    /// Pergunta cuja leitura falha já foi ao diário uma vez.
-    unread_reported: HashMap<String, String>,
+    /// Pergunta avisada do registro que fechou, até o pai ouvir como acabou.
+    closing: HashMap<String, Resolving>,
+    /// A avisada que saiu do registro para o aviso da seguinte, ainda à espera de ser contada.
+    parked: HashMap<String, Resolving>,
+    /// Pais Claude nesta rodada: só eles repassam por `AskUserQuestion` com a marca.
+    claude_parents: HashSet<String>,
 }
 
 impl Watcher {
@@ -284,10 +283,8 @@ impl Watcher {
         self.notified.retain(|n, _| present(n));
         self.unrecorded.retain(|n, _| present(n));
         self.closed.retain(|n, _| present(n));
-        self.told.retain(|n, _| present(n));
-        self.answered_retry_at.retain(|n, _| present(n));
         self.closing.retain(|n, _| present(n));
-        self.unread_reported.retain(|n, _| present(n));
+        self.parked.retain(|n, _| present(n));
         self.rate.forget_old(now);
         self.question_rate.forget_old(now);
         // Já na primeira vista: o registro criado aqui só deixa voltar resposta posterior a ele.
@@ -317,6 +314,9 @@ impl Watcher {
                 Err(e) => return unreadable(st, &e),
             };
             self.asks_seeded = true;
+            self.claude_parents = current().map(|rows| rows.iter()
+                .filter(|r| matches!(Provider::parse(&r.provider), Some(Provider::Claude | Provider::ClaudeHeadless)))
+                .map(|r| r.name.clone()).collect()).unwrap_or_default();
             self.open_asks = children.iter().filter(|r| read.get(&r.name).is_some_and(|l| l.asked_queue_id.is_some())
                 || self.unrecorded.get(&r.name).is_some_and(|u| u.queue.is_some())).map(|r| r.name.clone()).collect();
             for row in children {
@@ -406,7 +406,8 @@ impl Watcher {
             Some((since, seen)) if *seen == id => *since,
             _ => { self.asking.insert(child.clone(), (now, id.clone())); now }
         };
-        let text = question_message(child, &id, row, kind);
+        let relay = row.linked_by.as_ref().is_some_and(|parent| self.claude_parents.contains(parent));
+        let text = question_message(child, &id, row, kind, relay);
         let asked = match self.notified.get(child) {
             Some(notified) => *notified == id,
             // Vigia nova (reinício): o ID antigo morreu, vale a chave gravada, que o reinício não muda.
@@ -419,7 +420,9 @@ impl Watcher {
         if let Some(queued) = &link.asked_queue_id { return QuestionStep::Cancel(queued.clone()); }
         // Outra pergunta no lugar da avisada (Q1 → Q2 sem passar pela linha vazia): a avisada se resolve antes do aviso
         // novo. A mesma chamada com outro ID é a mesma pergunta depois de reabrir, e só ganha o ID novo.
-        if let Some(call) = &link.asked_call && question_call(row).as_deref() != Some(call.as_str()) {
+        // Dá à avisada `SETTLE` para ser contada antes; depois o aviso novo sai e ela segue sendo resolvida à parte. Sem a
+        // chamada da aberta não há como dizer que é outra pergunta.
+        if let Some(call) = &link.asked_call && question_call(row).is_some_and(|open| open != *call) && now - since < SETTLE {
             return QuestionStep::Closed(call.clone());
         }
         if now - since < SETTLE { return QuestionStep::Wait; }
@@ -435,14 +438,16 @@ impl Watcher {
         let id = open_interaction(row);
         // Na espera da nova tentativa só o cancelamento da linha que perdeu o sentido segue.
         // Pai de outra máquina não recebe aviso de pergunta: o `child_answer` só alcança filha desta máquina.
-        if parent.is_empty() || is_remote(parent) || (id.is_some() && self.question_retry_at.get(child).is_some_and(|t| now < *t)) { return; }
+        if parent.is_empty() || is_remote(parent) { return; }
+        self.parked_question(st, row, link, now, current).await;
+        // A mesma chamada aberta de novo: o fechamento visto era a filha reabrindo.
+        if self.closing.get(child).is_some_and(|pending| question_call(row).as_deref() == Some(pending.call.as_str())) { self.closing.remove(child); }
+        if id.is_some() && self.question_retry_at.get(child).is_some_and(|t| now < *t) { return; }
         let kind = match id.as_deref() {
             Some(id) if self.notified.get(child).map(String::as_str) != Some(id) => interaction_kind(st, child, id).await,
             _ => None,
         };
-        let step = self.question_step(row, link, kind.as_ref(), now);
-        if !matches!(step, QuestionStep::Closed(_)) { self.closing.remove(child); }
-        match step {
+        match self.question_step(row, link, kind.as_ref(), now) {
             QuestionStep::Wait | QuestionStep::Skip => {}
             QuestionStep::Limited => {
                 report(st, child, "link_question_rate_limited", "perguntas demais da filha em 10 min; não avisa o pai", "");
@@ -451,6 +456,7 @@ impl Watcher {
             QuestionStep::Forget => {
                 // Gravação que falha mantém `notified`: o próximo pedido de mesmo texto é outro aviso, e tenta de novo.
                 self.unrecorded.remove(child);
+                self.closing.remove(child);
                 if record_ask(st, child, |entry| if entry.asked_queue_id.is_none() { forget_asked(entry); }).await {
                     self.notified.remove(child);
                     self.closed.remove(child);
@@ -495,6 +501,12 @@ impl Watcher {
                 let Some(id) = id else { return };
                 let key = ask_key(&id, kind.as_ref(), &text);
                 let call = (kind == Some(InteractionKind::Question)).then(|| question_call(row)).flatten();
+                // A avisada antes desta, ainda sem fim contado, sai do registro e é resolvida à parte.
+                if let Some(old) = link.asked_call.clone().filter(|old| call.as_ref() != Some(old)) {
+                    let pending = self.closing.remove(child).filter(|pending| pending.call == old)
+                        .unwrap_or_else(|| Resolving::new(&old, link.asked_key.as_deref().unwrap_or(&old), now));
+                    self.parked.insert(child.to_owned(), pending);
+                }
                 let ((status, answer), queued) = crate::session_write::input::deliver_reply_entry(st, parent, &text).await;
                 if !status.is_success() {
                     let code = answer["detail"]["code"].as_str().unwrap_or("erro_envio_falhou_desconhecida");
@@ -521,62 +533,104 @@ impl Watcher {
         }
     }
 
-    /// A pergunta avisada `call` não está mais aberta como estava: conta ao pai como ela acabou, se ninguém da parte
-    /// dele a respondeu, e solta o registro.
+    /// A pergunta avisada do registro não está mais aberta como estava: conta ao pai como ela acabou e solta o registro.
     async fn closed_question(&mut self, st: &Arc<AppState>, row: &SessionRow, link: &LinkReturn, call: &str, now: Instant, current: &Rows<'_>) {
         let child = row.name.as_str();
-        let parent = row.linked_by.as_deref().unwrap_or_default();
-        if self.answered_retry_at.get(child).is_some_and(|t| now < *t) { return; }
-        match parent_mark(link, call, wall_now()) {
-            // A rota do pai ainda não respondeu: se recusar, a resposta foi do dono.
-            Mark::Pending => return,
-            Mark::Confirmed => return self.release(st, child, call).await,
-            Mark::None => {}
+        let mut pending = match self.closing.remove(child) {
+            Some(pending) if pending.call == call => pending,
+            _ => Resolving::new(call, link.asked_key.as_deref().unwrap_or(call), now),
+        };
+        if resolve(st, row, &link.parent_answers, &mut pending, now, current).await == Resolved::Wait {
+            self.closing.insert(child.to_owned(), pending);
+            return;
         }
-        if self.told.get(child).map(String::as_str) != Some(call) {
-            let since = match self.closing.get(child) {
-                Some((seen, since)) if seen == call => *since,
-                _ => { self.closing.insert(child.to_owned(), (call.to_owned(), now)); now }
-            };
-            let closure = match read_closure(row, call).await {
-                Ok(closure) => closure,
-                Err(e) => {
-                    if self.unread_reported.get(child).map(String::as_str) != Some(call) {
-                        report(st, child, "link_question_answer_unreadable", "resposta dada na filha ilegível", &io_kind(&e));
-                        self.unread_reported.insert(child.to_owned(), call.to_owned());
-                    }
-                    None
-                }
-            };
-            let Some(closure) = closure else {
-                // Sem resultado a pergunta não acabou: é a filha reabrindo, e o pai não ouve um fim que não houve.
-                if now - since < CLOSE_GIVE_UP { return; }
-                report(st, child, "link_question_closed_without_result", "pergunta avisada sumiu sem resultado; o pai não é avisado", "");
-                return self.release(st, child, call).await;
-            };
-            let notice = link.asked_key.as_deref().unwrap_or(call);
-            if tell_parent(st, parent, child, call, notice, Some(&closure), current).await == Told::Retry {
-                self.answered_retry_at.insert(child.to_owned(), now + BACKOFF);
-                return;
-            }
-            self.told.insert(child.to_owned(), call.to_owned());
-        }
-        self.release(st, child, call).await;
+        // Contado: a gravação que falha deixa a pendência marcada como contada, e a próxima rodada só solta.
+        pending.told = true;
+        if !self.release(st, child, call).await { self.closing.insert(child.to_owned(), pending); }
     }
 
-    /// Solta a pergunta resolvida; a gravação que falha deixa `told` segurar a repetição até a próxima rodada.
-    async fn release(&mut self, st: &AppState, child: &str, call: &str) {
-        self.answered_retry_at.remove(child);
+    /// A pergunta tirada do registro para o aviso da seguinte segue sendo resolvida sozinha, sem segurar o aviso.
+    async fn parked_question(&mut self, st: &Arc<AppState>, row: &SessionRow, link: &LinkReturn, now: Instant, current: &Rows<'_>) {
+        let child = row.name.as_str();
+        let Some(mut pending) = self.parked.remove(child) else { return };
+        if resolve(st, row, &link.parent_answers, &mut pending, now, current).await == Resolved::Wait {
+            self.parked.insert(child.to_owned(), pending);
+            return;
+        }
+        let (call, notice) = (pending.call.clone(), pending.notice.clone());
+        record_ask(st, child, move |entry| entry.parent_answers.retain(|mark| mark.call.as_deref() != Some(call.as_str()) && mark.id != notice)).await;
+    }
+
+    /// Solta a pergunta resolvida do registro. `false` = a gravação falhou.
+    async fn release(&mut self, st: &AppState, child: &str, call: &str) -> bool {
         self.unrecorded.remove(child);
         let call = call.to_owned();
-        if record_ask(st, child, move |entry| if entry.asked_call.as_deref() == Some(call.as_str()) && entry.asked_queue_id.is_none() { forget_asked(entry); }).await {
+        let written = record_ask(st, child, move |entry| if entry.asked_call.as_deref() == Some(call.as_str()) && entry.asked_queue_id.is_none() { forget_asked(entry); }).await;
+        if written {
             self.notified.remove(child);
             self.closed.remove(child);
-            self.told.remove(child);
             self.closing.remove(child);
-            self.unread_reported.remove(child);
+        }
+        written
+    }
+}
+
+/// Pergunta avisada que fechou, até o pai ouvir como acabou. O fim lido fica guardado: a filha que segue
+/// trabalhando empurra o resultado para fora da janela lida antes de o pai ocupado receber o recado.
+#[derive(Clone, Debug)]
+struct Resolving {
+    call: String,
+    /// `interaction_id` citado no aviso ao pai.
+    notice: String,
+    since: Instant,
+    closure: Option<Closure>,
+    retry_at: Option<Instant>,
+    unread_reported: bool,
+    told: bool,
+}
+
+impl Resolving {
+    fn new(call: &str, notice: &str, now: Instant) -> Self {
+        Self { call: call.to_owned(), notice: notice.to_owned(), since: now, closure: None, retry_at: None, unread_reported: false, told: false }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Resolved { Wait, Done }
+
+/// Decide e conta ao pai o fim de uma pergunta avisada, se ninguém da parte dele a respondeu.
+async fn resolve(st: &Arc<AppState>, row: &SessionRow, marks: &[ParentAnswer], pending: &mut Resolving, now: Instant, current: &Rows<'_>) -> Resolved {
+    let child = row.name.as_str();
+    let parent = row.linked_by.as_deref().unwrap_or_default();
+    if pending.told { return Resolved::Done; }
+    if pending.retry_at.is_some_and(|t| now < t) { return Resolved::Wait; }
+    match parent_mark(marks, &pending.call, Some(&pending.notice), wall_now(), answering) {
+        // A rota do pai ainda não respondeu: se recusar, a resposta foi do dono.
+        Mark::Pending => return Resolved::Wait,
+        Mark::Confirmed => return Resolved::Done,
+        Mark::None => {}
+    }
+    if pending.closure.is_none() {
+        match read_closure(row, &pending.call).await {
+            Ok(found) => pending.closure = found,
+            Err(e) if !pending.unread_reported => {
+                report(st, child, "link_question_answer_unreadable", "resposta dada na filha ilegível", &io_kind(&e));
+                pending.unread_reported = true;
+            }
+            Err(_) => {}
         }
     }
+    let Some(closure) = pending.closure.clone() else {
+        // Sem resultado a pergunta não acabou: é a filha reabrindo, e o pai não ouve um fim que não houve.
+        if now - pending.since < CLOSE_GIVE_UP { return Resolved::Wait; }
+        report(st, child, "link_question_closed_without_result", "pergunta avisada sumiu sem resultado; o pai não é avisado", "");
+        return Resolved::Done;
+    };
+    if tell_parent(st, parent, child, &pending.call, &pending.notice, Some(&closure), current).await == Told::Retry {
+        pending.retry_at = Some(now + BACKOFF);
+        return Resolved::Wait;
+    }
+    Resolved::Done
 }
 
 /// Chave, chamada e marcas da resposta saem juntas: deixadas, valeriam para a próxima pergunta. Marca de outra
@@ -660,7 +714,7 @@ fn asked_items(row: &SessionRow) -> Vec<(String, Vec<String>)> {
 }
 
 /// Só a pergunta (`Question`) convida o pai a responder; menu, plano e permissão são do dono.
-fn question_message(child: &str, id: &str, row: &SessionRow, kind: Option<&InteractionKind>) -> String {
+fn question_message(child: &str, id: &str, row: &SessionRow, kind: Option<&InteractionKind>, relay: bool) -> String {
     if kind != Some(&InteractionKind::Question) {
         let text = row.question.as_deref().or(row.label.as_deref()).filter(|t| !t.trim().is_empty()).unwrap_or("sem texto");
         return format!("[de: {child}] pedido esperando o dono: {}. O dono decide no app.", cut(text, ASK_CHARS));
@@ -672,7 +726,7 @@ fn question_message(child: &str, id: &str, row: &SessionRow, kind: Option<&Inter
         for (i, option) in options.iter().enumerate() { text.push_str(&format!("\n{}. {}", i + 1, cut(option, ASK_CHARS))); }
     }
     text.push_str(&format!("\nResponda com child_answer (alvo {child}, interaction_id {id})."));
-    if let Some(call) = question_call(row) {
+    if let Some(call) = question_call(row).filter(|_| relay) {
         text.push_str(&format!("\nSe for perguntar ao dono, use AskUserQuestion com metadata {{source: \"{RELAY_SOURCE}{call}\"}}."));
     }
     text
@@ -713,31 +767,42 @@ fn settle_answer(entry: &mut LinkReturn, attempt: &str, sent: bool) {
 pub(crate) async fn parent_answering(st: &AppState, child: &str, id: &str) -> Option<String> {
     let (id, now, attempt) = (id.to_owned(), wall_now(), crate::mods::state::random_hex(16));
     let mark = attempt.clone();
-    record_ask(st, child, move |entry| mark_answering(entry, &id, &mark, now)).await.then_some(attempt)
+    if !record_ask(st, child, move |entry| mark_answering(entry, &id, &mark, now)).await { return None; }
+    if let Ok(mut running) = ANSWERING.lock() { running.insert(attempt.clone()); }
+    Some(attempt)
 }
 
 pub(crate) async fn parent_answer_settled(st: &AppState, child: &str, attempt: &str, sent: bool) {
+    if let Ok(mut running) = ANSWERING.lock() { running.remove(attempt); }
     let attempt = attempt.to_owned();
     record_ask(st, child, move |entry| settle_answer(entry, &attempt, sent)).await;
 }
 
-/// Saiu ou pode ter saído: só a recusa clara tira a marca do pai.
+/// Saiu ou pode ter saído: só o que prova que nada chegou à pergunta tira a marca do pai.
 pub(crate) fn answer_maybe_sent(status: u16, value: &serde_json::Value) -> bool {
-    (200..300).contains(&status)
-        || matches!(value["detail"]["code"].as_str(), Some("erro_sem_confirmacao_resposta" | "erro_envio_falhou" | "erro_drive_fallback_falhou"))
+    const NOTHING_SENT: [&str; 11] = ["erro_interacao_desatualizada", "erro_interacao_sem_identidade", "erro_interacao_indisponivel",
+        "erro_sem_resposta", "erro_resposta_nao_entregue", "erro_terminal_aberto", "erro_codex_resposta_invalida",
+        "erro_corpo_invalido", "erro_permissao_do_dono", "runtime_unhealthy", "session_transfer_busy"];
+    if (200..300).contains(&status) { return true; }
+    !(matches!(status, 401 | 403 | 404 | 422) || value["detail"]["code"].as_str().is_some_and(|code| NOTHING_SENT.contains(&code)))
 }
 
 #[derive(Debug, PartialEq)]
 enum Mark { None, Pending, Confirmed }
 
-/// Quem respondeu a pergunta avisada `call`, pelas marcas do registro: pela chamada, ou pelo ID do aviso gravado.
-fn parent_mark(link: &LinkReturn, call: &str, now: f64) -> Mark {
-    let mine = || link.parent_answers.iter()
-        .filter(|mark| mark.call.as_deref() == Some(call) || link.asked_key.as_deref() == Some(mark.id.as_str()));
+/// Quem respondeu a pergunta avisada `call`, pelas marcas: pela chamada, ou pelo ID do aviso. A marca da rota
+/// ainda rodando neste processo segura sem prazo; a de antes de um reinício, só por `PENDING_ANSWER`.
+fn parent_mark(marks: &[ParentAnswer], call: &str, notice: Option<&str>, now: f64, running: impl Fn(&str) -> bool) -> Mark {
+    let mine = || marks.iter().filter(|mark| mark.call.as_deref() == Some(call) || notice == Some(mark.id.as_str()));
     if mine().any(|mark| mark.confirmed) { Mark::Confirmed }
-    else if mine().any(|mark| now - mark.at < PENDING_ANSWER) { Mark::Pending }
+    else if mine().any(|mark| running(&mark.attempt) || now - mark.at < PENDING_ANSWER) { Mark::Pending }
     else { Mark::None }
 }
+
+/// Tentativas de resposta cuja rota ainda não voltou, neste processo.
+static ANSWERING: LazyLock<std::sync::Mutex<HashSet<String>>> = LazyLock::new(Default::default);
+
+fn answering(attempt: &str) -> bool { ANSWERING.lock().is_ok_and(|running| running.contains(attempt)) }
 
 /// Como a pergunta avisada acabou na filha, pelo resultado da chamada dela no transcript.
 #[derive(Clone, Debug, PartialEq)]
@@ -1646,7 +1711,7 @@ mod tests {
     fn a_long_question_is_cut_at_300_chars() {
         let long = "é".repeat(ASK_CHARS + 10);
         let row = waiting("q1", &long, &[]);
-        let text = question_message("f", "q1", &row, Some(&InteractionKind::Question));
+        let text = question_message("f", "q1", &row, Some(&InteractionKind::Question), true);
         assert!(text.contains(&format!("{}…", "é".repeat(ASK_CHARS))), "{text}");
         assert!(!text.contains(&"é".repeat(ASK_CHARS + 1)));
     }
@@ -1814,10 +1879,20 @@ mod tests {
 
     #[test]
     fn the_notice_names_the_relay_source_by_the_call() {
-        let text = question_message("f", "q1", &asking("q1", "toolu_1"), Some(&InteractionKind::Question));
+        let text = question_message("f", "q1", &asking("q1", "toolu_1"), Some(&InteractionKind::Question), true);
         assert!(text.ends_with("\nSe for perguntar ao dono, use AskUserQuestion com metadata {source: \"hangar-child:toolu_1\"}."), "{text}");
         // Sem a chamada não há como casar o repasse: a linha não sai.
-        assert!(!question_message("f", "q1", &waiting("q1", "x", &[]), Some(&InteractionKind::Question)).contains("metadata"));
+        assert!(!question_message("f", "q1", &waiting("q1", "x", &[]), Some(&InteractionKind::Question), true).contains("metadata"));
+        // Pai sem `AskUserQuestion` (Codex, Pi, omp, Kimi): a linha não sai.
+        assert!(!question_message("f", "q1", &asking("q1", "toolu_1"), Some(&InteractionKind::Question), false).contains("metadata"));
+        let mut w = Watcher::default();
+        let QuestionStep::Send(text) = settled_step(&asking("q1", "toolu_1"), Some(&InteractionKind::Question), Instant::now()) else { panic!("esperava Send") };
+        assert!(!text.contains("metadata"), "pai fora de `claude_parents`: {text}");
+        w.claude_parents.insert("pai".into());
+        w.question_step(&asking("q1", "toolu_1"), &linked(), Some(&InteractionKind::Question), Instant::now());
+        let QuestionStep::Send(text) = w.question_step(&asking("q1", "toolu_1"), &linked(), Some(&InteractionKind::Question), Instant::now() + SETTLE)
+            else { panic!("esperava Send") };
+        assert!(text.contains("hangar-child:toolu_1"), "{text}");
     }
 
     /// Q1 avisada e Q2 aberta no lugar, sem a linha passar por vazia: a Q1 se resolve antes do aviso da Q2.
@@ -1826,6 +1901,13 @@ mod tests {
         let (t0, question) = (Instant::now(), Some(&InteractionKind::Question));
         let mut w = Watcher::default();
         assert_eq!(w.question_step(&asking("q2", "toolu_2"), &notified("q1", Some("toolu_1")), question, t0), QuestionStep::Closed("toolu_1".into()));
+        // A Q1 sem fim lido não segura a Q2 além do `SETTLE`: o aviso dela sai, e a Q1 segue à parte.
+        assert!(matches!(w.question_step(&asking("q2", "toolu_2"), &notified("q1", Some("toolu_1")), question, t0 + SETTLE), QuestionStep::Send(_)));
+        // Aberta sem chamada conhecida (o plugin ainda não a projetou): não é prova de outra pergunta.
+        let mut unknown = asking("q2", "toolu_2");
+        unknown.ask_form.as_mut().unwrap().as_object_mut().unwrap().remove("tool_use_id");
+        let mut w = Watcher::default();
+        assert_eq!(w.question_step(&unknown, &notified("q1", Some("toolu_1")), question, t0), QuestionStep::Wait);
         // A linha do aviso da Q1 ainda na fila sai antes: tirada sem entregar, a chamada some e a Q2 é avisada direto.
         let queued = LinkReturn { asked_queue_id: Some("row1".into()), ..notified("q1", Some("toolu_1")) };
         assert_eq!(w.question_step(&asking("q2", "toolu_2"), &queued, question, t0), QuestionStep::Cancel("row1".into()));
@@ -1842,6 +1924,7 @@ mod tests {
         let link = notified("q1", Some("toolu_1"));
         let reopened = asking("q2", "toolu_1");
         let mut w = Watcher::default();
+        w.claude_parents.insert("pai".into());
         assert_eq!(w.question_step(&reopened, &link, question, t0), QuestionStep::Wait);
         let QuestionStep::Send(text) = w.question_step(&reopened, &link, question, t0 + SETTLE) else { panic!("esperava Send") };
         assert!(text.contains("interaction_id q2") && text.contains("hangar-child:toolu_1"), "{text}");
@@ -1918,17 +2001,17 @@ mod tests {
         let mut entry = notified("q1", Some("toolu_1"));
         mark_answering(&mut entry, "q1", "a1", 100.0);
         assert_eq!(entry.parent_answers.iter().map(|m| (m.call.as_deref(), m.confirmed)).collect::<Vec<_>>(), [(Some("toolu_1"), false)]);
-        assert_eq!(parent_mark(&entry, "toolu_1", 110.0), Mark::Pending);
-        assert_eq!(parent_mark(&entry, "toolu_1", 100.0 + PENDING_ANSWER), Mark::None, "rota que nunca respondeu não segura para sempre");
+        assert_eq!(parent_mark(&entry.parent_answers, "toolu_1", entry.asked_key.as_deref(), 110.0, |_| false), Mark::Pending);
+        assert_eq!(parent_mark(&entry.parent_answers, "toolu_1", entry.asked_key.as_deref(), 100.0 + PENDING_ANSWER, |_| false), Mark::None, "rota que nunca respondeu não segura para sempre");
         let mut sent = entry.clone();
         settle_answer(&mut sent, "a1", true);
-        assert_eq!(parent_mark(&sent, "toolu_1", 100.0 + PENDING_ANSWER * 10.0), Mark::Confirmed);
+        assert_eq!(parent_mark(&sent.parent_answers, "toolu_1", sent.asked_key.as_deref(), 100.0 + PENDING_ANSWER * 10.0, |_| false), Mark::Confirmed);
         settle_answer(&mut entry, "a1", false);
-        assert_eq!((entry.parent_answers.len(), parent_mark(&entry, "toolu_1", 110.0)), (0, Mark::None));
+        assert_eq!((entry.parent_answers.len(), parent_mark(&entry.parent_answers, "toolu_1", entry.asked_key.as_deref(), 110.0, |_| false)), (0, Mark::None));
         // ID velho de antes da reabertura não marca a pergunta de agora.
         let mut stale = notified("q2", Some("toolu_1"));
         mark_answering(&mut stale, "q1", "a2", 100.0);
-        assert_eq!(parent_mark(&stale, "toolu_1", 110.0), Mark::None);
+        assert_eq!(parent_mark(&stale.parent_answers, "toolu_1", stale.asked_key.as_deref(), 110.0, |_| false), Mark::None);
     }
 
     /// Uma tentativa posterior recusada não apaga a resposta já confirmada, e cada tentativa só conclui a própria marca.
@@ -1939,13 +2022,13 @@ mod tests {
         settle_answer(&mut entry, "a1", true);
         mark_answering(&mut entry, "q1", "a2", 101.0);
         settle_answer(&mut entry, "a2", false);
-        assert_eq!(parent_mark(&entry, "toolu_1", 102.0), Mark::Confirmed);
+        assert_eq!(parent_mark(&entry.parent_answers, "toolu_1", entry.asked_key.as_deref(), 102.0, |_| false), Mark::Confirmed);
         // Tentativa para outra pergunta guarda a própria autoria, sem mexer na anterior.
         let mut other = notified("q1", Some("toolu_1"));
         mark_answering(&mut other, "q1", "a1", 100.0);
         mark_answering(&mut other, "q9", "a9", 100.0);
         settle_answer(&mut other, "a9", true);
-        assert_eq!(parent_mark(&other, "toolu_1", 101.0), Mark::Pending, "a confirmação da outra não vale para esta");
+        assert_eq!(parent_mark(&other.parent_answers, "toolu_1", other.asked_key.as_deref(), 101.0, |_| false), Mark::Pending, "a confirmação da outra não vale para esta");
         forget_asked(&mut other);
         assert_eq!(other.parent_answers.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["q9"], "só as marcas da resolvida saem");
     }
@@ -1958,7 +2041,7 @@ mod tests {
         settle_answer(&mut entry, "a1", true);
         assert_eq!(entry.parent_answers[0].call, None);
         Unrecorded { key: "q1".into(), queue: None, call: Some("toolu_1".into()) }.apply(&mut entry);
-        assert_eq!(parent_mark(&entry, "toolu_1", 101.0), Mark::Confirmed);
+        assert_eq!(parent_mark(&entry.parent_answers, "toolu_1", entry.asked_key.as_deref(), 101.0, |_| false), Mark::Confirmed);
     }
 
     #[test]
@@ -1971,6 +2054,10 @@ mod tests {
         assert!(!answer_maybe_sent(409, &coded("erro_resposta_nao_entregue")));
         assert!(!answer_maybe_sent(409, &coded("erro_interacao_desatualizada")));
         assert!(!answer_maybe_sent(503, &coded("runtime_unhealthy")));
+        // Falha depois da escrita (ou sem código) pode ter respondido: a marca fica.
+        assert!(answer_maybe_sent(500, &serde_json::Value::Null));
+        assert!(answer_maybe_sent(503, &coded("erro_codex_resposta_envio")));
+        assert!(!answer_maybe_sent(422, &coded("qualquer")), "corpo recusado antes da escrita");
     }
 
     /// O pai que é filha ligada de outro: a resposta que o servidor dá na pergunta de repasse dele é marcada como
@@ -1986,7 +2073,7 @@ mod tests {
         let mut w = Watcher::default();
         w.notified.insert("f".into(), "pq1".into());
         assert_eq!(w.question_step(&answered, &as_child, Some(&InteractionKind::Question), Instant::now()), QuestionStep::Closed("toolu_p".into()));
-        assert_eq!(parent_mark(&as_child, "toolu_p", 200.0), Mark::Confirmed, "o fechamento solta o registro sem contar ao avô");
+        assert_eq!(parent_mark(&as_child.parent_answers, "toolu_p", as_child.asked_key.as_deref(), 200.0, |_| false), Mark::Confirmed, "o fechamento solta o registro sem contar ao avô");
     }
 
     fn parent(form: serde_json::Value) -> SessionRow {

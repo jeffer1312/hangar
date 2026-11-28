@@ -966,8 +966,15 @@ impl Tools {
             return Err(format!("link_returns_write_failed: não gravei que a resposta é sua; nada foi enviado a '{alvo}'. Tente de novo."));
         };
         let body = json!({"answers": a.answers, "interaction_id": a.interaction_id});
-        let (status, value) = self.route_from(Some(&me), Method::POST, &format!("/api/sessions/{}/answer", segment(alvo)), Some(body)).await;
-        link_return::parent_answer_settled(&self.st, alvo, &attempt, link_return::answer_maybe_sent(status, &value)).await;
+        let (api, token, st) = (self.api.clone(), self.st.cfg.auth_token.clone(), self.st.clone());
+        let (path, target) = (format!("/api/sessions/{}/answer", segment(alvo)), alvo.to_owned());
+        // Rota e conclusão numa tarefa própria: o cliente MCP que corta a chamada não deixa a marca à espera.
+        let answered = tokio::spawn(async move {
+            let (status, value) = call_route(api, &token, Some(&me), Method::POST, &path, Some(body)).await;
+            link_return::parent_answer_settled(&st, &target, &attempt, link_return::answer_maybe_sent(status, &value)).await;
+            (status, value)
+        });
+        let (status, value) = answered.await.map_err(|e| format!("child_answer_failed: a resposta não terminou ({e})"))?;
         answer_outcome(status, value)
     }
 
