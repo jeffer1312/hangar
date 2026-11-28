@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 // O resto da pasta (temporários da gravação atômica) não passa no formato de dia.
 use crate::diary::DayDetail;
-use crate::wire::{Counter, is_day};
+use crate::wire::{Counter, Env, is_day, is_name};
 
 /// Teto da fila: acima dele sai o dia mais antigo.
 pub(crate) const MAX_DAYS: usize = 14;
@@ -25,13 +25,34 @@ pub(crate) struct DayFile {
     /// Marcas dos retratos do dia (servidor e apps), gravadas com os contadores e nunca copiadas ao pacote.
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) snapshot_keys: BTreeSet<String>,
+    /// O binário que contou (`versão-commit`); vazio só em arquivo de antes da divisão por versão.
+    pub(crate) build: String,
+    /// O `env` desse binário, que o lote leva mesmo quando outro binário o envia.
+    pub(crate) env: Option<Env>,
+    /// Arquivo de um binário que já não roda: `<dia>_<build>.json`, sem contagem nova.
+    pub(crate) frozen: bool,
+}
+
+impl DayFile {
+    /// O nome do arquivo sem `.json`: o dia, ou `<dia>_<build>` quando congelado.
+    pub(crate) fn stem(&self) -> String { if self.frozen { format!("{}_{}", self.day, self.build) } else { self.day.clone() } }
+}
+
+/// O dia UTC de um nome de arquivo da fila.
+pub(crate) fn day_of(stem: &str) -> &str { &stem[..10] }
+
+/// O binário de um arquivo congelado; `None` no arquivo do binário que roda.
+pub(crate) fn build_of(stem: &str) -> Option<&str> { stem.get(11..) }
+
+fn is_stem(stem: &str) -> bool {
+    stem.get(..10).is_some_and(is_day) && (stem.len() == 10 || (stem.as_bytes()[10] == b'_' && is_name(&stem[11..])))
 }
 
 fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry-v3") }
 
 fn queue_dir(home: &Path) -> PathBuf { root(home).join("queue") }
 
-fn day_path(home: &Path, day: &str) -> PathBuf { queue_dir(home).join(format!("{day}.json")) }
+fn day_path(home: &Path, stem: &str) -> PathBuf { queue_dir(home).join(format!("{stem}.json")) }
 
 pub(crate) fn once_path(home: &Path) -> PathBuf { root(home).join("once.json") }
 
@@ -47,7 +68,7 @@ pub(crate) fn read_day(home: &Path, day: &str) -> io::Result<Option<DayFile>> {
 
 pub(crate) fn write_day(home: &Path, file: &DayFile) -> io::Result<()> {
     std::fs::create_dir_all(queue_dir(home))?;
-    hangar_core::fs::atomic_write(&day_path(home, &file.day), &serde_json::to_vec(file)?)
+    hangar_core::fs::atomic_write(&day_path(home, &file.stem()), &serde_json::to_vec(file)?)
 }
 
 pub(crate) fn remove_day(home: &Path, day: &str) -> io::Result<()> {
@@ -55,6 +76,21 @@ pub(crate) fn remove_day(home: &Path, day: &str) -> io::Result<()> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         outcome => outcome,
     }
+}
+
+/// Grava o carimbo deste binário e devolve o que estava lá (o da vida anterior do servidor).
+pub(crate) fn swap_build(home: &Path, build: &str) -> io::Result<Option<String>> {
+    let path = root(home).join("build");
+    let previous = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text.trim().to_owned()).filter(|text| is_name(text)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    if previous.as_deref() != Some(build) {
+        std::fs::create_dir_all(root(home))?;
+        hangar_core::fs::atomic_write(&path, build.as_bytes())?;
+    }
+    Ok(previous)
 }
 
 /// Os dias na fila, do mais antigo ao mais novo.
@@ -67,7 +103,7 @@ pub(crate) fn days(home: &Path) -> io::Result<Vec<String>> {
     let mut days = Vec::new();
     for entry in entries {
         let name = entry?.file_name();
-        if let Some(stem) = name.to_str().and_then(|n| n.strip_suffix(".json")).filter(|s| is_day(s)) {
+        if let Some(stem) = name.to_str().and_then(|n| n.strip_suffix(".json")).filter(|s| is_stem(s)) {
             days.push(stem.to_owned());
         }
     }
@@ -75,14 +111,49 @@ pub(crate) fn days(home: &Path) -> io::Result<Vec<String>> {
     Ok(days)
 }
 
-/// Quantos dias saíram.
+/// Quantos arquivos saíram: ficam os de `MAX_DAYS` dias, com todos os binários de cada um.
 pub(crate) fn cap(home: &Path) -> io::Result<usize> {
-    let days = days(home)?;
-    let excess = &days[..days.len().saturating_sub(MAX_DAYS)];
-    for day in excess {
-        remove_day(home, day)?;
+    let stems = days(home)?;
+    let distinct: BTreeSet<&str> = stems.iter().map(|stem| day_of(stem)).collect();
+    let Some(&oldest_kept) = distinct.iter().rev().take(MAX_DAYS).last() else { return Ok(0) };
+    let excess: Vec<&String> = stems.iter().filter(|stem| day_of(stem) < oldest_kept).collect();
+    for stem in &excess {
+        remove_day(home, stem)?;
     }
     Ok(excess.len())
+}
+
+/// Deixa no nome do dia só o arquivo de `build`: o de outro binário vira congelado, o congelado de
+/// `build` volta a ser o do dia, e o de antes da divisão por versão sai (devolve quantos saíram).
+pub(crate) fn rotate(home: &Path, build: &str) -> io::Result<usize> {
+    let mut removed = 0;
+    for stem in days(home)?.into_iter().filter(|stem| build_of(stem).is_none()) {
+        // Arquivo ilegível fica: a gravação do dia o troca pela memória e avisa o diário.
+        let mut file = match read_day(home, &stem) {
+            Ok(Some(file)) => file,
+            Ok(None) => continue,
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => continue,
+            Err(e) => return Err(e),
+        };
+        if file.build == build { continue; }
+        if file.build.is_empty() {
+            remove_day(home, &stem)?;
+            removed += 1;
+            continue;
+        }
+        // Grava a cópia congelada antes de apagar: disco cheio não leva o dia junto.
+        file.frozen = true;
+        write_day(home, &file)?;
+        remove_day(home, &stem)?;
+    }
+    for stem in days(home)?.into_iter().filter(|stem| build_of(stem) == Some(build)) {
+        let Some(mut file) = read_day(home, &stem)? else { continue };
+        if read_day(home, day_of(&stem))?.is_some() { continue; }
+        file.frozen = false;
+        write_day(home, &file)?;
+        remove_day(home, &stem)?;
+    }
+    Ok(removed)
 }
 
 /// A fila e as marcas do escopo 3.
@@ -131,6 +202,35 @@ mod tests {
         assert_eq!(days.len(), MAX_DAYS);
         assert_eq!(days.first().map(String::as_str), Some("2026-11-02"));
         assert_eq!(days.last().map(String::as_str), Some("2026-11-15"));
+    }
+
+    #[test]
+    fn telemetry_each_binary_keeps_its_own_file_of_the_day() {
+        let home = tempfile::tempdir().unwrap();
+        let file = |day: &str, build: &str| DayFile { day: day.into(), build: build.into(), ..DayFile::default() };
+        write_day(home.path(), &file("2026-11-27", "0.1.0-aaaaaaa")).unwrap();
+        write_day(home.path(), &file("2026-11-26", "")).unwrap();
+        assert_eq!(rotate(home.path(), "0.2.0-bbbbbbb").unwrap(), 1, "o de antes da divisão sai");
+        assert_eq!(days(home.path()).unwrap(), ["2026-11-27_0.1.0-aaaaaaa"]);
+        let frozen = read_day(home.path(), "2026-11-27_0.1.0-aaaaaaa").unwrap().unwrap();
+        assert!(frozen.frozen && frozen.build == "0.1.0-aaaaaaa");
+        write_day(home.path(), &file("2026-11-27", "0.2.0-bbbbbbb")).unwrap();
+        assert_eq!(rotate(home.path(), "0.1.0-aaaaaaa").unwrap(), 0);
+        assert_eq!(days(home.path()).unwrap(), ["2026-11-27", "2026-11-27_0.2.0-bbbbbbb"], "o binário que volta retoma o próprio arquivo");
+        assert_eq!(read_day(home.path(), "2026-11-27").unwrap().unwrap().build, "0.1.0-aaaaaaa");
+        assert_eq!((day_of("2026-11-27_0.2.0-bbbbbbb"), build_of("2026-11-27_0.2.0-bbbbbbb")), ("2026-11-27", Some("0.2.0-bbbbbbb")));
+        assert_eq!(build_of("2026-11-27"), None);
+    }
+
+    #[test]
+    fn telemetry_cap_counts_days_not_files() {
+        let home = tempfile::tempdir().unwrap();
+        for n in 1..=15 {
+            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), ..DayFile::default() }).unwrap();
+        }
+        write_day(home.path(), &DayFile { day: "2026-11-15".into(), build: "0.1.0-dev".into(), frozen: true, ..DayFile::default() }).unwrap();
+        assert_eq!(cap(home.path()).unwrap(), 1);
+        assert_eq!(days(home.path()).unwrap().len(), MAX_DAYS + 1);
     }
 
     #[test]

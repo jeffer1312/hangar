@@ -562,7 +562,7 @@ impl OpenFacts for LocalFacts {
     fn transfer_busy(&self, name: &str) -> Result<bool, OpenError> {
         let base = self.hangar().join("conversation-transfers");
         let digest: String = ring::digest::digest(&ring::digest::SHA256, name.as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect();
-        let invalid = || OpenError::new(409, "erro_criacao_sessao", "índice de transferência inválido");
+        let invalid = || OpenError::new(409, "erro_criacao_sessao", "índice de transferência inválido").because("transfer_index_invalid");
         let ids = match read_json(&base.join("indexes").join(format!("session-{digest}.json"))) {
             Ok(None) => return Ok(false),
             Ok(Some(Value::Array(ids))) => ids,

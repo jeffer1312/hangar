@@ -435,7 +435,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 const SEND_REFUSALS: &[&str] = &["erro_envio_falhou", "erro_aguarde_clear", "erro_comando_nao_executado"];
 
 /// `message_sent` ou `send_failed` do `/input`; `telemetry` só vem com o dono.
-fn wire_session(provider: &str, terminal: bool) -> (hangar_telemetry::events::Provider, hangar_telemetry::events::Surface) {
+pub(crate) fn wire_session(provider: &str, terminal: bool) -> (hangar_telemetry::events::Provider, hangar_telemetry::events::Surface) {
     use hangar_telemetry::events::{Provider, Surface};
     (Provider::parse(provider).unwrap_or(Provider::Other), if terminal { Surface::Terminal } else { Surface::Headless })
 }

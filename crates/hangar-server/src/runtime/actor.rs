@@ -985,10 +985,10 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             // Codex e Antigravity: a queda de sempre, com o teto de 3 subidas (o cano que guardou o código ainda pode estar de pé).
             if matches!(target.provider.as_str(),"codex" | "antigravity") {
                 if rc.is_some() { respawn.kill = true; } else { enter_error(&mut error,&target,failure("cano_closed")); }
-                effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":rc})),clock(start))?);
+                effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":rc,"cause":"cano_died_socket_down"})),clock(start))?);
                 effects.extend(after_exit(&mut respawn,&mut engine,&target,clock(start).monotonic_s,closed.load(Ordering::Acquire)));
             } else {
-                effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":rc})),clock(start))?);
+                effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":rc,"cause":"cano_died_socket_down"})),clock(start))?);
                 publish(&events,&target,&mut revision,"claude_exit",json!({"conversation":engine.view()["conversation"]}));
             }
         }
@@ -1834,7 +1834,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     },
                     Some(IoEvent::End { code }) => {
                         if respawn.next_at.is_none() { respawn.was_working = engine.view()["in_progress"] == true; }
-                        effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":code})),clock(start))?);
+                        let asked = closed.load(Ordering::Acquire);
+                        effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":code,"asked":asked})),clock(start))?);
                         if target.provider=="claude" {publish(&events,&target,&mut revision,"claude_exit",json!({"conversation":engine.view()["conversation"]}));}
                         respawn.kill = true;
                         effects.extend(after_exit(&mut respawn,&mut engine,&target,clock(start).monotonic_s,closed.load(Ordering::Acquire)));
@@ -1842,7 +1843,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     None => {
                         io_open = false; enter_error(&mut error,&target,failure("cano_closed"));
                         if respawn.next_at.is_none() && !respawn.kill { respawn.was_working = engine.view()["in_progress"] == true; }
-                        effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null})),clock(start))?);
+                        let asked = closed.load(Ordering::Acquire);
+                        effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null,"asked":asked})),clock(start))?);
                         if target.provider=="claude" {publish(&events,&target,&mut revision,"claude_exit",json!({"conversation":engine.view()["conversation"]}));}
                         effects.extend(after_exit(&mut respawn,&mut engine,&target,clock(start).monotonic_s,closed.load(Ordering::Acquire)));
                     },
@@ -1900,7 +1902,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                             && sidecar_left(engine.launch.as_ref(),&target).await {
                             tracing::warn!(key=%target.key,session=%target.name,"arquivo da sessão sumiu ou é de outra vida; o ator para sem subir o processo de novo");
                             effects.push_back(Effect::Diag { event:DiagEvent::CodexSidecarGone,code:"codex_sidecar_gone".into() });
-                            effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null})),clock(start))?);
+                            effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null,"cause":"respawn_failed"})),clock(start))?);
                             closed.store(true,Ordering::Release);
                             reconnect.cancel();
                             sidecar_gone = true;
@@ -1908,7 +1910,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         }
                         let gone = std::mem::take(&mut respawn.swallowed);
                         if gone {
-                            effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null})),clock(start))?);
+                            effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null,"cause":"respawn_failed"})),clock(start))?);
                             respawn.kill = true;
                         }
                         respawn.last = Some(failure.clone());
@@ -3160,9 +3162,64 @@ fn take_mods(engine:&mut RuntimeEngine,waiters:&mut ModsWaiters,token:&mut u64,c
     }
 }
 
+/// A causa (`events::HEALTH`) e o `exit` da saída do processo pela linha `cano_saiu`; `None` quando não é queda
+/// (0 ou SIGTERM com a sessão parada). Código negativo é o sinal. O ator diz em `cause` quando foi ele quem viu a queda.
+pub(crate) fn crash(line:&Value,working:bool) -> Option<(&'static str,&'static str)> {
+    // O próprio Hangar parou o processo (fechar, reabrir, trocar de conta): não é queda.
+    if line["asked"] == true { return None; }
+    let seen = match line["cause"].as_str() { Some("cano_died_socket_down")=>Some("cano_died_socket_down"), Some("respawn_failed")=>Some("respawn_failed"), _=>None };
+    let Some(rc) = line["rc"].as_i64() else { return Some((seen.unwrap_or("pipe_closed_no_rc"),"none")) };
+    let exit = match rc { 0=>"code_0", 1=>"code_1", -9=>"sigkill", -15=>"sigterm", -11=>"sigsegv", -6=>"sigabrt", rc if rc < 0=>"signal_other", _=>"code_other" };
+    let cause = match rc { -9=>"sigkill", 0 | -15 if working=>"exit_while_working", 0 | -15=>return None, rc if rc < 0=>"signal_other", _=>"exit_nonzero" };
+    Some((seen.unwrap_or(cause),exit))
+}
+
+/// A queda vai à telemetria uma vez por minuto por sessão e código, como o log.
+pub(crate) fn report_crash(code:&'static str,session:&str,line:&Value,working:bool) {
+    let Some((cause,exit)) = crash(line,working) else { return };
+    if crate::warn_limit::allow(Some(session),&format!("health:{code}")) {
+        crate::telemetry_hooks::report_health(code,cause,hangar_usage_diary::Severity::Error,Some(session),vec![("exit",exit.to_owned())],None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Toda causa que `crash` devolve está no catálogo de cada código que a reporta: fora dele, a projeção a lê `other`.
+    #[test]
+    fn telemetry_crash_causes_are_in_the_catalog_of_every_crash_code() {
+        let lines = [json!({"type":"cano_saiu"}), json!({"type":"cano_saiu","cause":"cano_died_socket_down"}),
+            json!({"type":"cano_saiu","cause":"respawn_failed","rc":1}), json!({"type":"cano_saiu","rc":-9}), json!({"type":"cano_saiu","rc":0}),
+            json!({"type":"cano_saiu","rc":2}), json!({"type":"cano_saiu","rc":-11})];
+        for code in ["headless_processo_caiu","headless_caiu"] {
+            let causes = hangar_telemetry::events::HEALTH.iter().find(|h|h.code == code).unwrap().causes;
+            for line in &lines {
+                let (cause,_) = crash(line,true).unwrap();
+                assert!(causes.contains(&cause),"{code}: {cause}");
+            }
+        }
+    }
+
+    #[test]
+    fn telemetry_crash_cause_comes_from_the_exit_and_the_turn() {
+        let exit = |rc:Value| json!({"type":"cano_saiu","rc":rc});
+        assert_eq!(crash(&exit(json!(0)),false),None,"saída limpa parada não é queda");
+        assert_eq!(crash(&exit(json!(-15)),false),None);
+        assert_eq!(crash(&exit(json!(0)),true),Some(("exit_while_working","code_0")));
+        assert_eq!(crash(&exit(json!(-15)),true),Some(("exit_while_working","sigterm")));
+        assert_eq!(crash(&exit(json!(-9)),false),Some(("sigkill","sigkill")));
+        assert_eq!(crash(&exit(json!(1)),false),Some(("exit_nonzero","code_1")));
+        assert_eq!(crash(&exit(json!(2)),false),Some(("exit_nonzero","code_other")));
+        assert_eq!(crash(&exit(json!(-11)),false),Some(("signal_other","sigsegv")));
+        assert_eq!(crash(&exit(json!(-6)),false),Some(("signal_other","sigabrt")));
+        assert_eq!(crash(&exit(json!(-1)),false),Some(("signal_other","signal_other")));
+        assert_eq!(crash(&exit(Value::Null),false),Some(("pipe_closed_no_rc","none")));
+        assert_eq!(crash(&json!({"type":"cano_saiu","rc":null,"cause":"cano_died_socket_down"}),false),Some(("cano_died_socket_down","none")));
+        assert_eq!(crash(&json!({"type":"cano_saiu","rc":null,"cause":"respawn_failed"}),false),Some(("respawn_failed","none")));
+        assert_eq!(crash(&json!({"type":"cano_saiu","rc":null,"cause":"texto"}),false),Some(("pipe_closed_no_rc","none")),"só causa do ator");
+        assert_eq!(crash(&json!({"type":"cano_saiu","rc":-9,"asked":true}),true),None,"parada pedida pelo Hangar");
+    }
 
     fn commit_target()->RuntimeTarget {
         RuntimeTarget {key:"key".into(),generation:4,name:"s".into(),provider:"claude".into(),metadata:json!({"session_id":"a","lifecycle_pending":false}),

@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 use crate::routes::{AppState, cors, owner_gate};
 use crate::share::gate::Watcher;
 
+/// O cabeçalho em que o app nativo diz por que o verbo respondeu `erro:`; esta rota repassa o do app de lá.
+pub(crate) const BROWSER_CODE: &str = "x-hangar-browser-code";
 const BODY_MAX: usize = 1024 * 1024;
 const PNG_MAX: usize = 32 * 1024 * 1024;
 const PING_EVERY: std::time::Duration = std::time::Duration::from_secs(25);
@@ -105,6 +107,12 @@ async fn command(st: &AppState, name: &str, req: Request) -> Response {
     let shot = (verb == "shot").then(|| shot_path(st, name, &mut body));
     match st.browser_host.command(name, body).await {
         Ok(Reply::Text(text)) => text_response(text),
+        // A causa vai no cabeçalho do `/cmd` local, para o MCP e o CLI lerem igual; o texto não muda.
+        Ok(Reply::Error(code, text)) => {
+            let mut response = text_response(text);
+            if let Ok(value) = header::HeaderValue::from_str(&code) { response.headers_mut().insert(BROWSER_CODE, value); }
+            response
+        }
         Ok(Reply::Png(png)) => {
             let path = shot.unwrap_or_else(|| default_shot(st, name));
             let shown = path.display().to_string();

@@ -17,6 +17,7 @@
     "erasableSyntaxOnly": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "paths": {
       "@/*": [

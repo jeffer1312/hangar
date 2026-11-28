@@ -20,9 +20,36 @@ const NO_HOST: &str = "o app desktop não está aberto nesta máquina e nenhum a
 const STALE_HOST: &str = "a sessão foi usada por último no app desktop de outra máquina, e ele não está mais ligado: \
     abra a sessão no app desktop que você está usando e repita";
 
-/// O app não atende: a frase volta como erro da tool.
+/// O app não atende: a frase volta como erro da tool, e o código (`events::MCP_CAUSES`) diz onde parou.
+/// `None`: a frase é a recusa do próprio app, cujo código `verb_on` já marcou.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Unavailable(pub String);
+pub struct Unavailable(pub String, pub Option<&'static str>);
+
+impl Unavailable {
+    fn new(code: &'static str, text: impl Into<String>) -> Self { Unavailable(text.into(), Some(code)) }
+
+    /// A frase para a tool, com o código marcado na chamada.
+    pub fn into_text(self) -> String {
+        if let Some(code) = self.1 { super::tools::fail(code); }
+        self.0
+    }
+}
+
+use crate::browser_host::BROWSER_CODE;
+const APP_CODES: &[&str] = &["page_gone", "browser_starting", "browser_start_failed", "app_closing", "app_no_answer", "cdp_closed",
+    "dialog_open", "queue_deadline", "verb_unconfirmed", "target_missing", "target_ambiguous", "ref_invalid", "wait_timeout",
+    "browser_not_open"];
+
+/// O código da recusa do app pelo cabeçalho; fora da lista (ou app antigo, sem ele), a recusa genérica.
+fn app_code(header: Option<&str>) -> &'static str {
+    header.and_then(|code| APP_CODES.iter().copied().find(|known| *known == code)).unwrap_or("browser_verb_refused")
+}
+
+/// Sem resposta do app: prazo estourado ou conexão que não abriu.
+fn unreachable(error: &reqwest::Error) -> Unavailable {
+    Unavailable::new(if error.is_timeout() { "desktop_app_timeout" } else { "desktop_app_unreachable" },
+        format!("o app desktop não respondeu: {error}"))
+}
 
 pub(super) fn nav_dir(home: &Path) -> std::path::PathBuf { home.join(".hangar").join("nav") }
 
@@ -49,7 +76,7 @@ pub async fn verb(http: &reqwest::Client, home: &Path, name: &str, verb: &str, a
 /// A URL da página do navegador da sessão. `erro:` do app (sessão sem navegador, página caída) também é `Unavailable`.
 pub async fn page_url(http: &reqwest::Client, home: &Path, name: &str) -> Result<String, Unavailable> {
     let text = verb(http, home, name, "url", &[], None, VERB_TIMEOUT).await?;
-    ok_value(&text).ok_or(Unavailable(text))
+    ok_value(&text).ok_or(Unavailable(text, None))
 }
 
 /// O texto depois de `ok:`, sem as aspas quando o app o manda como string JSON.
@@ -85,7 +112,7 @@ fn dead_pid(srv: &Value) -> bool {
 fn server(home: &Path) -> Result<Option<(u64, String)>, Unavailable> {
     let Some(srv) = registration(home)? else { return Ok(None) };
     if dead_pid(&srv) {
-        return Err(Unavailable(format!("o app desktop do Hangar não está rodando nesta máquina: o registro em ~/.hangar/nav/_srv.json \
+        return Err(Unavailable::new("desktop_app_dead", format!("o app desktop do Hangar não está rodando nesta máquina: o registro em ~/.hangar/nav/_srv.json \
             aponta para o pid {}, que não está mais rodando. Se ele estava reiniciando (atualização), tente uma vez daqui a 15 s; \
             falhou de novo, avise o usuário que ele precisa abrir o app e siga sem o navegador embutido (o agent-browser serve)",
             srv["pid"])));
@@ -95,7 +122,7 @@ fn server(home: &Path) -> Result<Option<(u64, String)>, Unavailable> {
 }
 
 fn unreadable(why: &str) -> Unavailable {
-    Unavailable(format!("não deu para ler ~/.hangar/nav/_srv.json ({why}); feche e reabra o app desktop do Hangar"))
+    Unavailable::new("desktop_registry_unreadable", format!("não deu para ler ~/.hangar/nav/_srv.json ({why}); feche e reabra o app desktop do Hangar"))
 }
 
 /// Há app desktop nesta máquina para o `/cmd` (`true`). Sem ele, os verbos vão pela rota `browser-cmd` ao app de quem
@@ -125,22 +152,29 @@ pub fn host_body(verb: &str, args: &[String], tab: Option<i64>, deadline: Durati
 /// `local_app`: esta máquina tem app desktop, e o verbo saiu dela porque a sessão foi usada por último em outra.
 pub fn host_answer(status: u16, body: &Value, local_app: bool) -> Result<String, Unavailable> {
     // ponytail: texto que por acaso é JSON volta reserializado; só muda espaçamento, nunca o conteúdo.
-    if (200..300).contains(&status) { return Ok(body["detail"].as_str().map_or_else(|| body.to_string(), str::to_owned)); }
+    if (200..300).contains(&status) {
+        let text = body["detail"].as_str().map_or_else(|| body.to_string(), str::to_owned);
+        // O app de lá responde a recusa em texto, com a causa no `code` que a rota repassa.
+        if text.starts_with("erro:") { super::tools::fail(app_code(body["code"].as_str())); }
+        return Ok(text);
+    }
     let detail = &body["detail"];
+    let code = detail["code"].as_str().filter(|code| code.starts_with("browser_host_"))
+        .map_or_else(|| format!("http_{status}"), str::to_owned);
     Err(Unavailable(match (status, detail["code"].as_str()) {
         (409, Some("browser_host_none")) => if local_app { STALE_HOST } else { NO_HOST }.into(),
         (403, Some("browser_host_not_allowed")) => "o app desktop recusou usar o navegador dele".into(),
         _ => detail["msg"].as_str().or_else(|| detail.as_str()).map_or_else(|| format!("HTTP {status}"), str::to_owned),
-    }))
+    }, Some(hangar_telemetry::events::Code::known(&code, hangar_telemetry::events::MCP_CAUSES).as_str())))
 }
 
 /// `verb` com o sidecar já lido.
 #[allow(clippy::too_many_arguments)]
 async fn verb_on(http: &reqwest::Client, home: &Path, sc: Option<&Value>, verb: &str, args: &[String], tab: Option<i64>, timeout: Duration,
     secret: Option<&str>) -> Result<String, Unavailable> {
-    let (port, token) = server(home)?.ok_or_else(|| Unavailable(NOT_OPEN.into()))?;
+    let (port, token) = server(home)?.ok_or_else(|| Unavailable::new("desktop_app_closed", NOT_OPEN))?;
     let Some(key) = sc.and_then(|sc| sc["chave"].as_str()) else {
-        return Err(Unavailable("esta sessão não tem navegador aberto: abra com browser_open <url> (hangar-preview open <url>) antes".into()));
+        return Err(Unavailable::new("browser_not_open", "esta sessão não tem navegador aberto: abra com browser_open <url> (hangar-preview open <url>) antes"));
     };
     let mut body = json!({"chave": key, "verbo": verb, "args": args});
     if let Some(tab) = tab { body["aba"] = json!(tab); }
@@ -155,9 +189,12 @@ async fn verb_on(http: &reqwest::Client, home: &Path, sc: Option<&Value>, verb: 
     // shortcut: a cópia que o reqwest leva do corpo não é zerada; trocar se o corpo passar a ficar vivo além do pedido.
     let answer = http.post(format!("http://127.0.0.1:{port}/cmd")).bearer_auth(token)
         .header("content-type", "application/json").body(body.as_bytes().to_vec()).timeout(timeout).send().await
-        .map_err(|e| Unavailable(format!("o app desktop não respondeu: {e}")))?;
+        .map_err(|e| unreachable(&e))?;
+    let code = app_code(answer.headers().get(BROWSER_CODE).and_then(|v| v.to_str().ok()));
     // Resposta fora de 2xx também é a frase do app (`erro: …`), como no `hangar-preview`.
-    answer.text().await.map_err(|e| Unavailable(format!("o app desktop não respondeu: {e}")))
+    let text = answer.text().await.map_err(|e| unreachable(&e))?;
+    if text.starts_with("erro:") { super::tools::fail(code); }
+    Ok(text)
 }
 
 /// O sidecar já é da página pedida: não havia navegador, o endereço mudou, ou a pedida é a de antes.
@@ -191,7 +228,7 @@ pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_m
         if sc.is_some() && !pause_checked {
             pause_checked = true;
             if verb_on(http, home, sc.as_ref(), "estado", &[], None, left(), None).await.is_ok_and(|t| t.trim() == "pausado") {
-                return Err(Unavailable(PAUSED.into()));
+                return Err(Unavailable::new("browser_paused", PAUSED));
             }
         }
         if let Some(sc) = &sc && sc["ts"].as_f64().unwrap_or(0.0) as u64 >= since_ms && navigated(sc["url"].as_str().unwrap_or_default(), before, asked) {
@@ -208,9 +245,9 @@ pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_m
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    if !app_seen { return Err(Unavailable(NOT_OPEN.into())); }
+    if !app_seen { return Err(Unavailable::new("desktop_app_closed", NOT_OPEN)); }
     let detail = if last.is_empty() { String::new() } else { format!(" ({last})") };
-    Err(Unavailable(format!("o navegador não ficou pronto em 20s{detail}, com o app desktop aparentemente aberto. Tente uma vez de novo; \
+    Err(Unavailable::new("browser_not_ready", format!("o navegador não ficou pronto em 20s{detail}, com o app desktop aparentemente aberto. Tente uma vez de novo; \
         falhou de novo, avise o usuário")))
 }
 
@@ -259,9 +296,55 @@ mod tests {
         // Com app aqui, o verbo só saiu porque a sessão foi usada por último noutra máquina, que desligou.
         assert!(host_answer(409, &none, true).unwrap_err().0.starts_with("a sessão foi usada por último no app desktop de outra máquina"));
         let denied = json!({"detail": {"code": "browser_host_not_allowed", "msg": "x"}});
-        assert_eq!(host_answer(403, &denied, false), Err(Unavailable("o app desktop recusou usar o navegador dele".into())));
+        assert_eq!(host_answer(403, &denied, false), Err(Unavailable("o app desktop recusou usar o navegador dele".into(), Some("browser_host_not_allowed"))));
         let gone = json!({"detail": {"code": "browser_host_gone", "msg": "o app caiu; o shot pode ter sido executado"}});
         assert_eq!(host_answer(502, &gone, false).unwrap_err().0, "o app caiu; o shot pode ter sido executado");
+    }
+
+    /// Só o prefixo `erro:` é recusa; a causa do app de lá vem no `code` que a rota repassa, conferida na lista.
+    #[tokio::test]
+    async fn host_answer_marks_only_the_refusal_with_the_app_cause() {
+        let marked = |body: serde_json::Value| async move { super::super::tools::observed(async { host_answer(200, &body, false) }).await.2 };
+        assert_eq!(marked(json!({"detail": "error handling: a página fala disso"})).await, None, "leitura que começa com error");
+        assert_eq!(marked(json!({"detail": "erro: a pagina caiu", "code": "page_gone"})).await, Some("page_gone"));
+        assert_eq!(marked(json!({"detail": "erro: x", "code": "inventado"})).await, Some("browser_verb_refused"));
+        assert_eq!(marked(json!({"detail": "erro: x"})).await, Some("browser_verb_refused"), "app antigo, sem código");
+    }
+
+    /// O app nativo diz no cabeçalho por que o verbo deu `erro:`; sem ele, a recusa genérica.
+    #[tokio::test]
+    async fn mcp_failure_marks_the_app_refusal_code() {
+        use axum::routing::post;
+        let app = axum::Router::new()
+            .route("/cmd", post(|body: String| async move {
+                use axum::response::IntoResponse;
+                if body.contains("\"url\"") { return "error handling: a página fala disso".into_response(); }
+                let code = if body.contains("\"click\"") { "page_gone" } else { "inventado" };
+                ([(super::BROWSER_CODE, code)], "erro: a página fechou").into_response()
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let home = tempfile::tempdir().unwrap();
+        let nav = home.path().join(".hangar/nav");
+        std::fs::create_dir_all(&nav).unwrap();
+        std::fs::write(nav.join("_srv.json"), json!({"porta": port, "token": "t", "pid": std::process::id()}).to_string()).unwrap();
+        std::fs::write(nav.join("s.json"), json!({"chave": "s", "url": "http://a/"}).to_string()).unwrap();
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        for (verb, cause) in [("click", "page_gone"), ("text", "browser_verb_refused")] {
+            let call = super::verb(&http, home.path(), "s", verb, &[], None, super::VERB_TIMEOUT);
+            let (text, _, failure) = super::super::tools::observed(call).await;
+            assert!(text.unwrap().starts_with("erro:"));
+            assert_eq!(failure, Some(cause), "{verb}");
+        }
+        let call = super::verb(&http, home.path(), "s", "url", &[], None, super::VERB_TIMEOUT);
+        let (text, _, failure) = super::super::tools::observed(call).await;
+        assert_eq!((text.unwrap().as_str(), failure), ("error handling: a página fala disso", None), "leitura não é recusa");
+        std::fs::remove_file(nav.join("s.json")).unwrap();
+        let call = async { super::verb(&http, home.path(), "s", "click", &[], None, super::VERB_TIMEOUT).await.map_err(Unavailable::into_text) };
+        let (text, _, failure) = super::super::tools::observed(call).await;
+        assert!(text.unwrap_err().contains("não tem navegador aberto"));
+        assert_eq!(failure, Some("browser_not_open"));
     }
 
     #[test]

@@ -226,6 +226,12 @@ impl Sources for NativeSources {
                     Err(ServiceError(code)) => {
                         if crate::warn_limit::allow(Some(&row.name), code) {
                             tracing::warn!(session = %row.name, code, "whoami: sessão sem identidade do plugin fica de fora da descoberta");
+                            // ponytail: a linha já tem alvo de terminal, então o vínculo que falha é o do alvo de outra vida;
+                            // separar sem entrada e duplicada pede o código do `interaction_binding_readonly`.
+                            if code == "plugin_identity_missing" {
+                                crate::telemetry_hooks::report_health(code, "terminal_target_stale", hangar_usage_diary::Severity::Warn,
+                                    Some(&row.name), Vec::new(), None);
+                            }
                         }
                         continue;
                     }

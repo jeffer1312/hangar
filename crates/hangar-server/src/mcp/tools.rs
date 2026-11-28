@@ -53,7 +53,26 @@ const ROUTE_BODY_LIMIT: usize = 16 << 20;
 
 type Outcome = Result<CallToolResult, String>;
 
-tokio::task_local! { pub(super) static ARGUMENTS_REJECTED: std::cell::Cell<bool>; }
+tokio::task_local! {
+    pub(super) static ARGUMENTS_REJECTED: std::cell::Cell<bool>;
+    /// Onde a tool parou, num código de `events::MCP_CAUSES`; o último a marcar vence.
+    pub(super) static FAILURE: std::cell::Cell<Option<&'static str>>;
+}
+
+/// Marca onde a tool parou; fora de uma chamada do MCP não faz nada.
+pub(super) fn fail(code: &'static str) { let _ = FAILURE.try_with(|failure| failure.set(Some(code))); }
+
+/// Apaga a marca de uma tentativa que o chamador tratou e deixou para trás.
+fn clear_failure() { let _ = FAILURE.try_with(|failure| failure.set(None)); }
+
+/// `call` com o argumento recusado e o lugar da falha à vista de quem grava a telemetria.
+pub(super) async fn observed<T>(call: impl std::future::Future<Output = T>) -> (T, bool, Option<&'static str>) {
+    use std::cell::Cell;
+    ARGUMENTS_REJECTED.scope(Cell::new(false), FAILURE.scope(Cell::new(None), async move {
+        let out = call.await;
+        (out, ARGUMENTS_REJECTED.with(Cell::get), FAILURE.with(Cell::get))
+    })).await
+}
 
 pub struct Tools {
     st: Arc<AppState>,
@@ -208,6 +227,7 @@ impl NewSession {
 fn remote_target(nome: &str) -> Result<Option<(String, String)>, String> {
     let Some((server, name)) = nome.split_once("::") else { return Ok(None) };
     if server.is_empty() || name.is_empty() || name.contains("::") {
+        fail("invalid_target_name");
         return Err(format!("nome inválido '{nome}': use servidor::nome (um '::' só)"));
     }
     Ok(Some((server.to_owned(), name.to_owned())))
@@ -238,6 +258,7 @@ fn created(info: &Value, server: Option<&str>) -> Outcome {
     };
     // A sessão abriu: o erro diz isso e leva a resposta inteira, para nada se perder.
     if let Some(e) = info.get("link_error").filter(|e| !e.is_null()) {
+        fail("link_failed");
         return Err(format!("sessão '{}' abriu SEM a ligação: {}: {} — {out}",
             info["name"].as_str().unwrap_or_default(), e["code"].as_str().unwrap_or_default(), e["detail"].as_str().unwrap_or_default()));
     }
@@ -247,27 +268,31 @@ fn created(info: &Value, server: Option<&str>) -> Outcome {
 /// `new_session` com `servidor::nome`: abre lá, pela API de lá (`peers.json`), com as contas e os padrões de lá, como
 /// `hangar-send --new servidor::nome`. Vai só o que veio explícito: nada herda de quem chama noutra máquina.
 async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> Outcome {
-    if a.inherit == Some(true) { return Err("inherit não vale noutra máquina: lá nada herda de quem chama".into()); }
+    if a.inherit == Some(true) { fail("remote_inherit_refused"); return Err("inherit não vale noutra máquina: lá nada herda de quem chama".into()); }
     a.inherit = None;
     let resume = a.resume.clone().filter(|s| !s.is_empty());
     // Sem pasta, a home de lá: o servidor de lá expande o `~`.
     let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| "~".into());
     let call = move |method, path: String, body: Option<Value>| async move {
-        peers.call(server, method, &path, body.as_ref()).await.map(|v| v.unwrap_or(Value::Null)).map_err(|e| e.text(server))
+        peers.call(server, method, &path, body.as_ref()).await.map(|v| v.unwrap_or(Value::Null)).map_err(|e| peer_failed(&e, server))
     };
     if let Some(conta) = a.conta.clone().filter(|c| !c.is_empty()) {
         let configs = call(reqwest::Method::GET, "/api/claude-configs".into(), None).await?;
         let rows = configs.as_array().map(Vec::as_slice).unwrap_or_default();
         let labels: Vec<&str> = rows.iter().filter_map(|c| c["label"].as_str()).collect();
         a.conta = Some(remote_account(rows, &conta)
-            .ok_or_else(|| format!("conta '{conta}' não existe em '{server}' — lá há: {}", labels.join(", ")))?);
+            .ok_or_else(|| { fail("remote_account_unknown"); format!("conta '{conta}' não existe em '{server}' — lá há: {}", labels.join(", ")) })?);
     }
     if let Some(sid) = resume {
         let info = call(reqwest::Method::POST, format!("/api/archive/-/{}/resume", segment(&sid)), Some(a.clone_for_resume()?)).await?;
         return Ok(resumed(&info, Some(server)));
     }
     let info = crate::placement::forward::open(peers, server, &a.create_body(cwd), false).await
-        .map_err(|e| crate::placement::forward::failure_text(server, &e))?;
+        .map_err(|e| {
+            let text = crate::placement::forward::failure_text(server, &e);
+            fail(if crate::placement::forward::certain(&e) { e.code() } else { "placement_uncertain" });
+            text
+        })?;
     created(&info, Some(server))
 }
 
@@ -288,13 +313,14 @@ fn mcp_agent(caller: &str) -> String { format!("hangar-mcp (de {caller})") }
 /// `hangar-send --close servidor::sessao`. Par externo não está no `peers.json`: sessão de outra pessoa não fecha.
 async fn remote_close(peers: &PeerClient, server: &str, name: &str, caller: &str) -> Outcome {
     // O DELETE responde ok para nome que não existe: nome errado não pode virar "fechada".
-    let rows = peers.call(server, reqwest::Method::GET, "/api/sessions", None).await.map_err(|e| e.text(server))?;
+    let rows = peers.call(server, reqwest::Method::GET, "/api/sessions", None).await.map_err(|e| peer_failed(&e, server))?;
     if !rows.as_ref().and_then(Value::as_array).is_some_and(|rows| rows.iter().any(|s| s["name"] == name)) {
         return Err(format!("sessão '{name}' não existe em '{server}' (`hangar-send --list`)"));
     }
     let resp = peers.call_as(&mcp_agent(caller), server, reqwest::Method::DELETE, &format!("/api/sessions/{}", segment(name)), None).await.map_err(|e| {
         // Sem resposta legível o fechamento pode ter acontecido: quem repete ouviria "não existe" sem entender.
-        if e.is_transport() { format!("{} — a sessão pode ter fechado lá: confira com `hangar-send --list`", e.text(server)) } else { e.text(server) }
+        let text = peer_failed(&e, server);
+        if e.is_transport() { format!("{text} — a sessão pode ter fechado lá: confira com `hangar-send --list`") } else { text }
     })?;
     let mut out = Map::from_iter([("server".to_owned(), json!(server))]);
     if let Some(Value::Object(fields)) = resp { out.extend(fields); }
@@ -413,38 +439,43 @@ fn verb_args(raw: Option<&[Value]>) -> Result<Vec<String>, String> {
     raw.unwrap_or_default().iter().map(|a| match a {
         Value::String(s) => Ok(s.clone()),
         Value::Number(n) if n.is_i64() || n.is_u64() => Ok(n.to_string()),
-        other => Err(format!("argumento de verbo inválido: {other}")),
+        other => { fail("invalid_verb_args"); Err(format!("argumento de verbo inválido: {other}")) }
     }).collect()
 }
 
 /// O verbo que `browser`/`browser_batch` não mandam. `fill-secret` sai só do `vault_fill`, com o valor fora dos args.
 fn verb_refusal(verb: &str) -> Option<String> {
-    if verb == "fill-secret" { return Some("erro_cofre_so_vault_fill: fill-secret só pela tool vault_fill".into()); }
-    (!NAV_VERBS.contains(&verb)).then(|| format!("verbo desconhecido: {verb} (aceitos: {})", NAV_VERBS.join(", ")))
+    let refusal = if verb == "fill-secret" { Some("erro_cofre_so_vault_fill: fill-secret só pela tool vault_fill".into()) }
+        else { (!NAV_VERBS.contains(&verb)).then(|| format!("verbo desconhecido: {verb} (aceitos: {})", NAV_VERBS.join(", "))) };
+    if refusal.is_some() { fail("unknown_verb"); }
+    refusal
 }
 
 /// `interrupt`, `child_status` e `child_answer`: a voz não abre filha ligada (nasce sem `creator`), e Esc na própria
 /// sessão mataria o turno de quem chama. `sid`: o id desta máquina, que no `alvo` também quer dizer esta.
 fn interrupt_caller_refusal(me: &str, voice: bool, alvo: &str, sid: &str) -> Option<String> {
-    if voice { return Some("recusado: a voz não tem filha ligada; só quem abriu a filha com `link` a alcança".into()); }
-    (alvo == me || (!sid.is_empty() && alvo == format!("{sid}::{me}"))).then(|| format!("recusado: '{alvo}' é esta sessão"))
+    if voice { fail("voice_has_no_child"); return Some("recusado: a voz não tem filha ligada; só quem abriu a filha com `link` a alcança".into()); }
+    (alvo == me || (!sid.is_empty() && alvo == format!("{sid}::{me}"))).then(|| { fail("self_target"); format!("recusado: '{alvo}' é esta sessão") })
 }
 
 /// `child_status` e `child_answer` leem a filha por rotas desta máquina: a de outra (`servidor::nome`) fica de fora.
 fn child_caller_refusal(me: &str, voice: bool, alvo: &str) -> Option<String> {
-    interrupt_caller_refusal(me, voice, alvo, "").or_else(|| alvo.contains("::").then(|| "só alcança filha desta máquina".into()))
+    interrupt_caller_refusal(me, voice, alvo, "").or_else(|| alvo.contains("::").then(|| { fail("child_remote_unsupported"); "só alcança filha desta máquina".into() }))
 }
 
 /// O vínculo só vale com o pai ainda no grupo da filha: sair do grupo desfaz o poder sobre ela. `code` é o da tool.
 fn link_refusal(me: &str, alvo: &str, sidecar: Option<&Sidecar>, code: &str) -> Option<String> {
-    (sidecar.and_then(Sidecar::linked_parent) != Some(me)).then(|| format!("{code}: '{alvo}' não é filha ligada a você (aberta por você com new_session `link`)"))
+    (sidecar.and_then(Sidecar::linked_parent) != Some(me)).then(|| {
+        fail("erro_nao_ligada");
+        format!("{code}: '{alvo}' não é filha ligada a você (aberta por você com new_session `link`)")
+    })
 }
 
 /// Só a pergunta (`AskUserQuestion`) é do pai; menu da TUI, aprovação de plano e permissão são do dono. Tipo
 /// desconhecido segue à rota, que confere a identidade e só responde pergunta.
 fn answer_refusal(kind: Option<&InteractionKind>, alvo: &str) -> Option<String> {
-    matches!(kind, Some(InteractionKind::Menu | InteractionKind::Approval)).then(|| format!(
-        "erro_permissao_do_dono: o pedido aberto em '{alvo}' é menu ou permissão, e quem decide é o dono no app; child_answer só responde pergunta"))
+    matches!(kind, Some(InteractionKind::Menu | InteractionKind::Approval)).then(|| { fail("erro_permissao_do_dono"); format!(
+        "erro_permissao_do_dono: o pedido aberto em '{alvo}' é menu ou permissão, e quem decide é o dono no app; child_answer só responde pergunta") })
 }
 
 const ANSWER_UNCONFIRMED: &str = "enviada, sem confirmação; não tente de novo";
@@ -619,13 +650,15 @@ impl Tools {
     }
 
     pub(super) async fn observe(&self, period: hangar_telemetry::Collection, epoch: u64, name: &str,
-                                stage: &'static str, code: Option<&str>, took: std::time::Duration) {
+                                stage: &'static str, code: Option<&str>, cause: Option<&'static str>, session: &str,
+                                took: std::time::Duration) {
         use hangar_telemetry::events::{Code, Dims, Event};
         let Some(telemetry) = self.telemetry() else { return };
         let tool = Code::known(name, super::tool_names());
         let dims = Dims::new().with("tool", tool).with("error", code.is_some());
         telemetry.count_in(epoch, Event::McpTool, dims, 1);
-        crate::telemetry_hooks::record_action(&self.st, period, hangar_usage_diary::OwnerAction::Mcp, tool.as_str(), stage, code, took).await;
+        crate::telemetry_hooks::record_action(&self.st, period, hangar_usage_diary::OwnerAction::Mcp, tool.as_str(), stage, code, cause,
+            Some(session), took).await;
     }
 
     /// O convidado com login dono da sessão `name`; `None` = sessão do dono. Convidados ilegíveis sem última leitura
@@ -646,7 +679,7 @@ impl Tools {
     async fn resolve(&self, headers: &HeaderMap) -> Result<(String, Origin), String> {
         let home = self.home();
         let local = Local { home: &home, mux: &self.st.list.env().mux };
-        identity::resolve(headers, &local, &self.st.cfg.internal_secret).await.map_err(|e| format!("sessao_desconhecida: {e}"))
+        identity::resolve(headers, &local, &self.st.cfg.internal_secret).await.map_err(|e| { fail("caller_unknown"); format!("sessao_desconhecida: {e}") })
     }
 
     /// `(nome, é a voz)`.
@@ -659,7 +692,7 @@ impl Tools {
         let (name, voice) = self.caller(headers).await?;
         if !voice { return Ok(name); }
         let sessao = sessao.trim();
-        if sessao.is_empty() { return Err(VOICE_NEEDS_SESSION.into()); }
+        if sessao.is_empty() { fail("voice_needs_session"); return Err(VOICE_NEEDS_SESSION.into()); }
         Ok(sessao.to_owned())
     }
 
@@ -778,6 +811,7 @@ impl Tools {
         let sid = &self.server_id;
         // A voz não é sessão: recado dela para uma sessão chamada "voz" não volta para ela mesma.
         if !voice && (a.alvo == me || (!sid.is_empty() && a.alvo == format!("{sid}::{me}"))) {
+            fail("self_target");
             return Err(format!("recusado: '{}' é esta sessão — o recado voltaria pra você. Quem é quem: tool `sessions` (campo `voce`).", a.alvo));
         }
         // Modelo que escreve "[de: eu] …" por conta própria não ganha o prefixo em dobro.
@@ -805,11 +839,11 @@ impl Tools {
                 return Err(format!("'{}': {}", a.alvo, if msg.is_empty() { detail(status, &value) } else { msg.to_owned() }));
             }
         }
-        if sid.is_empty() { return Err("CP_SERVER_ID ausente no backend/.env — obrigatório pra envio cross-server".into()); }
+        if sid.is_empty() { fail("server_id_missing"); return Err("CP_SERVER_ID ausente no backend/.env — obrigatório pra envio cross-server".into()); }
         let body = json!({"text": format!("[de: {sid}::{me}] {texto}"), "steer": true});
         match self.st.peers.call(server_id, reqwest::Method::POST, &format!("/api/sessions/{session}/input"), Some(&body)).await {
             Ok(resp) => Ok(with_target(resp.unwrap_or_else(|| json!({})))),
-            Err(e) => Err(e.text(server_id)),
+            Err(e) => Err(peer_failed(&e, server_id)),
         }
     }
 
@@ -844,12 +878,13 @@ impl Tools {
 
     async fn new_session(&self, headers: &HeaderMap, mut a: NewSession) -> Outcome {
         if a.headless == Some(true) && let Some(provider) = a.provider.as_deref().filter(|p| !matches!(*p, "claude" | "codex" | "antigravity")) {
+            fail("headless_provider_unsupported");
             return Err(format!("headless só vale com provider claude, codex ou antigravity (veio: {provider})"));
         }
         // Quem chama precisa ser resolvido também para abrir noutra máquina, mesmo sem herdar nada.
         let (me, voice) = self.caller(headers).await?;
         if let Some((server, name)) = remote_target(&a.nome)? {
-            if a.machine.is_some() { return Err("use `servidor::nome` ou `machine`, não os dois".into()); }
+            if a.machine.is_some() { fail("target_conflict"); return Err("use `servidor::nome` ou `machine`, não os dois".into()); }
             a.nome = name;
             // A filha ligada abre pelo servidor daqui, onde a criadora existe: ele a abre lá e faz a ligação.
             if a.link { a.machine = Some(server); } else { return remote_session(&self.st.peers, &server, a).await; }
@@ -899,12 +934,12 @@ impl Tools {
         if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo, sid) { return Err(refusal); }
         let alvo = match remote_target(alvo)? {
             Some((server, name)) if server != sid => {
-                if sid.is_empty() { return Err("CP_SERVER_ID ausente no backend/.env — obrigatório pra interromper filha noutra máquina".into()); }
+                if sid.is_empty() { fail("server_id_missing"); return Err("CP_SERVER_ID ausente no backend/.env — obrigatório pra interromper filha noutra máquina".into()); }
                 // Lá é que o vínculo da filha é conferido.
                 let body = json!({"parent": format!("{sid}::{me}")});
                 let path = format!("/api/sessions/{}/linked-interrupt", segment(&name));
                 return self.st.peers.call(&server, reqwest::Method::POST, &path, Some(&body)).await
-                    .map(|answer| dict(answer.unwrap_or_else(|| json!({})))).map_err(|e| e.text(&server));
+                    .map(|answer| dict(answer.unwrap_or_else(|| json!({})))).map_err(|e| peer_failed(&e, &server));
             }
             Some((_, name)) => name,
             None => alvo.to_owned(),
@@ -920,8 +955,11 @@ impl Tools {
 
     /// `alvo` é filha ligada a `me`, pelo arquivo de grupo dela; senão a recusa com o código da tool.
     async fn linked_child(&self, me: &str, alvo: &str, code: &str) -> Result<(), String> {
-        let groups = self.st.groups.as_ref().ok_or("grupos indisponíveis neste servidor: o vínculo da filha não pode ser conferido")?;
-        let sidecar = groups.link(alvo).await.map_err(|e| format!("arquivo de grupo de '{alvo}' ilegível: {e}"))?;
+        let Some(groups) = self.st.groups.as_ref() else {
+            fail("groups_unavailable");
+            return Err("grupos indisponíveis neste servidor: o vínculo da filha não pode ser conferido".into());
+        };
+        let sidecar = groups.link(alvo).await.map_err(|e| { fail("group_file_unreadable"); format!("arquivo de grupo de '{alvo}' ilegível: {e}") })?;
         link_refusal(me, alvo, sidecar.as_ref(), code).map_or(Ok(()), Err)
     }
 
@@ -975,6 +1013,8 @@ impl Tools {
             (status, value)
         });
         let (status, value) = answered.await.map_err(|e| format!("child_answer_failed: a resposta não terminou ({e})"))?;
+        // A rota rodou noutra tarefa, fora do marcador desta chamada: a causa entra aqui.
+        let _ = FAILURE.try_with(|marked| marked.set(route_failure(status, None, &value)));
         answer_outcome(status, value)
     }
 
@@ -1023,13 +1063,13 @@ impl Tools {
         let (since, home) = (now_ms(), self.home());
         if self.remote_browser(&me, &home)? {
             // O app de lá só responde com o navegador pronto: a resposta é a URL, como a do `url`.
-            let text = self.host_verb(&me, "open", std::slice::from_ref(&a.url), None, Duration::from_secs(20)).await.map_err(|e| e.0)?;
+            let text = self.host_verb(&me, "open", std::slice::from_ref(&a.url), None, Duration::from_secs(20)).await.map_err(nav::Unavailable::into_text)?;
             let Some(url) = nav::ok_value(&text) else { return Err(text) };
             return Ok(dict(json!({"ok": true, "url": url})));
         }
         let before = nav::url_before(&home, &me);
         self.ok(Method::POST, &format!("/api/sessions/{}/nav", segment(&me)), Some(json!({"url": a.url}))).await?;
-        let ready = nav::wait_ready(&self.http, &home, &me, since, before.as_deref(), &a.url).await.map_err(|e| e.0)?;
+        let ready = nav::wait_ready(&self.http, &home, &me, since, before.as_deref(), &a.url).await.map_err(nav::Unavailable::into_text)?;
         Ok(dict(json!({"ok": true, "url": ready})))
     }
 
@@ -1153,19 +1193,19 @@ impl Tools {
 
     async fn nav_verb(&self, name: &str, verb: &str, mut args: Vec<String>, tab: Option<i64>) -> Result<String, String> {
         if let Some(refusal) = verb_refusal(verb) { return Err(refusal); }
-        if verb == "eval" && args.is_empty() { return Err("eval precisa de um trecho JS".into()); }
+        if verb == "eval" && args.is_empty() { fail("invalid_verb_args"); return Err("eval precisa de um trecho JS".into()); }
         let home = self.home();
         if verb == "shot" {
             // Caminho nosso e estável, que o app do celular consegue servir.
             let safe = regex::Regex::new(r"\W+").map_err(|e| e.to_string())?.replace_all(name, "-").into_owned();
             let dir = nav::nav_dir(&home).join("shots").join(safe);
-            std::fs::create_dir_all(&dir).map_err(|e| format!("pasta dos prints: {e}"))?;
+            std::fs::create_dir_all(&dir).map_err(|e| { fail("shot_dir_failed"); format!("pasta dos prints: {e}") })?;
             args = vec![dir.join(format!("{}.png", now_ms())).to_string_lossy().into_owned()];
         }
         let timeout = if verb == "login" { LOGIN_TIMEOUT } else { nav::VERB_TIMEOUT };
         let answer = if self.remote_browser(name, &home)? { self.host_verb(name, verb, &args, tab, timeout).await }
             else { nav::verb(&self.http, &home, name, verb, &args, tab, timeout).await };
-        let answer = answer.map_err(|e| e.0)?;
+        let answer = answer.map_err(nav::Unavailable::into_text)?;
         if answer.starts_with("erro:") { Err(answer) } else { Ok(answer) }
     }
 
@@ -1209,7 +1249,7 @@ impl Tools {
     /// nasceu com o Jev (o `headersHelper` repassa o `HANGAR_JEV` dela); a voz usa a do servidor.
     async fn jev_cli(&self, headers: &HeaderMap, sessao: &str, args: Vec<String>, limit: Duration) -> Result<(i32, String), String> {
         let (_, voice) = self.caller(headers).await?;
-        if !voice && header(headers, "x-hangar-jev").as_deref() != Some("on") { return Err(JEV_OFF.into()); }
+        if !voice && header(headers, "x-hangar-jev").as_deref() != Some("on") { fail("jev_off"); return Err(JEV_OFF.into()); }
         let target = self.me(headers, sessao).await?;
         // `runtime-config.json` da conta do servidor (`settings.projects_dir.parent`, a pasta `claude` da lista).
         let base = self.st.list.env().dirs.as_ref().map(|d| d.claude.clone())
@@ -1221,7 +1261,7 @@ impl Tools {
                 && !matches!(k.as_str(), "CP_AUTH_TOKEN" | "HANGAR_INTERNAL_SECRET" | "HANGAR_RUNTIME_INSTANCE" | "HANGAR_AUTH_CONTEXT"))
             .collect();
         env.extend(crate::session_open::claude::jev_pairs(true, &runtime));
-        if !env.iter().any(|(k, v)| k == "TYPESAFE_API_KEY" && !v.is_empty()) { return Err(JEV_UNCONFIGURED.into()); }
+        if !env.iter().any(|(k, v)| k == "TYPESAFE_API_KEY" && !v.is_empty()) { fail("jev_unconfigured"); return Err(JEV_UNCONFIGURED.into()); }
         let node = crate::runtime::process::resolve_program("node", env.iter().map(|(k, v)| (k, v)))
             .ok_or("node não encontrado no PATH do backend: o objetivo roda pelo hangar-preview")?;
         // A raiz da instalação; sem ela, a da cópia onde o servidor roda.
@@ -1249,7 +1289,8 @@ impl Tools {
         let mut args = a.cli_args();
         // O script roda no cwd do servidor: a pasta do roteiro sai do git onde a sessão trabalha.
         let target = self.me(headers, &a.sessao).await?;
-        let rows = self.ok(Method::GET, "/api/sessions", None).await.unwrap_or(Value::Null);
+        // Sem a lista, segue sem o cwd: a recusa dela não é a causa do que vier depois.
+        let rows = self.ok(Method::GET, "/api/sessions", None).await.unwrap_or_else(|_| { clear_failure(); Value::Null });
         let row = rows.as_array().into_iter().flatten().find(|r| r["name"] == target.as_str());
         let cwd = row.and_then(|r| r["git_cwd"].as_str().filter(|c| !c.is_empty()).or_else(|| r["cwd"].as_str().filter(|c| !c.is_empty())));
         let note = match cwd {
@@ -1439,10 +1480,10 @@ impl Tools {
     async fn fill_host(&self, home: &Path, name: &str) -> Result<(String, bool), String> {
         let remote = self.remote_browser(name, home)?;
         let url = if remote {
-            let text = self.host_verb(name, "url", &[], None, nav::VERB_TIMEOUT).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+            let text = self.host_verb(name, "url", &[], None, nav::VERB_TIMEOUT).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.into_text()))?;
             nav::ok_value(&text).ok_or_else(|| format!("erro_cofre_sem_navegador: {text}"))?
         } else {
-            nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?
+            nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.into_text()))?
         };
         let host = exec::host_of(&url).filter(|_| url.starts_with("https://") || url.starts_with("http://"))
             .ok_or_else(|| format!("erro_cofre_dominio_diferente: a página ({url}) não tem domínio"))?;
@@ -1489,7 +1530,7 @@ impl Tools {
                 Err(refusal) => return Err(host_fill_refusal(refusal)),
             }
         } else {
-            nav::fill_secret(&self.http, &home, &name, &args, &value).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?
+            nav::fill_secret(&self.http, &home, &name, &args, &value).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.into_text()))?
         };
         let answer = exec::mask(&answer, &value);
         if answer.starts_with("ok:") { return Ok(text("preenchido")); }
@@ -1507,7 +1548,7 @@ fn browser_is_remote(seen: Option<u64>, attached: bool, local_focus: impl FnOnce
         // App daqui caído: só um app de lá ligado serve. A hora de um que já desligou fica, mas não liga ninguém: a
         // recusa diz que o daqui reinicia.
         Err(_) if attached && local_dead() => Ok(true),
-        Err(e) => Err(e.0),
+        Err(e) => Err(e.into_text()),
     }
 }
 
@@ -1529,7 +1570,7 @@ fn fill_failure(answer: &str) -> String {
 /// e ele pode já estar na página.
 fn host_fill_answer(reply: hangar_browser_host::Reply) -> String {
     match reply {
-        hangar_browser_host::Reply::Text(text) => text,
+        hangar_browser_host::Reply::Text(text) | hangar_browser_host::Reply::Error(_, text) => text,
         hangar_browser_host::Reply::Png(_) => "erro: erro_cofre_incerto: o app desktop respondeu o fill-secret com uma imagem; o valor pode ter sido digitado".into(),
     }
 }
@@ -1550,6 +1591,55 @@ fn host_fill_refusal(refusal: hangar_browser_host::Refusal) -> String {
 mod tests {
     use super::*;
     use hangar_api::chat::ChatKind;
+
+    /// O futuro de `Tools::call` em debug passa da pilha padrão do teste.
+    fn on_big_stack(body: impl std::future::Future<Output = ()> + std::marker::Send + 'static) {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        std::thread::Builder::new().stack_size(256 << 20).spawn(move || rt.block_on(body)).unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn mcp_failure_marks_where_the_tool_stopped() { on_big_stack(failed_tool_body()) }
+
+    async fn failed_tool_body() {
+        use axum::http::{StatusCode, header::CONTENT_TYPE};
+        use axum::response::IntoResponse;
+        use axum::routing::{get, post};
+        let refused = |status: StatusCode, code: &'static str| move || async move {
+            let mut response = (status, [(CONTENT_TYPE, "application/json")], json!({"detail": {"code": code, "msg": "x"}}).to_string()).into_response();
+            if code == "erro_sessao_inexistente" { response.extensions_mut().insert(crate::diag::FailureCode(code)); }
+            response
+        };
+        let api = Router::new()
+            .route("/api/sessions/{name}/group-message", post(refused(StatusCode::NOT_FOUND, "erro_sessao_inexistente")))
+            .route("/api/sessions/{name}/pair", post(refused(StatusCode::CONFLICT, "erro_par_encerrado")))
+            .route("/api/external-pairs/send", post(refused(StatusCode::NOT_FOUND, "erro_par_inexistente")))
+            .route("/api/sessions/{name}/pair/contract", get(|| async { StatusCode::BAD_GATEWAY }));
+        let home = tempfile::tempdir().unwrap();
+        let tools = Tools::new(crate::telemetry_hooks::test_state(home.path(), false), api);
+        let mut voice = HeaderMap::new();
+        voice.insert("x-hangar-voice", crate::voice::machines::voice_signature("s").unwrap().parse().unwrap());
+        let cases = [
+            ("send", json!({"alvo": "a", "texto": "oi"}), HeaderMap::new(), "caller_unknown"),
+            ("send", json!({"alvo": "lab::a", "texto": "oi"}), voice.clone(), "server_id_missing"),
+            ("browser", json!({"verbo": "click"}), voice.clone(), "voice_needs_session"),
+            ("browser", json!({"verbo": "voar", "sessao": "x"}), voice.clone(), "unknown_verb"),
+            ("browser", json!({"verbo": "click", "sessao": "x", "args": [true]}), voice.clone(), "invalid_verb_args"),
+            ("browser_batch", json!({"passos": [{"verbo": "eval"}], "sessao": "x"}), voice.clone(), "invalid_verb_args"),
+            ("child_answer", json!({"alvo": "filha", "interaction_id": "i", "answers": []}), voice.clone(), "voice_has_no_child"),
+            ("new_session", json!({"nome": "a::b::c"}), voice.clone(), "invalid_target_name"),
+            ("new_session", json!({"nome": "n", "headless": true, "provider": "pi"}), voice.clone(), "headless_provider_unsupported"),
+            ("group", json!({"texto": "oi", "sessao": "x"}), voice.clone(), "erro_sessao_inexistente"),
+            ("pair", json!({"alvo": "y", "sessao": "x"}), voice.clone(), "erro_par_encerrado"),
+            ("contract", json!({"sessao": "x"}), voice.clone(), "http_502"),
+        ];
+        for (name, args, headers, cause) in cases {
+            let call = tools.call(name, args.as_object().unwrap().clone(), &headers, None, None);
+            let (result, _, failure) = observed(Box::pin(call)).await;
+            assert_eq!(result.is_error, Some(true), "{name} {args}");
+            assert_eq!(failure, Some(cause), "{name} {args}");
+        }
+    }
 
     #[test]
     fn only_an_owner_session_counts_a_tool() {
@@ -1739,7 +1829,7 @@ mod tests {
 
     #[test]
     fn a_dead_local_app_hands_the_browser_only_to_an_app_still_attached() {
-        let dead = || Err::<bool, _>(nav::Unavailable("reiniciando".into()));
+        let dead = || Err::<bool, _>(nav::Unavailable("reiniciando".into(), None));
         // O app de lá viu a sessão antes do foco daqui e desligou: a recusa segue dizendo que o daqui reinicia.
         assert_eq!(browser_is_remote(Some(5), false, || Some(10), dead, || true), Err("reiniciando".into()));
         assert_eq!(browser_is_remote(None, false, || None, dead, || true), Err("reiniciando".into()));
@@ -1968,11 +2058,37 @@ pub(super) async fn call_route(mut api: Router, token: &str, caller: Option<&str
     request.extensions_mut().insert(crate::telemetry_hooks::NoTelemetry);
     let Ok(response) = crate::telemetry_hooks::NO_TELEMETRY.scope((), api.call(request)).await;
     let status = response.status().as_u16();
+    let failure = response.extensions().get::<crate::diag::FailureCode>().map(|code| code.0);
+    let browser_code = response.headers().get(crate::browser_host::BROWSER_CODE).and_then(|v| v.to_str().ok()).map(str::to_owned);
     let raw = match axum::body::to_bytes(response.into_body(), ROUTE_BODY_LIMIT).await {
         Ok(raw) => raw,
-        Err(error) => return (502, json!({"detail": format!("resposta da rota {path} ilegível ({status}): {error}")})),
+        Err(error) => {
+            fail("http_502");
+            return (502, json!({"detail": format!("resposta da rota {path} ilegível ({status}): {error}")}));
+        }
     };
-    (status, serde_json::from_slice(&raw).unwrap_or_else(|_| json!({"detail": String::from_utf8_lossy(&raw)})))
+    let mut value = serde_json::from_slice(&raw).unwrap_or_else(|_| json!({"detail": String::from_utf8_lossy(&raw)}));
+    // A `browser-cmd` responde texto: a causa da recusa do app vem no cabeçalho, e o `host_answer` a lê aqui.
+    if let (Some(code), Some(map)) = (browser_code, value.as_object_mut()) { map.insert("code".into(), json!(code)); }
+    let _ = FAILURE.try_with(|marked| marked.set(route_failure(status, failure, &value)));
+    (status, value)
+}
+
+/// O código da recusa da rota: o do servidor (`FailureCode` ou `detail.code`) quando é dos conhecidos, senão o
+/// status. Resposta boa apaga a marca de uma tentativa anterior.
+fn route_failure(status: u16, failure: Option<&'static str>, value: &Value) -> Option<&'static str> {
+    use hangar_telemetry::events::{Code, MCP_CAUSES};
+    if (200..300).contains(&status) { return None; }
+    let known = |code: &str| Some(Code::known(code, MCP_CAUSES)).filter(|code| *code != Code::OTHER);
+    let code = failure.and_then(known).or_else(|| value["detail"]["code"].as_str().and_then(known))
+        .unwrap_or_else(|| Code::known(&format!("http_{status}"), MCP_CAUSES));
+    Some(code.as_str())
+}
+
+/// A frase do erro da outra máquina, com o tipo dele marcado na chamada.
+fn peer_failed(error: &crate::groups::peers::PeerError, server: &str) -> String {
+    fail(error.code());
+    error.text(server)
 }
 
 fn unshared_failed(why: &str) -> String {

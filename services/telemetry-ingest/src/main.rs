@@ -790,14 +790,21 @@ mod tests {
             open["fields"]["action"] = json!("browser_open");
             let mut close = record(&event, level, "erro_pasta", count + 2, first, last, "amostra do fechamento");
             close["fields"]["action"] = json!("browser_close");
+            // A mesma ferramenta por duas causas: duas linhas, cada uma com a amostra da sua causa.
+            let [closed, gone] = ["desktop_app_closed", "cdp_closed"].map(|cause| {
+                let mut row = record(&event, level, "erro_pasta", 1, first, last, cause);
+                row["fields"]["action"] = json!("browser");
+                row["fields"]["causa"] = json!(cause);
+                row
+            });
             // Todas as assinaturas têm duas máquinas para disputar o corte com os outros testes.
-            body["records"] = json!([legacy, open, close, record(&event, "warn", "erro_outro", 1, first, last, "x")]);
+            body["records"] = json!([legacy, open, close, closed, gone, record(&event, "warn", "erro_outro", 1, first, last, "x")]);
             assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
             ids.push(id);
         }
         let data = store::summary(&pool, 7).await.unwrap();
         let rows: Vec<&Value> = data["records"].as_array().unwrap().iter().filter(|r| r["event"] == json!(event)).collect();
-        assert_eq!(rows.len(), 4, "{rows:?}");
+        assert_eq!(rows.len(), 6, "{rows:?}");
         let row = rows.iter().find(|r| r["codigo"] == json!("erro_pasta") && r["action"].is_null()).unwrap();
         assert_eq!(**row, json!({
             "level": "error", "event": event, "codigo": "erro_pasta", "etapa": "abrir", "erro_tipo": null, "action": null,
@@ -806,6 +813,9 @@ mod tests {
             "sample_at": format!("{today} 09:30:00"),
             "fields": {"codigo": "erro_pasta", "etapa": "abrir", "detalhe": "amostra"}, "trail": ["app.visivel", "busca.abrir"],
             "daily": [{"day": yesterday, "count": 2}, {"day": today, "count": 5}],
+            // Pacote antigo, sem retrato nem ambiente: os campos novos vêm vazios.
+            "trail_last": [], "ctx_first": {}, "ctx_last": {}, "after": null, "capped": false,
+            "batch": {"version": "0.43.0", "commit": "dev", "install": null, "os": "windows", "clock_skew_s": null, "machine": {}},
         }));
         for (action, count, detail) in [("browser_open", 7, "amostra da abertura"), ("browser_close", 13, "amostra do fechamento")] {
             let row = rows.iter().find(|r| r["action"] == json!(action)).unwrap();
@@ -813,8 +823,59 @@ mod tests {
             assert_eq!(row["fields"]["action"], json!(action));
             assert_eq!(row["fields"]["detalhe"], json!(detail));
         }
-        assert!(data["records_total"].as_i64().unwrap() >= 4);
+        for cause in ["desktop_app_closed", "cdp_closed"] {
+            let row = rows.iter().find(|r| r["fields"]["causa"] == json!(cause)).unwrap();
+            assert_eq!((&row["count"], &row["machines"], &row["action"]), (&json!(3), &json!(2), &json!("browser")), "{cause}");
+            assert_eq!(row["daily"], json!([{"day": yesterday, "count": 1}, {"day": today, "count": 2}]), "{cause}");
+        }
+        assert!(data["records_total"].as_i64().unwrap() >= 6);
         forget(&pool, &ids).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn a_failure_brings_its_context_its_machine_and_what_came_after() {
+        let pool = online().await;
+        let today = utc_day(&pool, 0).await;
+        // Enviado dois minutos antes de chegar: a máquina está com o relógio atrasado.
+        let sent_at: String = sqlx::query_scalar(r#"SELECT to_char(now() AT TIME ZONE 'utc' - interval '120 seconds', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')"#)
+            .fetch_one(&pool).await.unwrap();
+        let id = fresh_id();
+        let event = format!("health.state_{}", &fresh_id()[..8]);
+        let mut body = batch_body(&id, &today);
+        body["env"]["install"] = json!("checkout");
+        body["sent_at"] = json!(sent_at);
+        body["machine"] = json!({"os": "linux", "os_name": "cachyos", "ram_total": "16-32g", "cli.claude": "2.1.195"});
+        body["counters"][0]["capped"] = json!(true);
+        let mut failure = record(&event, "warn", "terminal_observacao_falhou", 3, "10:00:00", "10:06:00", "x");
+        failure["fields"]["causa"] = json!("capture_timeout");
+        failure["ctx_first"] = json!({"mem_free": "ge40", "provider": "claude"});
+        failure["ctx_last"] = json!({"mem_free": "lt5", "provider": "claude"});
+        failure["trail_last"] = json!(["tela.ver:chat", "browser"]);
+        failure["after"] = json!("recovered");
+        failure["capped"] = json!(true);
+        body["records"] = json!([failure]);
+        body["trail"] = json!([{"t": "10:00:00", "event": "tela.ver", "level": "ok", "screen": "chat", "count": 5, "capped": true}]);
+        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+
+        let data = store::summary(&pool, 7).await.unwrap();
+        let row = data["records"].as_array().unwrap().iter().find(|r| r["event"] == json!(event)).unwrap().clone();
+        assert_eq!(row["ctx_first"], json!({"mem_free": "ge40", "provider": "claude"}));
+        assert_eq!(row["ctx_last"], json!({"mem_free": "lt5", "provider": "claude"}));
+        assert_eq!(row["trail_last"], json!(["tela.ver:chat", "browser"]));
+        assert_eq!(row["after"], json!("recovered"));
+        assert_eq!(row["capped"], json!(true));
+        assert_eq!(row["fields"]["causa"], json!("capture_timeout"));
+        let skew = row["batch"]["clock_skew_s"].as_i64().unwrap();
+        assert!((115..=180).contains(&skew), "{skew}");
+        assert_eq!(row["batch"], json!({"version": "0.42.0", "commit": "dev", "install": "checkout", "os": "linux", "clock_skew_s": skew,
+            "machine": {"os": "linux", "os_name": "cachyos", "ram_total": "16-32g", "cli.claude": "2.1.195"}}));
+        let capped: (bool, bool) = sqlx::query_as(
+            "SELECT (SELECT bool_and(capped) FROM counters WHERE batch_id = $1 AND event = 'future_event'),
+                    (SELECT bool_and(capped) FROM trail_steps WHERE batch_id = $1)")
+            .bind(&id).fetch_one(&pool).await.unwrap();
+        assert_eq!(capped, (true, true));
+        forget(&pool, &[id]).await;
     }
 
     #[tokio::test]

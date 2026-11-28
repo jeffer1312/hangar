@@ -19,6 +19,23 @@ export interface FailureRecord {
   fields: Record<string, unknown> | null;
   trail: string[] | null;
   daily: { day: string; count: number }[];
+  // Da amostra; receptor antigo não manda, pacote antigo vem vazio.
+  trail_last?: string[] | null;
+  ctx_first?: Record<string, string> | null;
+  ctx_last?: Record<string, string> | null;
+  after?: string | null;
+  capped?: boolean;
+  batch?: SampleBatch | null;
+}
+
+// O lote de onde veio a amostra: binário, instalação, relógio e ambiente da máquina.
+export interface SampleBatch {
+  version: string;
+  commit: string;
+  install: string | null;
+  os: string;
+  clock_skew_s: number | null;
+  machine: Record<string, string> | null;
 }
 
 export interface LogLine {

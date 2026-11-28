@@ -1,7 +1,7 @@
 # Telemetria anônima do Hangar
 
-Com sua autorização, o Hangar envia ao desenvolvedor contagens de uso e preferências, falhas e
-passos anteriores à falha. Envia um retrato por hora e um final ao fechar o dia UTC. Não envia o
+Com sua autorização, o Hangar envia ao desenvolvedor contagens de uso e preferências, falhas com a
+causa e o estado da máquina na hora, e os passos anteriores à falha. Envia um retrato por hora e um final ao fechar o dia UTC. Não envia o
 diário bruto nem linhas genéricas de log; conversa, texto digitado, nome e endereço ficam de fora.
 Os dados recebidos ficam por 400 dias.
 
@@ -14,20 +14,31 @@ possíveis) e os pontos do servidor que chamam a contagem.
 Só o servidor do Hangar (`hangar-server`) de cada máquina envia. O celular e o desktop nunca falam
 com o receptor: eles avisam o próprio servidor, que conta.
 
-Cada pacote é um dia (UTC) de uma máquina e leva:
+Cada pacote é um dia (UTC) de uma máquina e de uma versão do Hangar: se a máquina atualizou no meio
+do dia, cada versão manda o próprio pacote, com o que aconteceu enquanto ela rodava. Ele leva:
 
 - `schema`, `batch_id` (aleatório, para o receptor não gravar o mesmo pacote duas vezes);
 - `machine_id` e `owner_id`: dois números aleatórios gerados na máquina, sem relação com nome,
   conta ou outro identificador do Hangar (veja "Dono de várias máquinas");
 - `day`: o dia, sem horário;
 - `env`: versão do Hangar, commit (só em pacote de release; fora disso, `dev`), sistema,
-  arquitetura e canal de atualização (`latest`, `beta` ou `other`);
+  arquitetura, canal de atualização (`latest`, `beta` ou `other`) e `install` (`package`, o
+  pacote de release instalado, ou `checkout`, código de desenvolvimento);
+- `sent_at`: hora UTC do envio, para o receptor medir a diferença do relógio da máquina;
+- `machine`: o ambiente da máquina (veja "Ambiente da máquina");
 - `counters`: a lista de contadores `(evento, dimensões, faixa) → quantidade`;
 - `partial`: aparece nos retratos por hora, não no final;
-- `records`: até 200 falhas agrupadas por ação, nível, código e etapa, com primeira e última hora UTC,
-  quantidade, descrição fixa e duração em milissegundos quando conhecidas, e até 10 passos anteriores;
+- `records`: até 200 falhas agrupadas por ação, nível, código, causa e etapa, com primeira e última
+  hora UTC, quantidade, descrição fixa e duração em milissegundos quando conhecidas, até 10 passos antes
+  da primeira e antes da última vez (`trail`, `trail_last`, cada passo como `ação` ou `ação:tela`),
+  o estado da máquina e da sessão na primeira e na última vez (`ctx_first`, `ctx_last`, veja
+  "Retrato da falha") e o que houve depois da última (`after`: `recovered`, o mesmo passo deu certo em
+  até 2 min; `other_action`, a pessoa fez outra coisa; `none`, nada mais registrado até o envio);
 - `trail`: até 5.000 passos por dia, com hora UTC, ação, nível e tela quando conhecida. Passos iguais
   seguidos têm uma contagem só. Cortes dos registros ou da trilha entram em `diary_dropped`.
+
+Contagem que bateu no teto de 10 milhões leva `capped: true` (contador, registro ou passo): o número
+real é maior.
 
 As dimensões vêm de listas fixas, booleanos ou versões. Quando a origem foi confirmada, um rótulo
 fora da lista vira `other`; origem não confirmada fica fora. Não há texto livre no pacote.
@@ -54,7 +65,7 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 
 | Evento | Dimensões | O que conta |
 |---|---|---|
-| `session_open_failed` | `provider`, `code` | Sessão que você pediu e não abriu, também a recusada antes de começar (nome em uso, pasta fora do permitido, worktree) |
+| `session_open_failed` | `provider`, `code`, `cause` (a causa da tabela `HEALTH` quando o código é `erro_criacao_sessao`) | Sessão que você pediu e não abriu, também a recusada antes de começar (nome em uso, pasta fora do permitido, worktree) |
 | `send_failed` | `code` | Mensagem recusada |
 | `client_fatal` | `client`, `code` (tipo do erro, como `typeerror`) | Queda do app com horário comprovado. O texto do erro nunca sai |
 | `diary_dropped` | `part` (`records`, `trail`) | Registros e passos fora dos tetos do formato ou do tamanho em bytes |
@@ -151,6 +162,63 @@ o aviso. Se um celular ou PC alternar entre três máquinas no mesmo dia, pode a
 
 O canal de atualização não entra aqui: ele já vai em `env` em todo pacote.
 
+### Ambiente da máquina
+
+Lido na subida e uma vez por dia, vai em `machine` de cada pacote.
+
+| Chave | Valores |
+|---|---|
+| `os`, `os_name`, `os_version` | `linux`, `windows` ou `macos`; no Linux a distribuição de uma lista fechada (`arch`, `cachyos`, `ubuntu`, `debian`, `fedora`…, outra sai `other`), no Windows `windows_10` ou `windows_11`; a versão só em números (`24.04`, o build do Windows) |
+| `cpus` | `1-2`, `3-4`, `5-8`, `9-16`, `17-32`, `ge33` núcleos |
+| `ram_total` | `lt4g`, `4-8g`, `8-16g`, `16-32g`, `32-64g`, `ge64g` |
+| `mux`, `mux_version` | `tmux`, `psmux` ou `none`, e a versão em números |
+| `cli.claude`, `cli.codex`, `cli.pi`, `cli.omp`, `cli.kimi`, `cli.antigravity` | versão em números, ou `absent` |
+| `accounts.<provider>` | contas da máquina por provedor: `0`, `1`, `2-3`, `4-9`, `ge10` |
+| `connect`, `tailscale` | `on`, `off` |
+
+### Retrato da falha
+
+Na primeira e na última vez de cada falha. Só entram as chaves que se aplicam. A falha que um app
+entrega mais de 30 s depois de acontecer leva só `up`: o resto já seria o estado de outra hora.
+
+| Chave | Valores |
+|---|---|
+| `up` | servidor de pé há `lt1m`, `lt10m`, `lt1h`, `lt1d`, `ge1d`; `down` quando a falha da tela aconteceu com o servidor fora |
+| `mem_free` | memória livre: `lt5`, `lt10`, `lt20`, `lt40`, `ge40` (%) |
+| `disk_free` | disco livre da pasta do usuário: `lt1g`, `lt5g`, `lt20g`, `ge20g` |
+| `load`, `cpu` | carga de 1 min por núcleo (`lt0_5`, `lt1`, `lt2`, `ge2`); no Windows, uso do processador (`lt50`, `lt80`, `ge80`) |
+| `sessions`, `working`, `sessions.<provider>.<terminal\|headless>` | sessões vivas, trabalhando e por provedor e superfície, nas faixas de contagem |
+| `provider`, `surface`, `model`, `state`, `cli` | da sessão da falha: provedor, superfície, modelo da lista curta (motor sai `engine`), estado (`working`, `idle`, `awaiting_input`) e versão da CLI dela |
+| `client`, `client_version`, `resumed` | falha de app: qual (`ios`, `android`, `native`, `pwa`), a versão em números e se ele tinha acabado de voltar à tela (`lt5s`, `lt30s`, `no`) |
+| `accounts`, `no_login`, `spent`, `quota_unread`, `full` | troca de conta sem folga: quantas contas havia e quantas sem login, gastas, com cota não lida e cheias |
+| `exit`, `io`, `panic_at` | como o processo terminou (`code_0`, `code_1`, `sigkill`…), o tipo do erro de entrada e saída (`timed_out`, `permission_denied`…) e o lugar do pânico no código do Hangar (`crates.hangar-server.src.<arquivo>:<linha>`, ou `dependency`; nunca a mensagem) |
+
+### Causa
+
+Cada falha leva em `causa` um código de lista fechada, decidido onde ela nasce. As listas estão em
+`events.rs`: `HEALTH` (falhas do servidor, abaixo), `MCP_CAUSES` (por que uma ferramenta do MCP não
+concluiu: app desktop fechado, página fechada, navegador não pronto, sessão sem navegador, Jev desligado
+ou sem configuração, máquina do par fora…) e `CLIENT_CODES` (o que os apps dizem de uma falha de rede: `rede`, `timeout`,
+`silencio`, `servidor_fechou`, `http_4xx`, `http_5xx`…).
+
+### Falhas que o servidor percebe sozinho
+
+Sem ação do dono por trás, com o horário de quando aconteceram. A queda do servidor que não gravou a
+parada leva a hora da subida que a viu, nunca a do começo da vida que caiu. Uma linha por minuto no
+máximo, por sessão e código.
+
+| Código | O que é | Causas |
+|---|---|---|
+| `state_facts_unavailable` | o estado da sessão não pôde ser lido | vínculo da sessão perdido ou trocado, plugin ou pergunta ilegível, tempo esgotado… |
+| `terminal_observacao_falhou` | a tela do terminal não pôde ser lida | tempo esgotado, observador caiu, erro de entrada e saída, multiplexador recusou… |
+| `permission_observe_failed` | o modo de permissão não se confirmou | captura velha, modo não confirmado ou desconhecido… |
+| `plugin_identity_missing` | o plugin do Claude não foi reconhecido | sessão não registrada, chave desconhecida, nome diferente, adoção recusada… |
+| `work_review_refresh_failed` | a revisão do trabalho não foi relida | conector fora, tempo esgotado, login pedido… |
+| `limit_switch_no_room` | limite batido e nenhuma conta com folga | nenhuma outra conta, sem login, todas gastas, cota não lida, todas cheias |
+| `headless_processo_caiu`, `headless_caiu` | o processo sem terminal terminou sozinho | morto pelo sistema (`sigkill`), saída com erro, saída no meio do turno, sem login… |
+| `server_exit` | o servidor caiu | falta de memória, pânico, sinal, código de saída, vigia do sistema… |
+| `erro_criacao_sessao` | a sessão pedida não abriu | pasta fora do permitido, tmux recusou, terminal fechou ao nascer, conta inválida… |
+
 ### Falhas e trilha
 
 - Tela: só eventos recebidos com autenticação do dono e horário original dentro da coleta. O
@@ -160,10 +228,13 @@ O canal de atualização não entra aqui: ele já vai em `env` em todo pacote.
 - MCP: só chamadas de uma sessão identificada pela chave, comprovadamente do dono e sem convidado,
   convite ou par de fora. Nome de ferramenta fora do catálogo vira `other`; argumentos e respostas
   não são lidos para a coleta.
+- Servidor: as falhas da tabela acima, carimbadas pelo próprio servidor com o período de coleta.
+- Toda linha leva a versão e o commit do binário que a escreveu; o pacote de uma versão só lê as dela.
 
 O pacote não inclui texto de conversa, erro livre, saída de comando, pilha, caminhos, nomes de sessão,
-conta ou máquina, credenciais, e-mails, endereços nem conteúdo de convidado. Turnos, avisos de sessão,
-quedas sem autoria provada e ocorrências antigas sem horário comprovado ficam fora. O diário local,
+conta, modelo de motor ou máquina, credenciais, e-mails, endereços nem conteúdo de convidado. Os
+contadores antigos de turnos, avisos e quedas, sem horário comprovado, ficam fora; as falhas do servidor
+saem pelos registros acima. O diário local,
 os logs e o envio manual de relatório continuam separados. O receptor preserva os lotes históricos de
 versões anteriores, que podiam trazer `logs`.
 
@@ -183,7 +254,10 @@ versões anteriores, que podiam trazer `logs`.
 
 - `~/.hangar/telemetry-v3/queue/<dia>.json`: contadores, projeção e ID de cada dia do escopo 3, e as
   marcas privadas dos retratos do dia (máquinas e preferências do servidor e de cada app), gravadas
-  junto com as contagens deles. As marcas não saem no pacote.
+  junto com as contagens deles. As marcas não saem no pacote. É sempre o arquivo da versão que roda;
+  o de uma versão anterior do mesmo dia fica em `<dia>_<versão>-<commit>.json` até ser enviado. O
+  arquivo de antes da divisão por versão sai na primeira subida sem novo envio: o receptor fica com o
+  último retrato que a versão antiga mandou.
 - `~/.hangar/telemetry.json`: escolha de B em `option_b`, período de coleta e dois números aleatórios.
   O booleano legado `consent` permanece `false` ao aceitar B: uma reversão não autoriza logs antigos.
   Um "sim" sem escopo ou do escopo 2 sai do arquivo na subida, e a máquina fica sem resposta.

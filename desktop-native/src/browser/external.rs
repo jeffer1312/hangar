@@ -280,7 +280,7 @@ mod tests {
         let addr = fake_cdp().await;
         let run = |verb: &str| {
             let rx = submit(&format!("http://{addr}"), None, verb.into(), vec![]).unwrap();
-            async move { match tokio::time::timeout(Duration::from_secs(10), rx).await.unwrap().unwrap() { Reply::Text(t) => t, Reply::Png(_) => "png".into() } }
+            async move { match tokio::time::timeout(Duration::from_secs(10), rx).await.unwrap().unwrap() { Reply::Text(t) | Reply::Error(_, t) => t, Reply::Png(_) => "png".into() } }
         };
         assert_eq!(run("snapshot").await, "- RootWebArea \"x\"\n  - button \"Ok\" [ref=@e1]");
         assert_eq!(run("url").await, "ok: \"http://app.local/agenda\"");

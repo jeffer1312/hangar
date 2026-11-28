@@ -1,12 +1,13 @@
 import { AnimatePresence, motion } from "motion/react";
-import { AlertCircle, Check, ChevronRight, Copy, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { AlertCircle, Check, ChevronRight, CircleCheck, CircleStop, Copy, CornerDownRight, TriangleAlert } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { BarList, Block, Empty, Mono, Section, useQ } from "@/components/kit";
 import { Columns, DailyArea, Spark } from "@/components/charts";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { fieldsOf, recordKey, recordMarkdown, SAMPLE_TIME, SAMPLE_TRAIL, sparkNote, sparkSlots, type Derived } from "@/lib/derive";
+import { fieldsOf, recordKey, recordMarkdown, SAMPLE_TIME, sparkNote, sparkSlots, type Derived } from "@/lib/derive";
+import { afterText, happened, headline, stateRows, stepText, type StateRow } from "@/lib/failure";
 import { ago, compact, dayMonth, fmt, fullDay, when } from "@/lib/format";
 import { section } from "@/lib/sections";
 import type { FailureRecord, LogLine, Summary } from "@/lib/types";
@@ -30,8 +31,8 @@ export function LevelBadge({ level }: { level: string }) {
 }
 
 type Sort = "machines" | "count" | "recent";
-const recordText = (r: FailureRecord) => [r.event, r.level === "error" ? "erro" : "aviso", ...fieldsOf(r).map(f => f.key + " " + f.label + " " + f.value),
-  ...(r.trail ?? []), ...(r.versions ?? []), ...(r.os ?? [])].join(" ");
+const recordText = (r: FailureRecord) => { const h = happened(r); return [headline(r), r.event, r.level === "error" ? "erro" : "aviso", h.summary, h.cause ?? "",
+  ...fieldsOf(r).map(f => f.key + " " + f.label + " " + f.value), ...(r.trail ?? []), ...(r.versions ?? []), ...(r.os ?? [])].join(" "); };
 
 function CopyForAgent({ r }: { r: FailureRecord }) {
   const [state, setState] = useState<"idle" | "busy" | "done" | "manual">("idle");
@@ -56,6 +57,113 @@ function CopyForAgent({ r }: { r: FailureRecord }) {
   );
 }
 
+// Nome técnico, só para quem vai mexer no código: menor e apagado.
+const Tech = ({ children, className }: { children: ReactNode; className?: string }) =>
+  <span className={cn("font-mono text-[11px] text-faint [overflow-wrap:anywhere]", className)}>{children}</span>;
+const H4 = ({ children }: { children: ReactNode }) => <h4 className="mb-2 text-[12.5px] font-medium text-muted-foreground">{children}</h4>;
+const Caption = ({ children }: { children: ReactNode }) => <p className="mb-1 text-[11.5px] font-medium uppercase tracking-[0.06em] text-faint">{children}</p>;
+
+function WhatHappened({ r }: { r: FailureRecord }) {
+  const h = happened(r);
+  const cause = typeof r.fields?.causa === "string" ? r.fields.causa : null;
+  return (
+    <div>
+      <H4>O que aconteceu</H4>
+      <div className="space-y-1.5 rounded-lg border bg-card px-3 py-2.5">
+        <p className="text-[14px] font-medium text-pretty">{h.summary}</p>
+        {h.tool ? <p className="text-[13px]">{r.event === "mcp.tool" ? "Ferramenta" : "Ação"}: {h.tool}</p> : null}
+        {h.cause ? <p className="text-[13px] text-pretty">Por quê: {h.cause}.</p>
+          : cause ? <p className="text-[13px] text-muted-foreground">A causa ainda não tem nome neste painel.</p> : null}
+        {r.capped ? <p className="text-[12.5px] text-warn">A contagem bateu no teto: foram mais de {fmt.format(r.count)} vezes.</p> : null}
+        <Tech className="block pt-0.5">{h.technical}</Tech>
+      </div>
+    </div>
+  );
+}
+
+function StateGroup({ title, rows }: { title: string; rows: StateRow[] }) {
+  if (!rows.length) return null;
+  return (
+    <div>
+      <Caption>{title}</Caption>
+      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border">
+        {rows.map((row, i) => (
+          <div key={row.key} title={row.key} className={cn("min-w-0 bg-card px-3 py-2", rows.length % 2 && i === rows.length - 1 && "col-span-2")}>
+            <dt className="text-[11.5px] text-muted-foreground">{row.label}</dt>
+            <dd className="text-[13px] break-words">{row.value}</dd>
+            {row.first ? <dd className="text-[11.5px] text-faint">na primeira vez: {row.first}</dd> : null}
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function MachineState({ r }: { r: FailureRecord }) {
+  const { build, machine, moment } = stateRows(r);
+  return (
+    <div>
+      <H4>Em que estado a máquina estava</H4>
+      {build.length || machine.length || moment.length ? (
+        <div className="space-y-3">
+          <StateGroup title={r.count > 1 ? "Na última vez" : "Na hora da falha"} rows={moment} />
+          <StateGroup title="A máquina" rows={machine} />
+          <StateGroup title="O Hangar" rows={build} />
+        </div>
+      ) : <p className="text-[13px] text-muted-foreground">Esta falha veio de uma versão que ainda não mandava o estado da máquina.</p>}
+    </div>
+  );
+}
+
+function Steps({ steps, r }: { steps: string[]; r: FailureRecord }) {
+  return (
+    <ol className="relative space-y-0.5 before:absolute before:top-3 before:bottom-3 before:left-[9px] before:w-px before:bg-border-strong">
+      {steps.map((s, i) => { const t = stepText(s); return (
+        <li key={i} className="relative flex min-h-8 items-center gap-3 pl-0.5">
+          <span className="relative z-10 grid size-[18px] shrink-0 place-items-center rounded-full border border-border-strong bg-card text-[10px] text-muted-foreground tabular">{i + 1}</span>
+          {t.known ? <span className="min-w-0 flex-1 text-[13px]">{t.text}</span> : <Mono className="min-w-0 flex-1 text-muted-foreground">{t.text}</Mono>}
+          {t.known ? <Tech className="hidden max-w-[40%] truncate pr-2 sm:block">{s}</Tech> : null}
+        </li>
+      ); })}
+      <li className={cn("relative flex min-h-9 items-center gap-3 rounded-md pl-0.5", r.level === "error" ? "bg-destructive/10" : "bg-warn/10")}>
+        <span className="relative z-10 grid size-[18px] shrink-0 place-items-center rounded-full bg-card"><LevelIcon level={r.level} /></span>
+        <span className="min-w-0 flex-1 text-[13px] font-medium">Falhou aqui</span>
+        <Tech className="max-w-[45%] truncate pr-2">{r.event}</Tech>
+      </li>
+    </ol>
+  );
+}
+
+const AFTER_ICON: Record<string, typeof CircleCheck> = { recovered: CircleCheck, other_action: CornerDownRight, none: CircleStop };
+
+function Reproduce({ r }: { r: FailureRecord }) {
+  const first = r.trail ?? [], last = r.trail_last ?? [];
+  const showLast = r.count > 1 && last.length > 0 && JSON.stringify(last) !== JSON.stringify(first);
+  const after = afterText(r.after);
+  const Icon = r.after && Object.hasOwn(AFTER_ICON, r.after) ? AFTER_ICON[r.after] : CornerDownRight;
+  return (
+    <div className="space-y-3">
+      <H4>Como reproduzir</H4>
+      <div>
+        <Caption>{showLast ? "Antes da primeira vez" : "Passos antes da falha"}</Caption>
+        {first.length ? <Steps steps={first} r={r} /> : <p className="text-[13px] text-muted-foreground">O diário não guardou passos antes desta falha.</p>}
+      </div>
+      {showLast ? (
+        <div>
+          <Caption>Antes da última vez</Caption>
+          <Steps steps={last} r={r} />
+        </div>
+      ) : null}
+      {after ? (
+        <p className="flex items-start gap-2 rounded-lg border px-3 py-2 text-[13px] text-pretty">
+          <Icon className={cn("mt-0.5 size-4 shrink-0", r.after === "recovered" ? "text-ok" : "text-muted-foreground")} strokeWidth={1.9} />
+          <span><span className="text-muted-foreground">Depois da última vez: </span>{after}</span>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function Detail({ r, days, skipToday }: { r: FailureRecord; days: number; skipToday: boolean }) {
   const fields = fieldsOf(r);
   const wide = (f: { key: string; value: string }) => f.key === "detalhe" || f.value.length > 60;
@@ -67,59 +175,49 @@ function Detail({ r, days, skipToday }: { r: FailureRecord; days: number; skipTo
     ["Primeira vez no período", when(r.first) + " UTC"], ["Última no período", when(r.last) + " UTC"],
     ...(r.sample_at ? [[SAMPLE_TIME, when(r.sample_at) + " UTC"] as [string, string]] : [])];
   return (
-    <div className="grid gap-5 border-t px-4 pt-4 pb-5 sm:px-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-      <div className="min-w-0 space-y-5">
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[12.5px] sm:grid-cols-3">
-          {meta.map(([k, v]) => <div key={k} className="min-w-0"><dt className="text-muted-foreground">{k}</dt><dd className="font-medium break-words">{v}</dd></div>)}
-        </dl>
-        <div>
-          <h4 className="mb-1 text-[12.5px] font-medium text-muted-foreground">Vezes {sparkNote(days)}</h4>
-          <Columns rows={slots.map(x => ({ key: x.label, label: x.label.startsWith("semana") ? "Semana até " + fullDay(x.label.slice(-10)) : fullDay(x.label), value: x.value }))}
-            unit={["vez", "vezes"]} height={120} color={r.level === "error" ? "var(--destructive)" : "var(--warn)"}
-            tick={k => (k === slots[0].label || k === slots.at(-1)!.label ? dayMonth(k.slice(-10)) : "")} />
+    <div className="space-y-5 border-t px-4 pt-4 pb-5 sm:px-5">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-5">
+          <WhatHappened r={r} />
+          <MachineState r={r} />
         </div>
-        <div>
-          <h4 className="mb-2 text-[12.5px] font-medium text-muted-foreground">Campos da amostra</h4>
+        <div className="min-w-0 space-y-4">
+          <Reproduce r={r} />
+          <CopyForAgent r={r} />
+        </div>
+      </div>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-5">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[12.5px] sm:grid-cols-3">
+            {meta.map(([k, v]) => <div key={k} className="min-w-0"><dt className="text-muted-foreground">{k}</dt><dd className="font-medium break-words">{v}</dd></div>)}
+          </dl>
+          <div>
+            <h4 className="mb-1 text-[12.5px] font-medium text-muted-foreground">Vezes {sparkNote(days)}</h4>
+            <Columns rows={slots.map(x => ({ key: x.label, label: x.label.startsWith("semana") ? "Semana até " + fullDay(x.label.slice(-10)) : fullDay(x.label), value: x.value }))}
+              unit={["vez", "vezes"]} height={120} color={r.level === "error" ? "var(--destructive)" : "var(--warn)"}
+              tick={k => (k === slots[0].label || k === slots.at(-1)!.label ? dayMonth(k.slice(-10)) : "")} />
+          </div>
+        </div>
+        <div className="min-w-0">
+          <H4>Campos da amostra</H4>
           {fields.length ? (
             <dl className="grid gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-2">
               {fields.map(f => (
                 <div key={f.key} className={cn("min-w-0 bg-card px-3 py-2", (wide(f) || f === lone) && "sm:col-span-2")}>
                   <dt className="text-[11.5px] text-muted-foreground">{f.label}</dt>
-                  <dd className={cn("text-[13px] break-words", (f.key === "codigo" || f.key === "action") && "font-mono text-[12.5px]")}>{f.value}</dd>
+                  <dd className={cn("text-[13px] break-words", (f.key === "codigo" || f.key === "action" || f.key === "causa") && "font-mono text-[12.5px]")}>{f.value}</dd>
                 </div>
               ))}
             </dl>
           ) : <p className="text-[13px] text-muted-foreground">Sem campos nesta falha.</p>}
         </div>
       </div>
-      <div className="min-w-0 space-y-4">
-        <div>
-          <h4 className="mb-2 text-[12.5px] font-medium text-muted-foreground">{SAMPLE_TRAIL}</h4>
-          {r.trail?.length ? (
-            <ol className="relative space-y-0.5 before:absolute before:top-3 before:bottom-3 before:left-[9px] before:w-px before:bg-border-strong">
-              {r.trail.map((s, i) => (
-                <li key={i} className="relative flex min-h-8 items-center gap-3 pl-0.5">
-                  <span className="relative z-10 grid size-[18px] place-items-center rounded-full border border-border-strong bg-card text-[10px] text-muted-foreground tabular">{i + 1}</span>
-                  <Mono className="text-muted-foreground">{s}</Mono>
-                </li>
-              ))}
-              <li className="relative flex min-h-9 items-center gap-3 rounded-md bg-destructive/10 pl-0.5">
-                <span className="relative z-10 grid size-[18px] place-items-center rounded-full bg-card"><LevelIcon level={r.level} /></span>
-                <Mono className="font-medium">{r.event}</Mono>
-                <span className="ml-auto pr-2 text-[11.5px] text-muted-foreground">falha da amostra</span>
-              </li>
-            </ol>
-          ) : <p className="text-[13px] text-muted-foreground">O diário não guardou passos antes desta falha.</p>}
-        </div>
-        <CopyForAgent r={r} />
-      </div>
     </div>
   );
 }
 
 function Issue({ id, r, days, skipToday, open, onToggle }: { id: string; r: FailureRecord; days: number; skipToday: boolean; open: boolean; onToggle: () => void }) {
-  const codeLine = [r.action, r.codigo, r.etapa, r.erro_tipo].filter(Boolean).join(" · ");
-  const detail = typeof r.fields?.detalhe === "string" ? r.fields.detalhe : null;
+  const technical = [r.event, r.action, r.codigo, typeof r.fields?.causa === "string" ? r.fields.causa : null, r.etapa, r.erro_tipo].filter(Boolean).join(" · ");
   const slots = sparkSlots(r.daily, days, skipToday);
   return (
     <li className={cn("border-b last:border-b-0", open && "bg-[color-mix(in_srgb,var(--foreground)_2.5%,transparent)]")}>
@@ -127,9 +225,8 @@ function Issue({ id, r, days, skipToday, open, onToggle }: { id: string; r: Fail
         className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-3 text-left transition-colors hover:bg-accent/40 sm:px-5 md:grid-cols-[auto_minmax(0,1fr)_120px_64px_64px_84px_auto]">
         <LevelIcon level={r.level} className="self-start mt-0.5 md:self-center md:mt-0" />
         <span className="min-w-0">
-          <span className="block font-mono text-[13px] font-medium break-all">{r.event}</span>
-          {codeLine ? <span className="block font-mono text-[12px] text-muted-foreground break-all">{codeLine}</span> : null}
-          {detail ? <span className="mt-0.5 block text-[12.5px] text-muted-foreground line-clamp-2">{detail}</span> : null}
+          <span className="block text-[13.5px] font-medium">{headline(r)}</span>
+          <span className="mt-0.5 block font-mono text-[11px] text-faint break-all">{technical}</span>
           <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-muted-foreground md:hidden">
             <span><b className="font-medium text-foreground tabular">{compact.format(r.count)}</b> {r.count === 1 ? "vez" : "vezes"}</span>
             <span><b className="font-medium text-foreground tabular">{fmt.format(r.machines)}</b> {r.machines === 1 ? "máquina" : "máquinas"}</span>
