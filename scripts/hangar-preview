@@ -776,7 +776,7 @@ function problemaDoEscritor(env = process.env) {
  * Com a ajuda pela sessão (`JEV_AUX_MODE=session`) não há callback nem aviso: a dúvida volta a quem chamou.
  */
 function auxiliarDoObjetivo(env = process.env, avisar = () => {}) {
-  if (String(env.JEV_AUX_MODE ?? '').trim() === 'session') return { sessao: true };
+  if (String(env.JEV_AUX_MODE ?? '').trim() === 'session') return { sessionHelps: true };
   const base = envTexto(env, 'JEV_TEXTO_BASE_URL').replace(/\/$/, '');
   const chave = envTexto(env, 'JEV_TEXTO_API_KEY');
   const modelo = envTexto(env, 'JEV_TEXTO_MODELO');
@@ -971,7 +971,7 @@ if (cmd === 'objetivo') {
   process.on('exit', (codigo) => {
     if (!fechado) gravar({ tipo: 'fim', sucesso: false, parou: `saiu com codigo ${codigo} antes do fim do laco (motivo no stderr)` });
   });
-  const { ajudar, aviso, sessao } = auxiliarDoObjetivo(process.env, (texto) => gravar({ tipo: 'aviso', texto }));
+  const { ajudar, aviso, sessionHelps } = auxiliarDoObjetivo(process.env, (texto) => gravar({ tipo: 'aviso', texto }));
   const askJevWithImage = jevAsker(chaveJev);
   const captureWithCeiling = jev.withCaptureCeiling(() => captureScreenshot(chave));
   if (aviso) console.error(`hangar-preview: aviso: ${aviso}`);
@@ -1020,8 +1020,8 @@ if (cmd === 'objetivo') {
     roteiro: resultado.roteiro ?? null, feito: resultado.feito, segundos: (Date.now() - inicio) / 1000 });
   fechado = true;
   console.log(`\nparou: ${resultado.parou}`);
-  if (sessao && resultado.sucesso !== true) {
-    console.log('a decisão volta para esta sessão (modelo auxiliar: a própria sessão): veja a página com `shot` ou `snapshot --refs` e siga com click/fill, ou chame objetivo de novo com o que falta');
+  if (sessionHelps && resultado.sucesso !== true) {
+    console.log('a decisão volta para esta sessão: veja a página com `shot` ou `snapshot --refs` e siga com click/fill, ou chame objetivo de novo com o que falta');
   }
   if (resultado.roteiro) console.log(`roteiro: ${resultado.roteiro}`);
   console.log(`jev: acoes=${resultado.jev.acoes} verificacao=${resultado.jev.verificacao} tempo=${((Date.now() - inicio) / 1000).toFixed(1)}s`);

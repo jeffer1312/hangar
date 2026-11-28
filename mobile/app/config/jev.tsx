@@ -61,8 +61,10 @@ export default function Jev() {
   // Servidor que não publica a escolha (mais antigo) fica só com o auxiliar por API, como antes.
   const modeSupported = 'jev_aux_mode' in cfg.fields;
   const savedMode = textOf(cfg.current('jev_aux_mode')).trim();
-  // Sem escolha gravada vale o que o servidor faz: sem endereço, a dúvida já volta para a sessão.
-  const bySession = modeSupported && (savedMode === 'session' || (savedMode !== 'api' && !url));
+  // Sem escolha, a falta de um endereço salvo (sem ele nenhum modelo por API é chamado). O salvo, não o rascunho:
+  // apagar o campo para redigitar não esconde a seção.
+  const savedUrl = textOf(cfg.fields.jev_aux_base_url?.valor).trim();
+  const bySession = modeSupported && (savedMode === 'session' || (savedMode !== 'api' && !savedUrl));
   const model = textOf(cfg.current('jev_aux_modelo')).trim();
   const fetchKey = `${url}\n${textOf(cfg.draft.jev_aux_api_key).trim()}`;
   const fetchValid = fetchedFor === fetchKey;

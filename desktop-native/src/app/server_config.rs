@@ -547,12 +547,13 @@ impl ServerConfig {
 
     fn filled(&self, key: &str) -> bool { !text_of(&self.current(key)).trim().is_empty() }
 
-    /// Ajuda pela sessão: a escolha gravada; sem escolha, a falta de um endereço de auxiliar, como o servidor faz.
+    /// Ajuda pela sessão: a escolha; sem escolha, a falta de um endereço de auxiliar gravado (sem ele nenhum modelo
+    /// por API é chamado). O endereço é o salvo, não o rascunho: apagar o campo para redigitar não esconde a seção.
     fn aux_by_session(&self) -> bool {
         match text_of(&self.current(AUX_MODE)).trim() {
             "session" => true,
             "api" => false,
-            _ => !self.filled("jev_aux_base_url"),
+            _ => self.fields.get("jev_aux_base_url").and_then(|f| f.get("valor")).map(text_of).unwrap_or_default().trim().is_empty(),
         }
     }
 

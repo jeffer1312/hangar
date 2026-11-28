@@ -109,7 +109,13 @@ pub fn jev_env(on:bool,config:&Value) -> BTreeMap<String,String> {
         let (endpoint,model) = jev_destination(&key,&text("jev_endpoint").unwrap_or_default(),&text("jev_model").unwrap_or_default());
         env.extend([("TYPESAFE_API_KEY".to_owned(),key),("JEV_ENDPOINT".to_owned(),endpoint),("JEV_MODEL".to_owned(),model)]);
     }
-    for (field,var) in JEV_TEXT { if let Some(value) = text(field) { env.insert(var.to_owned(),value); } }
+    // Ajuda pela sessão: o marcador no lugar do auxiliar antigo; o comando de texto continua.
+    let by_session = crate::jev_aux::session_helps(&config["jev_aux_mode"]);
+    if by_session { env.insert("JEV_AUX_MODE".to_owned(),"session".to_owned()); }
+    for (field,var) in JEV_TEXT {
+        if by_session && var != "JEV_TEXTO_CMD" { continue; }
+        if let Some(value) = text(field) { env.insert(var.to_owned(),value); }
+    }
     env
 }
 
@@ -323,6 +329,9 @@ mod tests {
         let typesafe = jev_env(true,&json!({"jev_api_key":"k"}));
         assert_eq!((typesafe["JEV_ENDPOINT"].as_str(),typesafe["JEV_MODEL"].as_str()),("https://api.typesafe.ai/v1/systemone","jev-latest"));
         assert_eq!(jev_env(true,&json!({})),BTreeMap::from([("HANGAR_JEV".into(),"on".into())]),"sem chave não inventa destino");
+        let session = jev_env(true,&json!({"jev_aux_mode":"session","jev_texto_base_url":"https://h/v1","jev_texto_api_key":"k","jev_texto_cmd":"c"}));
+        assert_eq!(session,BTreeMap::from([("HANGAR_JEV".into(),"on".into()),("JEV_AUX_MODE".into(),"session".into()),("JEV_TEXTO_CMD".into(),"c".into())]),
+            "ajuda pela sessão: o marcador, sem o auxiliar antigo");
     }
 
     /// O ambiente de hoje (`sem_terminal._ambiente`) para a conta padrão e para uma adicional.
