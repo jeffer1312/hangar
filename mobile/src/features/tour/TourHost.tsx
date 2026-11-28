@@ -24,7 +24,7 @@ const STALL_MS = 4000;
 
 /** Planeja o tour e escolhe o balão da vez; o desenho só monta quando há balão com a peça na tela. */
 export function TourHost({ enabled }: { enabled: boolean }) {
-  const serverKey = useServers((s) => s.servers.map((x) => `${x.id}:${x.baseUrl}`).join('|'));
+  const serverKey = useServers((s) => `${s.ready && s.vaultReadable}|${s.servers.map((x) => `${x.id}:${x.baseUrl}`).join('|')}`);
   const listsReady = useSessions((s) => tourListsReady(s.byServer));
   const loadedKey = useSessions((s) => s.byServer.filter((b) => b.loaded).map((b) => b.server.id).join('|'));
   const count = useSessions((s) => s.rows.filter((r) => r.state !== 'dead').length);
@@ -126,11 +126,14 @@ function TourLayer({ target }: { target: TourTarget }) {
     {shade({ top: hole.y, left: hole.x + hole.w, width: Math.max(0, W - hole.x - hole.w), height: hole.h })}
     <View pointerEvents="none" style={[styles.ring, { top: hole.y, left: hole.x, width: hole.w, height: hole.h, borderColor: theme.tokens.accent.base }]} />
     <Animated.View entering={reduced ? undefined : FadeIn.duration(180)} exiting={reduced ? undefined : FadeOut.duration(120)}
-      style={[styles.place, { top, left, width, opacity: height ? 1 : 0 }]}
+      style={[styles.place, { top, left, width }]}
       onLayout={(e) => setHeight(e.nativeEvent.layout.height)}>
+      {/* A opacidade fica fora da vista animada: a entrada do Reanimated sobrescreve a dela, e o balão sumia. */}
+      <View style={{ opacity: height ? 1 : 0 }}>
       <TourBalloon tip={target.kind === 'tip'} title={title} body={body} waiting={target.kind === 'step'}
         tag={target.kind === 'tip' ? m.native_tour_tip_tag() : m.native_tour_progress({ n: target.n, total: target.total })}
         arrow={below ? 'up' : 'down'} arrowX={arrowX} actions={actions} />
+      </View>
     </Animated.View>
   </View>;
 }

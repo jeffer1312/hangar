@@ -74,9 +74,12 @@ export function syncTour(): Promise<void> {
 }
 
 async function syncRound(): Promise<void> {
-  const reads = await Promise.allSettled(servers().map(async (server) => ({ server, remote: await tourProgressFor(server) })));
+  const { ready, vaultReadable } = useServers.getState();
+  const own = servers();
+  const reads = await Promise.allSettled(own.map(async (server) => ({ server, remote: await tourProgressFor(server) })));
   let progress = useTour.getState().progress;
-  let answered = false;
+  // Cofre lido sem máquina própria (demonstração, só convite): não há visto noutro lugar para esperar.
+  let answered = own.length === 0 && ready && vaultReadable;
   for (const read of reads) {
     if (read.status === 'rejected') failed('tour_progress_get_failed', read.reason);
     else {

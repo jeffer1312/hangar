@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { memory, servers, tourProgressFor } = vi.hoisted(() => ({
   memory: new Map<string, string>(),
-  servers: { list: [] as { id: string; label: string; baseUrl: string; token: string; invite?: boolean; disabled?: boolean }[] },
+  servers: { list: [] as { id: string; label: string; baseUrl: string; token: string; invite?: boolean; disabled?: boolean }[], vaultRead: false },
   tourProgressFor: vi.fn(),
 }));
 vi.mock('react-native-mmkv', () => ({
@@ -12,7 +12,7 @@ vi.mock('react-native-mmkv', () => ({
   }),
 }));
 vi.mock('../../stores/servers', () => ({
-  useServers: { getState: () => ({ servers: servers.list }) },
+  useServers: { getState: () => ({ servers: servers.list, ready: servers.vaultRead, vaultReadable: servers.vaultRead }) },
   ownServers: (list: { invite?: boolean }[]) => list.filter((s) => !s.invite),
 }));
 vi.mock('../../net/demo', () => ({ DEMO_BASE_URL: 'http://127.0.0.1:1' }));
@@ -28,6 +28,7 @@ beforeEach(() => {
   memory.clear();
   tourProgressFor.mockReset();
   servers.list = [casa];
+  servers.vaultRead = false;
   useTour.setState({ progress: {}, synced: false, planned: false, replay: false, run: null, tips: [] });
 });
 
@@ -72,6 +73,14 @@ describe('sincronização do visto', () => {
     await syncTour();
     expect(useTour.getState().synced).toBe(true);
     expect(useTour.getState().progress.tips).toContain(MOBILE_TOUR_DONE);
+  });
+
+  it('cofre lido sem máquina própria (só demonstração ou convite): o visto é só o deste aparelho', async () => {
+    servers.list = [{ ...casa, id: 'demo', baseUrl: 'http://127.0.0.1:1' }, { ...casa, id: 'par', invite: true }];
+    servers.vaultRead = true;
+    await syncTour();
+    expect(tourProgressFor).not.toHaveBeenCalled();
+    expect(useTour.getState().synced).toBe(true);
   });
 
   it('servidor que só não tem a rota conta como resposta', async () => {
