@@ -1,4 +1,7 @@
 *
 !crates
 !services/telemetry-ingest
+!desktop-native/assets/providers
 **/target
+**/node_modules
+services/telemetry-ingest/panel/dist

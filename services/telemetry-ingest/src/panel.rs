@@ -1,35 +1,41 @@
-//! Painel do dono: `/panel` mostra a entrada ou o painel conforme a sessão; `/panel/data` é o resumo em JSON.
+//! Painel do dono: `/panel` é o app React (`panel/`, montado pelo Vite e embutido no executável), que
+//! pergunta a sessão em `/panel/api/me`; `/panel/data` é o resumo em JSON e `/panel/events` avisa de pacote novo.
 //! Contas por convite (`accounts`); sessão num cookie `__Host-` que o JavaScript não lê.
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::convert::Infallible;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::Router;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
-use tokio::sync::Semaphore;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use futures_util::Stream;
+use rust_embed::RustEmbed;
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
+use tokio::sync::broadcast::error::RecvError;
 
-use sha2::Digest;
+use crate::{Live, accounts, store};
 
-use crate::{accounts, store};
+/// O build do Vite: `index.html`, os arquivos de `public/` e `assets/` com o hash do conteúdo no nome.
+#[derive(RustEmbed)]
+#[folder = "panel/dist"]
+// Na depuração a pasta pode faltar, e o teste da página diz como montar; no release (imagem) ela é obrigatória.
+#[cfg_attr(debug_assertions, allow_missing = true)]
+struct Dist;
 
-const DASHBOARD: &str = include_str!("panel/dashboard.html");
-const LOGIN: &str = include_str!("panel/login.html");
-const JOIN: &str = include_str!("panel/join.html");
-const STYLE: &str = include_str!("panel/panel.css");
-const MANIFEST: &str = include_str!("panel/manifest.webmanifest");
-const SERVICE_WORKER: &str = include_str!("panel/sw.js");
-const ICON_192: &[u8] = include_bytes!("panel/icon-192.png");
-const ICON_512: &[u8] = include_bytes!("panel/icon-512.png");
-const APPLE_ICON: &[u8] = include_bytes!("panel/apple-touch-icon.png");
+/// Arquivos da raiz do app, com endereço fixo: revalidados a cada uso.
+const ROOT_FILES: [&str; 6] = ["manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
+/// Um canal ao vivo dura no máximo isto; o navegador reconecta sozinho e a sessão é conferida de novo.
+const EVENTS_MAX_LIFE: Duration = Duration::from_secs(15 * 60);
+/// Intervalo do `ping` nomeado (e não comentário): o painel vê o silêncio e refaz a conexão meio aberta.
+const EVENTS_KEEP_ALIVE: Duration = Duration::from_secs(20);
 const COOKIE: &str = "__Host-panel";
 const DEFAULT_DAYS: i32 = 30;
 /// Espera de toda entrada recusada: tentar senha em série fica lento sem atrasar quem acerta.
@@ -73,32 +79,13 @@ impl Limiter {
 struct Panel {
     pool: PgPool,
     limiter: Arc<Limiter>,
+    live: Arc<Live>,
 }
 
-/// Só os scripts da própria página rodam, conferidos pelo hash; o resto do conteúdo vem só desta origem.
-fn csp(html: &str) -> String {
-    let hashes: Vec<String> = html
-        .split("<script>")
-        .skip(1)
-        .filter_map(|rest| rest.split_once("</script>").map(|(body, _)| body))
-        .map(|body| format!("'sha256-{}'", STANDARD.encode(sha2::Sha256::digest(body.as_bytes()))))
-        .collect();
-    format!(
-        "default-src 'none'; script-src {}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
-         manifest-src 'self'; worker-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-        hashes.join(" ")
-    )
-}
-
-static CSP: LazyLock<[String; 3]> = LazyLock::new(|| [csp(DASHBOARD), csp(LOGIN), csp(JOIN)]);
-
-/// O CSS vai dentro da página: um arquivo à parte ficava no cache do navegador e a página nova
-/// aparecia com o estilo da versão anterior.
-static PAGES: LazyLock<[String; 3]> = LazyLock::new(|| [inline_style(DASHBOARD), inline_style(LOGIN), inline_style(JOIN)]);
-
-fn inline_style(html: &str) -> String {
-    html.replace(r#"<link rel="stylesheet" href="/panel/assets/panel.css">"#, &format!("<style>{STYLE}</style>"))
-}
+/// Só roda script servido por esta origem, nunca inline. O estilo inline fica: o gráfico escreve as
+/// cores das séries num `<style>` e os componentes usam `style`.
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; \
+    connect-src 'self'; manifest-src 'self'; worker-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 #[derive(Deserialize)]
 struct Period {
@@ -125,17 +112,19 @@ struct Join {
     password: String,
 }
 
-pub fn router(pool: PgPool) -> Router {
+pub fn router(pool: PgPool, live: Arc<Live>) -> Router {
     accounts::warm();
-    let state = Panel { pool, limiter: Arc::new(Limiter::new()) };
-    Router::new()
-        .route("/panel", get(home))
-        .route("/panel/join", get(|| async { page(2) }))
-        .route("/panel/manifest.webmanifest", get(|| async { asset("application/manifest+json", MANIFEST.as_bytes()) }))
-        .route("/panel/sw.js", get(service_worker))
-        .route("/panel/icon-192.png", get(|| async { asset("image/png", ICON_192) }))
-        .route("/panel/icon-512.png", get(|| async { asset("image/png", ICON_512) }))
-        .route("/panel/apple-touch-icon.png", get(|| async { asset("image/png", APPLE_ICON) }))
+    let state = Panel { pool, limiter: Arc::new(Limiter::new()), live };
+    let mut router = Router::new()
+        .route("/panel", get(page))
+        .route("/panel/", get(page))
+        .route("/panel/join", get(page))
+        .route("/panel/assets/{*file}", get(hashed_asset));
+    for name in ROOT_FILES {
+        router = router.route(&format!("/panel/{name}"), get(move || std::future::ready(root_file(name))));
+    }
+    router
+        .route("/panel/events", get(events))
         .route("/panel/data", get(data))
         .route("/panel/trail", get(trail))
         .route("/panel/api/me", get(me))
@@ -146,27 +135,86 @@ pub fn router(pool: PgPool) -> Router {
         .with_state(state)
 }
 
-fn page(which: usize) -> Response {
+fn content_type(name: &str) -> &'static str {
+    match name.rsplit_once('.').map(|(_, ext)| ext) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("webmanifest") => "application/manifest+json",
+        Some("json") => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+fn embedded(path: &str, cache: &'static str) -> Response {
+    match Dist::get(path) {
+        Some(file) => ([(header::CONTENT_TYPE, content_type(path)), (header::CACHE_CONTROL, cache)], file.data).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// O app para `/panel` e `/panel/join`, com ou sem sessão: quem decide a tela é `/panel/api/me`, e os dados
+/// continuam atrás da sessão. Nunca guardado, para a versão nova entrar no recarregar.
+async fn page() -> Response {
+    let mut response = embedded("index.html", "no-store");
     // A página não roda dentro de outro site (clickjacking) e não manda o caminho a links de fora.
-    let mut response = Html(PAGES[which].as_str()).into_response();
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&CSP[which]).expect("CSP em ASCII"));
+    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
 }
 
-// ponytail: endereço sem versão, então `no-cache` (revalida a cada uso); com hash no caminho daria para guardar de vez.
-fn asset(kind: &'static str, body: &'static [u8]) -> Response {
-    ([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, "no-cache")], body).into_response()
+/// Nome com o hash do conteúdo: o mesmo endereço nunca muda, então fica guardado de vez.
+async fn hashed_asset(Path(file): Path<String>) -> Response {
+    // Sem subir de pasta: no build de depuração o rust-embed lê do disco.
+    if file.split('/').any(|part| part.is_empty() || part == "..") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    embedded(&format!("assets/{file}"), "public, max-age=31536000, immutable")
 }
 
-/// O escopo `/panel` cobre a própria página de entrada, que fica fora do diretório do script.
-fn service_worker() -> std::future::Ready<Response> {
-    let mut response = asset("application/javascript", SERVICE_WORKER.as_bytes());
-    response.headers_mut().insert("service-worker-allowed", HeaderValue::from_static("/panel"));
-    std::future::ready(response)
+fn root_file(name: &'static str) -> Response {
+    let mut response = embedded(name, "no-cache");
+    // O escopo `/panel` cobre a própria página de entrada, que fica fora do diretório do script.
+    if name == "sw.js" {
+        response.headers_mut().insert("service-worker-allowed", HeaderValue::from_static("/panel"));
+    }
+    response
+}
+
+/// Um aviso `batch` por pacote gravado; sem dado nenhum, o painel relê `/panel/data`. Acaba no desligamento ou
+/// depois de `max_life`, e o navegador reconecta conferindo a sessão de novo.
+fn batch_events(live: &Live, max_life: Duration) -> impl Stream<Item = Result<Event, Infallible>> + use<> {
+    let state = (live.notify.subscribe(), live.stop.subscribe(), tokio::time::Instant::now() + max_life);
+    futures_util::stream::unfold(state, |(mut batches, mut stop, end)| async move {
+        let arrived = tokio::select! {
+            // Atrasado também é "chegou coisa nova": um aviso basta para reler.
+            got = batches.recv() => !matches!(got, Err(RecvError::Closed)),
+            _ = stop.wait_for(|stopping| *stopping) => false,
+            () = tokio::time::sleep_until(end) => false,
+        };
+        arrived.then(|| (Ok(Event::default().event("batch").data("{}")), (batches, stop, end)))
+    })
+}
+
+async fn events(State(panel): State<Panel>, headers: HeaderMap) -> Response {
+    match user(&panel.pool, &headers).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return error(StatusCode::UNAUTHORIZED, "session"),
+        Err(response) => return response,
+    }
+    let stream = batch_events(&panel.live, EVENTS_MAX_LIFE);
+    // Proxy no meio (Cloudflare, Traefik) não pode juntar os avisos esperando o corpo encher.
+    let mut response = Sse::new(stream).keep_alive(KeepAlive::new().interval(EVENTS_KEEP_ALIVE).event(Event::default().event("ping"))).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
+    response
 }
 
 fn error(status: StatusCode, code: &str) -> Response { (status, axum::Json(json!({"error": code}))).into_response() }
@@ -206,14 +254,6 @@ async fn user(pool: &PgPool, headers: &HeaderMap) -> Result<Option<(i64, String)
 fn unavailable(what: &str, cause: &sqlx::Error) -> Response {
     eprintln!("telemetry-ingest: panel {what}: {cause}");
     error(StatusCode::SERVICE_UNAVAILABLE, "store")
-}
-
-async fn home(State(panel): State<Panel>, headers: HeaderMap) -> Response {
-    match user(&panel.pool, &headers).await {
-        Ok(Some(_)) => page(0),
-        Ok(None) => page(1),
-        Err(response) => response,
-    }
 }
 
 async fn me(State(panel): State<Panel>, headers: HeaderMap) -> Response {
@@ -399,29 +439,35 @@ mod tests {
     }
 
     #[test]
-    fn pages_carry_their_style_inline() {
-        for page in PAGES.iter() {
-            assert!(page.contains("<style>") && !page.contains("/panel/assets/panel.css"), "o estilo vai dentro da página");
+    fn the_app_page_runs_only_its_own_scripts() {
+        let html = String::from_utf8(Dist::get("index.html").expect("panel/dist: rode npm run build em panel/").data.into_owned()).unwrap();
+        assert!(html.contains(r#"<div id="root">"#) && html.contains(r#"src="/panel/assets/"#), "{html}");
+        assert!(!html.contains("<script>"), "nenhum script inline");
+        assert!(html.contains(r#"<link rel="manifest" href="/panel/manifest.webmanifest">"#) && html.contains("viewport-fit=cover"));
+        let script = CSP.split(';').find(|d| d.trim_start().starts_with("script-src")).unwrap();
+        assert_eq!(script.trim(), "script-src 'self'");
+        assert!(CSP.contains("frame-ancestors 'none'") && CSP.contains("font-src 'self'") && !CSP.contains("unsafe-eval"));
+        for name in ROOT_FILES {
+            assert!(Dist::get(name).is_some(), "{name} no build");
         }
+        let sw = String::from_utf8(Dist::get("sw.js").unwrap().data.into_owned()).unwrap();
+        assert!(sw.contains("fetch(e.request)") && !sw.contains("caches"), "o service worker não guarda nada");
     }
 
-    #[test]
-    fn pages_can_be_installed() {
-        for page in PAGES.iter() {
-            assert!(page.contains(r#"<link rel="manifest" href="/panel/manifest.webmanifest">"#), "o manifesto vai em toda página");
-            assert!(page.contains(r#"rel="apple-touch-icon""#) && page.contains("viewport-fit=cover"));
-        }
-        let policy = csp(DASHBOARD);
-        assert!(policy.contains("manifest-src 'self'") && policy.contains("worker-src 'self'"), "{policy}");
-        assert!(!SERVICE_WORKER.contains("caches"), "o service worker não guarda nada");
-    }
+    #[tokio::test]
+    async fn each_batch_is_one_event_and_the_stream_ends_on_shutdown() {
+        use futures_util::StreamExt;
+        let live = Live::new();
+        let mut stream = std::pin::pin!(batch_events(&live, Duration::from_secs(60)));
+        live.notify.send(()).unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(5), stream.next()).await.unwrap();
+        assert!(matches!(event, Some(Ok(_))), "pacote novo vira um aviso");
+        live.stop.send(true).unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(5), stream.next()).await.unwrap().is_none(), "desligar encerra o canal");
 
-    #[test]
-    fn csp_allows_only_the_page_scripts_by_hash() {
-        let policy = csp("<p>x</p><script>alert(1)</script>");
-        assert!(policy.contains("script-src 'sha256-"), "{policy}");
-        assert!(policy.contains("frame-ancestors 'none'") && !policy.contains("unsafe-eval"));
-        assert_eq!(csp(DASHBOARD).matches("'sha256-").count(), DASHBOARD.matches("<script>").count());
+        let fresh = Live::new();
+        let mut short = std::pin::pin!(batch_events(&fresh, Duration::ZERO));
+        assert!(tokio::time::timeout(Duration::from_secs(5), short.next()).await.unwrap().is_none(), "o canal tem prazo");
     }
 
     #[test]

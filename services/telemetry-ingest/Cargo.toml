@@ -13,16 +13,18 @@ axum = { version = "0.8.9", default-features = false, features = ["http1", "toki
 hangar-telemetry = { path = "../../crates/hangar-telemetry", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Senha das contas do painel; o sha2 guarda só o hash dos tokens de sessão e convite.
+# Senha das contas do painel.
 argon2 = "0.5"
-# Hash dos scripts da página na Content-Security-Policy.
-base64 = "0.22"
+# O sha2 guarda o hash dos tokens de sessão e convite.
 sha2 = "0.10"
+# O app do painel (panel/dist, montado pelo Vite) vai dentro do executável.
+rust-embed = "8"
+futures-util = { version = "0.3", default-features = false }
 # A mesma rand_core que o argon2 usa, com o gerador do sistema ligado (sal e tokens).
 rand_core = { version = "0.6", features = ["getrandom"] }
 # `macros` só para o `migrate!`, que embute os arquivos; nenhuma consulta é conferida contra banco na compilação.
 sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "postgres", "json", "macros", "migrate"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal", "sync"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

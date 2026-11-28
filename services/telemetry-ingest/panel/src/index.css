@@ -1,0 +1,124 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+/* Variantes e animações dos componentes do shadcn (shadcn/dist/tailwind.css), copiadas para não instalar o CLI. */
+@import "./styles/shadcn.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Tema escuro do Hangar (desktop-native/src/theme.rs, site/src/site.css). Só escuro: o painel não tem tema claro. */
+:root {
+  color-scheme: dark;
+  --deep: #0c0a11;
+  --background: #121013;
+  --foreground: #ece6e8;
+  --card: #1a171c;
+  --card-foreground: #ece6e8;
+  --popover: #221e24;
+  --popover-foreground: #ece6e8;
+  --primary: #7c87e8;
+  --primary-foreground: #0c0a11;
+  --secondary: #262127;
+  --secondary-foreground: #ece6e8;
+  --muted: #221e24;
+  --muted-foreground: #a9a0a4;
+  --faint: #857c81;
+  --accent: #2d272e;
+  --accent-foreground: #ece6e8;
+  --destructive: #ff6b61;
+  --warn: #ffab2e;
+  --ok: #4cc777;
+  --border: rgba(255, 248, 244, 0.075);
+  --border-strong: rgba(255, 248, 244, 0.13);
+  --input: rgba(255, 248, 244, 0.13);
+  --ring: #7c87e8;
+  --grid: rgba(255, 248, 244, 0.06);
+  --radius: 0.75rem;
+  --chart-1: #d97757;
+  --chart-2: #8b5cf6;
+  --chart-3: #10a37f;
+  --chart-4: #4f8fe0;
+  --chart-5: #c08a1c;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --sl: env(safe-area-inset-left, 0px);
+  --sr: env(safe-area-inset-right, 0px);
+  --st: env(safe-area-inset-top, 0px);
+  --sb: env(safe-area-inset-bottom, 0px);
+}
+
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --color-deep: var(--deep);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-grid: var(--grid);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.33);
+  --ease-out: var(--ease-out);
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html { @apply font-sans; background: var(--background); scrollbar-color: var(--secondary) transparent; -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-size: 14px; line-height: 1.5; min-height: 100dvh; overflow-x: clip;
+    font-feature-settings: "ss01", "cv11";
+  }
+  ::selection { background: rgb(124 135 232 / 0.35); color: #fff; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--secondary); border-radius: 10px; border: 2px solid var(--background); }
+  ::-webkit-scrollbar-track { background: transparent; }
+  input, textarea { caret-color: var(--primary); }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; }
+  /* Toque: alvos de 44 px e campos de 16 px (o iOS não amplia a página ao focar). */
+  @media (pointer: coarse) {
+    input, select, textarea { font-size: 16px !important; }
+  }
+  .tabular { font-variant-numeric: tabular-nums; }
+  html { scroll-padding-top: calc(var(--st) + 64px); }
+  @media (max-width: 1023px) { html { scroll-padding-top: calc(var(--st) + 60px); } }
+}
+
+/* Barras das listas crescem uma vez ao aparecer; nada disso roda com movimento reduzido. */
+@keyframes grow-x { from { transform: scaleX(0); } }
+@keyframes flash { 0% { background: rgb(124 135 232 / 0.28); } 100% { background: transparent; } }
+.grow-x { transform-origin: left; animation: grow-x 0.6s var(--ease-out) both; animation-delay: calc(var(--i, 0) * 25ms); }
+.flash { animation: flash 1.4s var(--ease-out); border-radius: 6px; }
+@media (prefers-reduced-motion: reduce) {
+  .grow-x, .flash { animation: none; }
+}
+.recharts-surface:focus, .recharts-wrapper:focus, .recharts-wrapper *:focus { outline: none; }
+
+/* Busca: seção sem nenhum cartão que case some inteira. */
+main[data-searching] [data-section]:not(:has([data-block])) { display: none; }
