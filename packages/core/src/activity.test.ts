@@ -19,6 +19,16 @@ function run(events: ChatEvent[]) {
   return f.snapshot();
 }
 
+describe('Agent lançado de dentro de um script do Code Mode', () => {
+  it('o resultado do script que cita o lançamento não toma o lugar da chamada Agent', () => {
+    const resultado: ChatEvent = { kind: 'tool_result', id: 'r-agent', tool_use_id: 'toolu_cc_a', result: '', bg_agent_id: 'ag-9' };
+    const script: ChatEvent = { kind: 'tool_result', id: 'r-repl', tool_use_id: 'toolu_repl',
+      result: '{"status":"async_launched","note":"Async agent launched successfully.\nagentId: ag-9 (internal ID)"}' };
+    const fim: ChatEvent = { kind: 'tool_result', id: 'queued-task:ag-9:1', tool_use_id: 'task:ag-9', result: 'task-notification' };
+    expect(run([launch('toolu_cc_a'), resultado, script, fim]).agents.map(a => a.running)).toEqual([false]);
+  });
+});
+
 describe('subagentes nativos do Codex', () => {
   const spawn = (name = 'spawn_agent'): ChatEvent => ({ id: 'spawn', kind: 'tool_use', tool_name: name, tool_use_id: 'launch',
     tool_input: { task_name: 'review', agent_type: 'worker', message: `gAAAA${'x'.repeat(80)}` } });
