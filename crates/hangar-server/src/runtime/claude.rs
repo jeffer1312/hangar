@@ -1243,6 +1243,7 @@ impl ClaudeEngine {
                 self.waiters.clear(); self.changed(effects,true);
             }
             "user" => {
+                self.finish_called_agent(&event);
                 if event["isReplay"] == true && let Some(uuid) = event["uuid"].as_str()
                     && let Some(index) = self.echoes.iter().position(|(known,_)|known == uuid) {
                     let (_,operation_id) = self.echoes.remove(index).unwrap();
@@ -1310,6 +1311,23 @@ impl ClaudeEngine {
         if let Some(end) = event["patch"]["end_time"].as_u64() { entry["end_time"] = json!(end); }
     }
 
+    /// O resultado de uma chamada `Agent` que esperou o fim (`completed`; `async_launched` ainda roda) encerra a execução
+    /// em curso: chamado de dentro de um script do Code Mode, o subagente nasce em segundo plano e a CLI pode não mandar
+    /// o `task_notification` dele.
+    fn finish_called_agent(&mut self,event:&Value) {
+        let result = &event["tool_use_result"];
+        let Some(id) = result["agentId"].as_str().filter(|_|result["status"] == "completed") else { return };
+        let failed = event["message"]["content"].as_array().is_some_and(|blocks|blocks.iter().any(|block|block["is_error"] == true));
+        if failed { return; }
+        let Some(entry) = self.subagents.get_mut(id).filter(|entry|entry["state"] == "running") else { return };
+        entry["state"] = json!("completed");
+        if let Some(end) = event["timestamp"].as_str().and_then(|at|chrono::DateTime::parse_from_rfc3339(at).ok()) {
+            entry["end_time"] = json!(end.timestamp_millis());
+        }
+        self.tasks.retain(|(key,_)|key != id);
+        self.label = self.tasks_label();
+    }
+
     fn restore_failed(&mut self,waiter:&Waiter,reason:&str) { self.restore_failed_for(&waiter.operation_id,&waiter.payload,reason); }
 
     /// A volta ao modo de base depois do plano aprovado falhou: a sessão segue no modo errado, e isso aparece.
@@ -1375,7 +1393,9 @@ impl ClaudeEngine {
                 let live:BTreeSet<String> = event["tasks"].as_array().into_iter().flatten().filter_map(|task|task["task_id"].as_str().map(str::to_owned)).collect();
                 for task in event["tasks"].as_array().into_iter().flatten() {
                     self.track_subagent(task);
-                    self.start_task(task);
+                    // Encerrado pelo resultado da chamada, mas ainda no conjunto vivo da CLI: não volta ao rótulo.
+                    let ended = task["task_id"].as_str().and_then(|id|self.subagents.get(id)).is_some_and(|entry|entry["state"] != "running");
+                    if !ended { self.start_task(task); }
                 }
                 let gone:Vec<String> = self.background.difference(&live).cloned().collect();
                 self.tasks.retain(|(key,_)|!gone.contains(key));

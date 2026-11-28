@@ -5,6 +5,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Permissão do Kimi vem do wire do agente principal.** `permission.set_mode` decide o modo,
+  com leitura incremental; ausência de evento após o primeiro registro válido é o estado inicial
+  manual do Kimi. O rodapé é configurável e não comprova permissão. A troca dirige `/permission`,
+  preserva rascunho e confirma a escolha; antes do primeiro wire, confere o tique do seletor e o
+  fecha. `--yolo` e `--auto` só entram na conversa nova: retomar conserva a escolha persistida.
+  Ver [permissões e envio direto do Kimi](#permissões-e-envio-direto-do-kimi-27112026).
+
 - **Continuação automática só depois de parada passageira, uma vez, por um registro só.** Rede, stream
   perdido ou 5xx (este uma vez por corrente) continuam quando a sondagem compartilhada alcança o
   provedor, até 2 h depois da parada. Toda continuação automática, inclusive a troca de conta no limite
@@ -6030,3 +6037,40 @@ desatualizado do painel: a recontagem agora entrega a mesma leitura à aba e inv
 anteriores. O detalhe adota a retomada do mesmo filho e volta a consultar, sem reabertura; a
 transição invalida também o detalhe antigo em voo. A versão recompilada confirmou na tela a
 retomada com o detalhe aberto e a linha Rodando com modelo, chamadas e ferramenta atual.
+
+
+## Permissões e envio direto do Kimi (27/11/2026)
+
+A CLI 2.8.1 oferece manual (`Always Ask`), yolo (`Ask When Needed`) e auto (`Never Ask`).
+`/permission` abre uma lista com as três escolhas. Na abertura existem `--yolo` e `--auto`;
+sem flag, a CLI lê seu padrão. Não há flag manual de abertura. O desktop nativo e o Expo
+mostram os três modos na conversa, e os dois modos por flag mais Padrão na criação.
+
+O Kimi permite reordenar ou remover a peça de modo do rodapé e substituir a linha por um
+comando. Inferir manual pela ausência de um prefixo podia manter auto enquanto o Hangar
+confirmava manual. O evento durável `permission.set_mode`, filtrado pelo agente principal,
+é a fonte do modo. A leitura usa o mesmo leitor incremental e limitado em memória da barra.
+Antes de existir conversa, a confirmação vem do `← current` do seletor, fechado antes da resposta.
+
+As flags de abertura sobrepõem o modo de uma conversa retomada. Reaplicá-las após uma troca
+manual elevava a permissão na restauração. O comando de retomada preserva o modo persistido
+pela CLI, sem as flags da criação.
+
+Sem `permission.set_mode` do agente principal, o modo é manual: na CLI 2.8.1 o estado nasce
+`manual` (`defineState("permissionMode", () => "manual")`), e tanto o `defaultPermissionMode`
+do config quanto `--yolo`/`--auto` passam por `setMode`, que grava o evento durável na
+primeira vez mesmo sem mudança (`permissionMode.configured`).
+
+Limite conhecido: o spec de uma sessão Kimi aberta com `--yolo` grava `"permission":"yolo"`,
+valor que a versão anterior não lê. Depois da volta da atualização, restaurar ou reabrir essa
+sessão pelo spec falha com `restore_spec_unreadable`; as demais sessões não mudam.
+
+O Ctrl+S orienta a fila da própria TUI e a resposta é assíncrona. Conferir uma única captura
+300 ms depois podia responder sem confirmação enquanto a orientação estava em andamento.
+O driver agora aguarda o desaparecimento da fila por até 5 s e nunca repete a tecla nessa
+espera. O prazo esgotado continua incerto; não autoriza redigitar a mensagem.
+
+Costuras verificadas: controle público do ator com E/S externa simulada e relógio pausado;
+leitura incremental de eventos reais em arquivo temporário; comando público de abertura e
+retomada; opções compartilhadas; seleção na folha real de ajustes do Expo. As simulações não
+comprovam o tempo de resposta do serviço do modelo nem executam um turno de produção.

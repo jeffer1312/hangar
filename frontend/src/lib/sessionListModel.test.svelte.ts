@@ -531,8 +531,8 @@ describe('sessão caída: reabrir e dispensar', () => {
   it('reabrir vai ao servidor da linha sem trocar o ativo', async () => {
     vi.mocked(reopenFallenSession).mockResolvedValue({ ok: true });
     const d = createSessionListModel(opts('desktop'));
-    expect(await d.reopen('s', 'srv-b')).toBe('');
-    expect(vi.mocked(reopenFallenSession).mock.calls[0]).toEqual(['s', expect.objectContaining({ id: 'srv-b' })]);
+    expect(await d.reopen('s', 'srv-b', 'o:123:456')).toBe('');
+    expect(vi.mocked(reopenFallenSession).mock.calls[0]).toEqual(['s', expect.objectContaining({ id: 'srv-b' }), { lifecycleId: 'o:123:456' }]);
     expect(selectServer).not.toHaveBeenCalled();
     expect(d.isReopening('s', 'srv-b')).toBe(false);
   });
@@ -570,8 +570,9 @@ describe('sessão caída: reabrir e dispensar', () => {
   it('dispensar vai pela rota própria ao servidor da linha, sem confirmação nem DELETE', async () => {
     vi.mocked(dismissFallenSession).mockResolvedValue({ ok: true });
     const d = createSessionListModel(opts('desktop'));
-    expect(await d.dismiss('s', 'srv-b')).toEqual({ ok: true, erro: '' });
-    expect(vi.mocked(dismissFallenSession).mock.calls[0]).toEqual(['s', expect.objectContaining({ id: 'srv-b' })]);
+    expect(await d.dismiss('s', 'srv-b', 'o:123:456')).toEqual({ ok: true, erro: '' });
+    expect(vi.mocked(dismissFallenSession).mock.calls[0]).toEqual(['s', expect.objectContaining({ id: 'srv-b' }), 'o:123:456']);
+    expect(store.markDeleting).not.toHaveBeenCalled();
     expect(deleteSession).not.toHaveBeenCalled();
     expect(selectServer).not.toHaveBeenCalled();
   });

@@ -1,4 +1,4 @@
-import { expect, test } from "claude-code/testing";
+import { expect, mock, test } from "claude-code/testing";
 import { parseNotifications } from "./verificarParse";
 import { clearBridge, setBridge } from "./bridge";
 import { agentEnd, contentText, registerState } from "./state";
@@ -20,16 +20,19 @@ test("só completed é fim normal", () => {
 type Handler = (...args: any[]) => any;
 
 /** Os hooks do state.ts com um engine de mentira; `status` responde cada POST /agent. */
-function harness(status: () => number | "hang" = () => 200, sleep: () => Promise<void> = () => new Promise(() => {})) {
+function harness(status: () => number | "hang" = () => 200, sleep: () => Promise<void> = () => new Promise(() => {}), onAgent?: (event: string) => void) {
   const handlers = new Map<string, Handler>();
-  registerState(((event: string, ...args: any[]) => handlers.set(event, args.at(-1))) as never);
+  // `tool.call` tem um gancho por ferramenta: a chave leva o matcher.
+  registerState(((event: string, ...args: any[]) => handlers.set(args.length > 1 ? `${event}:${args[0].tool}` : event, args.at(-1))) as never);
   const agents: string[] = [];
   const logs: string[] = [];
   const $ = {
     http: { fetch: async (url: string, init: { body: string }) => {
       if (!url.endsWith("/agent")) return { status: 200, text: "" };
       const b = JSON.parse(init.body) as { agentId: string; estado: string };
-      agents.push(`${b.agentId}:${b.estado}`);
+      const event = `${b.agentId}:${b.estado}`;
+      agents.push(event);
+      onAgent?.(event);
       const s = status();
       if (s === "hang") return new Promise(() => {});
       return { status: s, text: "" };
@@ -43,7 +46,8 @@ function harness(status: () => number | "hang" = () => 200, sleep: () => Promise
     agents, logs,
     spawn: (agentId: string, background = false) => fire("agent.spawn", { background }, { model: "m", agentId }),
     done: (agentId: string, isAborted = false) => fire("turn.complete", { agentId, answer: "", isAborted }),
-    sendMessage: (to: string, answer: unknown = { result: "ok" }) => fire("tool.call", { tool: "SendMessage", to }, answer),
+    sendMessage: (to: string, answer: unknown = { result: "ok" }) => fire("tool.call:SendMessage", { tool: "SendMessage", to }, answer),
+    agentCall: (answer: unknown) => fire("tool.call:Agent", { tool: "Agent", prompt: "p" }, answer),
     notify: (id: string) => fire("session.append", { origin: { kind: "task-notification" },
       message: { content: `<task-notification><task-id>${id}</task-id><status>completed</status></task-notification>` } }),
     fireSpawnWith: (inner: () => Promise<unknown>) => handlers.get("agent.spawn")!($, { background: false }, inner),
@@ -95,6 +99,40 @@ test("segundo plano: a notificação encerra, e depois da retomada o turn.comple
   expect(h.agents).toEqual(["bg1:running", "bg1:finished", "bg1:running", "bg1:finished"]);
 }));
 
+test("Agent do Code Mode: o completed da chamada encerra o de segundo plano, que não recebe notificação", () => withBridge(async () => {
+  const h = harness();
+  await h.spawn("cm1", true);
+  await h.done("cm1");
+  await h.agentCall({ result: { status: "completed", agentId: "cm1", content: [] } });
+  expect(h.agents).toEqual(["cm1:running", "cm1:finished"]);
+}));
+
+test("Agent do Code Mode: o completed antes do turn.complete encerra uma vez só", () => withBridge(async () => {
+  const h = harness();
+  await h.spawn("cm2", true);
+  await h.agentCall({ result: { status: "completed", agentId: "cm2" } });
+  await h.done("cm2");
+  expect(h.agents).toEqual(["cm2:running", "cm2:finished"]);
+}));
+
+test("Agent lançado em segundo plano (async_launched) segue rodando até a notificação", () => withBridge(async () => {
+  const h = harness();
+  await h.spawn("bg3", true);
+  await h.agentCall({ result: { status: "async_launched", agentId: "bg3" } });
+  await h.done("bg3");
+  expect(h.agents).toEqual(["bg3:running"]);
+  await h.notify("bg3");
+  expect(h.agents).toEqual(["bg3:running", "bg3:finished"]);
+}));
+
+test("Agent de primeiro plano já encerrado no turn.complete não manda o fim de novo", () => withBridge(async () => {
+  const h = harness();
+  await h.spawn("fg2");
+  await h.done("fg2");
+  await h.agentCall({ result: { status: "completed", agentId: "fg2" } });
+  expect(h.agents).toEqual(["fg2:running", "fg2:finished"]);
+}));
+
 test("aviso recusado aparece no log", () => withBridge(async () => {
   const h = harness(() => 500);
   await h.spawn("e1");
@@ -103,23 +141,27 @@ test("aviso recusado aparece no log", () => withBridge(async () => {
 
 test("backend pendurado não segura o hook nem os avisos seguintes", () => withBridge(async () => {
   let s: number | "hang" = "hang";
-  const h = harness(() => s, async () => {});
+  const posted = Promise.withResolvers<void>();
+  const h = harness(() => s, async () => {}, (event) => {
+    if (event === "h1:finished") posted.resolve();
+  });
   await h.spawn("h1");
   s = 200;
   await h.done("h1");
-  await new Promise((r) => setTimeout(r, 0));
+  await posted.promise;
   expect(h.agents).toEqual(["h1:running", "h1:finished"]);
 }));
 
 const PONTE = { url: "http://127.0.0.1:1/api/plugin", token: "t", sessao: "s" };
 
 /** Engine de mentira do `/agent-sent`: `acks` responde cada tentativa (status ou erro de rede). */
-function delivery(acks: (number | "erro")[]) {
+function delivery(acks: (number | "erro")[], clock = { now: async () => 1_000_000 }, onSend?: () => Promise<unknown>) {
   const sends: unknown[] = [];
   const posts: unknown[] = [];
   const logs: string[] = [];
   const $ = {
-    session: { send: async (a: unknown) => { sends.push(a); return { isDelivered: true }; } },
+    clock,
+    session: { send: async (a: unknown) => { sends.push(a); await onSend?.(); return { isDelivered: true }; } },
     http: { fetch: async (_url: string, init: { body: string }) => {
       posts.push(JSON.parse(init.body));
       const a = acks.shift() ?? 200;
@@ -131,11 +173,13 @@ function delivery(acks: (number | "erro")[]) {
   return { $, sends, posts, logs };
 }
 
-test("confirmação que falha uma vez é repetida, sem segunda entrega", async () => {
-  const d = delivery(["erro", 200]);
+test("confirmação repetida mantém o horário anterior ao envio", {}, async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 });
+  const d = delivery(["erro", 200], $.clock, () => clock.advance(30));
   await deliverAgentMessage(d.$, PONTE, { id: "m-1", to: "a1", text: "oi" });
   expect(d.sends).toEqual([{ to: { agentId: "a1" }, text: "oi" }]);
-  expect(d.posts).toEqual([1, 2].map(() => ({ sessao: "s", token: "t", id: "m-1", isDelivered: true })));
+  expect(d.posts).toHaveLength(2);
+  for (const post of d.posts) expect(post).toMatchObject({ sessao: "s", token: "t", id: "m-1", isDelivered: true, attemptedAt: 1_000_000 });
   expect(d.logs).toEqual([]);
 });
 

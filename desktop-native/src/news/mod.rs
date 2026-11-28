@@ -33,6 +33,7 @@ mod scheduled_tasks;
 mod hide_from_list;
 mod image_reveal;
 mod linked_children;
+mod kimi_permissions;
 mod rename_suggestion;
 mod search_conversations;
 mod server_status;
@@ -79,6 +80,7 @@ pub type NewsAnimation = fn(started: Instant, width: Pixels, window: &mut Window
 /// A animação pelo nome do arquivo da novidade (`animacao:`); nome desconhecido = cartão só com texto.
 pub fn animation(name: &str) -> Option<NewsAnimation> {
     match name {
+        "kimi-permissions" => Some(kimi_permissions::render),
         "historico-compositor" => Some(composer_history::render),
         "codex-atividade" => Some(codex_activity::render),
         "etiquetas-maquina-conta" => Some(account_tags::render),

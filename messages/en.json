@@ -12823,5 +12823,8 @@
   "integrations_tools_load_error": "Couldn't load tools ({reason}).",
   "integrations_validation_command_quotes": "Close every quote in the command before saving.",
   "integrations_validation_header_name": "Invalid header name: {name}.",
-  "integrations_validation_url_insecure": "Use HTTPS (or localhost) when sending tokens or headers."
+  "integrations_validation_url_insecure": "Use HTTPS (or localhost) when sending tokens or headers.",
+  "native_kimi_mode_manual": "Always Ask",
+  "native_kimi_mode_yolo": "Ask When Needed",
+  "native_kimi_mode_auto": "Never Ask"
 }

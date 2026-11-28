@@ -38,6 +38,8 @@ pub struct Entry {
     pub name: String,
     pub provider: AgentProvider,
     pub conversation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<String>,
     /// O modo de permissão que o Rust viu por último (o Claude troca de modo por teclas, sem regravar o spec).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
@@ -258,7 +260,7 @@ async fn confirm_fallen(home: PathBuf, program: std::ffi::OsString, key: String,
     // que voltou viva sai pelo `forget_live` do próximo tique.
     let name = entry.name.clone();
     if super::fallen::insert_unless_forgotten(&home, &name, started, super::fallen::Fallen { key, provider: entry.provider,
-        conversation: entry.conversation, permission_mode: entry.permission_mode, cwd, died_at: now(), cause: cause.clone() }) {
+        conversation: entry.conversation, permission_mode: entry.permission_mode, cwd, died_at: now(), cause: cause.clone(), orphan_pid: None, orphan_birth: None, orphan_descendants: Vec::new(), orphan_transcript: None }) {
         tracing::warn!(session = %name, %cause, %unit, "o systemd derrubou a sessão; ela fica na lista para reabrir");
     }
 }
@@ -325,7 +327,9 @@ async fn alive(st: &crate::routes::AppState, home: &Path, program: &std::ffi::Os
             (AgentProvider::Claude, Some(sid), Some(runtime)) => runtime.observed_claude_mode(sid),
             _ => None,
         };
-        out.insert(key, Entry { name: row.name.clone(), provider, conversation, permission_mode, missing_since: None, unit, turn_open, last_line });
+        let transcript = row.jsonl.clone().filter(|_| row.tracked
+            && hangar_api::session::runtime_key(row.lifecycle_id.as_deref()).is_none_or(|observed| observed == key));
+        out.insert(key, Entry { name: row.name.clone(), provider, conversation, transcript, permission_mode, missing_since: None, unit, turn_open, last_line });
     }
     Some(out)
 }
@@ -402,9 +406,80 @@ pub fn resolved_for(home: &Path, server_projects: &Path, key: &str, entry: &Entr
         resume: Some(conversation), restore: true })
 }
 
+pub(super) fn resolve_orphan(home: &Path, projects: &Path, key: &str, entry: &Entry) -> Result<super::Resolved, String> {
+    let mut resolved = resolved_for(home, projects, key, entry)?;
+    // A fotografia de antes da atualização não tem o caminho: no Claude ele sai do spec e da conversa, que o
+    // `resolved_for` já conferiu existir.
+    let derived = (resolved.spec.provider == AgentProvider::Claude).then(|| resolved.resume.as_deref()
+        .map(|conversation| super::claude::transcript(&resolved.spec, conversation, projects).to_string_lossy().into_owned())).flatten();
+    let transcript = entry.transcript.clone().filter(|path| Path::new(path).is_file())
+        .or(derived.filter(|path| Path::new(path).is_file())).ok_or("restore_transcript_missing")?;
+    let transcript = transcript.as_str();
+    match resolved.spec.provider {
+        // O modo da fotografia pode ser velho: vale o último que a própria conversa gravou.
+        AgentProvider::Claude => {
+            let found = last_claude_mode(Path::new(transcript)).unwrap_or_else(|error| {
+                tracing::warn!(code = "restore_mode_unreadable", kind = ?error.kind(), session = %entry.name, "o modo da conversa não foi lido");
+                None
+            });
+            let mode = found.as_deref().and_then(super::PermissionMode::claude).ok_or("restore_permission_unconfirmed")?;
+            resolved.spec.permission_mode = Some(mode);
+        }
+        AgentProvider::Codex => {
+            let path = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(home), &entry.name);
+            let meta = crate::runtime::codex_sidecar::read(&path).ok().flatten()
+                .filter(|meta| meta.get("key").and_then(serde_json::Value::as_str) == Some(key)
+                    && meta.get(crate::runtime::codex_sidecar::PERMISSION_UNKNOWN).is_none_or(serde_json::Value::is_null)
+                    && meta.get("thread_id").and_then(serde_json::Value::as_str) == resolved.resume.as_deref()
+                    && meta.get("rollout_path").and_then(serde_json::Value::as_str) == Some(transcript))
+                .ok_or("restore_permission_unconfirmed")?;
+            let stored = meta.get("permission_mode").and_then(serde_json::Value::as_str).ok_or("restore_permission_unconfirmed")?;
+            let (turn, _) = crate::runtime::codex_relaunch::rollout_mode(Path::new(transcript)).ok().flatten()
+                .ok_or("restore_permission_unconfirmed")?;
+            if crate::runtime::codex_launch::least(turn, stored) != Some("Ask for approval") {
+                return Err("restore_permission_unconfirmed".into());
+            }
+            resolved.spec.permission_mode = Some(super::PermissionMode::AskForApproval);
+        }
+        AgentProvider::Antigravity => return Err("restore_permission_unconfirmed".into()),
+        _ => {}
+    }
+    Ok(resolved)
+}
+
+/// O último `permission-mode` que o Claude Code gravou na conversa.
+/// Lido de trás para a frente em blocos: a conversa pode ter centenas de MB e o registro costuma estar no fim.
+fn last_claude_mode(transcript: &Path) -> std::io::Result<Option<String>> {
+    use std::io::{Read, Seek, SeekFrom};
+    const CHUNK: u64 = 256 * 1024;
+    let mut file = std::fs::File::open(transcript)?;
+    let mut end = file.metadata()?.len();
+    let mut tail: Vec<u8> = Vec::new();
+    while end > 0 {
+        let start = end.saturating_sub(CHUNK);
+        let mut chunk = vec![0; (end - start) as usize];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut chunk)?;
+        chunk.extend_from_slice(&tail);
+        // A primeira linha do bloco pode estar cortada: só é lida quando o bloco seguinte a completar.
+        let cut = if start == 0 { 0 } else { chunk.iter().position(|b| *b == b'\n').map_or(chunk.len(), |i| i + 1) };
+        let found = chunk[cut..].split(|b| *b == b'\n').rev().filter(|line| line.windows(17).any(|w| w == b"\"permission-mode\""))
+            .find_map(|line| {
+                let value: serde_json::Value = serde_json::from_slice(line).ok()?;
+                (value["type"] == "permission-mode").then(|| value["permissionMode"].as_str().map(str::to_owned)).flatten()
+            });
+        if found.is_some() { return Ok(found); }
+        tail = chunk[..cut].to_vec();
+        end = start;
+    }
+    Ok(None)
+}
+
 /// Reabre uma sessão pelo spec gravado, na conversa dela; devolve o código da falha.
-async fn reopen(host: &super::server::ServerHost, key: &str, entry: &Entry) -> Result<(), String> {
-    let mut resolved = resolved_for(super::open::OpenHost::home(host), &super::open::OpenHost::server_projects(host), key, entry)?;
+async fn reopen(host: &super::server::ServerHost, key: &str, entry: &Entry, orphan: Option<&super::fallen::Fallen>) -> Result<(), String> {
+    let (home, projects) = (super::open::OpenHost::home(host), super::open::OpenHost::server_projects(host));
+    let mut resolved = if orphan.is_some() { resolve_orphan(home, &projects, key, entry) }
+        else { resolved_for(home, &projects, key, entry) }?;
     let env = crate::accounts::environment::AccountEnvironment::from_map(super::open::OpenHost::env(host).clone());
     let runtime = tokio::runtime::Handle::current();
     let mut spec = resolved.spec;
@@ -412,7 +487,10 @@ async fn reopen(host: &super::server::ServerHost, key: &str, entry: &Entry) -> R
         spec.refresh_engine_window(&super::facts::LocalFacts::new(env, runtime));
         spec
     }).await.map_err(|_| "restore_spec_job".to_owned())?;
-    super::open::open_session(host, resolved, &OpenCaller::Owner).await.map(|_| ()).map_err(|e| e.code.unwrap_or("restore_open_failed").to_owned())
+    match orphan {
+        Some(fallen) => super::open::reopen_orphan(host, resolved, fallen).await,
+        None => super::open::open_session(host, resolved, &OpenCaller::Owner).await,
+    }.map(|_| ()).map_err(|e| e.code.unwrap_or("restore_open_failed").to_owned())
 }
 
 /// Até `wait`, o pane da sessão deixa o shell: o agente subiu. `None`: o multiplexador não respondeu.
@@ -675,9 +753,9 @@ fn agent_problem(st: &crate::routes::AppState, name: &str, shown: bool) {
 }
 
 /// O agente que demora fica para a reconferência; a continuação do turno cortado é de quem chama (`continue_later`).
-pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry)
-                                -> Result<(), String> {
-    let mut result = reopen(host, key, entry).await;
+pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry,
+                                orphan: Option<&super::fallen::Fallen>) -> Result<(), String> {
+    let mut result = reopen(host, key, entry, orphan).await;
     // Restaurada é o agente de pé: o `new-session` volta antes de o shell soltar o comando.
     if result.is_ok() && entry.provider != AgentProvider::Codex {
         match agent_up(program, &entry.name, AGENT_WAIT).await {
@@ -723,6 +801,7 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
         let (current, count) = mux_now(&program).await;
         let live = st.list.discover(None).await.ok().map(|rows| rows.iter().map(|r| r.name.clone()).collect::<HashSet<String>>());
         if let Some(names) = &live { super::fallen::forget_live(&home, names); }
+        super::orphans::scan(&home, &snap).await;
         if cfg!(windows) && windows.is_none() { windows = windows_startup(current, &snap); }
         let discovered=live.is_some();
         let same = if cfg!(windows) { windows == Some(false) } else { matches!(current, MuxStart::Started(at) if snap.mux_started == Some(at)) };
@@ -781,7 +860,7 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
                     let host = super::server::ServerHost::new(st.clone()).await;
                     for (key, entry) in &pending {
                         let resume = reboot_resume(&host, &st, key, entry, reboot);
-                        let result = restore_one(&host, &st, &program, key, entry).await;
+                        let result = restore_one(&host, &st, &program, key, entry, None).await;
                         if result.is_ok() && let Some(boot) = resume { continue_later(&st, &entry.name, boot); }
                         if result.as_ref().err().is_some_and(|code| code == AGENT_MISSING || code == MUX_SILENT) { waiting.push((entry.clone(), 0, resume)); }
                         results.push((key.clone(), result));
@@ -864,8 +943,8 @@ mod tests {
     use super::*;
 
     fn entry(name: &str, conversation: Option<&str>) -> Entry {
-        Entry { name: name.into(), provider: AgentProvider::Claude, conversation: conversation.map(str::to_owned), permission_mode: None, missing_since: None, unit: None,
-            turn_open: false, last_line: None }
+        Entry { name: name.into(), provider: AgentProvider::Claude, conversation: conversation.map(str::to_owned), transcript: None, permission_mode: None,
+            missing_since: None, unit: None, turn_open: false, last_line: None }
     }
 
     fn recorded(home: &Path, key: &str, provider: AgentProvider, mode: super::super::PermissionMode) {

@@ -2212,17 +2212,13 @@ export function isFallenSession(s: { state?: string | null; problema?: string | 
 
 // Reabre a sessão caída pelo spec dela, na mesma conversa. `continue`: o "Reabrir e continuar", que manda o
 // turno cortado seguir; `continued: false` com `code` diz por que o continue não saiu (a sessão reabriu).
+// `lifecycleId`: a vida que a linha mostrava (órfão do psmux); outra vida é recusada.
 export async function reopenFallenSession(
   name: string,
   server?: Server | null,
-  opts?: { continue?: boolean },
+  opts?: { continue?: boolean; lifecycleId?: string | null },
 ): Promise<{ ok: boolean; continued?: boolean; code?: string }> {
-  const query = opts?.continue ? '?continue=1' : '';
-  return sessionFetch<{ ok: boolean; continued?: boolean; code?: string }>(
-    server,
-    `/api/sessions/${encodeURIComponent(name)}/reopen${query}`,
-    { method: 'POST' },
-  );
+  return actOnFallenSession(name, 'reopen', server, opts?.lifecycleId, opts?.continue);
 }
 
 const autoContinuePath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/auto-continue`;
@@ -2242,9 +2238,16 @@ export async function cancelSessionAutoContinue(name: string, server?: Server | 
   return reply?.cancelled === true;
 }
 
-// Tira a caída da lista; recusa (404) se o nome já voltou vivo, em vez de fechar a sessão reaberta.
-export async function dismissFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
-  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/dismiss`, { method: 'POST' });
+export async function dismissFallenSession(name: string, server?: Server | null, lifecycleId?: string | null): Promise<{ ok: boolean }> {
+  return actOnFallenSession(name, 'dismiss', server, lifecycleId);
+}
+
+function actOnFallenSession(name: string, action: 'reopen' | 'dismiss', server?: Server | null, lifecycleId?: string | null, continueTurn?: boolean) {
+  const params = new URLSearchParams();
+  if (lifecycleId) params.set('lifecycle_id', lifecycleId);
+  if (continueTurn) params.set('continue', '1');
+  const query = params.size ? `?${params}` : '';
+  return sessionFetch<{ ok: boolean; continued?: boolean; code?: string }>(server, `/api/sessions/${encodeURIComponent(name)}/${action}${query}`, { method: 'POST' });
 }
 
 // Relança uma sessão "sem id" com `claude --resume <uuid>` -> passa a rastreá-la, continuando a

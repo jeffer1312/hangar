@@ -7,6 +7,12 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+mod windows;
+
+#[cfg(windows)]
+pub use windows::{process_birth, process_tree, scan_orphans, stop_processes};
+
 /// Versão do psmux desde a qual `list-panes -a` e a autenticação foram lidos no código. Mais nova também
 /// é tentada: a lista só usa o caminho direto depois de a resposta bater com a do CLI, e falha volta ao CLI.
 /// É a versão do programa chamado; a dos servidores vivos não é verificada aqui.
@@ -173,5 +179,49 @@ pub fn command(dir: &Path, base: &str, args: &[String], deadline: Instant) -> Re
     }
 }
 
+/// Servidor de sessão vivo cuja ficha (`<nome>.port`) sumiu da pasta de dados: o `ls` não o vê, e ele segura o nome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Orphan { pub name: String, pub pid: u32 }
+
+/// O nome do servidor de sessão pela linha de comando (`tmux.exe server -s <nome> …`). O de reserva
+/// (`__warm__`) e o de outro socket (`-L`, os testes) não são sessões da pasta de dados padrão.
+fn session_server(args: &[String]) -> Option<&str> {
+    if !server_program(args.first()?) || args.get(1)? != "server" { return None; }
+    let mut name = None;
+    let mut rest = args[2..].iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-s" => name = Some(rest.next()?.as_str()),
+            "-L" => return None,
+            _ => {}
+        }
+    }
+    name.filter(|n| !n.is_empty() && *n != "__warm__" && !n.contains(['/', '\\', ':']))
+}
+
+fn server_program(arg: &str) -> bool {
+    let program = arg.rsplit(['/', '\\']).next().unwrap_or("").to_ascii_lowercase();
+    matches!(program.strip_suffix(".exe").unwrap_or(&program), "tmux" | "psmux" | "pmux")
+}
+
+pub fn pane_server_pid(tmux: &str) -> Option<u32> {
+    let socket = tmux.split(',').next()?;
+    let (_, tail) = socket.rsplit_once("psmux-")?;
+    tail.split(['/', '\\']).next()?.parse().ok()
+}
+
+#[cfg(any(windows, test))]
+fn orphans(dir: &Path, processes: impl IntoIterator<Item = (u32, Vec<String>)>) -> std::io::Result<Vec<Orphan>> {
+    let mut found = Vec::new();
+    for (pid, args) in processes {
+        if let Some(name) = session_server(&args) && !dir.join(format!("{name}.port")).try_exists()? {
+            found.push(Orphan { name: name.to_owned(), pid });
+        }
+    }
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod orphan_tests;

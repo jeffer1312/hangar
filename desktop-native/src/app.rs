@@ -23,6 +23,7 @@ pub(crate) mod chrome;
 mod computer;
 mod whatsapp;
 mod controls;
+pub(crate) use controls::control_option;
 mod plan_review;
 mod create;
 mod device;
@@ -8470,11 +8471,11 @@ impl Hangar {
                 let target = sidebar::Target::new(&self.open_server(), &selected.name);
                 let busy = self.sidebar.reopening.contains(&target);
                 let buttons: Vec<Button> = sidebar::reopen_choices(selected).iter().map(|choice| {
-                    let (target, continue_turn) = (target.clone(), choice.continues());
+                    let (target, continue_turn, life) = (target.clone(), choice.continues(), selected.lifecycle_id.clone());
                     let label = if busy { format!("{}…", choice.label()) } else { choice.label() };
                     Button::new(if continue_turn { "fallen-reopen-continue" } else { "fallen-reopen" }).small().when(continue_turn, |b| b.outline())
                         .label(label).disabled(busy)
-                        .on_click(cx.listener(move |this, _, _, cx| this.reopen_with(target.clone(), continue_turn, cx)))
+                        .on_click(cx.listener(move |this, _, _, cx| this.reopen_with(target.clone(), continue_turn, life.clone(), cx)))
                 }).collect();
                 content = content.child(div().flex_1().p_6().flex().flex_col().items_start().gap_3().text_sm().text_color(theme::warning())
                     .child(selected.problema.as_deref().and_then(problem_text).unwrap_or_default())
@@ -9627,7 +9628,7 @@ impl Render for Hangar {
             .capture_action(cx.listener(|this, _: &gpui_kit::base::input::OutdentInline, window, cx| {
                 if this.connection_dialog || !this.composer.read(cx).focus_handle(cx).is_focused(window) { return; }
                 match this.provider().0 {
-                    "claude" | "antigravity" => this.cycle_permission(cx),
+                    "claude" | "antigravity" | "kimi" => this.cycle_permission(cx),
                     "codex" => this.toggle_codex_mode(cx),
                     _ => return,
                 }

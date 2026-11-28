@@ -11,6 +11,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `set -g <qualquer coisa>` volta do `show -g`. Endereço é `=<sessão>:<janela>.<pane>`.
 - **No psmux a sessão de quem chama sai do pid no `TMUX` (`/tmp/psmux-<pid>/…`)**, casado com
   `list-sessions '#{pid}'`: o pane é sempre `%1` e o terceiro campo do `TMUX` é sempre `0`.
+- **Servidor do psmux sem a ficha só vira sessão caída acionável com vínculo comprovado.** O nome
+  sozinho não liga o processo ao Hangar. Reabrir e Dispensar exigem a mesma vida da linha, conferem
+  o vínculo e só prosseguem após comprovar a saída dos processos identificados. Reabrir prepara a
+  abertura da mesma conversa com permissões comprovadas antes de encerrar a anterior.
 - **Fora do Linux o Rust lê processos pelo `sysinfo` (`list/procs.rs`), e ambiente vazio é
   ilegível, não ausência**: é o que ele devolve para processo de outro dono, e a exclusão de conta
   precisa separar os dois. Nascimento vem em segundos inteiros e não há fd aberto (o transcript não
