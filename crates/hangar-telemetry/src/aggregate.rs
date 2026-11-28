@@ -400,7 +400,12 @@ impl Telemetry {
         }
         let mut next = settings.state.clone();
         next.refusal_reported = true;
-        if let Err(e) = state::store(&self.home, &next) { return Ok((applied.or(Some(e)), None)); }
+        if let Err(e) = state::store(&self.home, &next) {
+            // Só uma falha volta a quem chamou; a outra vai ao diário pelas notas.
+            if applied.is_none() { return Ok((Some(e), None)); }
+            self.note(Failure::Disk(e));
+            return Ok((applied, None));
+        }
         settings.state = next;
         let kind = if accepted { RefusalKind::Revoked } else { RefusalKind::Declined };
         Ok((applied, Some(Refusal::new(kind, &self.batch_env))))

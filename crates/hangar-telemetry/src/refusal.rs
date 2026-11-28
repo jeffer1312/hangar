@@ -10,16 +10,24 @@ const WAITS: [u64; 4] = [0, 60, 300, 1800];
 
 impl Telemetry {
     /// `POST` ao `/v1/declined` do mesmo receptor do pacote.
-    pub fn http_refusal_post(&self) -> reqwest::Result<Post> {
-        let batch = self.batch_url();
-        let url = reqwest::Url::parse(&batch).and_then(|url| url.join("declined")).map_or(batch, String::from);
-        self.post_to(url)
-    }
+    pub fn http_refusal_post(&self) -> reqwest::Result<Post> { self.post_to(refusal_url(&self.batch_url())) }
 
     /// Liga quem leva o aviso de recusa; só o primeiro vale.
     pub fn set_refusal_post(&self, post: Post) { let _ = self.refusal_post.set(post); }
 
     pub fn refusal_post(&self) -> Option<Post> { self.refusal_post.get().cloned() }
+}
+
+/// O último segmento `batch` vira `declined`; endereço sem esse segmento (a base do receptor) ganha `/v1/declined`.
+fn refusal_url(batch: &str) -> String {
+    let Ok(mut url) = reqwest::Url::parse(batch) else { return batch.to_owned() };
+    let path = url.path().trim_end_matches('/').to_owned();
+    let path = match path.strip_suffix("/batch") {
+        Some(prefix) => format!("{prefix}/declined"),
+        None => format!("{path}/v1/declined"),
+    };
+    url.set_path(&path);
+    url.into()
 }
 
 /// Manda o aviso até um 2xx; 400 desiste na hora. `Err` com o status da última tentativa, `None` sem resposta.
@@ -118,7 +126,16 @@ mod tests {
     fn telemetry_refusal_url_is_beside_the_batch_url() {
         let fx = Fixture::new();
         let telemetry = fx.start_with(Arc::new(|k: &str| (k == "HANGAR_TELEMETRY_URL").then(|| "http://127.0.0.1:9/v1/batch".to_owned())));
-        assert_eq!(reqwest::Url::parse(&telemetry.batch_url()).unwrap().join("declined").unwrap().as_str(), "http://127.0.0.1:9/v1/declined");
+        assert_eq!(refusal_url(&telemetry.batch_url()), "http://127.0.0.1:9/v1/declined");
         assert!(telemetry.http_refusal_post().is_ok());
+        for (batch, declined) in [
+            ("https://telemetry.hangar.dev.br/v1/batch", "https://telemetry.hangar.dev.br/v1/declined"),
+            ("https://telemetry.hangar.dev.br/v1/batch/", "https://telemetry.hangar.dev.br/v1/declined"),
+            ("https://telemetry.hangar.dev.br", "https://telemetry.hangar.dev.br/v1/declined"),
+            ("https://telemetry.hangar.dev.br/", "https://telemetry.hangar.dev.br/v1/declined"),
+            ("http://127.0.0.1:9/proxy/v1/batch?x=1", "http://127.0.0.1:9/proxy/v1/declined?x=1"),
+        ] {
+            assert_eq!(refusal_url(batch), declined, "{batch}");
+        }
     }
 }

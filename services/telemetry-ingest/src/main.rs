@@ -87,6 +87,9 @@ async fn retention(pool: PgPool) {
             Ok(removed) => eprintln!("telemetry-ingest: retention removed {removed} batches"),
             Err(error) => eprintln!("telemetry-ingest: retention: {error}"),
         }
+        if let Err(error) = store::prune_refusals(&pool).await {
+            eprintln!("telemetry-ingest: retention (refusals): {error}");
+        }
         if let Err(error) = accounts::prune(&pool).await {
             eprintln!("telemetry-ingest: retention (panel): {error}");
         }
@@ -527,6 +530,12 @@ mod tests {
         assert_eq!(left, vec![recent]);
         let orphans: i64 = sqlx::query_scalar("SELECT count(*) FROM counters WHERE batch_id = $1").bind(&old).fetch_one(&pool).await.unwrap();
         assert_eq!(orphans, 0);
+        let version = format!("t-{}", fresh_id());
+        sqlx::query("INSERT INTO refusals (day, kind, version, os, channel) VALUES ('2000-01-01', 'declined', $1, 'linux', 'latest'), ($2::date, 'declined', $1, 'linux', 'latest')")
+            .bind(&version).bind(&yesterday).execute(&pool).await.unwrap();
+        store::prune_refusals(&pool).await.unwrap();
+        let days: Vec<String> = sqlx::query_scalar("SELECT to_char(day, 'YYYY-MM-DD') FROM refusals WHERE version = $1").bind(&version).fetch_all(&pool).await.unwrap();
+        assert_eq!(days, vec![yesterday]);
     }
 
     /// Entra com uma conta nova e devolve o cookie da sessão.

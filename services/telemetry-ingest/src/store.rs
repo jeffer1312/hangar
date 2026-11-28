@@ -435,8 +435,13 @@ pub async fn trail(pool: &PgPool, machine: &str, day: &str) -> Result<serde_json
     Ok(serde_json::json!({"machine": machine, "day": day, "partial": partial, "steps": steps.0}))
 }
 
+/// À parte da limpeza dos pacotes: falha aqui não segura a outra.
+pub async fn prune_refusals(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM refusals WHERE day < (now() AT TIME ZONE 'utc')::date - $1").bind(RETENTION_DAYS).execute(pool).await?;
+    Ok(result.rows_affected())
+}
+
 pub async fn prune(pool: &PgPool) -> Result<u64, sqlx::Error> {
-    sqlx::query("DELETE FROM refusals WHERE day < (now() AT TIME ZONE 'utc')::date - $1").bind(RETENTION_DAYS).execute(pool).await?;
     let result = sqlx::query("DELETE FROM batches WHERE day < (now() AT TIME ZONE 'utc')::date - $1")
         .bind(RETENTION_DAYS)
         .execute(pool)

@@ -6175,7 +6175,11 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   envio: no máximo um aviso por máquina, mesmo que todas as tentativas falhem (o código vai ao diário).
   Sem identificador, o receptor guarda só a soma por dia e combinação (`refusals`), e o painel compara
   com as máquinas que mandaram pacote no período. Limite aceito: a recusa conta no dia em que chega, e
-  as máquinas que enviam contam pelo período, então a proporção do painel é aproximada.
+  as máquinas que enviam contam pelo período, então a proporção do painel é aproximada. A máquina que
+  desligou depois de aceitar pode ter mandado pacote no mesmo período: o painel mostra esse número à
+  parte, fora da barra. Outro limite aceito, raro: um binário antigo (volta de atualização) regrava o
+  `telemetry.json` sem `refusal_reported`, e o aviso pode sair de novo nessa máquina se ela recusar de
+  novo depois de voltar à versão nova. Não vale mudar o formato do arquivo por isso.
 
 ## Servidor tmux antigo vivo não ganha outro por cima (27/11/2026)
 
