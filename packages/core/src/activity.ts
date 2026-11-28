@@ -210,6 +210,8 @@ export function createActivityFolder(): ActivityFolder {
   // resultado vem sem erro (recado recusado não reabre nada).
   let retomada = new Map<string, string>();
   let codexCalls = new Set<string>();
+  // Só o resultado de uma chamada Agent é lançamento: o de um script do Code Mode pode citar o texto dele.
+  let agentCalls = new Set<string>();
   // agentId parado esperando o próprio trabalho de fundo; sai no fim ou quando é retomado.
   let waiting = new Set<string>();
   // Marca um agente background como terminado pelo agentId, com o launch vindo ANTES ou DEPOIS do fim.
@@ -270,8 +272,8 @@ export function createActivityFolder(): ActivityFolder {
         return;
       }
       // O campo estruturado vence o texto, que muda entre versoes do Claude Code.
-      const textLaunch = /Async agent launched/i.test(r);
-      const launchedId = e.bg_agent_id ?? (textLaunch ? r.match(/agentId:\s*([A-Za-z0-9_-]+)/)?.[1] : undefined);
+      const textLaunch = agentCalls.has(e.tool_use_id) && /Async agent launched/i.test(r);
+      const launchedId = agentCalls.has(e.tool_use_id) ? e.bg_agent_id ?? (textLaunch ? r.match(/agentId:\s*([A-Za-z0-9_-]+)/)?.[1] : undefined) : undefined;
       if (textLaunch || launchedId) {
         if (launchedId) {
           bgAgent.set(launchedId, e.tool_use_id);
@@ -432,6 +434,7 @@ export function createActivityFolder(): ActivityFolder {
       case 'AgentSwarm': {
         if (e.tool_use_id) {
           semResultado.add(e.tool_use_id);
+          agentCalls.add(e.tool_use_id);
           const itens = Array.isArray(input.items) ? input.items.length : 0;
           const desc = String(input.description ?? input.subagent_type ?? m.atividade_agente());
           agents.push({
@@ -473,6 +476,7 @@ export function createActivityFolder(): ActivityFolder {
     acordado = new Map();
     retomada = new Map();
     codexCalls = new Set();
+    agentCalls = new Set();
     waiting = new Set();
     shells = [];
     bgPendente = new Set();
