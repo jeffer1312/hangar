@@ -20,7 +20,7 @@ vi.mock('../../ui/haptics', () => ({ haptic: { selection: vi.fn(), success: vi.f
 vi.mock('@hangar/core', async (original) => ({ ...(await original<typeof import('@hangar/core')>()), tourProgressFor, registrarDiag: vi.fn() }));
 
 import { MOBILE_TOUR_DONE, MOBILE_TOUR_SKIPPED } from '@hangar/core';
-import { planTour, replayTour, syncTour, tourAction, tourChoice, useTour } from './store';
+import { dropStalledStep, planTour, replayTour, syncTour, tourAction, tourChoice, useTour } from './store';
 
 const casa = { id: 'casa', label: 'Casa', baseUrl: 'https://casa.test', token: 't' };
 
@@ -124,6 +124,19 @@ describe('volta do tour', () => {
     planTour(2, 'newConversation');
     expect(useTour.getState().run?.steps.map((s) => s.id)).toEqual(['attach', 'dictation', 'model']);
     expect(useTour.getState().tips.map((t) => t.id)).toEqual(['tour-menu', 'tour-search', 'media']);
+  });
+
+  it('passo sem peça vira dica e o tour segue; o último encerra a volta', () => {
+    tourProgressFor.mockResolvedValue({});
+    planTour(2);
+    dropStalledStep();
+    expect(useTour.getState().run?.steps[useTour.getState().run!.index!].id).toBe('search');
+    expect(useTour.getState().tips.map((t) => t.id)).toEqual(['tour-menu', 'media']);
+    for (let i = 0; i < 4; i++) dropStalledStep();
+    expect(useTour.getState().run?.index).toBeNull();
+    expect(useTour.getState().progress.tips).toContain(MOBILE_TOUR_SKIPPED);
+    dropStalledStep();
+    expect(useTour.getState().tips.filter((t) => t.id === 'tour-menu')).toHaveLength(1);
   });
 
   it('tour já visto no celular deixa só as dicas', () => {

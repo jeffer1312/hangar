@@ -1,3 +1,4 @@
+import { useContext } from 'react';
 import { Text, View } from 'react-native';
 import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
@@ -8,6 +9,7 @@ import { TourBalloon, tourText } from '../tour/TourBalloon';
 import { superficie } from '../../theme/superficie';
 import { useScriptStep } from './scriptStep';
 import * as m from '../../paraglide/messages';
+import { WorkingMarkPaused } from '../../ui/WorkingMark';
 
 // Roteiro do `tour-no-celular`: o balão aponta o + do compositor e depois a pílula do modelo, como na conversa.
 const MODEL_AT = 2.6;
@@ -20,7 +22,10 @@ const none = async () => {};
 
 export function TourAnimation({ width }: { width: number }) {
   const reduced = useReducedMotion();
-  const t = useScriptStep(STEPS, CYCLE, MODEL_AT, reduced);
+  // Fora da tela (folha fechada, conversa por cima) o roteiro para no quadro que explica, como as outras miniaturas.
+  const paused = useContext(WorkingMarkPaused);
+  const still = reduced || paused;
+  const t = useScriptStep(STEPS, CYCLE, MODEL_AT, still);
   const model = t >= MODEL_AT;
   const step = model ? 'model' : 'attach';
   const { title, body } = tourText(step);
@@ -28,7 +33,7 @@ export function TourAnimation({ width }: { width: number }) {
   return <View style={[styles.stage, { width, height: HEIGHT * scale }]} pointerEvents="none"
     accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
     <View style={[styles.surface, { width: WIDTH, height: HEIGHT, transform: [{ scale }] }]}>
-      <Animated.View key={step} entering={reduced ? undefined : FadeIn.duration(200)} style={styles.balloon}>
+      <Animated.View key={step} entering={still ? undefined : FadeIn.duration(200)} style={styles.balloon}>
         <TourBalloon tag={m.native_tour_progress({ n: model ? 5 : 3, total: 5 })} title={title} body={body} waiting
           arrow="down" arrowX={model ? 214 : 18}
           actions={[{ label: model ? m.mobile_tour_done() : m.native_tour_skip(), primary: true, onPress: noop },

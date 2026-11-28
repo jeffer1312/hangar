@@ -8,7 +8,7 @@ import { useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
 import { useAparencia } from '../../stores/aparencia';
 import { useTabletLandscape } from '../tablet/layout';
-import { planTour, setTipsOff, syncTour, tipSeen, tourChoice, useTour } from './store';
+import { dropStalledStep, planTour, setTipsOff, syncTour, tipSeen, tourChoice, useTour } from './store';
 import { anchorNode, useAnchors } from './anchors';
 import { TourBalloon, tourText, type BalloonAction } from './TourBalloon';
 import * as m from '../../paraglide/messages';
@@ -19,25 +19,29 @@ const MARGIN = 16;
 const GAP = 12;
 const RING = 4;
 const MAX_WIDTH = 320;
-// Passo cuja peça sumiu por este tempo (outra tela, outro modo) deixa as dicas aparecerem enquanto espera.
+// Passo cuja peça não aparece por este tempo (outra tela, sessões ocultas, linha fora da rolagem) vira dica e o tour segue.
 const STALL_MS = 4000;
+// Com o balão aberto a peça é medida de novo neste intervalo: um pai que se move (aviso que some, animação) a leva junto.
+const REMEASURE_MS = 500;
 
 /** Planeja o tour e escolhe o balão da vez; o desenho só monta quando há balão com a peça na tela. */
 export function TourHost({ enabled }: { enabled: boolean }) {
   const serverKey = useServers((s) => `${s.ready && s.vaultReadable}|${s.servers.map((x) => `${x.id}:${x.baseUrl}`).join('|')}`);
   const listsReady = useSessions((s) => tourListsReady(s.byServer));
   const loadedKey = useSessions((s) => s.byServer.filter((b) => b.loaded).map((b) => b.server.id).join('|'));
-  const count = useSessions((s) => s.rows.filter((r) => r.state !== 'dead').length);
+  const allRows = useSessions((s) => s.rows.filter((r) => r.state !== 'dead').length);
+  const homeRows = useAnchors((s) => s.homeRows);
   const tablet = useTabletLandscape();
   const homeScreen = useAparencia((s) => s.homeScreen);
   const home = tablet ? 'newConversation' : homeScreen;
+  // A lista da tela inicial diz quantas linhas desenha; sem ela montada, vale a contagem da lista inteira.
+  const count = home === 'sessions' && homeRows !== null ? homeRows : allRows;
   const synced = useTour((s) => s.synced);
   const planned = useTour((s) => s.planned);
   const run = useTour((s) => s.run);
   const tips = useTour((s) => s.tips);
   const onScreen = useAnchors((s) => s.onScreen);
   const progress = useTour((s) => s.progress);
-  const [stalled, setStalled] = useState(false);
 
   useEffect(() => { if (enabled) void syncTour(); }, [enabled, serverKey]);
   // Sem resposta ainda: tenta de novo quando uma lista chega ou o app volta à frente.
@@ -60,13 +64,12 @@ export function TourHost({ enabled }: { enabled: boolean }) {
   const pending = run ? runStep(run) : null;
   const waiting = !!pending && !onScreen.includes(pending.anchor);
   useEffect(() => {
-    setStalled(false);
-    if (!waiting) return;
-    const timer = setTimeout(() => setStalled(true), STALL_MS);
+    if (!enabled || !waiting) return;
+    const timer = setTimeout(dropStalledStep, STALL_MS);
     return () => clearTimeout(timer);
-  }, [waiting, pending?.id]);
+  }, [enabled, waiting, pending?.id]);
 
-  const target = useMemo(() => tourTarget(run, tips, new Set(onScreen), progress, stalled), [run, tips, onScreen, progress, stalled]);
+  const target = useMemo(() => tourTarget(run, tips, new Set(onScreen), progress, false), [run, tips, onScreen, progress]);
 
   if (!enabled || !target) return null;
   return <TourLayer key={`${target.kind}:${target.step.id}`} target={target} />;
@@ -87,11 +90,16 @@ function TourLayer({ target }: { target: TourTarget }) {
   useEffect(() => {
     const node = anchorNode(anchor);
     if (!node) { setRect(null); return; }
-    const measure = () => node.measureInWindow((x, y, width, h) => setRect(width > 0 && h > 0 ? { x, y, width, height: h } : null));
+    const measure = () => node.measureInWindow((x, y, width, h) => setRect((prev) => {
+      if (!(width > 0 && h > 0)) return null;
+      // Mesma posição não redesenha: a medida periódica só pinta quando algo andou.
+      return prev && prev.x === x && prev.y === y && prev.width === width && prev.height === h ? prev : { x, y, width, height: h };
+    }));
     measure();
     // A peça sobe e desce com o teclado.
     const subs = [Keyboard.addListener('keyboardDidShow', measure), Keyboard.addListener('keyboardDidHide', measure)];
-    return () => subs.forEach((s) => s.remove());
+    const timer = setInterval(measure, REMEASURE_MS);
+    return () => { clearInterval(timer); subs.forEach((s) => s.remove()); };
   }, [anchor, moved, W, H]);
 
   const { title, body } = tourText(target.step.id);

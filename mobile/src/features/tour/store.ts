@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import {
-  mergeTourProgress, mobileTourOutcome, planMobileTour, registrarDiag, runAction, runChoice, sameTourProgress, seenTip, seenTour,
+  mergeTourProgress, mobileTourOutcome, planMobileTour, registrarDiag, runAction, runChoice, runDropStep, sameTourProgress, seenTip, seenTour,
   startTourRun, tipsSwitch, tourProgressFor, type Server, type TourChoice, type TourHomeMode, type TourProgress, type TourRun, type TourStep,
 } from '@hangar/core';
 import { prefs } from '../../stores/prefs';
@@ -128,6 +128,15 @@ export function tourAction(stepId: string) {
   const before = run.index;
   const next = runAction(run, stepId);
   if (next.run.index !== before) haptic.selection();
+  settle(next);
+}
+
+/** O passo da vez ficou sem a peça na tela tempo demais: vira dica que espera a peça, e o tour segue. */
+export function dropStalledStep() {
+  const { run, tips } = useTour.getState();
+  if (!run) return;
+  const { tip, ...next } = runDropStep(run);
+  if (tip && !tips.some((t) => t.id === tip.id)) useTour.setState({ tips: [tip, ...tips] });
   settle(next);
 }
 

@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useContext, useEffect } from 'react';
 import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { cancelAnimation, useAnimatedStyle, useReducedMotion, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as m from '../../paraglide/messages';
+import { WorkingMarkPaused } from '../../ui/WorkingMark';
 
 export type BalloonAction = { label: string; primary?: boolean; onPress: () => void };
 
@@ -23,12 +24,15 @@ export function tourText(id: string): { title: string; body: string } {
 function WaitingDot() {
   const { theme } = useUnistyles();
   const reduced = useReducedMotion();
+  // Tela coberta (miniatura numa folha fechada, conversa por baixo) para a pulsação, como as outras animações.
+  const paused = useContext(WorkingMarkPaused);
+  const still = reduced || paused;
   const opacity = useSharedValue(1);
   useEffect(() => {
-    if (reduced) return;
+    if (still) { cancelAnimation(opacity); opacity.value = 1; return; }
     opacity.value = withRepeat(withTiming(0.25, { duration: 600 }), -1, true);
     return () => cancelAnimation(opacity);
-  }, [reduced, opacity]);
+  }, [still, opacity]);
   const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
   return <Animated.View style={[styles.dot, { backgroundColor: theme.tokens.accent.base }, style]} />;
 }

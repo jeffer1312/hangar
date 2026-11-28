@@ -4,8 +4,15 @@ import { create } from 'zustand';
 // Leve de propósito: as telas registram peças e ações daqui sem carregar o estado do tour (preferências, servidores).
 const nodes = new Map<string, View>();
 
-/** Quais peças estão na tela e um contador que muda quando alguma se move: o balão mede de novo. */
-export const useAnchors = create<{ onScreen: string[]; moved: number }>(() => ({ onScreen: [], moved: 0 }));
+/**
+ * Quais peças estão na tela, um contador que muda quando alguma se move (o balão mede de novo) e quantas
+ * linhas a lista da tela inicial desenha de fato (ocultas, grupos recolhidos e o que a busca tira não contam).
+ */
+export const useAnchors = create<{ onScreen: string[]; moved: number; homeRows: number | null }>(() => ({ onScreen: [], moved: 0, homeRows: null }));
+
+export function setHomeRows(rows: number | null) {
+  if (useAnchors.getState().homeRows !== rows) useAnchors.setState({ homeRows: rows });
+}
 
 export function registerAnchor(id: string, view: View) {
   nodes.set(id, view);

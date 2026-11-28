@@ -55,7 +55,7 @@ import { RenameSheet } from './RenameSheet';
 import { WorktreeSheet } from '../worktrees/WorktreeSheet';
 import * as m from '../../paraglide/messages';
 import { TourAnchor, useTourAnchor } from '../tour/TourAnchor';
-import { anchorsScrolled, reportTourAction } from '../tour/anchors';
+import { anchorsScrolled, reportTourAction, setHomeRows } from '../tour/anchors';
 import { superficie } from '../../theme/superficie';
 
 // Erro LANÇADO pelo apiFetch — já vem com mensagem pronta. O `formataErro` é pro envelope do
@@ -403,6 +403,14 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   const hiddenOpen = useHiddenSectionOpen();
   const sections = useMemo(() => buildSessionSections(rows, hiddenOpen ? 'expanded' : 'collapsed', modo, busca, recolhidos, undefined, pairGroups),
     [rows, hiddenOpen, busca, modo, recolhidos, pairGroups]);
+  // O tour conta as linhas que esta lista desenha: sessão oculta ou dentro de grupo recolhido não tem peça para o balão.
+  const drawnRows = useMemo(() => sections.reduce((n, section) =>
+    n + section.data.filter((item) => !section.heads.get(pickKey(item.serverId, item.name))?.collapsed).length, 0), [sections]);
+  useEffect(() => {
+    if (!home) return;
+    setHomeRows(drawnRows);
+    return () => setHomeRows(null);
+  }, [home, drawnRows]);
   const variosServidores = servers.length > 1;
 
   // Sessão que entra ou sai do topo desliza para o lugar novo em vez de pular. A chave ignora a
