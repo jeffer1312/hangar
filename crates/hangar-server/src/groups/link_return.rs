@@ -104,8 +104,7 @@ async fn run(st: Arc<AppState>, groups: Arc<GroupService>) {
             tokio::time::sleep(TICK).await;
             // Lista em erro: não dá para provar que a filha ficou parada o tempo todo.
             let Some(rows) = sub.rows() else { watcher.idle.clear(); continue };
-            let children: Vec<&SessionRow> = rows.iter()
-                .filter(|r| r.linked_by.as_deref().is_some_and(|p| !is_remote(p)) && returnable(&r.provider)).collect();
+            let children: Vec<&SessionRow> = rows.iter().filter(|r| r.linked_by.is_some() && returnable(&r.provider)).collect();
             if !children.is_empty() {
                 watcher.round(&st, &groups.server_id(), &children, &|| sub.rows()).await;
             }
@@ -456,10 +455,10 @@ async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at:
         Ok(_) | Err(Refusal::NoAnswer(_)) => {}
     }
     if !still_same(current().as_deref().map(Vec::as_slice), child, reply_at) { return Outcome::Moved; }
-    let Some(Reply { text, key, dropped }) = reply(child, found, || rate.allow(child, Instant::now())) else { return Outcome::Done };
+    let Some(Reply { text, key, dropped }) = reply(&signed(child, check), found, || rate.allow(child, Instant::now())) else { return Outcome::Done };
     if let Some((code, reason)) = dropped { report(st, child, code, reason, ""); }
     if dropped == Some(RATE_LIMITED) && !rate.notice_once(child, Instant::now()) { return Outcome::Done; }
-    let (status, answer) = crate::session_write::input::deliver_reply(st, check.parent, &text).await;
+    let (status, answer) = deliver(st, check.parent, &text).await;
     if !status.is_success() {
         let code = answer["detail"]["code"].as_str().unwrap_or("erro_envio_falhou_desconhecida");
         report(st, child, code, "entrega da resposta da filha ao pai falhou", &status.as_u16().to_string());
@@ -474,6 +473,26 @@ async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at:
         report(st, child, "link_returns_write_failed", "returned_at da filha não gravado", &io_kind(&e));
     }
     Outcome::Done
+}
+
+/// Como o pai chama a filha: com a máquina daqui quando ele é de outra (`[de: srv::filha]`).
+fn signed(child: &str, check: &Check) -> String {
+    if is_remote(check.parent) && !check.server.is_empty() { format!("{}::{child}", check.server) } else { child.to_owned() }
+}
+
+/// O pai de outra máquina recebe pela API de lá, como o recado `servidor::sessao`. Lá fora do ar é falha
+/// passageira: tenta de novo até a resposta passar de `MAX_AGE`.
+async fn deliver(st: &AppState, parent: &str, text: &str) -> (StatusCode, serde_json::Value) {
+    use crate::groups::peers::PeerError;
+    use serde_json::json;
+    let Some((server, name)) = parent.split_once("::") else { return crate::session_write::input::deliver_reply(st, parent, text).await };
+    let path = format!("/api/sessions/{}/input", super::exit::segment(name));
+    match st.peers.call(server, reqwest::Method::POST, &path, Some(&json!({"text": text}))).await {
+        Ok(answer) => (StatusCode::OK, answer.unwrap_or_default()),
+        Err(PeerError::Refused { status, detail }) => (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), json!({"detail": detail})),
+        Err(PeerError::Unknown) => (StatusCode::NOT_FOUND, json!({"detail": {"code": "link_return_parent_machine_unknown"}})),
+        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": {"code": "link_return_parent_unreachable"}})),
+    }
 }
 
 /// O que segue ao pai; `dropped` = a resposta não foi inteira, com o código e o motivo do diário.
@@ -528,6 +547,17 @@ mod tests {
     #[test]
     fn all_criteria_pass() {
         assert_eq!(decide(&check(), &turn(asked("[de: pai] faz isso"), false)).map(|(a, _)| a), Ok("feito"));
+    }
+
+    #[test]
+    fn a_parent_on_another_machine_asks_and_reads_the_child_with_this_machine() {
+        let remote = Check { parent: "casa::pai", server: "lab", ..check() };
+        assert!(passes(&remote, asked("[de: casa::pai] faz isso")));
+        assert!(!passes(&remote, asked("[de: pai] faz isso")), "o homônimo daqui não é o pai");
+        assert_eq!(signed("f", &remote), "lab::f");
+        assert_eq!(signed("f", &check()), "f", "o pai daqui lê o nome cru");
+        let Reply { text, .. } = reply(&signed("f", &remote), Ok(("feito", "k".into())), || true).unwrap();
+        assert_eq!(text, "[de: lab::f] feito");
     }
 
     #[test]

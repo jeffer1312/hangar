@@ -232,7 +232,6 @@ fn created(info: &Value, server: Option<&str>) -> Outcome {
 /// `new_session` com `servidor::nome`: abre lá, pela API de lá (`peers.json`), com as contas e os padrões de lá, como
 /// `hangar-send --new servidor::nome`. Vai só o que veio explícito: nada herda de quem chama noutra máquina.
 async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> Outcome {
-    if a.link { return Err("erro_link_remoto: a ligação só vale entre sessões desta máquina".into()); }
     if a.inherit == Some(true) { return Err("inherit não vale noutra máquina: lá nada herda de quem chama".into()); }
     a.inherit = None;
     let resume = a.resume.clone().filter(|s| !s.is_empty());
@@ -410,10 +409,10 @@ fn verb_refusal(verb: &str) -> Option<String> {
 }
 
 /// `interrupt`: a voz não abre filha ligada (nasce sem `creator`), e Esc na própria sessão mataria o turno de quem chama.
-fn interrupt_caller_refusal(me: &str, voice: bool, alvo: &str) -> Option<String> {
+/// `sid`: o id desta máquina, que no `alvo` também quer dizer esta.
+fn interrupt_caller_refusal(me: &str, voice: bool, alvo: &str, sid: &str) -> Option<String> {
     if voice { return Some("recusado: a voz não interrompe sessão; só quem abriu a filha com `link` interrompe".into()); }
-    if alvo.contains("::") { return Some("interrupt só alcança sessão desta máquina".into()); }
-    (alvo == me).then(|| format!("recusado: '{alvo}' é esta sessão"))
+    (alvo == me || (!sid.is_empty() && alvo == format!("{sid}::{me}"))).then(|| format!("recusado: '{alvo}' é esta sessão"))
 }
 
 /// O vínculo só vale com o pai ainda no grupo da filha: sair do grupo desfaz o poder de interromper.
@@ -741,7 +740,8 @@ impl Tools {
         if let Some((server, name)) = remote_target(&a.nome)? {
             if a.maquina.is_some() { return Err("use `servidor::nome` ou `maquina`, não os dois".into()); }
             a.nome = name;
-            return remote_session(&self.st.peers, &server, a).await;
+            // A filha ligada abre pelo servidor daqui, onde a criadora existe: ele a abre lá e faz a ligação.
+            if a.link { a.maquina = Some(server); } else { return remote_session(&self.st.peers, &server, a).await; }
         }
         if let Some(sid) = a.resume.as_deref().filter(|s| !s.is_empty()) { return self.resume_session(sid, a.clone_for_resume()).await; }
         let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| self.home().display().to_string());
@@ -784,7 +784,21 @@ impl Tools {
 
     async fn interrupt(&self, headers: &HeaderMap, alvo: &str) -> Outcome {
         let (me, voice) = self.caller(headers).await?;
-        if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo) { return Err(refusal); }
+        let sid = self.server_id.as_str();
+        if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo, sid) { return Err(refusal); }
+        let alvo = match remote_target(alvo)? {
+            Some((server, name)) if server != sid => {
+                if sid.is_empty() { return Err("CP_SERVER_ID ausente no backend/.env — obrigatório pra interromper filha noutra máquina".into()); }
+                // Lá é que o vínculo da filha é conferido.
+                let body = json!({"parent": format!("{sid}::{me}")});
+                let path = format!("/api/sessions/{}/linked-interrupt", segment(&name));
+                return self.st.peers.call(&server, reqwest::Method::POST, &path, Some(&body)).await
+                    .map(|answer| dict(answer.unwrap_or_else(|| json!({})))).map_err(|e| e.text(&server));
+            }
+            Some((_, name)) => name,
+            None => alvo.to_owned(),
+        };
+        let alvo = alvo.as_str();
         let home = self.home();
         if !identity::exists(&Local { home: &home, mux: &self.st.list.env().mux }, alvo).await {
             return Err(format!("sessão '{alvo}' não existe (tool `sessions`)"));
@@ -1484,10 +1498,12 @@ mod tests {
 
     #[test]
     fn voice_self_and_remote_are_refused_before_the_link() {
-        assert!(interrupt_caller_refusal("voz", true, "filha").is_some());
-        assert!(interrupt_caller_refusal("pai", false, "pai").is_some());
-        assert!(interrupt_caller_refusal("pai", false, "srv::filha").is_some());
-        assert_eq!(interrupt_caller_refusal("pai", false, "filha"), None);
+        assert!(interrupt_caller_refusal("voz", true, "filha", "casa").is_some());
+        assert!(interrupt_caller_refusal("pai", false, "pai", "casa").is_some());
+        assert!(interrupt_caller_refusal("pai", false, "casa::pai", "casa").is_some(), "o próprio com o id daqui");
+        // A filha de outra máquina segue para lá, que confere o vínculo.
+        assert_eq!(interrupt_caller_refusal("pai", false, "lab::filha", "casa"), None);
+        assert_eq!(interrupt_caller_refusal("pai", false, "filha", "casa"), None);
     }
 
     fn new_args(v: Value) -> NewSession { serde_json::from_value(v).unwrap() }
@@ -1611,10 +1627,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn link_and_inherit_are_refused_on_another_machine() {
+    async fn inherit_is_refused_on_another_machine() {
         let peers = PeerClient::new(crate::groups::peers::PeerBook::new(None));
-        let err = remote_session(&peers, "lab", new_args(json!({"nome": "filha", "cwd": "/tmp", "link": true}))).await.unwrap_err();
-        assert!(err.starts_with("erro_link_remoto:"), "{err}");
         let err = remote_session(&peers, "lab", new_args(json!({"nome": "filha", "cwd": "/tmp", "inherit": true}))).await.unwrap_err();
         assert!(err.contains("inherit"), "{err}");
     }

@@ -315,7 +315,7 @@ fn external_link_refuses_orq_and_own_machine_groups() {
 #[test]
 fn lone_orq_arbiter_refuses_an_external_pair() {
     let d = Disk::new();
-    let arbiter = Sidecar { peers: vec![], task: Some("t".into()), gid: "o1".into(), harness: none(), orq: true, fed: None, linked_by: None, lead: None };
+    let arbiter = Sidecar { peers: vec![], task: Some("t".into()), gid: "o1".into(), harness: none(), orq: true, fed: None, linked_by: None, lead: None, linked_children: vec![] };
     d.apply(&[("arb".to_owned(), arbiter.clone())], &[]);
     assert!(matches!(plan_external_link(&d.read(), "arb", "fulano::x", &none(), &outside, &gid("e1")), Err(JoinRefusal::Orq)));
     assert_eq!(d.read()("arb"), Some(arbiter));

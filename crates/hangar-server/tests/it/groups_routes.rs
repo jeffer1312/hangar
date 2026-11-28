@@ -207,9 +207,6 @@ async fn linked_pair_marks_the_child_records_linked_at_and_sends_no_protocol() {
     assert!(parent.get("linked_by").is_none());
     let returns = hangar_server::groups::link_state::read(&dir.path().join("hangar")).unwrap();
     assert!(returns["s1"].linked_at > 0.0 && returns["s1"].returned_at.is_none() && !returns.contains_key("s0"));
-    // Remoto não liga.
-    let (status, body) = call(srv.addr, "POST", "s2/pair", Some(&json!({"peer": "lab::x", "link": true})), OWNER).await;
-    assert_eq!((status, body["detail"]["code"].clone()), (400, json!("erro_link_remoto")));
 }
 
 #[tokio::test(flavor = "multi_thread")]

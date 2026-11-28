@@ -84,6 +84,9 @@ fn link_is_decided_before_opening() {
     assert!(SessionOpenRequest::parse(br#"{"name":"f","cwd":"/x","link":1}"#).is_err());
     let linked = parse(r#"{"name":"f","cwd":"/x","creator":"pai","link":true}"#);
     assert_eq!(linked.link_plan(&owner).unwrap(), LinkPlan::Join("pai".into()));
+    // A filha que abre noutra máquina continua ligada à criadora daqui.
+    let elsewhere = parse(r#"{"name":"f","cwd":"/x","creator":"pai","link":true,"machine":"lab"}"#);
+    assert_eq!(elsewhere.link_plan(&owner).unwrap(), LinkPlan::Join("pai".into()));
     let guest = resolve::OpenCaller::Guest { root: "/x".into() };
     let refused = linked.link_plan(&guest).unwrap_err();
     assert_eq!((refused.status, refused.code), (403, Some("erro_link_convidado")));

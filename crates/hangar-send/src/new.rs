@@ -173,7 +173,7 @@ fn parse_options(args: &[String], err: &mut dyn Write) -> Result<Options, u8> {
 pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let Some(requested) = args.first().filter(|name| !name.is_empty()) else { return fail(err, USAGE, 2) };
     // servidor::nome cria a sessão NOUTRA máquina, pela API dela (peers.json), igual ao recado.
-    let (remote, mut name) = match requested.split_once("::") {
+    let (mut remote, mut name) = match requested.split_once("::") {
         Some((server, rest)) => {
             if server.is_empty() || rest.is_empty() || rest.contains("::") {
                 return fail(err, "erro: use servidor::nome (um '::' só)", 2);
@@ -191,11 +191,12 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
         Ok(options) => options,
         Err(code) => return code,
     };
-    if !remote.is_empty() && options.link {
-        return fail(err, "erro: --link só vale nesta máquina (sem servidor::)", 2);
-    }
     if !remote.is_empty() && !options.machine.is_empty() {
         return fail(err, "erro: use servidor::nome ou --machine, não os dois", 2);
+    }
+    // A filha ligada abre pelo servidor daqui, onde a criadora existe: ele a abre lá e faz a ligação.
+    if options.link && !remote.is_empty() {
+        options.machine = std::mem::take(&mut remote);
     }
     let mut endpoint = cx.local();
     if !remote.is_empty() {

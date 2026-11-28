@@ -289,9 +289,9 @@ impl SessionOpenRequest {
     /// O vínculo pedido, decidido antes de abrir; `Err` recusa a abertura.
     pub fn link_plan(&self, caller: &OpenCaller) -> Result<LinkPlan, OpenError> {
         if !self.link { return Ok(LinkPlan::No); }
-        // O grupo é local: do outro lado, a criadora seria uma sessão homônima de lá.
+        // A ligação sai da máquina da criadora; a filha vai a outra por `machine`, nunca por `srv::` no nome.
         if [self.name.as_deref(), self.creator.as_deref()].into_iter().flatten().any(crate::groups::local::is_remote) {
-            return Err(OpenError::new(400, "erro_link_remoto", "a ligação só vale entre sessões desta máquina"));
+            return Err(OpenError::new(400, "erro_link_remoto", "a criadora é desta máquina; para a filha abrir noutra, use `machine`"));
         }
         // O convidado nunca entra no grupo de uma sessão do dono.
         if matches!(caller, OpenCaller::Guest { .. }) {

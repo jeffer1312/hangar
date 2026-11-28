@@ -25,6 +25,9 @@ pub struct Sidecar {
     /// A sessão que formou o grupo (`--pair`/`--link`): a principal da aba no app. Só vale enquanto
     /// for o próprio dono do sidecar ou estiver em `peers`.
     pub lead: Option<String>,
+    /// Filhas ligadas a esta sessão, vistas daqui, num grupo entre máquinas: a de outra máquina não está
+    /// nas linhas daqui, e o pai com ela não adormece. Só vale o que estiver em `peers`.
+    pub linked_children: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -61,6 +64,9 @@ pub struct GroupRecord {
     /// Pares de fora, só informativo: o par vale na máquina da ponta e nenhuma outra o grava.
     #[serde(default)]
     pub outside: Vec<OutsideRef>,
+    /// Filha ligada (`srv::nome`) → pai (`srv::nome`): a máquina da filha grava o `linked_by` dela daqui.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub links: BTreeMap<String, String>,
 }
 
 /// Membro de fora visto pela dona: `server` é a máquina onde o par foi feito.
@@ -89,7 +95,9 @@ impl Sidecar {
         let fed = data.get("fed").and_then(|f| serde_json::from_value::<Fed>(f.clone()).ok());
         let linked_by = data.get("linked_by").and_then(Value::as_str).filter(|p| !p.is_empty()).map(str::to_owned);
         let lead = data.get("lead").and_then(Value::as_str).filter(|p| !p.is_empty()).map(str::to_owned);
-        Some(Sidecar { peers, task, gid, harness, orq, fed, linked_by, lead })
+        let linked_children = data.get("linked_children").and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).filter(|c| !c.is_empty()).map(str::to_owned).collect()).unwrap_or_default();
+        Some(Sidecar { peers, task, gid, harness, orq, fed, linked_by, lead, linked_children })
     }
 
     /// Mesmo corpo que o `PairLink.set` grava (pair.py:96-108).
@@ -103,6 +111,7 @@ impl Sidecar {
         if let Some(fed) = &self.fed { body["fed"] = serde_json::to_value(fed).expect("Fed serializa"); }
         if let Some(parent) = &self.linked_by { body["linked_by"] = json!(parent); }
         if let Some(lead) = &self.lead { body["lead"] = json!(lead); }
+        if !self.linked_children.is_empty() { body["linked_children"] = json!(self.linked_children); }
         body
     }
 
@@ -112,6 +121,18 @@ impl Sidecar {
     /// O pai só vale enquanto estiver em `peers`: sair do grupo desfaz o vínculo sem apagar o campo.
     pub fn linked_parent(&self) -> Option<&str> {
         self.linked_by.as_deref().filter(|p| self.peers.iter().any(|m| m == p))
+    }
+
+    /// Tem filha ligada de outra máquina ainda no grupo.
+    pub fn has_remote_child(&self) -> bool {
+        self.linked_children.iter().any(|c| c.contains("::") && self.peers.contains(c))
+    }
+
+    /// Vínculos que só valem com a outra ponta em `peers`: quem saiu leva o seu junto.
+    pub fn drop_stale_links(&mut self) {
+        let peers = &self.peers;
+        self.linked_by = self.linked_by.take().filter(|p| peers.contains(p));
+        self.linked_children.retain(|c| peers.contains(c));
     }
 
     /// Quem formou o grupo, visto do sidecar de `me`; saiu do grupo = sem principal declarada.

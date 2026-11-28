@@ -156,6 +156,7 @@ fn overrides() -> BTreeMap<&'static str, Override> {
             .stdout("sessão criada: nova (/w) [jev: false] — fala com ela via: hangar-send nova \"msg\"\n")),
         ("new__providers-500", skip(lookup_gone, "o --new não consulta mais /api/providers")),
         ("new__providers-unreadable", skip(lookup_gone, "o --new não consulta mais /api/providers")),
+        ("new__link-remote", skip("filha ligada entre máquinas", "servidor:: com --link abre pelo servidor daqui (open_fields.rs)")),
         ("new__value-missing-at-end", why("D14.2").code(2).stderr("uso: --model <id>\n")),
         ("pair__no-peer", why("D14.2").code(2).stderr(PAIR_USAGE)),
         ("close__no-target", why("D14.2").code(2).stderr("uso: hangar-send --close <sessao|servidor::sessao>\n")),

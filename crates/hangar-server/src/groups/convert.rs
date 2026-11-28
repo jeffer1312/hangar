@@ -177,7 +177,7 @@ async fn convert(st: &Arc<AppState>, groups: &Arc<GroupService>, me: &str, l: Le
     let task = l.sidecar.task.clone().unwrap_or_default();
     let record = GroupRecord { protocol: PROTOCOL, gid: gid.clone(), owner: me.into(), version: 1, task: task.clone(),
         members: vec![Member { server: me.into(), name: l.name.clone(), provider: provider(&l.name) }, Member { server: server.into(), name: l.remote.clone(), provider: theirs }],
-        outside: Vec::new() };
+        outside: Vec::new(), links: Default::default() };
     let body = json!({"protocol": PROTOCOL, "owner": me, "version": 1, "task": task, "members": record.members, "outside": [], "joining": [],
         "convert_from_legacy": a});
     match st.peers.call_group(server, reqwest::Method::PUT, &format!("/api/groups/{}", segment(&gid)), Some(&body)).await {

@@ -83,6 +83,7 @@ async fn round(st: &Arc<AppState>) {
     let after = Duration::from_secs(u64::from(cfg.after_minutes) * 60);
     // O `sessao.adormecida` do diário sai do runtime, que sabe o tempo parado.
     for name in candidates(&rows, &cfg, now()) {
+        if holds_remote_child(st, &name).await { continue }
         let Some(row) = rows.iter().find(|r| r.name == name) else { continue };
         let result = if row.provider == "codex" { registry.sleep_codex(&name, after).await }
             else { registry.sleep_claude_terminal(&name, after).await };
@@ -90,6 +91,13 @@ async fn round(st: &Arc<AppState>) {
             st.diag.report("rust.session_sleep_failed", &name, "session_sleep_failed", "a sessão oculta não adormeceu");
         }
     }
+}
+
+/// A filha ligada de outra máquina não está nas linhas daqui: o pai dela não adormece. Grupo ilegível
+/// também segura: na dúvida, a sessão fica acordada.
+async fn holds_remote_child(st: &AppState, name: &str) -> bool {
+    let Some(groups) = &st.groups else { return false };
+    groups.link(name).await.map_or(true, |link| link.is_some_and(|s| s.has_remote_child()))
 }
 
 #[cfg(test)]

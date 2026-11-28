@@ -402,7 +402,8 @@ async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller
         };
         match decision {
             Decision::Opened(mut opened) => {
-                if let Some(error) = link_child(&st, link, &opened.body).await
+                let child = opened.body["name"].as_str().unwrap_or_default().to_owned();
+                if let Some(error) = link_child(&st, link, &child).await
                     && let Some(body) = opened.body.as_object_mut() { body.insert("link_error".into(), error); }
                 Decision::Opened(opened)
             }
@@ -411,15 +412,14 @@ async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller
     }).await.unwrap_or_else(|_| Decision::Refused(OpenError::new(500, "erro_criacao_sessao", "a abertura não terminou")))
 }
 
-/// Põe a sessão aberta no grupo da criadora pela rota de grupo. Falhar não fecha a sessão: devolve o
-/// `link_error` da resposta.
-async fn link_child(st: &Arc<AppState>, link: super::LinkPlan, opened: &Value) -> Option<Value> {
+/// Põe a sessão aberta (`child`, `srv::nome` quando abriu noutra máquina) no grupo da criadora pela rota
+/// de grupo. Falhar não fecha a sessão: devolve o `link_error` da resposta.
+async fn link_child(st: &Arc<AppState>, link: super::LinkPlan, child: &str) -> Option<Value> {
     let parent = match link {
         super::LinkPlan::No => return None,
         super::LinkPlan::Unlinked(code, detail) => return Some(json!({"code": code, "detail": detail})),
         super::LinkPlan::Join(parent) => parent,
     };
-    let child = opened["name"].as_str().unwrap_or_default();
     let code = match crate::groups::bridge::route(st.clone(), "POST", &parent, "pair", json!({"peer": child, "link": true})).await {
         Ok(reply) if reply["status"] == 200 => return None,
         Ok(reply) => {
@@ -548,15 +548,18 @@ pub(crate) async fn resolve_here(st: &Arc<AppState>, request: &SessionOpenReques
     }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou")))
 }
 
-/// A abertura que a escolha mandou a outra máquina: a resposta é a de lá, com `alvo` e `placement`.
-async fn forwarded(st: &AppState, server: &str, body: &Value, placement: Option<Value>, warnings: Vec<String>) -> Response {
+/// A abertura que a escolha mandou a outra máquina: a resposta é a de lá, com `alvo`, `placement` e, com
+/// `link`, a ligação feita daqui (a criadora é daqui; lá a filha nasce sem ela).
+async fn forwarded(st: &Arc<AppState>, server: &str, body: &Value, placement: Option<Value>, warnings: Vec<String>, link: super::LinkPlan) -> Response {
     use crate::groups::peers::PeerError;
     let opened = crate::placement::forward::open(&st.peers, server, body, true).await
         .and_then(|info| if info["name"].is_string() { Ok(info) } else { Err(PeerError::Transport(format!("{server}: resposta da abertura sem o nome"))) });
     match opened {
         Ok(mut info) => {
             let alvo = format!("{server}::{}", info["name"].as_str().unwrap_or_default());
+            let link_error = link_child(st, link, &alvo).await;
             if let Some(fields) = info.as_object_mut() {
+                if let Some(error) = link_error { fields.insert("link_error".into(), error); }
                 fields.insert("alvo".into(), json!(alvo));
                 if let Some(placement) = placement { fields.insert("placement".into(), placement); }
                 if !warnings.is_empty() {
@@ -604,6 +607,16 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let _progress = super::open::Progress::track(request.name.as_deref().unwrap_or(""));
     let caller = guest.as_ref().map_or(OpenCaller::Owner, |g| OpenCaller::Guest { root: g.root.clone() });
     use crate::placement::suggest::Step;
+    // Ligação recusada não chega a escolher máquina nem a clonar; a abertura aqui confere de novo.
+    let link = match request.link_plan(&caller) {
+        Ok(link) => link,
+        Err(error) => {
+            let mut response = reply(&error);
+            crate::routes::cors(&parts.headers, response.headers_mut());
+            access_diary("POST /api/sessions", &response, started, &diag);
+            return response;
+        }
+    };
     let placement = match crate::placement::suggest::step(&st, &request, &caller).await {
         Step::Here(placement) => placement,
         Step::Refused(error) => {
@@ -613,7 +626,7 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             return response;
         }
         Step::There { server, body, placement, warnings } => {
-            let mut response = forwarded(&st, &server, &body, placement, warnings).await;
+            let mut response = forwarded(&st, &server, &body, placement, warnings, link).await;
             crate::routes::cors(&parts.headers, response.headers_mut());
             access_diary("POST /api/sessions", &response, started, &diag);
             return response;

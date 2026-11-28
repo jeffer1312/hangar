@@ -264,8 +264,6 @@ fn kept_by_request(request: &SessionOpenRequest, caller: &OpenCaller) -> Option<
         || request.codex_account.is_some() || named(&request.omp_profile) {
         return Some("local_field");
     }
-    // A ligação ainda só vale entre sessões desta máquina.
-    if request.link { return Some("link") }
     None
 }
 
@@ -375,7 +373,6 @@ fn why_text(why: &str) -> &str {
         "guest" => "pedido de convidado",
         "prewarm" => "reserva pré-aquecida",
         "local_field" => "conta, motor ou perfil desta máquina",
-        "link" => "a ligação só vale nesta máquina",
         "orq" => "orquestração",
         "mode_off" => "balanceamento desligado",
         other => other,
@@ -393,14 +390,13 @@ mod tests {
         assert_eq!(kept_by_request(&plain, &owner), None);
         let guest = OpenCaller::Guest { root: "/g".into() };
         assert_eq!(kept_by_request(&plain, &guest), Some("guest"));
-        let cases: [(&str, fn(&mut SessionOpenRequest)); 7] = [
+        let cases: [(&str, fn(&mut SessionOpenRequest)); 6] = [
             ("prewarm", |r| r.prewarm = Some("p".into())),
             ("local_field", |r| r.config_dir = Some("/h/.claude-x".into())),
             ("local_field", |r| r.engine = Some("kimi".into())),
             ("local_field", |r| r.codex_account = Some("a1".into())),
             ("local_field", |r| r.omp_profile = Some("p1".into())),
             ("local_field", |r| r.engine_account = Some("e1".into())),
-            ("link", |r| r.link = true),
         ];
         for (why, change) in cases {
             let mut request = plain.clone();
@@ -408,7 +404,9 @@ mod tests {
             assert_eq!(kept_by_request(&request, &owner), Some(why), "{request:?}");
         }
         // Motor vazio é o mesmo que nenhum: a tela manda `engine: null`.
-        assert_eq!(kept_by_request(&SessionOpenRequest { engine: Some(String::new()), ..plain }, &owner), None);
+        assert_eq!(kept_by_request(&SessionOpenRequest { engine: Some(String::new()), ..plain.clone() }, &owner), None);
+        // A filha ligada vai a outra máquina: a ligação é feita pela federação dos grupos.
+        assert_eq!(kept_by_request(&SessionOpenRequest { link: true, creator: Some("pai".into()), ..plain }, &owner), None);
     }
 
     #[test]

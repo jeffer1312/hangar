@@ -102,8 +102,9 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  aparece na linha de subagentes, pode ser interrompida por esta e
                                  a resposta final da tarefa volta sozinha como [de: <filha>] (só
                                  filhas Claude, Codex e Antigravity; Pi/omp/Kimi não devolvem). A filha não
-                                 manda a resposta final por recado. Só nesta máquina (servidor::nome
-                                 recusa) e não combina com --resume. Com o backend em modo python,
+                                 manda a resposta final por recado. Com servidor::nome (ou --machine)
+                                 a filha abre lá pelo servidor daqui, que faz a ligação; a resposta
+                                 volta como [de: servidor::filha]. Não combina com --resume. Com o backend em modo python,
                                  volta 422. Sessão aberta sem a ligação = linha "erro:" e saída 1.
                                  Sem servidor:: nem --machine, o servidor escolhe a máquina
                                  (balanceamento) e a saída diz "máquina: <id> — <motivo>"; fale

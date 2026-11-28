@@ -59,11 +59,16 @@ fn open(tmp: &tempfile::TempDir, sender: Arc<Fake>, ladder: &[Duration]) -> Outb
 
 /// Espera o trabalhador de `dest` sair; teto generoso, só estoura se ele ficar vivo.
 async fn worker_gone(outbox: &Outbox, dest: &str) {
-    for _ in 0..500 {
-        if !outbox.workers().iter().any(|w| w == dest) { return; }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("o trabalhador de {dest} continuou vivo sem item");
+    let gone = tokio::time::timeout(DEADLINE, async {
+        while outbox.workers().iter().any(|w| w == dest) { tokio::task::yield_now().await; }
+    }).await;
+    assert!(gone.is_ok(), "o trabalhador de {dest} continuou vivo sem item");
+}
+
+/// Espera o dublê receber `n` envios, pelo aviso de cada chamada.
+async fn sent_at_least(fake: &Fake, n: usize) {
+    let reached = tokio::time::timeout(DEADLINE, async { while fake.sent().len() < n { fake.called.notified().await; } }).await;
+    assert!(reached.is_ok(), "o dublê recebeu {} envios, esperava {n}", fake.sent().len());
 }
 
 #[tokio::test]
@@ -201,7 +206,7 @@ async fn cancel_joining_drops_member_from_pending_push() {
 fn owner_restart_pushes_each_other_server_once() {
     let member = |server: &str, name: &str| Member { server: server.into(), name: name.into(), provider: String::new() };
     let record = |gid: &str, owner: &str| GroupRecord { protocol: 1, gid: gid.into(), owner: owner.into(), version: 4, task: String::new(),
-        members: vec![member("casa", "a"), member("lab", "b"), member("lab", "c"), member("vm", "d")], outside: vec![] };
+        members: vec![member("casa", "a"), member("lab", "b"), member("lab", "c"), member("vm", "d")], outside: vec![], links: Default::default() };
     let items = restart_pushes(&[record("g", "casa"), record("h", "lab")], "casa");
     let push = |server: &str| OutboxItem::Push { server: server.into(), gid: "g".into(), version: 4, joining: vec![], origin: "casa".into() };
     assert_eq!(items, [push("lab"), push("vm")], "só os grupos desta dona, uma vez por máquina");
@@ -339,13 +344,19 @@ async fn enqueue_does_not_block_wait_during_write() {
     let fifo = tmp.path().join("groups/outbox.json.tmp");
     assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
     let writer = { let o = outbox.clone(); tokio::task::spawn_blocking(move || o.enqueue(vec![push("vm", "g", 1, &[])])) };
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let reader = { let o = outbox.clone(); tokio::task::spawn_blocking(move || o.pending().len()) };
-    let probe = tokio::time::timeout(Duration::from_secs(5), reader).await;
+    // Sem espera fixa: lê várias vezes com a escrita presa no FIFO; a leitura que esperasse o disco estoura o prazo.
+    let mut probe = Ok(());
+    for _ in 0..200 {
+        let reader = { let o = outbox.clone(); tokio::task::spawn_blocking(move || o.pending().len()) };
+        if let Err(e) = tokio::time::timeout(Duration::from_secs(5), reader).await { probe = Err(e); break; }
+        tokio::task::yield_now().await;
+    }
+    let held = !writer.is_finished();
     // Solta a escrita presa antes de qualquer asserção, para a thread não sobrar.
     let drain = std::thread::spawn(move || { let mut s = String::new(); let _ = std::io::Read::read_to_string(&mut std::fs::File::open(&fifo).unwrap(), &mut s); });
     let _ = writer.await;
     drain.join().unwrap();
+    assert!(held, "a escrita deveria seguir presa no FIFO durante as leituras");
     assert!(probe.is_ok(), "ler a fila esperou a escrita do disco");
     assert!(tokio::time::timeout(Duration::from_secs(5), outbox.wait("lab", "g", 1, DEADLINE)).await.is_ok());
 }
@@ -361,20 +372,14 @@ async fn refusals_and_retries_reach_who_uses_the_queue() {
     let leave = OutboxItem::Leave { owner: "rel-refusal".into(), gid: "g".into(), member: "a".into(), origin: "casa".into() };
     let rename = OutboxItem::Rename { owner: "rel-refusal".into(), gid: "g".into(), from: "a".into(), to: "b".into(), origin: "casa".into() };
     outbox.enqueue(vec![leave.clone(), rename.clone()]).unwrap();
-    for _ in 0..500 {
-        if fake.sent().len() >= 5 { break; }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(fake.sent().len() >= 5, "a escada curta tenta de novo");
+    // A escada curta tenta de novo.
+    sent_at_least(&fake, 5).await;
     assert_eq!(fake.failed(), [(leave, "erro_grupo_inexistente".into(), false), (rename.clone(), "grupos.peer_inacessivel".into(), true)]);
 
     let token = Fake::new(vec![], || Err(refused(401, None)));
     let other = open(&tempfile::tempdir().unwrap(), token.clone(), &SHORT);
     let rename = OutboxItem::Rename { owner: "rel-token".into(), gid: "g".into(), from: "a".into(), to: "b".into(), origin: "casa".into() };
     other.enqueue(vec![rename.clone()]).unwrap();
-    for _ in 0..500 {
-        if token.sent().len() >= 3 { break; }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    sent_at_least(&token, 3).await;
     assert_eq!(token.failed(), [(rename, "grupos.peer_token_recusado".into(), true)]);
 }
