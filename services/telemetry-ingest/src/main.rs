@@ -566,6 +566,7 @@ mod tests {
             "first": format!("{yesterday} 10:00:00"), "last": format!("{today} 13:00:00"),
             "sample_at": format!("{today} 09:30:00"),
             "fields": {"codigo": "erro_pasta", "etapa": "abrir", "detalhe": "amostra"}, "trail": ["app.visivel", "busca.abrir"],
+            "daily": [{"day": yesterday, "count": 2}, {"day": today, "count": 5}],
         }));
         for (action, count, detail) in [("browser_open", 7, "amostra da abertura"), ("browser_close", 13, "amostra do fechamento")] {
             let row = rows.iter().find(|r| r["action"] == json!(action)).unwrap();

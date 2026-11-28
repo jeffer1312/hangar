@@ -1,4 +1,6 @@
 //! Gravação no Postgres: um pacote por transação, `batch_id` como chave da repetição.
+use std::collections::HashMap;
+
 use hangar_telemetry::wire::Batch;
 use sqlx::PgPool;
 use sqlx::types::Json;
@@ -167,6 +169,9 @@ type RecordRow = (
     Json<serde_json::Value>, Option<String>, i64,
 );
 
+/// Assinatura de uma falha: evento, codigo, etapa, erro_tipo e ação.
+type RecordKey = (String, Option<String>, Option<String>, Option<String>, Option<String>);
+
 /// Hoje e os `days - 1` dias antes dele, em UTC; dia à frente (relógio adiantado) só conta quando chegar.
 /// `concat!` porque o sqlx só aceita SQL estático.
 macro_rules! in_period {
@@ -279,6 +284,20 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .fetch_all(&mut *pool)
     .await?;
     let records_total = records.first().map_or(0, |r| r.13);
+    // Vezes por dia de cada assinatura nos últimos 14 dias, para a minibarra da lista de problemas.
+    let record_days: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>, String, i64)> = sqlx::query_as(
+        "SELECT r.event, r.fields->>'codigo', r.fields->>'etapa', r.fields->>'erro_tipo', r.fields->>'action',
+                to_char(b.day, 'YYYY-MM-DD'), LEAST(sum(r.count), 9223372036854775807)::bigint
+         FROM records r JOIN batches b ON b.batch_id = r.batch_id
+         WHERE b.day BETWEEN (now() AT TIME ZONE 'utc')::date - 13 AND (now() AT TIME ZONE 'utc')::date
+         GROUP BY 1, 2, 3, 4, 5, b.day ORDER BY b.day",
+    )
+    .fetch_all(&mut *pool)
+    .await?;
+    let mut daily_of: HashMap<RecordKey, Vec<serde_json::Value>> = HashMap::new();
+    for (event, codigo, etapa, erro_tipo, action, day, count) in record_days {
+        daily_of.entry((event, codigo, etapa, erro_tipo, action)).or_default().push(serde_json::json!({"day": day, "count": count}));
+    }
     // Passagens de um passo ao seguinte dentro do dia de cada máquina.
     let transitions: Vec<(String, String, i64, i64, i64)> = sqlx::query_as(concat!(
         "WITH s AS (
@@ -308,11 +327,14 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     tx.commit().await?;
     use serde_json::json;
     Ok(json!({
-        "records": records.into_iter().map(|r| json!({
-            "level": r.0, "event": r.1, "codigo": r.2, "etapa": r.3, "erro_tipo": r.4, "action": r.12, "count": r.5, "machines": r.6,
-            "versions": r.7, "os": r.8, "first": r.9, "last": r.10,
-            "sample_at": r.11.0["at"], "fields": r.11.0["fields"], "trail": r.11.0["trail"],
-        })).collect::<Vec<_>>(),
+        "records": records.into_iter().map(|r| {
+            let daily = daily_of.remove(&(r.1.clone(), r.2.clone(), r.3.clone(), r.4.clone(), r.12.clone())).unwrap_or_default();
+            json!({
+                "level": r.0, "event": r.1, "codigo": r.2, "etapa": r.3, "erro_tipo": r.4, "action": r.12, "count": r.5, "machines": r.6,
+                "versions": r.7, "os": r.8, "first": r.9, "last": r.10,
+                "sample_at": r.11.0["at"], "fields": r.11.0["fields"], "trail": r.11.0["trail"], "daily": daily,
+            })
+        }).collect::<Vec<_>>(),
         "records_total": records_total,
         "transitions": transitions.into_iter().map(|(from, to, count, machines, _)|
             json!({"from": from, "to": to, "count": count, "machines": machines})).collect::<Vec<_>>(),
