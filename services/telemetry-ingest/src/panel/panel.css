@@ -16,6 +16,8 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { background: var(--bg); scrollbar-color: var(--raised) transparent; }
+/* Instalado no iPhone a página vai até as bordas: fundos encostam nelas, o conteúdo recua pelo entalhe e pela barra de início. */
+:root { --sl: env(safe-area-inset-left, 0px); --sr: env(safe-area-inset-right, 0px); --st: env(safe-area-inset-top, 0px); --sb: env(safe-area-inset-bottom, 0px); }
 body { margin: 0; color: var(--text); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; min-height: 100vh; font-feature-settings: "cv11", "ss01"; }
 ::selection { background: rgba(124,135,232,.34); color: #fff; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -29,7 +31,8 @@ button, input { font: inherit; color: inherit; }
   background: radial-gradient(55% 55% at 50% 0%, rgba(124,135,232,.13), transparent 70%); }
 
 /* Entrar e convite */
-.auth { position: relative; z-index: 1; min-height: 100vh; display: grid; place-items: center; padding: var(--s6) var(--s4); }
+.auth { position: relative; z-index: 1; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center;
+  padding: calc(var(--s6) + var(--st)) calc(var(--s4) + var(--sr)) calc(var(--s6) + var(--sb)) calc(var(--s4) + var(--sl)); }
 .auth-card { width: min(100%, 400px); background: var(--card); border: 1px solid var(--line-strong); border-radius: 18px;
   padding: var(--s10) var(--s8) var(--s8); box-shadow: 0 24px 64px rgba(0,0,0,.5); }
 .auth-card .brand { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s8); }
@@ -56,9 +59,9 @@ button, input { font: inherit; color: inherit; }
 .foot { margin-top: var(--s6); color: var(--muted); font-size: 12px; text-align: center; }
 
 /* Painel: uma cor por seção (--hue), ícone, chip e barras dela */
-.bar { position: sticky; top: 0; z-index: 6; background: rgba(18,16,19,.92); backdrop-filter: blur(16px); }
+.bar { position: sticky; top: 0; z-index: 6; padding-top: var(--st); background: rgba(18,16,19,.92); backdrop-filter: blur(16px); }
 .top { border-bottom: 1px solid var(--line); }
-.top-in { max-width: 1240px; margin: 0 auto; padding: 0 var(--s8); height: 64px; display: flex; align-items: center; gap: var(--s5); }
+.top-in { max-width: 1240px; margin: 0 auto; padding: 0 calc(var(--s8) + var(--sr)) 0 calc(var(--s8) + var(--sl)); height: 64px; display: flex; align-items: center; gap: var(--s5); }
 .brand-line { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
 .brand-line h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.005em; white-space: nowrap; }
 .brand-line .sub { color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -95,7 +98,7 @@ button, input { font: inherit; color: inherit; }
 @keyframes pop { from { opacity: 0; transform: scale(.96) translateY(-4px); } }
 
 .chips { border-bottom: 1px solid var(--line); }
-.chips-in { max-width: 1240px; margin: 0 auto; padding: var(--s3) var(--s8); display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.chips-in { max-width: 1240px; margin: 0 auto; padding: var(--s3) calc(var(--s8) + var(--sr)) var(--s3) calc(var(--s8) + var(--sl)); display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
 .chips-in::-webkit-scrollbar { display: none; }
 .chip { --hue: var(--accent); display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 var(--s3) 0 10px; flex: none; border-radius: 999px;
   border: 1px solid var(--line); background: var(--surface); color: var(--secondary); text-decoration: none; font-size: 13px; font-weight: 500; white-space: nowrap;
@@ -106,7 +109,7 @@ button, input { font: inherit; color: inherit; }
 .chip[aria-current="true"] { color: var(--text); background: color-mix(in srgb, var(--hue) 16%, var(--surface)); border-color: color-mix(in srgb, var(--hue) 45%, transparent); }
 .chip.hot em { color: var(--hue); font-weight: 600; }
 
-main.wrap { max-width: 1240px; margin: 0 auto; padding: var(--s8) var(--s8) var(--s16); }
+main.wrap { max-width: 1240px; margin: 0 auto; padding: var(--s8) calc(var(--s8) + var(--sr)) calc(var(--s16) + var(--sb)) calc(var(--s8) + var(--sl)); }
 .notice { display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); margin-bottom: var(--s6); border-radius: 12px;
   background: var(--accent-soft); color: var(--text); font-size: 13px; }
 .notice button { margin-left: auto; }
@@ -299,12 +302,12 @@ dialog p { margin: 0 0 var(--s5); color: var(--secondary); font-size: 13px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 
 @media (max-width: 860px) {
-  .top-in { height: auto; flex-wrap: wrap; padding: var(--s3) var(--s4); gap: var(--s3); }
+  .top-in { height: auto; flex-wrap: wrap; padding: var(--s3) calc(var(--s4) + var(--sr)) var(--s3) calc(var(--s4) + var(--sl)); gap: var(--s3); }
   .brand-line .sub { display: none; }
   .search { order: 5; max-width: none; flex-basis: 100%; }
   .seg { margin-left: auto; }
-  .chips-in { padding: var(--s2) var(--s4); }
-  main.wrap { padding: var(--s6) var(--s4) var(--s12); }
+  .chips-in { padding: var(--s2) calc(var(--s4) + var(--sr)) var(--s2) calc(var(--s4) + var(--sl)); }
+  main.wrap { padding: var(--s6) calc(var(--s4) + var(--sr)) calc(var(--s12) + var(--sb)) calc(var(--s4) + var(--sl)); }
   .sec { margin-bottom: var(--s12); }
   .card { padding: var(--s5); }
   .sec-head .big { display: none; }

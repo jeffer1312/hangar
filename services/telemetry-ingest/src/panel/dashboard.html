@@ -2,10 +2,17 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <title>Telemetria do Hangar</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20200%20200%22%20aria-hidden%3D%22true%22%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20rx%3D%2244%22%20fill%3D%22%231b1d1f%22%2F%3E%3Cg%20fill%3D%22none%22%20stroke%3D%22%23f5f5f0%22%20stroke-linecap%3D%22round%22%20stroke-width%3D%2217%22%20transform%3D%22translate(0%2016)%22%3E%3Cpath%20d%3D%22M%2033.49%20132.44%20A%2074%2074%200%201%201%20166.51%20132.44%22%2F%3E%3Cpath%20d%3D%22M%2056.96%20109.15%20A%2044%2044%200%201%201%20143.04%20109.15%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
+<meta name="theme-color" content="#121013">
+<link rel="manifest" href="/panel/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/panel/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Telemetria">
 <link rel="stylesheet" href="/panel/assets/panel.css">
 </head>
 <body>
@@ -43,6 +50,8 @@
 <div id="tip" role="tooltip"></div>
 <script>
 "use strict";
+// Sem isto o painel não pode ser instalado; o service worker só repassa à rede.
+navigator.serviceWorker?.register("/panel/sw.js", { scope: "/panel" }).catch((e) => console.warn("service worker:", e));
 // [título, grupo, o que mede, em uma frase].
 const EVENTS = {
   app_visible_minutes: ["Minutos com o app aberto", "uso", "Tempo com o app do Hangar na tela, no celular ou no PC."],

@@ -25,6 +25,11 @@ const DASHBOARD: &str = include_str!("panel/dashboard.html");
 const LOGIN: &str = include_str!("panel/login.html");
 const JOIN: &str = include_str!("panel/join.html");
 const STYLE: &str = include_str!("panel/panel.css");
+const MANIFEST: &str = include_str!("panel/manifest.webmanifest");
+const SERVICE_WORKER: &str = include_str!("panel/sw.js");
+const ICON_192: &[u8] = include_bytes!("panel/icon-192.png");
+const ICON_512: &[u8] = include_bytes!("panel/icon-512.png");
+const APPLE_ICON: &[u8] = include_bytes!("panel/apple-touch-icon.png");
 const COOKIE: &str = "__Host-panel";
 const DEFAULT_DAYS: i32 = 30;
 /// Espera de toda entrada recusada: tentar senha em série fica lento sem atrasar quem acerta.
@@ -80,7 +85,7 @@ fn csp(html: &str) -> String {
         .collect();
     format!(
         "default-src 'none'; script-src {}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
-         form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+         manifest-src 'self'; worker-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
         hashes.join(" ")
     )
 }
@@ -126,6 +131,11 @@ pub fn router(pool: PgPool) -> Router {
     Router::new()
         .route("/panel", get(home))
         .route("/panel/join", get(|| async { page(2) }))
+        .route("/panel/manifest.webmanifest", get(|| async { asset("application/manifest+json", MANIFEST.as_bytes()) }))
+        .route("/panel/sw.js", get(service_worker))
+        .route("/panel/icon-192.png", get(|| async { asset("image/png", ICON_192) }))
+        .route("/panel/icon-512.png", get(|| async { asset("image/png", ICON_512) }))
+        .route("/panel/apple-touch-icon.png", get(|| async { asset("image/png", APPLE_ICON) }))
         .route("/panel/data", get(data))
         .route("/panel/trail", get(trail))
         .route("/panel/api/me", get(me))
@@ -145,6 +155,18 @@ fn page(which: usize) -> Response {
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+// ponytail: endereço sem versão, então `no-cache` (revalida a cada uso); com hash no caminho daria para guardar de vez.
+fn asset(kind: &'static str, body: &'static [u8]) -> Response {
+    ([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, "no-cache")], body).into_response()
+}
+
+/// O escopo `/panel` cobre a própria página de entrada, que fica fora do diretório do script.
+fn service_worker() -> std::future::Ready<Response> {
+    let mut response = asset("application/javascript", SERVICE_WORKER.as_bytes());
+    response.headers_mut().insert("service-worker-allowed", HeaderValue::from_static("/panel"));
+    std::future::ready(response)
 }
 
 fn error(status: StatusCode, code: &str) -> Response { (status, axum::Json(json!({"error": code}))).into_response() }
@@ -381,6 +403,17 @@ mod tests {
         for page in PAGES.iter() {
             assert!(page.contains("<style>") && !page.contains("/panel/assets/panel.css"), "o estilo vai dentro da página");
         }
+    }
+
+    #[test]
+    fn pages_can_be_installed() {
+        for page in PAGES.iter() {
+            assert!(page.contains(r#"<link rel="manifest" href="/panel/manifest.webmanifest">"#), "o manifesto vai em toda página");
+            assert!(page.contains(r#"rel="apple-touch-icon""#) && page.contains("viewport-fit=cover"));
+        }
+        let policy = csp(DASHBOARD);
+        assert!(policy.contains("manifest-src 'self'") && policy.contains("worker-src 'self'"), "{policy}");
+        assert!(!SERVICE_WORKER.contains("caches"), "o service worker não guarda nada");
     }
 
     #[test]
