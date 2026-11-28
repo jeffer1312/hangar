@@ -269,8 +269,7 @@ fn queued_batch_store_review_cli_echo_confirms_all_member_ids() {
     assert_eq!(store.exec(1,"echo-again",clock(),Action::Confirm {entry_ids:vec![id]}).unwrap(),0);
 }
 
-/// O roteiro e o resultado vêm do Python (backend/tests/test_runtime_queue.py): a poda tem de
-/// deixar o mesmo estado nos dois donos.
+/// O roteiro e o resultado de compactação foram capturados antes da migração para Rust.
 #[test]
 fn compaction_matches_python_oracle() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/runtime_queue/compaction.json");

@@ -14,8 +14,9 @@ Python tools that are not the server yet (Codex launcher, orq scripts, push keys
 The app never scrapes the terminal for chat content — it reads structured transcripts/events.
 Only terminal sessions use the tmux pane for live **state** and input. Server pieces:
 
-- Lista, transcript, estado, entrada e fila das sessões Claude/Codex são do Rust
-  (`crates/hangar-server/src/runtime/`, `list/`, `state/`); o `backend/app/` não tem motor de chat.
+- Lista, transcript, estado, entrada e fila das sessões Claude/Codex são do Rust. O servidor
+  coordena a execução em `runtime/`, `list/` e `state/`. A persistência e os recibos da fila
+  moram em `crates/hangar-runtime-queue/`.
 - Codex (`runtime/codex*.rs`) — um app-server WebSocket de loopback por sessão Codex; o servidor
   consome eventos JSON-RPC enquanto a TUI `codex --remote` da mesma thread roda no tmux.
   O app-server é do PANE, não do servidor. Sem terminal, ele roda em stdio

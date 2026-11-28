@@ -292,7 +292,6 @@ mod owner_refusal;
 mod prewarm_routes;
 mod plugin_loopback;
 mod proxy;
-mod queue_v2_terminal;
 mod runtime_actor;
 mod runtime_cano;
 mod runtime_claude;

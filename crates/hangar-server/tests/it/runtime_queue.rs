@@ -9,8 +9,6 @@ fn fill(store:&mut Store, count:usize, prefix:&str) {
 fn append() -> Action { Action::Append { text:"Olá".into(), delivered:false, ts:None,
     pre_transcript:false, entry_id:Some("entry-1".into()) } }
 
-/// A CLI responde `/btw` sozinha e não grava a linha: sem isto a bolha esperava para sempre.
-
 /// A intenção grande (quadro com anexo) ia inteira para o recibo de cada fase: MB por gravação.
 #[test]
 fn phase_receipts_do_not_copy_a_large_intent() {
