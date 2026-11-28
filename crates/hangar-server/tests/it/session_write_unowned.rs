@@ -97,7 +97,14 @@ fn watcher(home: &Path, wrapper: &Path) -> Arc<hangar_server::runtime::codex_ter
         mux_program: wrapper.to_owned().into_os_string() }))
 }
 
-fn fixture(name: &str) -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/raw_codex").join(name) }
+fn fixture(name: &str) -> PathBuf {
+    let directory = match name {
+        "pane_codex_composer_text.txt" | "pane_codex_resume_loading.txt" =>
+            "../hangar-other-terminal-policy/tests/fixtures",
+        _ => "tests/it/fixtures/raw_codex",
+    };
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(directory).join(name)
+}
 
 impl Rig {
     /// Servidor com o tmux isolado na lista, nas escritas e na captura; sem `runtime`, o estado fica sem o

@@ -3,8 +3,7 @@ use super::*;
 use crate::interactions::{InteractionKind, InteractionTarget};
 use crate::terminal_state::{ReducerFacts, ReducerMemory};
 use hangar_api::state::StateEvent;
-use regex::Regex;
-use std::sync::LazyLock;
+pub use hangar_other_terminal_policy::{kimi_approval_open as approval_open, kimi_picker_open as picker_open};
 
 #[derive(Clone)]
 pub struct PendingInteraction {
@@ -56,16 +55,6 @@ impl FileCache {
         let quotas = self.kimi_quotas.get(quota_cache, |bytes| serde_json::from_slice(bytes).ok());
         super::kimi_status::line(&facts, config, quotas, now)
     }
-}
-static APPROVAL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"↵\s*confirm|Type feedback").unwrap());
-static PICKER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"↵\s*(choose|toggle|save)|type answer").unwrap());
-pub fn approval_open(pane: &str) -> bool {
-    APPROVAL.is_match(pane)
-}
-pub fn picker_open(pane: &str) -> bool {
-    PICKER.is_match(pane)
 }
 fn source_error(error: std::io::Error) -> RuntimeError {
     failed(if error.kind() == std::io::ErrorKind::NotFound {
@@ -164,7 +153,7 @@ pub(super) fn read(
     {
         pending = None;
     }
-    let mut analysis = super::drive::screen(target.provider, pane);
+    let mut analysis = hangar_other_terminal_policy::screen(target.provider, pane);
     if target.provider == hangar_transcript::Provider::Kimi
         && hook.as_deref() != Some("awaiting_input")
     {

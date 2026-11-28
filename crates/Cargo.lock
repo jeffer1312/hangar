@@ -2116,6 +2116,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-other-terminal-policy"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "hangar-transcript",
+ "regex",
+]
+
+[[package]]
 name = "hangar-package"
 version = "0.1.0"
 dependencies = [
@@ -2335,6 +2344,7 @@ dependencies = [
  "hangar-omp-sync",
  "hangar-open-cli",
  "hangar-opencode-cookie",
+ "hangar-other-terminal-policy",
  "hangar-package",
  "hangar-placement",
  "hangar-plugins",
