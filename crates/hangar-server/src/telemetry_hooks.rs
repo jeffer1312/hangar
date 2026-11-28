@@ -117,7 +117,8 @@ pub(crate) fn speed_awaits_ready(name: &str) -> bool {
 /// Pronta vista por quem observa a sessão desde sempre (ator do runtime, captura dos outros com terminal).
 pub(crate) fn speed_ready(name: &str) { speed(|clock, now| clock.ready(name, Duration::ZERO, now)); }
 
-/// Linha da fila confirmada no agente, enviada em `sent` (hora de parede da fila); `text` só decide se é recado
+/// Linha da fila confirmada no agente, despachada a ele em `sent` (hora de parede da tentativa, `row_clock`): a espera
+/// na fila com o agente ocupado não entra no `first_reply`. `text` só decide se é recado
 /// de outra sessão ou comando e não sai daqui.
 pub(crate) fn speed_delivered(name: &str, text: &str, steered: bool, sent: Option<f64>) {
     if text.trim_start().starts_with('/') { return; }

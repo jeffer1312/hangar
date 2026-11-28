@@ -44,11 +44,11 @@ function lineLabel(card: SpeedCard, key: string) {
   return { label: OS[key] ?? key, color: "" };
 }
 
-function Card({ card, index }: { card: SpeedCard; index: number }) {
+function Card({ card, index, searching }: { card: SpeedCard; index: number; searching: boolean }) {
   const t = TEXT[card.event];
   const v = VERDICT[card.verdict];
   return (
-    <div data-block data-hits={useQ() ? 1 : undefined} className="speed-card flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4" style={{ "--i": index } as React.CSSProperties}>
+    <div data-block data-hits={searching ? 1 : undefined} className="speed-card flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4" style={{ "--i": index } as React.CSSProperties}>
       <div className="flex items-start gap-2.5">
         <span className="grid size-8 shrink-0 place-items-center rounded-[9px] bg-[color-mix(in_srgb,var(--hue)_16%,transparent)] text-(--hue)">
           <t.icon className="size-[18px]" strokeWidth={1.9} />
@@ -121,7 +121,7 @@ export function Speed({ data, d }: { data: Summary; d: Derived }) {
         {SYSTEMS.map(([value, label]) => <ToggleGroupItem key={value} value={value} className="h-11 px-3 sm:h-8">{value === "all" ? <>Todos<span className="max-sm:hidden">&nbsp;os sistemas</span></> : label}</ToggleGroupItem>)}
       </ToggleGroup>
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr))]">
-        {cards.map((c, i) => <Card key={c.event} card={c} index={i} />)}
+        {cards.map((c, i) => <Card key={c.event} card={c} index={i} searching={!!outer} />)}
       </div>
       {others.length ? (
         <Group title="Outros tempos">
