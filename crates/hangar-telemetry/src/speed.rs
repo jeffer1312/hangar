@@ -58,6 +58,12 @@ impl SpeedClock {
         known.owner_sends.push(message);
     }
 
+    /// O envio dessa mensagem foi recusado: a marca dela sai.
+    pub fn untouch(&mut self, name: &str, message: u64) {
+        let Some(known) = self.0.get_mut(name) else { return };
+        if let Some(at) = known.owner_sends.iter().rposition(|m| *m == message) { known.owner_sends.remove(at); }
+    }
+
     pub fn knows(&self, name: &str) -> bool { self.0.contains_key(name) }
 
     /// Quem paga para ler a tela pergunta antes.
@@ -220,6 +226,15 @@ mod tests {
         clock.touch("s", CLAUDE, 8, ms(1_000));
         clock.delivered("s", 8, false, false, ms(1_000), ms(1_100));
         assert!(clock.replied("s", ZERO, ms(2_000)).is_some(), "a do dono continua valendo");
+    }
+
+    #[test]
+    fn a_refused_send_leaves_no_mark() {
+        let mut clock = SpeedClock::default();
+        clock.touch("s", CLAUDE, 7, ms(0));
+        clock.untouch("s", 7);
+        clock.delivered("s", 7, false, false, ms(100), ms(200));
+        assert_eq!(clock.replied("s", ZERO, ms(300)), None);
     }
 
     #[test]

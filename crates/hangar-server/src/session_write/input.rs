@@ -417,6 +417,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         crate::telemetry_hooks::speed_touch(&ctx.name, provider, surface, &text);
     }
     let mut result = send_with_receipt(&ctx.st, &ctx.name, &ctx.target, &text, steer, conversation, expected_turn, false).await;
+    if counted && !result.0.is_success() { crate::telemetry_hooks::speed_untouch(&ctx.name, &text); }
     // `false`: o pedido foi para a fila comum (Claude com terminal, Pi, omp, Kimi, Antigravity, comando de barra).
     if wants_conversation && result.0.is_success() { result.1["conversation"] = json!(conversation); }
     if let Some(note) = note {

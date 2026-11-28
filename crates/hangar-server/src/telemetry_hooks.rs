@@ -107,6 +107,9 @@ pub(crate) fn speed_touch(name: &str, provider: Provider, surface: Surface, text
     speed(|clock, now| { clock.touch(name, Session { provider, surface }, message_mark(text), now); None });
 }
 
+/// O envio da mensagem foi recusado.
+pub(crate) fn speed_untouch(name: &str, text: &str) { speed(|clock, _| { clock.untouch(name, message_mark(text)); None }); }
+
 /// Barato e sem o motor: quem paga para juntar o sinal (fila) pergunta antes.
 pub(crate) fn speed_knows(name: &str) -> bool {
     installed().is_some() && SPEED.lock().unwrap_or_else(|e| e.into_inner()).1.knows(name)
