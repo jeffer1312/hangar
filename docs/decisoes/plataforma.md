@@ -17,7 +17,8 @@ a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
   entre máquinas. (5) Mesma pasta, mesma máquina. (6) Trabalho não publicado (commit não enviado,
   mudança não commitada, branch sem upstream) fica onde está, sem push automático. (7) Limite, não
   pontuação: sai da escolha a máquina com menos de 15% de memória livre, 6 ou mais sessões
-  trabalhando ou processador acima de 80% nos últimos 5 min. (8) Regras do dono (projeto → máquina,
+  trabalhando, 10 ou mais sessões abertas ou processador acima de 80% nos últimos 5 min; entre as
+  que ficam, vence a com menos sessões abertas (emenda de 28/11, abaixo). (8) Regras do dono (projeto → máquina,
   horário → máquina a evitar) vencem a carga; máquina da regra fora ou acima do limite cai para a
   próxima, com aviso; 5 e 6 vencem as regras, com aviso. (9) O agente clona; a sessão nasce com a
   nota "clone novo: instale as dependências pelo README/CLAUDE.md do projeto; `.env` não veio". O
@@ -102,6 +103,17 @@ a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
   [Sessão filha ligada a quem a abriu](#sessão-filha-ligada-a-quem-a-abriu).
 - **Fora do escopo.** Mover sessão já aberta, favoritos de projeto e levar `.env`, dependências e
   banco local junto.
+- **Emenda de 28/11/2026: sessões abertas e a pasta na Nova conversa.** Em uso, nenhuma sessão saiu
+  do notebook: com 30 abertas, só 2 trabalhavam e a memória livre estava em 56%, então ele seguia
+  dentro dos três limites; e a Nova conversa pedia a sugestão com `cwd: "~"`, só ao abrir e sem trocar
+  a máquina quando já havia pasta marcada. Telemetria do dia: 23 aberturas, uma só passou pela
+  escolha. Mudou: os fatos levam `open` (sessões da lista fora de `dead`; versão sem o campo não
+  reprova e fica por último), o limite `open` (padrão 10) entra em `Limits`, e a ordem entre as
+  candidatas é abertas, trabalhando, memória. Na tela (nativo e Expo), a pergunta com a pasta
+  escolhida, que só servia à regra de projeto, também aceita `least_loaded`: a máquina mais livre
+  já vem marcada, sem clique, e a abertura vai pelo servidor daqui com `machine` (pasta traduzida,
+  clone se faltar); máquina trocada à mão só recebe a oferta. A regra de projeto continua esperando o
+  clique. Pasta sem git, mesma worktree e trabalho não publicado seguem presos aqui.
 
 ## Portas da sessão, túnel e navegador emprestado (23/11/2026)
 

@@ -19,6 +19,9 @@ pub struct MachineFacts {
     pub mem_total: u64,
     pub mem_available: u64,
     pub working: u32,
+    /// Sessões abertas, paradas incluídas. `None`: versão que não conta, não reprova e fica por último na ordem.
+    #[serde(default)]
+    pub open: Option<u32>,
     /// `None` quando a máquina não sabe medir: não reprova.
     pub cpu_pct: Option<f32>,
     pub repos: Vec<KnownRepo>,
@@ -65,6 +68,7 @@ pub enum Exclusion {
     Schedule,
     Memory,
     Working,
+    Open,
     Cpu,
     /// Sem o repositório e sem pasta onde cloná-lo.
     NoCloneDir,
@@ -167,7 +171,7 @@ pub fn choose(ctx: &OpenContext, facts: &[MachineFacts], config: &PlacementConfi
     let best = candidates
         .into_iter()
         .filter(|(_, clone)| !(ctx.agent && has_repo && clone.is_some()))
-        .min_by_key(|(f, _)| (f.working, Reverse(f.mem_available)));
+        .min_by_key(|(f, _)| (f.open.unwrap_or(u32::MAX), f.working, Reverse(f.mem_available)));
     match best {
         Some((f, clone)) => {
             Placement { server: f.server_id.clone(), reason: ReasonCode::LeastLoaded { local_out }, clone, warnings }
@@ -199,6 +203,9 @@ fn check(
     }
     if f.working >= limits.working {
         return Err(Exclusion::Working);
+    }
+    if f.open.is_some_and(|n| n >= limits.open) {
+        return Err(Exclusion::Open);
     }
     if f.cpu_pct.is_some_and(|c| c > limits.cpu_pct as f32) {
         return Err(Exclusion::Cpu);
@@ -239,6 +246,7 @@ mod tests {
             mem_total: 32 * GB,
             mem_available: free_gb * GB,
             working,
+            open: Some(working),
             cpu_pct: Some(10.0),
             repos: vec![KnownRepo { project: hangar(), root: format!("/home/{id}/hangar") }],
             clone_dir: Some(format!("/home/{id}/Projetos")),
@@ -291,6 +299,7 @@ mod tests {
     fn each_limit_takes_the_local_out() {
         let cases = [
             (machine("pc", 6, 20), Exclusion::Working),
+            (MachineFacts { open: Some(10), ..machine("pc", 0, 20) }, Exclusion::Open),
             (machine("pc", 0, 4), Exclusion::Memory), // 4 de 32 GB = 12,5%
             (MachineFacts { cpu_pct: Some(80.5), ..machine("pc", 0, 20) }, Exclusion::Cpu),
             (MachineFacts { capable: false, ..machine("pc", 0, 20) }, Exclusion::NotCapable),
@@ -357,6 +366,24 @@ mod tests {
         let facts = [machine("pc", 8, 20), machine("vm", 2, 6), machine("nb", 1, 6), machine("srv", 1, 9)];
         let p = choose(&ctx(), &facts, &PlacementConfig::default(), now());
         assert_eq!(p.server, "srv");
+    }
+
+    #[test]
+    fn many_open_sessions_take_the_local_out_even_with_few_working() {
+        let nb = MachineFacts { open: Some(30), ..machine("pc", 2, 13) };
+        let p = choose(&ctx(), &[nb, MachineFacts { open: Some(4), ..machine("srv", 3, 8) }], &PlacementConfig::default(), now());
+        assert_eq!((p.server.as_str(), p.reason), ("srv", ReasonCode::LeastLoaded { local_out: Exclusion::Open }));
+    }
+
+    #[test]
+    fn the_fewest_open_wins_and_a_machine_that_does_not_count_comes_last() {
+        let local = MachineFacts { open: Some(12), ..machine("pc", 0, 20) };
+        let facts = [local, MachineFacts { open: Some(5), ..machine("nb", 0, 30) }, MachineFacts { open: Some(3), ..machine("vm", 2, 6) },
+            MachineFacts { open: None, ..machine("old", 0, 30) }];
+        assert_eq!(choose(&ctx(), &facts, &PlacementConfig::default(), now()).server, "vm");
+        let facts = [MachineFacts { open: Some(12), ..machine("pc", 0, 20) }, MachineFacts { open: None, ..machine("old", 0, 30) },
+            MachineFacts { open: Some(9), ..machine("nb", 5, 10) }];
+        assert_eq!(choose(&ctx(), &facts, &PlacementConfig::default(), now()).server, "nb");
     }
 
     #[test]

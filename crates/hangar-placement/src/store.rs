@@ -61,6 +61,9 @@ pub fn validate(config: &PlacementConfig) -> Result<(), Invalid> {
     if limits.working == 0 {
         return bad("limits.working".into());
     }
+    if limits.open == 0 {
+        return bad("limits.open".into());
+    }
     for (i, rule) in config.project_rules.iter().enumerate() {
         if rule.project.0.trim().is_empty() {
             return bad(format!("project_rules[{i}].project"));
@@ -108,7 +111,7 @@ mod tests {
         PlacementConfig {
             ui_mode: UiMode::Ask,
             agent_mode: AgentMode::Off,
-            limits: Limits { mem_free_pct: 20, working: 4, cpu_pct: 70 },
+            limits: Limits { mem_free_pct: 20, working: 4, open: 8, cpu_pct: 70 },
             project_rules: vec![ProjectRule { project: ProjectId("git:github.com/a/b".into()), server: "pc".into() }],
             schedule_rules: vec![schedule()],
             clone_dirs: [("nb".to_owned(), "/home/j/Projetos".to_owned())].into(),
@@ -120,7 +123,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let config = load(home.path()).unwrap();
         assert_eq!((config.ui_mode, config.agent_mode), (UiMode::Suggest, AgentMode::Auto));
-        assert_eq!(config.limits, Limits { mem_free_pct: 15, working: 6, cpu_pct: 80 });
+        assert_eq!(config.limits, Limits { mem_free_pct: 15, working: 6, open: 10, cpu_pct: 80 });
         assert!(config.project_rules.is_empty() && config.schedule_rules.is_empty() && config.clone_dirs.is_empty());
     }
 
@@ -144,13 +147,14 @@ mod tests {
     #[test]
     fn invalid_config_is_refused_without_writing() {
         let home = tempfile::tempdir().unwrap();
-        let cases: [(&str, fn(&mut PlacementConfig)); 7] = [
+        let cases: [(&str, fn(&mut PlacementConfig)); 8] = [
             ("schedule_rules[0].tz", |c| c.schedule_rules[0].tz = "Lua/Base".into()),
             ("schedule_rules[0].from", |c| c.schedule_rules[0].from = "9h".into()),
             ("schedule_rules[0].to", |c| c.schedule_rules[0].to = "24:00".into()),
             ("schedule_rules[0].days", |c| c.schedule_rules[0].days = vec![0]),
             ("limits.mem_free_pct", |c| c.limits.mem_free_pct = 101),
             ("limits.working", |c| c.limits.working = 0),
+            ("limits.open", |c| c.limits.open = 0),
             ("project_rules[0].server", |c| c.project_rules[0].server = " ".into()),
         ];
         for (field, change) in cases {

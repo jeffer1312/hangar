@@ -95,6 +95,8 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
   // Máquina pedida por quem abriu, trocada à mão ou qualquer escolha na tela (nome, provedor, modelo, conta, modo, pasta):
   // a troca remontaria o formulário e perderia essas escolhas, então a sugestão que chega depois só mostra o motivo.
   const chosen = useRef(!!initial?.server);
+  // Máquina pedida por quem abriu ou trocada à mão: a carga da pasta só oferece outra, sem marcá-la.
+  const machinePicked = useRef(!!initial?.server);
   const [suggestion, setSuggestion] = useState<PlacementSuggestion | null>(null);
   // A máquina escolhida na pílula vale só para onde a conversa nasce; o servidor ativo é das Configurações.
   const [machine, setMachine] = useState(() => {
@@ -107,6 +109,7 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
   useEffect(() => { if (target && target.id !== machine) setMachine(target.id); }, [machine, target?.id]);
   const pickMachine = useCallback((id: string) => {
     chosen.current = true;
+    machinePicked.current = true;
     rememberMachine(id);
     setMachine(id);
   }, []);
@@ -129,13 +132,13 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
   // O motor é de uma máquina: trocar a pílula de máquina descarta o pedido.
   const initialEngine = initial?.engine && (!initial.server || initial.server === target?.id) ? initial.engine : undefined;
   return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine}
-    suggestion={suggestion} onTouched={keepChoice} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} initialEngine={initialEngine} />
+    machinePicked={machinePicked} suggestion={suggestion} onTouched={keepChoice} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} initialEngine={initialEngine} />
     : home?.mode === 'sessions' ? <View style={{ flex: 1 }}>{home.sessions}</View>
       : <Text accessibilityRole="alert">{m.servidor_nao_existe()}</Text>;
 }
 
-function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouched, onClose, keyboardOffset, home, layout, initialEngine }: {
-  active: Server; machines: Server[]; onPickMachine: (id: string) => void; suggestion: PlacementSuggestion | null; onTouched: () => void;
+function CreateSessionForm({ active, machines, onPickMachine, machinePicked, suggestion, onTouched, onClose, keyboardOffset, home, layout, initialEngine }: {
+  active: Server; machines: Server[]; onPickMachine: (id: string) => void; machinePicked: { current: boolean }; suggestion: PlacementSuggestion | null; onTouched: () => void;
   onClose?: () => void; keyboardOffset?: number; home?: HomePresentation;
   layout: 'conversation' | 'form'; initialEngine?: string;
 }) {
@@ -677,7 +680,10 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
     setRuleTaken(false);
     if (p !== NO_PROJECT_CWD && isOwnMachine(active)) {
       placementRuleOfferFor(active, placementMachines(machinesRef.current), p).then((offer) => {
-        if (mounted.current && generation === pickGeneration.current) setRuleOffer(offer);
+        if (!mounted.current || generation !== pickGeneration.current) return;
+        setRuleOffer(offer);
+        // A carga já marca a outra máquina; a regra espera o clique. Máquina, conta ou motor escolhidos aqui ficam.
+        if (offer?.mark && !machinePicked.current) setRuleTaken(true);
       }, (cause: unknown) => console.warn('new_chat_project_rule_unread', cause));
     }
     try {
@@ -688,7 +694,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
       if (!mounted.current || generation !== pickGeneration.current) return;
       setError(cause instanceof Error ? cause.message : m.criar_sessao_erro());
     }
-  }, [active]);
+  }, [active, machinePicked]);
   // Escolha da pessoa, não a pasta que o seletor marca sozinho ao abrir: a sugestão de máquina que chega depois não a tira.
   const pickByHand = useCallback((p: string, root?: string) => { onTouched(); return handlePick(p, root); }, [handlePick, onTouched]);
 
@@ -1250,13 +1256,18 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
   // A oferta vale para a pasta escolhida agora e para uma máquina que segue na lista do app.
   const ruleServer = ruleOffer && ruleOffer.cwd === picked ? machines.find((sv) => sv.id === ruleOffer.serverId) ?? null : null;
   const ruleLabel = ruleServer ? machineView(ruleServer, machines.indexOf(ruleServer)).label : '';
-  const elsewhere = ruleTaken && ruleOffer && ruleServer ? { server: ruleOffer.server, at: ruleServer } : null;
+  // A carga marcada vale só sem conta ou motor escolhidos aqui, que não vão a outra máquina: escolhê-los volta para esta.
+  const localChoice = accountTouched.current || !!engine;
+  const elsewhere = ruleTaken && ruleOffer && ruleServer && (ruleOffer.project !== null || !localChoice) ? { server: ruleOffer.server, at: ruleServer } : null;
   // Voltar a esta máquina depois do clique só desfaz a oferta; outra troca a máquina e descarta a oferta.
-  const pickShownMachine = (id: string) => { if (id === active.id) setRuleTaken(false); else if (id !== elsewhere?.at.id) onPickMachine(id); };
+  const pickShownMachine = (id: string) => {
+    if (id === active.id) { if (ruleTaken) machinePicked.current = true; setRuleTaken(false); } else if (id !== elsewhere?.at.id) onPickMachine(id);
+  };
   // Escolha da pessoa: a sugestão de máquina que chega depois não desfaz o clique.
   const ruleLine = ruleServer && ruleOffer ? (
     <View style={styles.ruleLine}>
-      <Text style={styles.ruleText}>{m.native_placement_rule_offer({ projeto: ruleOffer.project, maquina: ruleLabel })}</Text>
+      <Text style={styles.ruleText}>{ruleOffer.project === null ? m.native_new_chat_machine_suggested({ motivo: ruleOffer.text })
+        : m.native_placement_rule_offer({ projeto: ruleOffer.project, maquina: ruleLabel })}</Text>
       {!ruleTaken ? (
         <Pressable onPress={() => { onTouched(); setRuleTaken(true); }} disabled={creating} hitSlop={LINK_SLOP} accessibilityRole="button"
           accessibilityState={{ disabled: creating }}>

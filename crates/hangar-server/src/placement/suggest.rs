@@ -594,8 +594,8 @@ mod tests {
     }
 
     fn machine(id: &str, working: u32) -> MachineFacts {
-        MachineFacts { server_id: id.into(), version: "1".into(), capable: true, mem_total: 0, mem_available: 0, working, cpu_pct: None,
-            repos: Vec::new(), clone_dir: None }
+        MachineFacts { server_id: id.into(), version: "1".into(), capable: true, mem_total: 0, mem_available: 0, working, open: Some(working),
+            cpu_pct: None, repos: Vec::new(), clone_dir: None }
     }
 
     fn reserved_for(server: &str) -> OpenContext {

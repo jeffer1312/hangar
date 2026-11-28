@@ -122,7 +122,7 @@ mod tests {
 
     fn nb() -> MachineFacts {
         MachineFacts { server_id: "nb".into(), version: "1".into(), capable: true, mem_total: 0, mem_available: 0, working: 0,
-            cpu_pct: None, repos: vec![KnownRepo { project: hangar(), root: "/home/j/Projetos/hangar".into() }], clone_dir: None }
+            open: Some(0), cpu_pct: None, repos: vec![KnownRepo { project: hangar(), root: "/home/j/Projetos/hangar".into() }], clone_dir: None }
     }
 
     fn request(cwd: &str) -> SessionOpenRequest {

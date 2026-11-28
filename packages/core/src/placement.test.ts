@@ -2,11 +2,11 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
 import * as m from './paraglide/messages';
 import { placementLimits, placementProjects, placementReasonText, placementScheduleRule, placementStatus, placementSuggested,
-  placementSuggestionFor, readPlacementAll, samePlacementConfig, placementElsewhereBody, placementRuleOf, placementRuleOfferFor,
+  placementSuggestionFor, readPlacementAll, samePlacementConfig, placementElsewhereBody, placementOfferOf, placementRuleOfferFor,
   type Placement, type PlacementConfig } from './placement';
 
 const config: PlacementConfig = {
-  ui_mode: 'suggest', agent_mode: 'auto', limits: { mem_free_pct: 15, working: 6, cpu_pct: 80 },
+  ui_mode: 'suggest', agent_mode: 'auto', limits: { mem_free_pct: 15, working: 6, open: 10, cpu_pct: 80 },
   project_rules: [{ project: 'git:github.com/a/b', server: 'nb' }],
   schedule_rules: [{ days: [1, 5], from: '09:00', to: '18:00', tz: 'America/Sao_Paulo', avoid: 'nb' }],
   clone_dirs: { nb: '/h/Projetos', pc: '/h/src' },
@@ -79,10 +79,12 @@ it('sugerida fora da lista do aparelho não marca nada; servidor sem a rota reje
 
 const rule: Placement = { server: 'nb', reason: { code: 'project_rule', project: 'git:github.com/a/b' }, clone: null, warnings: [] };
 
-it('só a regra de projeto vira oferta, com o projeto sem o prefixo', () => {
-  expect(placementRuleOf(rule)).toEqual({ server: 'nb', project: 'github.com/a/b' });
-  expect(placementRuleOf(least)).toBeNull();
-  expect(placementRuleOf({ ...rule, server: '' })).toBeNull();
+it('regra de projeto e carga viram oferta; o resto fica na marcada', () => {
+  expect(placementOfferOf(rule)).toEqual({ server: 'nb', project: 'github.com/a/b' });
+  expect(placementOfferOf(least)).toEqual({ server: 'nb', project: null });
+  expect(placementOfferOf({ ...rule, server: '' })).toBeNull();
+  expect(placementOfferOf({ ...least, reason: { code: 'local_within_limits' } })).toBeNull();
+  expect(placementOfferOf({ ...least, reason: { code: 'same_folder' } })).toBeNull();
 });
 
 it('a oferta da pasta é pedida à máquina marcada com a pasta e acha a máquina da regra na lista', async () => {
@@ -92,16 +94,44 @@ it('a oferta da pasta é pedida à máquina marcada com a pasta e acha a máquin
     'https://pc.test/api/peers/identificador': { identificador: 'pc' },
     'https://nb.test/api/peers/identificador': { identificador: 'nb' },
   });
-  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toEqual({ server: 'nb', serverId: 'nb-app', project: 'github.com/a/b', cwd: '/h/hangar' });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toEqual({ server: 'nb', serverId: 'nb-app', project: 'github.com/a/b',
+    text: m.native_placement_reason_project_rule({ projeto: 'github.com/a/b', maquina: 'Notebook' }), cwd: '/h/hangar', mark: false });
   const sent = vi.mocked(globalThis.fetch).mock.calls.find(([url]) => String(url).endsWith('/api/placement/suggest'));
   expect(JSON.parse(String(sent?.[1]?.body))).toEqual({ cwd: '/h/hangar', machine: 'auto' });
 });
 
-it('sem oferta: tela desligada não pergunta, carga não oferece, regra para a própria marcada nem fora da lista', async () => {
+it('a carga da pasta vira oferta sem projeto, com o motivo e o nome da máquina', async () => {
+  const open: Placement = { ...least, reason: { code: 'least_loaded', local_out: 'open' } };
+  routes({
+    'https://pc.test/api/placement/config': config,
+    'https://pc.test/api/placement/suggest': open,
+    'https://pc.test/api/peers/identificador': { identificador: 'pc' },
+    'https://nb.test/api/peers/identificador': { identificador: 'nb' },
+  });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toEqual({ server: 'nb', serverId: 'nb-app', project: null,
+    text: m.native_placement_reason_least_loaded({ motivo: m.native_placement_exclusion_open(), maquina: 'Notebook' }), cwd: '/h/hangar', mark: true });
+  // Tela em "perguntar" ou clone a fazer: a carga só oferece.
+  routes({
+    'https://pc.test/api/placement/config': { ...config, ui_mode: 'ask' },
+    'https://pc.test/api/placement/suggest': open,
+    'https://pc.test/api/peers/identificador': { identificador: 'pc' },
+    'https://nb.test/api/peers/identificador': { identificador: 'nb' },
+  });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toMatchObject({ project: null, mark: false });
+  routes({
+    'https://pc.test/api/placement/config': config,
+    'https://pc.test/api/placement/suggest': { ...open, clone: { dir: '/h/Projetos' } },
+    'https://pc.test/api/peers/identificador': { identificador: 'pc' },
+    'https://nb.test/api/peers/identificador': { identificador: 'nb' },
+  });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toMatchObject({ project: null, mark: false });
+});
+
+it('sem oferta: tela desligada não pergunta, nem escolha para a própria marcada ou fora da lista', async () => {
   routes({ 'https://pc.test/api/placement/config': { ...config, ui_mode: 'off' } });
   expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toBeNull();
   expect(vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).endsWith('/suggest'))).toBe(false);
-  routes({ 'https://pc.test/api/placement/config': config, 'https://pc.test/api/placement/suggest': least });
+  routes({ 'https://pc.test/api/placement/config': config, 'https://pc.test/api/placement/suggest': { ...least, reason: { code: 'local_within_limits' } } });
   expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toBeNull();
   routes({ 'https://pc.test/api/placement/config': config, 'https://pc.test/api/placement/suggest': { ...rule, server: 'pc' },
     'https://pc.test/api/peers/identificador': { identificador: 'pc' } });
@@ -135,11 +165,18 @@ it('lê cada máquina: versão sem a rota é antiga, e as regras comparam sem a 
   expect(placementStatus({ state: 'failed', error: 'x' }, config)).toBe('silent');
 });
 
+it('servidor sem o limite de abertas lê o padrão', async () => {
+  const { open: _, ...old } = config.limits;
+  routes({ 'https://pc.test/api/placement/config': { ...config, limits: old } });
+  expect((await readPlacementAll([pc]))[0].read).toMatchObject({ state: 'ready', config: { limits: { open: 10 } } });
+});
+
 it('limites e regra de horário seguem o que o servidor aceita', () => {
-  expect(placementLimits('15', ' 6 ', '80')).toEqual({ ok: true, value: { mem_free_pct: 15, working: 6, cpu_pct: 80 } });
-  expect(placementLimits('101', '6', '80')).toEqual({ ok: false, error: m.native_placement_limit_pct_invalid() });
-  expect(placementLimits('15', '6', 'abc')).toEqual({ ok: false, error: m.native_placement_limit_pct_invalid() });
-  expect(placementLimits('15', '0', '80')).toEqual({ ok: false, error: m.native_placement_limit_working_invalid() });
+  expect(placementLimits('15', ' 6 ', '80', '10')).toEqual({ ok: true, value: { mem_free_pct: 15, working: 6, open: 10, cpu_pct: 80 } });
+  expect(placementLimits('101', '6', '80', '10')).toEqual({ ok: false, error: m.native_placement_limit_pct_invalid() });
+  expect(placementLimits('15', '6', 'abc', '10')).toEqual({ ok: false, error: m.native_placement_limit_pct_invalid() });
+  expect(placementLimits('15', '0', '80', '10')).toEqual({ ok: false, error: m.native_placement_limit_working_invalid() });
+  expect(placementLimits('15', '6', '80', '0')).toEqual({ ok: false, error: m.native_placement_limit_open_invalid() });
   expect(placementScheduleRule([5, 1], '9:00', '18:00', 'America/Sao_Paulo', 'nb'))
     .toEqual({ ok: true, value: { days: [1, 5], from: '09:00', to: '18:00', tz: 'America/Sao_Paulo', avoid: 'nb' } });
   expect(placementScheduleRule([], '9h', '18:00', 'UTC', 'nb')).toEqual({ ok: false, error: m.native_placement_schedule_time_invalid() });
