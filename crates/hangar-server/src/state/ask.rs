@@ -123,6 +123,14 @@ struct Sidecar { tool_input: ToolInput, #[serde(default)] tool_use_id: Option<St
 #[derive(Deserialize)]
 struct ToolInput { questions: Vec<AskQuestionItem> }
 
+/// `metadata.source` do AskUserQuestion no registro do hook, que o dono não vê; `hangar-child:<id>` marca o repasse
+/// da pergunta de uma filha ligada. Registro ausente, ilegível ou sem a marca é `None`.
+pub fn pending_source(jsonl: &Path) -> Option<String> {
+    let bytes = std::fs::read(sidecar_path(jsonl)?).ok()?;
+    let sidecar: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    sidecar["tool_input"]["metadata"]["source"].as_str().map(str::to_owned)
+}
+
 /// Pergunta pendente do sidecar. Ausente é o caso normal (`Ok(None)`); `Err` é o código de um
 /// arquivo que existe e não serve (contrato do hook quebrado), que vai ao diário.
 pub fn read_pending(jsonl: &Path) -> Result<Option<AskQuestion>, String> {
@@ -672,6 +680,23 @@ mod tests {
         // A resposta no transcript encerra o aviso: o mesmo quadro não revive o cartão velho.
         std::fs::write(&jsonl, "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\"}]}}\n").unwrap();
         assert_eq!(observe_screen_menu(&store, &binding, &jsonl, PLAN), Err("plan_notice_missing".to_owned()));
+    }
+
+    /// A marca de repasse (`metadata.source`) do registro do hook vai à pergunta publicada; metadado torto não a derruba.
+    #[test]
+    fn the_sidecar_source_reaches_the_question() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("projects/p/sid-fonte.jsonl");
+        let askq = sidecar_path(&jsonl).unwrap();
+        std::fs::create_dir_all(askq.parent().unwrap()).unwrap();
+        let sidecar = |metadata: &str| format!(r#"{{"tool_input":{{"questions":[{{"question":"Cor?","header":"Cor","multiSelect":false,
+            "options":[{{"label":"Azul"}}]}}],"metadata":{metadata}}}}}"#);
+        assert_eq!(pending_source(&jsonl), None, "sem registro");
+        std::fs::write(&askq, sidecar(r#"{"source":"hangar-child:q1"}"#)).unwrap();
+        assert_eq!(pending_source(&jsonl).as_deref(), Some("hangar-child:q1"));
+        std::fs::write(&askq, sidecar("5")).unwrap();
+        assert_eq!(pending_source(&jsonl), None);
+        assert_eq!(read_pending(&jsonl).unwrap().expect("a pergunta segue sem a marca").questions.len(), 1);
     }
 
     #[test]

@@ -45,6 +45,18 @@ const BACKOFF: Duration = Duration::from_secs(30);
 const EVENT: &str = "rust.link_return_failed";
 /// Texto da pergunta da filha no recado ao pai, em `char`.
 const ASK_CHARS: usize = 300;
+/// Resposta dada na filha, no recado ao pai, em `char`.
+const ANSWER_CHARS: usize = 1000;
+/// Eventos do fim da conversa da filha onde a resposta da pergunta fechada é procurada.
+const ANSWER_WINDOW: usize = 200;
+/// A resposta chega ao transcript um pouco depois de a pergunta sumir da linha: espera isto antes de dizer que não leu.
+const ANSWER_GRACE: Duration = Duration::from_secs(10);
+/// Ferramentas de pergunta ao dono: o resultado da chamada é a resposta dada.
+const ASK_TOOLS: [&str; 2] = ["AskUserQuestion", "request_user_input"];
+/// Marca, no `metadata.source` do AskUserQuestion do pai, da pergunta que repassa a de uma filha.
+const RELAY_SOURCE: &str = "hangar-child:";
+/// Chave de aviso de menu e permissão; a de pergunta é o `interaction_id`.
+const NOTICE_KEY: &str = "notice:";
 /// Tipo da interação ainda ilegível (vínculo da conversa por ligar): espera isto além do `SETTLE` antes de
 /// avisar como pedido do dono, que não se refaz como pergunta depois.
 const KIND_GRACE: Duration = Duration::from_secs(60);
@@ -240,6 +252,9 @@ struct Watcher {
     unrecorded: HashMap<String, String>,
     /// Desde quando a filha está sem interação com a chave de um aviso ainda gravada.
     closed: HashMap<String, Instant>,
+    /// Pergunta respondida na filha já contada ao pai: a gravação que falha não conta de novo.
+    told: HashMap<String, String>,
+    answered_retry_at: HashMap<String, Instant>,
 }
 
 impl Watcher {
@@ -255,7 +270,7 @@ impl Watcher {
         }
     }
 
-    async fn round(&mut self, st: &AppState, server: &str, children: &[&SessionRow], current: &Rows<'_>) {
+    async fn round(&mut self, st: &Arc<AppState>, server: &str, children: &[&SessionRow], current: &Rows<'_>) {
         let now = Instant::now();
         let present = |n: &String| children.iter().any(|r| &r.name == n);
         self.idle.retain(|n, _| present(n));
@@ -269,6 +284,8 @@ impl Watcher {
         self.notified.retain(|n, _| present(n));
         self.unrecorded.retain(|n, _| present(n));
         self.closed.retain(|n, _| present(n));
+        self.told.retain(|n, _| present(n));
+        self.answered_retry_at.retain(|n, _| present(n));
         self.rate.forget_old(now);
         self.question_rate.forget_old(now);
         // Já na primeira vista: o registro criado aqui só deixa voltar resposta posterior a ele.
@@ -304,7 +321,7 @@ impl Watcher {
                 let Some(link) = read.get(&row.name) else { continue };
                 let mut link = link.clone();
                 if link.asked_queue_id.is_none() { link.asked_queue_id = self.unrecorded.get(&row.name).cloned(); }
-                self.ask(st, row, &link, now).await;
+                self.ask(st, row, &link, now, current).await;
             }
             links = Some(read);
         }
@@ -354,6 +371,8 @@ enum QuestionStep {
     /// A interação avisada fechou sem linha na fila: a chave gravada sai, ou o próximo pedido de mesmo texto,
     /// depois de um reinício, seria dado como já avisado.
     Forget,
+    /// A pergunta avisada com este `interaction_id` fechou sem o `child_answer` do pai: o dono respondeu na filha.
+    Answered(String),
 }
 
 impl Watcher {
@@ -363,11 +382,12 @@ impl Watcher {
         let Some(id) = open_interaction(row) else {
             self.asking.remove(child);
             if let Some(queued) = &link.asked_queue_id { return QuestionStep::Cancel(queued.clone()); }
-            if link.asked_key.is_some() {
+            if let Some(key) = &link.asked_key {
                 // Fechada depois de avisada nesta vigia, ou fechada há `SETTLE`: logo depois do reinício o pedido ainda
                 // aberto pode voltar com outro ID, e a chave é o que segura o aviso repetido.
                 let since = *self.closed.entry(child.clone()).or_insert(now);
-                return if self.notified.contains_key(child) || now - since >= SETTLE { QuestionStep::Forget } else { QuestionStep::Wait };
+                if !self.notified.contains_key(child) && now - since < SETTLE { return QuestionStep::Wait; }
+                return if answered_in_child(key, link) { QuestionStep::Answered(key.clone()) } else { QuestionStep::Forget };
             }
             // Nada gravado a limpar: a vigia esquece a interação fechada e para de reler o arquivo por ela.
             self.closed.remove(child);
@@ -397,7 +417,7 @@ impl Watcher {
     }
 
     /// Avisa o pai da interação aberta da filha, ou tira da fila dele o aviso que perdeu o sentido.
-    async fn ask(&mut self, st: &AppState, row: &SessionRow, link: &LinkReturn, now: Instant) {
+    async fn ask(&mut self, st: &Arc<AppState>, row: &SessionRow, link: &LinkReturn, now: Instant, current: &Rows<'_>) {
         let child = row.name.as_str();
         let parent = row.linked_by.as_deref().unwrap_or_default();
         let id = open_interaction(row);
@@ -416,9 +436,31 @@ impl Watcher {
             }
             QuestionStep::Forget => {
                 // Gravação que falha mantém `notified`: o próximo pedido de mesmo texto é outro aviso, e tenta de novo.
-                if record_ask(st, child, |entry| if entry.asked_queue_id.is_none() { entry.asked_key = None; }).await {
+                if record_ask(st, child, |entry| if entry.asked_queue_id.is_none() { entry.asked_key = None; entry.parent_answered = None; }).await {
                     self.notified.remove(child);
                     self.closed.remove(child);
+                }
+            }
+            QuestionStep::Answered(id) => {
+                if self.answered_retry_at.get(child).is_some_and(|t| now < *t) { return; }
+                if self.told.get(child) != Some(&id) {
+                    let answer = match read_child_answer(row).await {
+                        Ok(answer) => answer,
+                        Err(e) => { report(st, child, "link_question_answer_unreadable", "resposta dada na filha ilegível", &io_kind(&e)); None }
+                    };
+                    let since = self.closed.get(child).copied().unwrap_or(now);
+                    if answer.is_none() && now - since < ANSWER_GRACE { return; }
+                    if tell_parent(st, parent, child, &id, answer.as_deref(), current).await == Told::Retry {
+                        self.answered_retry_at.insert(child.to_owned(), now + BACKOFF);
+                        return;
+                    }
+                    self.told.insert(child.to_owned(), id);
+                }
+                self.answered_retry_at.remove(child);
+                if record_ask(st, child, |entry| if entry.asked_queue_id.is_none() { entry.asked_key = None; entry.parent_answered = None; }).await {
+                    self.notified.remove(child);
+                    self.closed.remove(child);
+                    self.told.remove(child);
                 }
             }
             QuestionStep::Cancel(queued) => {
@@ -437,13 +479,14 @@ impl Watcher {
                 self.cancel_retry_at.remove(child);
                 self.open_asks.remove(child);
                 self.unrecorded.remove(child);
-                let closed = id.is_none();
-                // A interação fechada leva a chave junto; trocada por outra, a chave fica até a nova ser avisada.
+                // A interação fechada leva a chave junto; trocada por outra, a chave fica até a nova ser avisada. Aviso
+                // que já tinha saído da fila o pai leu: a chave fica, e a pergunta fechada vai ao `Answered`.
+                let forget = id.is_none() && cancelled == Ok(true);
                 let cleared = record_ask(st, child, move |entry| if entry.asked_queue_id.as_deref() == Some(queued.as_str()) {
                     entry.asked_queue_id = None;
-                    if closed { entry.asked_key = None; }
+                    if forget { entry.asked_key = None; entry.parent_answered = None; }
                 }).await;
-                if closed && cleared { self.notified.remove(child); }
+                if forget && cleared { self.notified.remove(child); }
             }
             QuestionStep::Send(text) => {
                 let Some(id) = id else { return };
@@ -484,7 +527,7 @@ fn ask_key(id: &str, kind: Option<&InteractionKind>, text: &str) -> String {
     if kind == Some(&InteractionKind::Question) { return id.to_owned(); }
     let digest = ring::digest::digest(&ring::digest::SHA256, text.as_bytes());
     let hex: String = digest.as_ref()[..16].iter().map(|byte| format!("{byte:02x}")).collect();
-    format!("notice:{hex}")
+    format!("{NOTICE_KEY}{hex}")
 }
 
 /// Grava a pergunta avisada no registro da filha; falha vai ao diário (`notified` segura o reaviso). `true` = gravado.
@@ -551,7 +594,116 @@ fn question_message(child: &str, id: &str, row: &SessionRow, kind: Option<&Inter
         for (i, option) in options.iter().enumerate() { text.push_str(&format!("\n{}. {}", i + 1, cut(option, ASK_CHARS))); }
     }
     text.push_str(&format!("\nResponda com child_answer (alvo {child}, interaction_id {id})."));
+    text.push_str(&format!("\nSe for perguntar ao dono, use AskUserQuestion com metadata {{source: \"{RELAY_SOURCE}{id}\"}}."));
     text
+}
+
+/// A pergunta avisada (chave = `interaction_id`) fechou sem o `child_answer` do pai: quem respondeu foi o dono, na filha.
+fn answered_in_child(key: &str, link: &LinkReturn) -> bool {
+    !key.starts_with(NOTICE_KEY) && link.parent_answered.as_deref() != Some(key)
+}
+
+/// O pai vai responder pelo `child_answer`: gravado antes da rota, porque a pergunta pode fechar já na resposta.
+pub(crate) async fn parent_answering(st: &AppState, child: &str, id: &str) {
+    let id = id.to_owned();
+    record_ask(st, child, move |entry| entry.parent_answered = Some(id)).await;
+}
+
+/// A resposta do pai não saiu: a marca sai, senão a resposta que o dono der na filha não chega a ele.
+pub(crate) async fn parent_answer_dropped(st: &AppState, child: &str, id: &str) {
+    let id = id.to_owned();
+    record_ask(st, child, move |entry| if entry.parent_answered.as_deref() == Some(id.as_str()) { entry.parent_answered = None; }).await;
+}
+
+/// Saiu ou pode ter saído: só a recusa clara tira a marca do pai.
+pub(crate) fn answer_maybe_sent(status: u16, value: &serde_json::Value) -> bool {
+    (200..300).contains(&status) || matches!(value["detail"]["code"].as_str(), Some("erro_sem_confirmacao_resposta" | "erro_envio_falhou"))
+}
+
+/// A resposta da última pergunta ao dono na conversa: o resultado da chamada da ferramenta, cortado.
+fn asked_answer(events: &[ChatEvent]) -> Option<String> {
+    let call = events.iter().rev().find(|e| e.kind == ChatKind::ToolUse && e.tool_name.as_deref().is_some_and(|n| ASK_TOOLS.contains(&n)))?;
+    let id = call.tool_use_id.as_deref().filter(|id| !id.is_empty())?;
+    let result = events.iter().rev().find(|e| e.kind == ChatKind::ToolResult && e.tool_use_id.as_deref() == Some(id))?;
+    result.result.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| cut(t, ANSWER_CHARS))
+}
+
+async fn read_child_answer(row: &SessionRow) -> io::Result<Option<String>> {
+    let (Some(provider), Some(jsonl)) = (Provider::parse(&row.provider), row.jsonl.clone().filter(|j| !j.is_empty())) else { return Ok(None) };
+    blocking(move || {
+        let events = merged_history_capped(&HistoryRequest {
+            provider, jsonl: PathBuf::from(jsonl), queue: None, limit: Some(ANSWER_WINDOW), tail_window: TAIL_WINDOW,
+        }, MAX_READ)?;
+        Ok(asked_answer(&events))
+    }).await
+}
+
+/// A pergunta aberta do pai que repassa a da filha, pela marca no `metadata.source`: (`interaction_id`, formulário).
+fn relay_question(parent: &SessionRow, source: &str) -> Option<(String, serde_json::Value)> {
+    let form = parent.ask_form.as_ref().filter(|form| form["source"].as_str() == Some(source))?;
+    Some((open_interaction(parent)?, form.clone()))
+}
+
+/// O mesmo texto livre em cada pergunta do formulário; o campo de texto vem depois das opções.
+fn free_text_body(form: &serde_json::Value, interaction_id: &str, text: &str) -> serde_json::Value {
+    let answers: Vec<serde_json::Value> = form["questions"].as_array().into_iter().flatten()
+        .map(|q| serde_json::json!({"kind": "text", "value": text, "type_index": q["options"].as_array().map_or(0, Vec::len)}))
+        .collect();
+    serde_json::json!({"answers": answers, "interaction_id": interaction_id})
+}
+
+/// Caractere de controle que o `/answer` recusa vira espaço; parágrafo e tabulação ficam.
+fn plain(text: &str) -> String {
+    text.chars().map(|c| if c.is_control() && !matches!(c, '\n' | '\t') { ' ' } else { c }).collect()
+}
+
+/// Resposta livre à pergunta de repasse do pai.
+fn relay_answer_text(child: &str, answer: Option<&str>) -> String {
+    plain(&match answer {
+        Some(answer) => format!("Respondida pelo dono na filha {child}: {}. Não repita nem mande à filha.", answer.trim_end_matches('.')),
+        None => format!("Encerrada na filha {child} sem resposta lida. Não repita nem mande à filha."),
+    })
+}
+
+/// Recado ao pai sem pergunta de repasse aberta (pai Codex, pai livre, ou sem a marca).
+fn answered_message(child: &str, id: &str, answer: Option<&str>) -> String {
+    match answer {
+        Some(answer) => format!("[de: {child}] a pergunta (interaction_id {id}) foi respondida pelo dono na filha: {}. Não responda nem repita.", answer.trim_end_matches('.')),
+        None => format!("[de: {child}] a pergunta (interaction_id {id}) foi encerrada na filha sem resposta lida. Não responda nem repita."),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Told { Done, Retry }
+
+/// Fecha a pergunta de repasse do pai pelo `/answer`, ou manda o recado pela fila quando não há uma.
+async fn tell_parent(st: &Arc<AppState>, parent: &str, child: &str, id: &str, answer: Option<&str>, current: &Rows<'_>) -> Told {
+    let source = format!("{RELAY_SOURCE}{id}");
+    let relay = current().and_then(|rows| rows.iter().find(|r| r.name == parent).and_then(|r| relay_question(r, &source)));
+    if let Some((interaction_id, form)) = relay {
+        let body = free_text_body(&form, &interaction_id, &relay_answer_text(child, answer));
+        let (status, value) = crate::session_write::answer::answer_as_owner(st, parent, &body).await;
+        if answer_maybe_sent(status.as_u16(), &value) {
+            st.diag.record_line(answered_line(child));
+            return Told::Done;
+        }
+        let code = value["detail"]["code"].as_str().unwrap_or("erro_resposta_desconhecida").to_owned();
+        report(st, child, &code, "resposta dada na filha não fechou a pergunta do pai", &status.as_u16().to_string());
+        // Pergunta do pai trocada ou fechada nesse meio: segue o recado. Pai ocupado tenta de novo.
+        if !matches!(code.as_str(), "erro_interacao_desatualizada" | "erro_interacao_sem_identidade") && transient(status) { return Told::Retry; }
+    }
+    let (status, value) = crate::session_write::input::deliver_reply(st, parent, &answered_message(child, id, answer)).await;
+    if status.is_success() {
+        st.diag.record_line(answered_line(child));
+        return Told::Done;
+    }
+    let code = value["detail"]["code"].as_str().unwrap_or("erro_envio_falhou_desconhecida");
+    report(st, child, code, "resposta dada na filha não chegou ao pai", &status.as_u16().to_string());
+    if transient(status) { Told::Retry } else { Told::Done }
+}
+
+fn answered_line(child: &str) -> serde_json::Value {
+    serde_json::json!({"evento": "rust.link_question_answered_in_child", "nivel": "ok", "sessao": child, "codigo": "link_question_answered_in_child"})
 }
 
 /// O que a decisão precisa saber da filha, já lido.
@@ -1308,7 +1460,7 @@ mod tests {
         assert_eq!(w.question_step(&row, &linked(), question, t0), QuestionStep::Wait);
         assert_eq!(w.question_step(&row, &linked(), question, t0 + SETTLE - Duration::from_secs(1)), QuestionStep::Wait);
         let QuestionStep::Send(text) = w.question_step(&row, &linked(), question, t0 + SETTLE) else { panic!("esperava Send") };
-        assert_eq!(text, "[de: f] pergunta (interaction_id q1): Qual pasta?\n1. src\n2. docs\nResponda com child_answer (alvo f, interaction_id q1).");
+        assert_eq!(text, "[de: f] pergunta (interaction_id q1): Qual pasta?\n1. src\n2. docs\nResponda com child_answer (alvo f, interaction_id q1).\nSe for perguntar ao dono, use AskUserQuestion com metadata {source: \"hangar-child:q1\"}.");
         // Avisada (o mesmo ID gravado como `asked_key`): não vai de novo.
         let asked = LinkReturn { asked_key: Some("q1".into()), ..linked() };
         assert_eq!(w.question_step(&row, &asked, question, t0 + SETTLE * 2), QuestionStep::Skip);
@@ -1458,9 +1610,9 @@ mod tests {
         assert_eq!(w.question_step(&working, &queued, question, t0), QuestionStep::Cancel("row1".into()));
         // Trocada por outra: a do aviso antigo sai antes de avisar a nova.
         assert_eq!(w.question_step(&waiting("q2", "y", &[]), &queued, question, t0 + SETTLE), QuestionStep::Cancel("row1".into()));
-        // Linha já tirada (ou entregue sem id): a chave gravada sai com a interação fechada.
+        // Linha já tirada (ou entregue sem id): a pergunta fechou sem o `child_answer` do pai, e a chave sai depois.
         let done = LinkReturn { asked_queue_id: None, ..queued };
-        assert_eq!(w.question_step(&working, &done, question, t0), QuestionStep::Forget);
+        assert_eq!(w.question_step(&working, &done, question, t0), QuestionStep::Answered("q1".into()));
         // Sem chave nem linha: nada, e a vigia esquece a interação.
         w.notified.insert("f".into(), "q1".into());
         assert_eq!(w.question_step(&working, &linked(), question, t0), QuestionStep::Skip);
@@ -1487,6 +1639,108 @@ mod tests {
         let next = waiting("p2", "Permitir Bash?", &[]);
         reborn.question_step(&next, &linked(), approval, t0);
         assert!(matches!(reborn.question_step(&next, &linked(), approval, t0 + SETTLE), QuestionStep::Send(_)));
+    }
+
+    /// A pergunta avisada que fecha sem o `child_answer` do pai foi respondida na filha; a que o pai respondeu, não.
+    #[tokio::test(start_paused = true)]
+    async fn a_question_closed_without_the_parent_answer_was_answered_in_the_child() {
+        let t0 = Instant::now();
+        let question = Some(&InteractionKind::Question);
+        let mut closed = waiting("q1", "Qual pasta?", &[]);
+        closed.state = "working".into();
+        let asked = LinkReturn { asked_key: Some("q1".into()), ..linked() };
+        let mut w = Watcher::default();
+        w.notified.insert("f".into(), "q1".into());
+        assert_eq!(w.question_step(&closed, &asked, question, t0), QuestionStep::Answered("q1".into()));
+        // O pai respondeu esta pelo `child_answer`: só a chave sai.
+        let by_parent = LinkReturn { parent_answered: Some("q1".into()), ..asked.clone() };
+        let mut w = Watcher::default();
+        w.notified.insert("f".into(), "q1".into());
+        assert_eq!(w.question_step(&closed, &by_parent, question, t0), QuestionStep::Forget);
+        // A marca de uma pergunta anterior não vale para esta.
+        let old_mark = LinkReturn { parent_answered: Some("q0".into()), ..asked.clone() };
+        assert_eq!(w.question_step(&closed, &old_mark, question, t0), QuestionStep::Answered("q1".into()));
+        // Depois de reiniciar, espera o `SETTLE` (o pedido pode voltar com outro ID) e conta igual.
+        let mut fresh = Watcher::default();
+        assert_eq!(fresh.question_step(&closed, &asked, question, t0), QuestionStep::Wait);
+        assert_eq!(fresh.question_step(&closed, &asked, question, t0 + SETTLE), QuestionStep::Answered("q1".into()));
+        // Menu e permissão o dono sempre decide na filha: não viram resposta ao pai.
+        let notice = LinkReturn { asked_key: Some(format!("{NOTICE_KEY}abc")), ..linked() };
+        let mut w = Watcher::default();
+        w.notified.insert("f".into(), "p1".into());
+        assert_eq!(w.question_step(&closed, &notice, Some(&InteractionKind::Approval), t0), QuestionStep::Forget);
+    }
+
+    fn call(name: &str, id: &str) -> ChatEvent {
+        ChatEvent { kind: ChatKind::ToolUse, tool_name: Some(name.into()), tool_use_id: Some(id.into()), ..Default::default() }
+    }
+
+    fn result(id: &str, text: &str) -> ChatEvent {
+        ChatEvent { kind: ChatKind::ToolResult, tool_use_id: Some(id.into()), result: Some(text.into()), ..Default::default() }
+    }
+
+    #[test]
+    fn the_answer_given_in_the_child_is_the_result_of_its_last_question() {
+        let answered = "User has answered your questions: \"Qual pasta?\"=\"src\".";
+        let events = vec![call("AskUserQuestion", "t0"), result("t0", "antiga"), ev(ChatKind::UserMsg, "x"),
+            call("Bash", "b1"), result("b1", "saída"), call("AskUserQuestion", "t1"), result("t1", answered)];
+        assert_eq!(asked_answer(&events).as_deref(), Some(answered));
+        // A resposta ainda não chegou ao transcript: nada lido, nunca a da pergunta anterior.
+        assert_eq!(asked_answer(&events[..6]), None);
+        // Codex pergunta pelo `request_user_input`.
+        assert_eq!(asked_answer(&[call("request_user_input", "c1"), result("c1", "docs")]).as_deref(), Some("docs"));
+        let long = "é".repeat(ANSWER_CHARS + 5);
+        assert_eq!(asked_answer(&[call("AskUserQuestion", "t"), result("t", &long)]).unwrap().chars().count(), ANSWER_CHARS + 1);
+    }
+
+    fn parent(form: serde_json::Value) -> SessionRow {
+        serde_json::from_value(serde_json::json!({"name": "pai", "provider": "claude", "state": "awaiting_input", "ask_form": form})).unwrap()
+    }
+
+    /// O pai parado na pergunta que repassa a da filha recebe a resposta nela, pelo ID publicado e em texto livre.
+    #[test]
+    fn the_relay_question_of_the_parent_is_found_by_its_source_and_answered_in_free_text() {
+        let form = serde_json::json!({"interaction_id": "pq1", "source": "hangar-child:q1", "questions": [
+            {"header": "h", "question": "Qual pasta?", "options": [{"label": "src"}, {"label": "docs"}]}]});
+        let (id, found) = relay_question(&parent(form.clone()), "hangar-child:q1").expect("pergunta de repasse");
+        assert_eq!(id, "pq1");
+        let text = relay_answer_text("f", Some("\"Qual pasta?\"=\"src\"."));
+        assert_eq!(text, "Respondida pelo dono na filha f: \"Qual pasta?\"=\"src\". Não repita nem mande à filha.");
+        let body = free_text_body(&found, &id, &text);
+        assert_eq!(body, serde_json::json!({"interaction_id": "pq1", "answers": [{"kind": "text", "value": text, "type_index": 2}]}));
+        // O corpo passa pela mesma validação da rota.
+        let parsed = crate::session_write::answer::parse_body(&axum::body::Bytes::from(body.to_string())).expect("corpo do /answer");
+        assert_eq!(parsed.answers_json()[0]["value"], serde_json::json!(text));
+        // Outra filha, outra pergunta, ou pergunta sem a marca: não é esta.
+        assert!(relay_question(&parent(form.clone()), "hangar-child:q2").is_none());
+        let mut unmarked = form.clone();
+        unmarked.as_object_mut().unwrap().remove("source");
+        assert!(relay_question(&parent(unmarked), "hangar-child:q1").is_none());
+        let mut idle = parent(form);
+        idle.state = "idle".into();
+        assert!(relay_question(&idle, "hangar-child:q1").is_none(), "pergunta já fechada no pai");
+        assert_eq!(relay_answer_text("f", None), "Encerrada na filha f sem resposta lida. Não repita nem mande à filha.");
+        assert_eq!(plain("a\u{1b}b\nc\td\re"), "a b\nc\td e");
+    }
+
+    /// Sem pergunta de repasse no pai, o recado vai pela fila dizendo que não há o que responder.
+    #[test]
+    fn without_a_relay_question_the_parent_gets_a_line() {
+        assert_eq!(answered_message("f", "q1", Some("src.")),
+            "[de: f] a pergunta (interaction_id q1) foi respondida pelo dono na filha: src. Não responda nem repita.");
+        assert_eq!(answered_message("f", "q1", None),
+            "[de: f] a pergunta (interaction_id q1) foi encerrada na filha sem resposta lida. Não responda nem repita.");
+    }
+
+    /// Só a recusa clara tira a marca do `child_answer`: resposta que pode ter saído fica marcada.
+    #[test]
+    fn the_parent_mark_stays_when_the_answer_may_have_gone() {
+        let coded = |code: &str| serde_json::json!({"detail": {"code": code}});
+        assert!(answer_maybe_sent(200, &serde_json::json!({"ok": true})));
+        assert!(answer_maybe_sent(409, &coded("erro_sem_confirmacao_resposta")));
+        assert!(answer_maybe_sent(502, &coded("erro_envio_falhou")));
+        assert!(!answer_maybe_sent(409, &coded("erro_interacao_desatualizada")));
+        assert!(!answer_maybe_sent(503, &coded("runtime_unhealthy")));
     }
 
     #[test]

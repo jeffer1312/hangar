@@ -354,6 +354,22 @@ pub async fn answer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     respond(&ctx, result)
 }
 
+/// O mesmo `/answer`, chamado de dentro do servidor com o token do dono, sem passar pela rede.
+pub(crate) async fn answer_as_owner(st: &Arc<AppState>, name: &str, body: &Value) -> Answer {
+    let path = format!("/api/sessions/{}/answer", crate::groups::exit::segment(name));
+    let built = axum::http::Request::builder().method(axum::http::Method::POST).uri(path)
+        .header("authorization", format!("Bearer {}", st.cfg.auth_token)).header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()));
+    let Ok(req) = built else { return (StatusCode::INTERNAL_SERVER_ERROR, detail_body("answer_request_invalid", "pedido interno inválido", json!({}))) };
+    let response = answer(State(st.clone()), ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))), req).await;
+    let status = response.status();
+    let value = match axum::body::to_bytes(response.into_body(), 1 << 20).await {
+        Ok(raw) => serde_json::from_slice(&raw).unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    };
+    (status, value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Item, one_line, validate};

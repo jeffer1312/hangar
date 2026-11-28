@@ -55,6 +55,8 @@ async fn menu_interaction<C: CaptureSource>(runtime: &crate::runtime::gateway::R
         row.pending_questions = row.pending_questions.max(1);
         // O formulário vai à linha com o ID dele: o card responde pelo `/answer`, como o passo a passo do chat.
         row.ask_form = serde_json::to_value(&question).ok();
+        // A marca de repasse fica só na linha: o retorno da filha a procura na pergunta aberta do pai.
+        if let (Some(form), Some(source)) = (row.ask_form.as_mut(), crate::state::ask::pending_source(jsonl)) { form["source"] = source.into(); }
     }
     Ok(menu)
 }

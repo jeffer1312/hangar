@@ -4447,6 +4447,23 @@ ninguém.
   `[painel: …]`: o painel diz "não responda".
 - **`child_answer` passa pela `/answer` com o `interaction_id` do aviso.** Codex com terminal não
   informa quem resolveu: a resposta sai "enviada, sem confirmação" e não se tenta de novo.
+- **Pergunta respondida na filha chega ao pai, só pelo ID (28/11/2026).** Caso: o pai `x-respostas`
+  (Claude sem terminal) repassou ao dono, num `AskUserQuestion` próprio, a pergunta de
+  `site-hangar-atualizar`; o dono respondeu na filha e o cartão do pai ficou aberto (recado não entra
+  com pergunta aberta). Respondido depois no pai, o `child_answer` voltou `erro_interacao_desatualizada`,
+  o pai mandou a resposta por recado e a filha a leu como conflito e perguntou de novo. Agora o aviso de
+  pergunta pede, para repassar ao dono, `AskUserQuestion` com `metadata {source: "hangar-child:<id>"}`:
+  o dono não vê o campo, ele chega ao registro `.hangar-askq/` (com terminal) e ao `control_request`
+  (sem terminal) e vai à linha em `ask_form.source`. O `child_answer` grava `parent_answered` no
+  `link-returns.json` antes da rota (a pergunta pode fechar já na resposta) e o tira só na recusa clara.
+  A pergunta avisada que fecha sem essa marca foi respondida na filha: a vigia lê a resposta na conversa
+  dela (o resultado do `AskUserQuestion` ou do `request_user_input`, até 1 000 caracteres, esperando
+  até 10 s pelo transcript) e, se o pai tem pergunta aberta com a marca, a responde pelo `/answer` com o
+  `interaction_id` publicado, em texto livre; senão manda `[de: <filha>] a pergunta (interaction_id …)
+  foi respondida pelo dono na filha: … Não responda nem repita.` pela entrega normal. Nunca casar pela
+  redação da pergunta: modelo que não pôs a marca recebe o recado. O aviso tirado da fila antes de
+  entregar não conta, porque o pai não o leu. O Codex não tem `request_user_input` no modo Default:
+  pergunta em texto, não fica parado, e recebe o recado.
 - **Parar para só a sessão.** O `/interrupt` não alcança filha ligada, e o `cascade=1` de cliente
   antigo é ignorado; a tool `interrupt` para só a filha nomeada, sem as netas. O dono não pediu o
   Parar em cascata e o tirou (27/11): a filha segue o trabalho dela quando o pai para; quem alcança as
