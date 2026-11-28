@@ -71,7 +71,8 @@ def prune_removed_worktrees(cache):
             if any(part.is_symlink() for part in (owner, *unit.parents, unit) if part.is_relative_to(cache)):
                 continue
             checkout = Path(os.fsdecode(owner.read_bytes()))
-            if checkout.is_absolute() and checkout.resolve() not in active:
+            # Outro clone pode dividir o target configurado: só sai a unidade cuja worktree sumiu do disco.
+            if checkout.is_absolute() and checkout.resolve() not in active and not checkout.exists():
                 shutil.rmtree(unit)
     stamp.touch()
 

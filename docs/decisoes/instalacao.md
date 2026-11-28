@@ -263,8 +263,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   executáveis finais na worktree. O Cargo identifica os artefatos dos
   membros pelo caminho do wrapper na worktree e reaproveita as dependências externas entre elas.
   A cada 24 horas, durante um build, o script poda os intermediários marcados de worktrees que
-  saíram do registro do Git, sob a trava de build. Cache configurado pelo usuário e dependências
-  externas ficam fora dessa poda.
+  saíram do registro do Git e do disco, sob a trava de build, também no target configurado pelo
+  usuário. Dependências externas ficam fora dessa poda. Sem a marca da worktree dona (target passado
+  por `--target-dir`), o wrapper não entra.
   Com wrapper do usuário, fontes substituídas, dependência local fora do workspace ou Cargo anterior
   à 1.100, continua valendo a invalidação de fingerprints na troca de árvore. O script pega a
   trava `/tmp/hangar-build.lock` e copia os executáveis para o `crates/target` do checkout na mesma
@@ -1165,6 +1166,9 @@ O Cargo calcula a identidade de um membro do workspace com o caminho absoluto do
 com a mesma identidade para as dependências externas. No cache padrão, o wrapper identifica a
 worktree dona da unidade e coloca o incremental junto dela antes de passar o comando ao
 compilador. O Cargo continua verificando alterações no código e na configuração de cada worktree.
+No target configurado pelo usuário vale a mesma marca: sem ela, cada worktree deixava uma cópia dos
+membros e do incremental que nenhuma poda alcançava. Como outro clone pode dividir esse target, a
+poda só remove a unidade cuja worktree saiu do registro e não existe mais no disco.
 
 No cache criado pelo script, `CARGO_BUILD_BUILD_DIR` aponta para o diretório compartilhado e
 `CARGO_TARGET_DIR` para o diretório de compilação da worktree. Os testes que executam o

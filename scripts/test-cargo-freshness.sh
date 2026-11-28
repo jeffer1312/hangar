@@ -49,6 +49,23 @@ mkdir "$build/.hangar-cargo-workspace.json"
 if prepare 2>"$sandbox/error"; then exit 1; fi
 [[ -s "$sandbox/error" ]]
 printf 'Invalidação seletiva, cache, caminhos com espaços e links: OK\n'
+# A poda só apaga a unidade cuja worktree sumiu do disco: outro clone pode usar o mesmo target.
+repo="$sandbox/repo"
+shared="$sandbox/shared cache"
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init -q "$repo"
+mkdir -p "$sandbox/other clone"
+owned_unit() {
+    mkdir -p "$shared/debug/build/pkg/$1"
+    printf '%s' "$2" > "$shared/debug/build/pkg/$1/.hangar-worktree"
+}
+owned_unit 0123456789abcdef "$repo"
+owned_unit 1111111111111111 "$sandbox/other clone"
+owned_unit 2222222222222222 "$sandbox/removed"
+(cd "$repo" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HANGAR_CARGO_CACHE_WORKTREE="$repo" \
+    python3 "$root/scripts/cargo-worktree-cache.py" --prune "$shared")
+[[ -d "$shared/debug/build/pkg/0123456789abcdef" && -d "$shared/debug/build/pkg/1111111111111111" ]]
+[[ ! -e "$shared/debug/build/pkg/2222222222222222" ]]
+printf 'Poda preserva outro clone no mesmo target e remove a worktree apagada: OK\n'
 [[ ${1:-} == --with-cargo ]] || exit 0
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 CARGO_HOME="$temporary/cargo-home" CARGO_TERM_COLOR=never
 unset RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER
@@ -163,7 +180,32 @@ assert_reused
 assert_cache_owners removed
 printf 'Poda removeu as unidades da worktree encerrada e preservou o cache em uso: OK\n'
 
+# Com target configurado, as unidades da worktree encerrada também saem e as da ativa ficam.
+configured_target="$sandbox/configured target"
 mkdir -p "$CARGO_HOME"
+printf '[build]\ntarget-dir = "%s"\n' "$configured_target" > "$CARGO_HOME/config.toml"
+git -C "$sandbox/first" -c core.hooksPath=/dev/null worktree add --detach --quiet "$sandbox/configured"
+printf "pub fn value()->&'static str{\"configured\"}\n" > "$sandbox/configured/crates/library/src/lib.rs"
+owned_units() {
+    python3 - "$configured_target" "$1" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+owner = os.fsencode(sys.argv[2])
+print(sum(marker.read_bytes() == owner for marker in Path(sys.argv[1]).glob("*/build/*/*/.hangar-worktree")))
+PY
+}
+build_tree configured
+build_tree first
+(( $(owned_units "$sandbox/configured") > 0 && $(owned_units "$sandbox/first") > 0 ))
+git -C "$sandbox/first" worktree remove --force "$sandbox/configured"
+touch -t 200001010000 "$configured_target/.hangar-pruned"
+build_tree first
+assert_reused
+(( $(owned_units "$sandbox/configured") == 0 && $(owned_units "$sandbox/first") > 0 ))
+printf 'Target configurado: poda da worktree encerrada e cache em uso preservado: OK\n'
+
 printf '[build]\nrustc-workspace-wrapper = "configured-rustc"\n' > "$CARGO_HOME/config.toml"
 cat > "$CARGO_HOME/configured-rustc" <<'SH'
 #!/usr/bin/env sh

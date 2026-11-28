@@ -84,7 +84,15 @@ if [[ "$cache_mode" == default && "$alvo" == "$proprio" && "$target_arg" == -1 &
             echo "cargo-pinned: não foi possível podar o cache compartilhado" >&2
         fi
     fi
+elif [[ -n "$cache_mode" && "$alvo" != "$proprio" && "$target_arg" == -1 ]]; then
+    export CARGO_BUILD_BUILD_DIR="$intermediarios"
+    export HANGAR_CARGO_CACHE_WORKTREE="$raiz"
+    if ! python3 "$raiz/scripts/cargo-worktree-cache.py" --prune "$intermediarios"; then
+        echo "cargo-pinned: não foi possível podar o cache compartilhado" >&2
+    fi
 fi
+# Sem a marca da worktree dona, cada worktree deixaria no cache uma cópia que a poda não alcança.
+[[ -n ${HANGAR_CARGO_CACHE_WORKTREE:-} ]] || cache_mode=
 
 if [[ "$alvo" == "$proprio" ]]; then
     # O Cargo não pode escrever no par publicado antes de terminar a rodada.
