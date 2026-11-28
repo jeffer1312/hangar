@@ -54,4 +54,6 @@ test("as mais atrasadas primeiro e a contagem por faixa", () => {
   assert.deepEqual(v.rows.map(r => r.machine.label), ["c", "d", "b", "a", "e"]);
   assert.deepEqual([v.ok, v.near, v.far, v.outside], [1, 1, 2, 1]);
   assert.deepEqual(v.latest.map(l => [l.channel, l.os, l.version]), [["latest", "linux", "0.1.0.12300"], ["latest", "windows", "0.1.0.12251"]]);
+  const onlyCheckout = versionView([m("0.1.0.1", "windows", "latest", "w", "checkout")], published);
+  assert.deepEqual(onlyCheckout.latest, [], "checkout não puxa o cartão da mais atual");
 });

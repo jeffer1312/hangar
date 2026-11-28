@@ -57,7 +57,7 @@ export function versionView(machines: MachineLast[], published: Published) {
   const latest: (Release & { channel: string })[] = [];
   for (const [channel, releases] of Object.entries(published.channels)) {
     for (const os of [...new Set(releases.map(r => r.os))].sort()) {
-      if (!machines.some(m => m.channel === channel && m.os === os)) continue;
+      if (!machines.some(m => m.channel === channel && m.os === os && m.install !== "checkout")) continue;
       const top = releases.filter(r => r.os === os).sort((a, b) => compareVersions(b.version, a.version))[0];
       latest.push({ ...top, channel });
     }
