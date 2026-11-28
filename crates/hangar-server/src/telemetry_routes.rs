@@ -563,13 +563,14 @@ pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
 }
 
 /// O aviso único de "Não enviar", em segundo plano; o que não chegou vai ao diário e não se tenta de novo.
-fn send_refusal(telemetry: &Telemetry, refusal: Refusal, diag: crate::diag::DiagClient) {
+fn send_refusal(telemetry: &Arc<Telemetry>, refusal: Refusal, diag: crate::diag::DiagClient) {
     let Some(post) = telemetry.refusal_post() else {
         diag.report("telemetry.refusal", "", "telemetry_refusal_no_client", "aviso de recusa da telemetria sem cliente HTTP: não sai");
         return;
     };
+    let telemetry = telemetry.clone();
     tokio::spawn(async move {
-        if let Err(status) = hangar_telemetry::send_refusal(refusal, post).await {
+        if let Err(status) = telemetry.send_refusal(refusal, post).await {
             let code = status.map_or_else(|| "telemetry_refusal_unreachable".to_owned(), |status| format!("telemetry_refusal_http_{status}"));
             diag.report("telemetry.refusal", "", &code, "aviso de recusa da telemetria não chegou ao receptor; não volta a ser mandado");
         }

@@ -1056,10 +1056,11 @@ function acceptanceCard(data) {
   body.classList.add("accept");
   body.style.setProperty("--hue", ACCEPT_COLOR.send);
   body.style.setProperty("--hue-soft", "color-mix(in srgb, " + ACCEPT_COLOR.send + " 15%, transparent)");
-  const later = revoked ? el("p", { class: "minor", text: (revoked === 1 ? "1 máquina desligou" : fmt.format(revoked) + " máquinas desligaram")
-    + " a coleta depois de aceitar. Elas podem estar também entre as que enviaram no período, por isso ficam fora da barra." }) : null;
+  // `append` escreveria "null": sem revogação, a lista fica vazia.
+  const later = revoked ? [el("p", { class: "minor", text: (revoked === 1 ? "1 máquina desligou" : fmt.format(revoked) + " máquinas desligaram")
+    + " a coleta depois de aceitar. Elas podem estar também entre as que enviaram no período, por isso ficam fora da barra." })] : [];
   if (!total) {
-    body.append(el("p", { class: "empty", text: "Nenhuma máquina mandou pacote nem recusou no aviso no período." }), later);
+    body.append(el("p", { class: "empty", text: "Nenhuma máquina mandou pacote nem recusou no aviso no período." }), ...later);
     return body;
   }
   const parts = [["send", send, ["enviou", "enviam"]], ["declined", declined, ["recusou no aviso", "recusaram no aviso"]]].filter(p => p[1]);
@@ -1070,7 +1071,7 @@ function acceptanceCard(data) {
     el("div", { class: "accept-legend" }, ...parts.map(([k, n, verb]) => el("div", { class: "accept-item", style: "--c:" + ACCEPT_COLOR[k] },
       el("i", { "aria-hidden": "true" }), counter("b", "accept:" + k, n, fmtInt),
       el("span", { text: (n === 1 ? "máquina " + verb[0] : "máquinas " + verb[1]) + " · " + pct0.format(n / total) })))),
-    later);
+    ...later);
   return body;
 }
 

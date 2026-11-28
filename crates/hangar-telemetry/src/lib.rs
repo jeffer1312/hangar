@@ -23,8 +23,6 @@ mod switch;
 #[cfg(feature = "runtime")]
 pub use aggregate::{Clock, Config, EnvLookup, Telemetry};
 #[cfg(feature = "runtime")]
-pub use refusal::send_refusal;
-#[cfg(feature = "runtime")]
 pub use send::{DEFAULT_URL, Failure, Post, PostFuture};
 #[cfg(feature = "runtime")]
 pub use state::{CONSENT_SCOPE, Collection};

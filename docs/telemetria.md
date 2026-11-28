@@ -193,8 +193,8 @@ No Windows, `~` é a pasta do seu usuário.
 - `PUT {"consent":false}` revoga, mesmo de um cliente antigo, e apaga a fila de B e as das versões
   anteriores (`~/.hangar/telemetry/` e `~/.hangar/telemetry-scope-2/`). O que o receptor já recebeu
   não é apagado pela revogação.
-- Se você recusar, o servidor manda uma única vez um aviso anônimo de que recusou (só a versão e o
-  sistema), e nada mais: `{"kind", "version", "os", "channel"}` em `POST /v1/declined`, com `kind`
+- Se você recusar, o servidor manda uma única vez um aviso anônimo de que recusou (só o tipo da
+  recusa, a versão, o sistema e o canal), e nada mais: `{"kind", "version", "os", "channel"}` em `POST /v1/declined`, com `kind`
   `declined` (a primeira resposta foi não) ou `revoked` (tinha aceitado e desligou). Sem
   `machine_id`, `owner_id`, lote nem dia; o receptor só soma 1 no dia em que recebe. A marca
   `refusal_reported` no `telemetry.json` faz o aviso sair uma vez por máquina, mesmo mudando de ideia

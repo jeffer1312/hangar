@@ -411,6 +411,14 @@ impl Telemetry {
         Ok((applied, Some(Refusal::new(kind, &self.batch_env))))
     }
 
+    /// Algum desligamento do ambiente vale agora (`.env` relido; ilegível conta como desligado). Não muda o estado.
+    pub(crate) fn env_off_now(&self) -> bool {
+        match hangar_core::user_data::read_env_raw(&self.home, self.backend.as_deref()) {
+            Ok(dotenv) => switch::disabled_by(&*self.lookup, dotenv.as_deref()).is_some(),
+            Err(_) => true,
+        }
+    }
+
     /// O dono desta máquina e quando ele nasceu (segundos Unix), para a convergência com os peers.
     pub fn owner(&self) -> io::Result<(String, i64)> {
         lock(&self.settings).map(|s| (s.state.owner_id.clone(), s.state.owner_created))

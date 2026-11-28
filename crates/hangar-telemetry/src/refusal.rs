@@ -30,19 +30,24 @@ fn refusal_url(batch: &str) -> String {
     url.into()
 }
 
-/// Manda o aviso até um 2xx; 400 desiste na hora. `Err` com o status da última tentativa, `None` sem resposta.
-pub async fn send_refusal(refusal: Refusal, post: Post) -> Result<(), Option<u16>> {
-    let body = serde_json::to_vec(&refusal).map_err(|_| None)?;
-    let mut last = None;
-    for wait in WAITS {
-        tokio::time::sleep(Duration::from_secs(wait)).await;
-        match post(body.clone()).await {
-            Some(200..=299) => return Ok(()),
-            Some(400) => return Err(Some(400)),
-            status => last = status,
+impl Telemetry {
+    /// Manda o aviso até um 2xx; 400 desiste na hora. Um desligamento do ambiente que passa a valer entre as
+    /// tentativas encerra sem mandar (`Ok`). `Err` com o status da última tentativa, `None` sem resposta.
+    pub async fn send_refusal(&self, refusal: Refusal, post: Post) -> Result<(), Option<u16>> {
+        let body = serde_json::to_vec(&refusal).map_err(|_| None)?;
+        let mut last = None;
+        for wait in WAITS {
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+            // ponytail: lê o .env no laço assíncrono; são no máximo quatro leituras de um arquivo pequeno.
+            if self.env_off_now() { return Ok(()); }
+            match post(body.clone()).await {
+                Some(200..=299) => return Ok(()),
+                Some(400) => return Err(Some(400)),
+                status => last = status,
+            }
         }
+        Err(last)
     }
-    Err(last)
 }
 
 #[cfg(test)]
@@ -108,6 +113,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn telemetry_refusal_retries_then_gives_up_and_400_stops() {
+        let fx = Fixture::new();
+        let telemetry = fx.start_as_is();
+        let send_refusal = |refusal, post| telemetry.send_refusal(refusal, post);
         let refusal = || Refusal { kind: RefusalKind::Declined, version: "0.42.0".into(), os: "linux".into(), channel: "latest".into() };
         let (post, seen) = receiver(vec![Some(503), None, Some(204)]);
         assert_eq!(send_refusal(refusal(), post).await, Ok(()));
@@ -120,6 +128,24 @@ mod tests {
         let (post, seen) = receiver(vec![Some(503), Some(503), None, None]);
         assert_eq!(send_refusal(refusal(), post).await, Err(None));
         assert_eq!(seen.lock().unwrap().len(), 4);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn telemetry_refusal_stops_when_the_env_switch_turns_on_between_tries() {
+        let fx = Fixture::new();
+        let telemetry = fx.start_as_is();
+        let dotenv = fx.home.path().join(".hangar/config/.env");
+        std::fs::create_dir_all(dotenv.parent().unwrap()).unwrap();
+        let tries = Arc::new(Mutex::new(0));
+        let seen = tries.clone();
+        let post: Post = Arc::new(move |_body: Vec<u8>| -> PostFuture {
+            *seen.lock().unwrap() += 1;
+            std::fs::write(&dotenv, "DO_NOT_TRACK=1\n").unwrap();
+            Box::pin(async { Some(503) })
+        });
+        let refusal = Refusal { kind: RefusalKind::Declined, version: "0.42.0".into(), os: "linux".into(), channel: "latest".into() };
+        assert_eq!(telemetry.send_refusal(refusal, post).await, Ok(()));
+        assert_eq!(*tries.lock().unwrap(), 1, "a tentativa seguinte não sai");
     }
 
     #[test]
