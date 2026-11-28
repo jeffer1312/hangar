@@ -99,6 +99,13 @@ struct Period {
     days: Option<i32>,
 }
 
+/// Opcionais para a sessão ser conferida antes: sem login é 401 mesmo com o pedido torto.
+#[derive(Deserialize)]
+struct TrailQuery {
+    machine: Option<String>,
+    day: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct Login {
     email: String,
@@ -119,6 +126,7 @@ pub fn router(pool: PgPool) -> Router {
         .route("/panel", get(home))
         .route("/panel/join", get(|| async { page(2) }))
         .route("/panel/data", get(data))
+        .route("/panel/trail", get(trail))
         .route("/panel/api/me", get(me))
         .route("/panel/api/login", post(login))
         .route("/panel/api/logout", post(logout))
@@ -204,6 +212,25 @@ async fn data(State(panel): State<Panel>, headers: HeaderMap, Query(period): Que
     match store::summary(pool, days).await {
         Ok(summary) => ([(header::CACHE_CONTROL, "no-store")], axum::Json(summary)).into_response(),
         Err(e) => unavailable("summary", &e),
+    }
+}
+
+async fn trail(State(panel): State<Panel>, headers: HeaderMap, Query(query): Query<TrailQuery>) -> Response {
+    let pool = &panel.pool;
+    match user(pool, &headers).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return error(StatusCode::UNAUTHORIZED, "session"),
+        Err(response) => return response,
+    }
+    let is_hex_id = |v: &str| v.len() == 32 && v.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let is_day = |v: &str| v.len() == 10 && v.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });
+    let (Some(machine), Some(day)) = (query.machine.filter(|m| is_hex_id(m)), query.day.filter(|d| is_day(d))) else {
+        return error(StatusCode::BAD_REQUEST, "query");
+    };
+    match store::trail(pool, &machine, &day).await {
+        Ok(steps) => ([(header::CACHE_CONTROL, "no-store")], axum::Json(steps)).into_response(),
+        Err(e) if store::is_bad_value(&e) => error(StatusCode::BAD_REQUEST, "day"),
+        Err(e) => unavailable("trail", &e),
     }
 }
 

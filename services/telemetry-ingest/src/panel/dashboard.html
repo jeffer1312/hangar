@@ -12,8 +12,8 @@
 <div class="bar" id="bar">
 <header class="top">
   <div class="top-in">
-    <div class="brand-line"><svg class="logo" width="30" height="30" viewBox="0 0 200 200" aria-hidden="true"><rect width="200" height="200" rx="44" fill="#1b1d1f"/><g fill="none" stroke="#f5f5f0" stroke-linecap="round" stroke-width="17" transform="translate(0 16)"><path d="M 33.49 132.44 A 74 74 0 1 1 166.51 132.44"/><path d="M 56.96 109.15 A 44 44 0 1 1 143.04 109.15"/></g></svg><div><h1>Telemetria do Hangar</h1><div class="sub" id="sub">dados anônimos, um pacote por máquina por dia</div></div></div>
-    <label class="search"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="q" type="search" placeholder="Buscar erro, evento, versão ou opção" aria-label="Buscar no painel" autocomplete="off"><kbd id="q-key">/</kbd><button id="q-clear" type="button" aria-label="Limpar busca" hidden><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></label>
+    <div class="brand-line"><svg class="logo" width="30" height="30" viewBox="0 0 200 200" aria-hidden="true"><rect width="200" height="200" rx="44" fill="#1b1d1f"/><g fill="none" stroke="#f5f5f0" stroke-linecap="round" stroke-width="17" transform="translate(0 16)"><path d="M 33.49 132.44 A 74 74 0 1 1 166.51 132.44"/><path d="M 56.96 109.15 A 44 44 0 1 1 143.04 109.15"/></g></svg><div><h1>Telemetria do Hangar</h1><div class="sub" id="sub">dados anônimos, envio a cada hora</div></div></div>
+    <label class="search"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="q" type="search" placeholder="Buscar erro, campo, passo, versão ou opção" aria-label="Buscar no painel" autocomplete="off"><kbd id="q-key">/</kbd><button id="q-clear" type="button" aria-label="Limpar busca" hidden><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></label>
     <div class="seg" id="period" role="group" aria-label="Período">
       <button data-days="7" type="button">7 dias</button><button data-days="30" type="button">30 dias</button><button data-days="90" type="button">90 dias</button>
     </div>
@@ -31,7 +31,8 @@
 </div>
 <main class="wrap">
   <div class="notice" id="notice" hidden><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><span id="notice-text"></span><button class="btn ghost" id="notice-clear" type="button">Limpar busca</button></div>
-  <div id="content"><div class="skel-grid"><div class="kp"><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div></div><div class="skeleton" style="height:300px"></div></div></div>
+  <p class="load-status" id="panel-status" role="status">Carregando dados do painel…</p>
+  <div id="content" aria-busy="true"><div class="skel-grid" aria-hidden="true"><div class="kp"><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div></div><div class="skeleton" style="height:300px"></div></div></div>
 </main>
 <dialog id="invite-dialog">
   <h2>Convidar para o painel</h2>
@@ -68,6 +69,7 @@ const EVENTS = {
   update_failed_code: ["Falhas de atualização", "saude", "O código do erro de cada atualização que falhou."],
   server_startup: ["Subida do servidor", "saude", "Do início do servidor até ele aceitar pedidos, depois de ligar, reiniciar ou atualizar."],
   log_dropped: ["Linhas de log que sobraram", "saude", "Linhas novas de aviso ou erro que não couberam no teto de 100 por dia."],
+  diary_dropped: ["Registros do diário que não couberam", "saude", "Registros cortados na máquina antes do envio do pacote."],
 };
 // Preferências do retrato diário (evento settings): [título, grupo, o que é].
 const SETTING_GROUPS = ["Aparência", "Conversa", "Barra e navegação", "Beta", "Servidor"];
@@ -261,7 +263,7 @@ function timeSentence(buckets) {
 }
 
 
-const ICON = {"overview":"<rect x=\"3\" y=\"3\" width=\"7\" height=\"9\" rx=\"1\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"5\" rx=\"1\"/><rect x=\"14\" y=\"12\" width=\"7\" height=\"9\" rx=\"1\"/><rect x=\"3\" y=\"16\" width=\"7\" height=\"5\" rx=\"1\"/>","problems":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/>","log":"<path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"/><path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/><path d=\"M16 13H8\"/><path d=\"M16 17H8\"/><path d=\"M10 9H8\"/>","usage":"<path d=\"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z\"/>","speed":"<path d=\"m12 14 4-4\"/><path d=\"M3.34 19a10 10 0 1 1 17.32 0\"/>","machines":"<rect x=\"2\" y=\"3\" width=\"20\" height=\"14\" rx=\"2\"/><path d=\"M8 21h8\"/><path d=\"M12 17v4\"/>","config":"<path d=\"M20 7h-9\"/><path d=\"M14 17H5\"/><circle cx=\"17\" cy=\"17\" r=\"3\"/><circle cx=\"7\" cy=\"7\" r=\"3\"/>","search":"<circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/>","users":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"/><path d=\"M16 3.13a4 4 0 0 1 0 7.75\"/>","chevron":"<path d=\"m9 18 6-6-6-6\"/>","check":"<path d=\"M20 6 9 17l-5-5\"/>","invite":"<path d=\"M2 21a8 8 0 0 1 13.29-6\"/><circle cx=\"10\" cy=\"8\" r=\"5\"/><path d=\"M19 16v6\"/><path d=\"M22 19h-6\"/>","table":"<rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\"/><path d=\"M3 9h18\"/><path d=\"M3 15h18\"/><path d=\"M9 3v18\"/>","logout":"<path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\"/><path d=\"m16 17 5-5-5-5\"/><path d=\"M21 12H9\"/>","x":"<path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/>","heart":"<path d=\"M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z\"/><path d=\"M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27\"/>","calendar":"<path d=\"M8 2v4\"/><path d=\"M16 2v4\"/><rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\"/><path d=\"M3 10h18\"/>","alertCircle":"<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 8v4\"/><path d=\"M12 16h.01\"/>"};
+const ICON = {"overview":"<rect x=\"3\" y=\"3\" width=\"7\" height=\"9\" rx=\"1\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"5\" rx=\"1\"/><rect x=\"14\" y=\"12\" width=\"7\" height=\"9\" rx=\"1\"/><rect x=\"3\" y=\"16\" width=\"7\" height=\"5\" rx=\"1\"/>","problems":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/>","log":"<path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"/><path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/><path d=\"M16 13H8\"/><path d=\"M16 17H8\"/><path d=\"M10 9H8\"/>","usage":"<path d=\"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z\"/>","speed":"<path d=\"m12 14 4-4\"/><path d=\"M3.34 19a10 10 0 1 1 17.32 0\"/>","machines":"<rect x=\"2\" y=\"3\" width=\"20\" height=\"14\" rx=\"2\"/><path d=\"M8 21h8\"/><path d=\"M12 17v4\"/>","config":"<path d=\"M20 7h-9\"/><path d=\"M14 17H5\"/><circle cx=\"17\" cy=\"17\" r=\"3\"/><circle cx=\"7\" cy=\"7\" r=\"3\"/>","search":"<circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/>","users":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"/><path d=\"M16 3.13a4 4 0 0 1 0 7.75\"/>","chevron":"<path d=\"m9 18 6-6-6-6\"/>","check":"<path d=\"M20 6 9 17l-5-5\"/>","invite":"<path d=\"M2 21a8 8 0 0 1 13.29-6\"/><circle cx=\"10\" cy=\"8\" r=\"5\"/><path d=\"M19 16v6\"/><path d=\"M22 19h-6\"/>","table":"<rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\"/><path d=\"M3 9h18\"/><path d=\"M3 15h18\"/><path d=\"M9 3v18\"/>","logout":"<path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\"/><path d=\"m16 17 5-5-5-5\"/><path d=\"M21 12H9\"/>","x":"<path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/>","heart":"<path d=\"M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z\"/><path d=\"M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27\"/>","calendar":"<path d=\"M8 2v4\"/><path d=\"M16 2v4\"/><rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\"/><path d=\"M3 10h18\"/>","alertCircle":"<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 8v4\"/><path d=\"M12 16h.01\"/>","route":"<circle cx=\"6\" cy=\"19\" r=\"3\"/><path d=\"M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15\"/><circle cx=\"18\" cy=\"5\" r=\"3\"/>","copy":"<rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\"/><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"/>"};
 function icon(name) {
   const s = svgEl("svg", { class: "ic", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.75",
     "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" });
@@ -274,6 +276,7 @@ const SECTIONS = [
   ["problems", "Problemas", "#f2766b", "problems", "O que deu errado para quem usa: ação que falhou, sessão que caiu, app que fechou."],
   ["log", "Log de erros", "#f2a36b", "log", "Linhas de aviso e erro do servidor, limpas na máquina antes de sair."],
   ["usage", "Como usam", "#45c2a8", "usage", "O que as pessoas fazem com o Hangar, dia a dia."],
+  ["trail", "Caminho de uso", "#b5d65a", "route", "Por onde as pessoas passam no app, passo a passo, só pelo nome de cada ação."],
   ["speed", "Velocidade", "#5aaee8", "speed", "Quanto cada coisa demora. Cada barra é uma faixa de tempo; quanto maior, mais vezes caiu ali."],
   ["machines", "Máquinas", "#b48cf0", "machines", "Versão, sistema e canal de cada máquina, e a saúde do servidor."],
   ["settings", "Como configuram", "#e88ab8", "config", "Quantas máquinas escolheram cada opção. Cada app manda o retrato uma vez por dia."],
@@ -426,6 +429,243 @@ function logCard(logs) {
   return el("div", { class: "card", "data-title": "log de erros" }, el("div", { class: "log-tools" }, levels, shownCount), list);
 }
 
+// A tela e a cópia mostram só a projeção conhecida, mesmo se o receptor guardar outros campos.
+const FIELD_LABEL = { action: "Ação", codigo: "Código", etapa: "Etapa", erro_tipo: "Tipo do erro", ms: "Duração (ms)", tela: "Tela",
+  provider: "Agente", status: "Status", cliente: "App", detalhe: "Detalhe" };
+const fieldsOf = r => Object.entries(FIELD_LABEL).filter(([key]) => typeof r.fields?.[key] === "string")
+  .map(([key, label]) => ({ key, label, value: r.fields[key] }));
+const when = s => s ? dayMonth(s) + " " + s.slice(11, 19) : "";
+const quantity = (n, single, plural) => fmt.format(n) + " " + (n === 1 ? single : plural);
+const levelBadge = level => {
+  const [label, cls, ic] = level === "error" ? ["erro", "error", "alertCircle"] : level === "warn" ? ["aviso", "warn", "problems"] : [level, "warn", "problems"];
+  return el("span", { class: "level " + cls }, icon(ic), label);
+};
+// Abertas continuam abertas ao trocar o período.
+const openRecords = new Set();
+const recordKey = r => JSON.stringify([r.event, r.action, r.codigo, r.etapa, r.erro_tipo]);
+const sampleTimeLabel = "Amostra (primeira ocorrência no lote)";
+const sampleTrailTitle = "Passos antes da primeira ocorrência da amostra";
+
+function recordMarkdown(r) {
+  const out = ["## Falha do Hangar: " + r.event, "",
+    "Telemetria anônima. Os campos e passos são da amostra mais recente, não da última ocorrência no período.", "",
+    "- Nível: " + (r.level === "error" ? "erro" : "aviso"),
+    "- Ocorrências: " + quantity(r.count, "vez", "vezes") + " em " + quantity(r.machines, "máquina", "máquinas"),
+    "- Primeira vez no período: " + r.first + " UTC; última: " + r.last + " UTC",
+    ...(r.sample_at ? ["- " + sampleTimeLabel + ": " + r.sample_at + " UTC"] : []),
+    "- Versões: " + (r.versions || []).join(", "),
+    "- Sistemas: " + (r.os || []).join(", "), "", "### Campos da amostra", ""];
+  const fields = fieldsOf(r).map(({ key, value }) => key + ": " + value).join("\n");
+  if (fields) {
+    let fence = "~~~";
+    while (fields.includes(fence)) fence += "~";
+    out.push(fence, fields, fence);
+  } else out.push("Sem campos nesta falha.");
+  out.push("", "### " + sampleTrailTitle, "");
+  if (r.trail?.length) r.trail.forEach((s, i) => out.push((i + 1) + ". " + s));
+  else out.push("O diário não guardou passos antes desta falha.");
+  return out.join("\n") + "\n";
+}
+
+function recordBody(r) {
+  const fields = fieldsOf(r);
+  const trail = r.trail?.length
+    ? el("ol", { class: "steps", role: "list" }, ...r.trail.map(s => el("li", {}, el("code", { text: s }), icon("chevron"))),
+        el("li", { class: "here" }, el("code", { text: r.event }), el("span", { class: "tag", text: "Falha da amostra" })))
+    : el("p", { class: "empty", text: "O diário não guardou passos antes desta falha." });
+  const copy = el("button", { class: "btn", type: "button" }, icon("copy"), "Copiar para o agente");
+  const status = el("span", { class: "copy-status", role: "status" });
+  const manual = el("textarea", { class: "manual", readonly: "", rows: "8", "aria-label": "Texto para copiar manualmente", hidden: "" });
+  copy.addEventListener("click", async () => {
+    if (copy.getAttribute("aria-disabled") === "true") return;
+    copy.setAttribute("aria-disabled", "true");
+    status.textContent = "Copiando…";
+    const md = recordMarkdown(r);
+    try {
+      await navigator.clipboard.writeText(md);
+      manual.hidden = true;
+      status.textContent = "Copiado.";
+    } catch {
+      manual.value = md;
+      manual.hidden = false;
+      status.textContent = "Não deu para copiar. Selecione o texto e copie à mão.";
+      if (document.activeElement === copy) { manual.focus(); manual.select(); }
+    } finally {
+      copy.removeAttribute("aria-disabled");
+    }
+  });
+  return [
+    el("div", { class: "log-meta rec-env" },
+      el("span", {}, "Versões: ", el("b", { text: (r.versions || []).join(", ") })),
+      el("span", {}, "Sistemas: ", el("b", { text: (r.os || []).join(", ") })),
+      el("span", {}, "Primeira vez no período: ", el("b", { text: when(r.first) + " UTC" })),
+      r.sample_at ? el("span", {}, sampleTimeLabel + ": ", el("b", { text: when(r.sample_at) + " UTC" })) : null),
+    el("h4", { text: "Campos da amostra" }),
+    fields.length ? el("dl", { class: "rec-fields" }, ...fields.map(({ key, label, value }) =>
+      el("div", { class: "rec-field" + (key === "detalhe" || value.length > 80 ? " wide" : "") },
+        el("dt", { text: label }), el("dd", { class: key === "codigo" || key === "action" ? "mono" : "", text: value }))))
+      : el("p", { class: "empty", text: "Sem campos nesta falha." }),
+    el("h4", { text: sampleTrailTitle }), trail,
+    el("div", { class: "rec-actions" }, copy, status), manual,
+  ];
+}
+
+function recordRow(r, i) {
+  const key = recordKey(r), id = "rec-" + i;
+  const detail = r.fields?.detalhe;
+  const q = [r.event, r.level === "error" ? "erro" : "aviso", ...fieldsOf(r).map(({ key, label, value }) => `${key} ${label} ${value}`),
+    ...(r.trail || []), ...(r.versions || []), ...(r.os || [])].join(" ").toLowerCase();
+  const head = el("button", { class: "rec-head", type: "button", "aria-expanded": "false", "aria-controls": id },
+    levelBadge(r.level),
+    el("span", { class: "rec-main" },
+      el("span", { class: "rec-title" }, el("code", { class: "rec-event", text: r.event }),
+        r.action ? el("code", { class: "tag", text: r.action }) : null,
+        r.codigo ? el("span", { class: "tag", text: r.codigo }) : null),
+      detail ? el("span", { class: "rec-detail", text: detail }) : null),
+    el("span", { class: "log-meta rec-meta" },
+      el("span", { text: quantity(r.count, "vez", "vezes") }),
+      el("span", { text: quantity(r.machines, "máquina", "máquinas") }),
+      el("span", { text: "Última no período: " + when(r.last) + " UTC" })),
+    icon("chevron"));
+  const body = el("div", { class: "rec-body", id });
+  const row = el("div", { class: "rec", "data-q": q }, head, body);
+  const toggle = open => {
+    if (open && !body.childElementCount) body.append(...recordBody(r));
+    body.hidden = !open; head.setAttribute("aria-expanded", String(open)); row.classList.toggle("open", open);
+    if (open) openRecords.add(key); else openRecords.delete(key);
+  };
+  head.addEventListener("click", () => toggle(body.hidden));
+  toggle(openRecords.has(key));
+  return row;
+}
+
+// Lista longa mostra o começo; a busca procura em todas.
+function moreButton(list, total, shown) {
+  if (total <= shown) return null;
+  const all = "Mostrar todas as " + fmt.format(total);
+  const button = el("button", { class: "btn ghost more-btn", type: "button", text: all,
+    "aria-expanded": "false", "aria-controls": list.id });
+  button.addEventListener("click", () => {
+    const short = list.classList.toggle("short");
+    button.setAttribute("aria-expanded", String(!short));
+    button.textContent = short ? all : "Mostrar só as " + shown;
+  });
+  return button;
+}
+
+const failureDetailsId = "failure-details";
+function recordsCard(records, total) {
+  if (!records.length) return card("Falhas com detalhe", null, el("p", { class: "empty", text: "Nenhuma falha com detalhe no período." }));
+  const list = el("div", { class: "rec-list short", id: "failure-records" }, ...records.map(recordRow));
+  const details = card("Falhas com detalhe", "A mesma falha de todas as máquinas numa linha. Abra para ver os campos e os passos da amostra ou copiar o contexto para um agente.",
+    cutNote(total, records.length, "falhas distintas"), list, moreButton(list, records.length, 20));
+  details.id = failureDetailsId;
+  return details;
+}
+
+function cutNote(total, shown, unit) {
+  return total > shown ? el("p", { class: "cut", text: "O painel recebeu " + fmt.format(total) + " " + unit
+    + " no período. A lista está limitada a " + fmt.format(shown) + "." }) : null;
+}
+
+// O dia escolhido e o filtro sobrevivem ao redesenho.
+let trailPick = "", trailOnlyProblems = false, trailRequest;
+function timelineCard(days, total) {
+  const explain = "Passos de uma máquina na ordem registrada, com horários em UTC. Falhas e avisos ficam marcados.";
+  if (!days.length) return card("Um dia de uso", explain, el("p", { class: "empty", text: "Nenhum dia com caminho no período." }));
+  const select = el("select", { class: "pick", id: "trail-pick" });
+  const dayKey = d => d.machine + "|" + d.day;
+  days.forEach(d => select.append(el("option", { value: dayKey(d),
+    text: d.day.split("-").reverse().join("/") + " · máquina " + d.label + " · " + d.os + " " + d.version })));
+  select.value = days.some(d => dayKey(d) === trailPick) ? trailPick : dayKey(days[0]);
+  const filter = el("div", { class: "seg", role: "group", "aria-label": "Filtrar passos" });
+  const status = el("p", { class: "load-status", role: "status" });
+  const box = el("div", { class: "timeline-box" });
+  const timeline = card("Um dia de uso", explain, cutNote(total, days.length, "dias de máquinas com caminho"),
+    el("div", { class: "trail-tools" }, el("label", { class: "trail-target", for: select.id }, "Máquina e dia", select), filter), status, box);
+  let result = null;
+  const draw = () => {
+    const { day, steps, partial } = result;
+    const shown = trailOnlyProblems ? steps.filter(s => s.level !== "ok") : steps;
+    const empty = !steps.length ? "Nenhum passo recebido nesse dia." : "Nenhuma falha nem aviso nesse dia.";
+    status.textContent = (shown.length ? quantity(shown.length, "passo", "passos") + "." : empty)
+      + (partial ? " Dados parciais: o último pacote desse dia ainda não é o final." : "");
+    box.replaceChildren(...(shown.length ? [el("ol", { class: "timeline", role: "list" }, ...shown.map(s => {
+      const levelText = s.level === "error" ? "erro" : s.level === "warn" ? "aviso" : "";
+      return el("li", { class: "tl-row " + s.level, "data-q": [s.t, s.event, s.screen, levelText].join(" ").toLowerCase() },
+        el("time", { datetime: day + "T" + s.t + "Z", text: s.t }),
+        el("div", { class: "tl-main" }, el("code", { class: "tl-event", text: s.event }),
+          s.screen ? el("span", { class: "tag", text: s.screen }) : null,
+          s.count > 1 ? el("span", { class: "tl-count", text: "×" + fmt.format(s.count) }) : null,
+          levelText ? levelBadge(s.level) : null));
+    }))] : []));
+    applyFilter();
+  };
+  for (const [value, label] of [[false, "Todos"], [true, "Só falhas e avisos"]]) {
+    const button = el("button", { type: "button", "aria-pressed": String(value === trailOnlyProblems), text: label });
+    button.addEventListener("click", () => {
+      trailOnlyProblems = value;
+      filter.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === button)));
+      if (result) draw();
+    });
+    filter.append(button);
+  }
+  const loadDay = async () => {
+    const d = days[select.selectedIndex];
+    trailPick = select.value;
+    trailRequest?.abort();
+    trailRequest = new AbortController();
+    const { signal } = trailRequest;
+    const stale = () => signal.aborted || !box.isConnected;
+    result = null;
+    timeline.dataset.trailState = "loading";
+    status.textContent = "Carregando os passos desse dia…";
+    box.setAttribute("aria-busy", "true");
+    box.replaceChildren(el("div", { class: "skel-rows", "aria-hidden": "true" }, ...Array.from({ length: 4 }, () => el("div", { class: "skeleton" }))));
+    if (timeline.isConnected) applyFilter();
+    try {
+      const query = new URLSearchParams({ machine: d.machine, day: d.day });
+      const res = await fetch("/panel/trail?" + query, { cache: "no-store", signal });
+      if (stale()) return;
+      if (res.status === 401) { location.replace("/panel"); return; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const body = await res.json();
+      if (stale()) return;
+      if (!Array.isArray(body.steps)) throw new Error("A resposta não trouxe os passos do dia.");
+      result = { day: d.day, steps: body.steps, partial: body.partial };
+      delete timeline.dataset.trailState;
+      draw();
+    } catch (err) {
+      if (stale()) return;
+      timeline.dataset.trailState = "error";
+      status.textContent = "Não foi possível ler o caminho desse dia.";
+      const retry = el("button", { class: "btn", type: "button", text: "Tentar de novo" });
+      retry.addEventListener("click", () => { select.focus(); loadDay(); });
+      box.replaceChildren(el("div", { class: "error-box" }, icon("alertCircle"), el("span", { text: err.message }), retry));
+      applyFilter();
+    } finally {
+      if (!stale()) box.setAttribute("aria-busy", "false");
+    }
+  };
+  select.addEventListener("change", loadDay);
+  loadDay();
+  return timeline;
+}
+
+function trailSection(data) {
+  const transitions = data.transitions || [], days = data.trail_days || [];
+  const dayTotal = data.trail_days_total ?? days.length;
+  if (!transitions.length && !days.length) return sectionBlock("trail", null, null, el("div", { class: "card empty" }, icon("route"),
+    "Nenhuma máquina enviou o caminho de uso no período. Ele chega a cada hora nas versões que coletam o diário."));
+  const list = transitions.length ? barList(transitions.map(t => ({ label: t.from + " → " + t.to, value: t.count, machines: t.machines }))) : null;
+  if (list) { list.classList.add("short"); list.id = "trail-transitions"; }
+  const top = card("Passagens mais comuns", "De uma ação para a seguinte, somando os dias de todas as máquinas.",
+    cutNote(data.transitions_total, transitions.length, "passagens distintas"),
+    list || el("div", { class: "empty", text: "Nenhuma passagem no período." }), list ? moreButton(list, transitions.length, 12) : null);
+  return sectionBlock("trail", fmt.format(dayTotal), dayTotal === 1 ? "dia com caminho" : "dias com caminho",
+    el("div", { class: "split" }, timelineCard(days, dayTotal), top));
+}
+
 function sectionBlock(id, big, bigNote, ...body) {
   const [, name, hue, ic, explain] = SECTIONS.find(s => s[0] === id);
   return el("section", { class: "sec", id: "s-" + id, style: "--hue:" + hue, "aria-labelledby": "h-" + id, "data-title": name.toLowerCase() },
@@ -471,7 +711,7 @@ function render(data) {
   for (const c of data.by_dims) entry(c.event).dims.push({ label: dimsLabel(c.dims), value: c.count, machines: c.machines });
   for (const c of data.by_bucket) entry(c.event).buckets.set(c.bucket, { value: c.count, machines: c.machines });
   const total = event => (byEvent.get(event)?.dims || []).reduce((s, d) => s + d.value, 0);
-  // O dia só chega depois de fechar em UTC: sem pacote de hoje, o gráfico para em ontem em vez de cair num zero falso.
+  // Sem pacote de hoje, o gráfico para em ontem; um parcial de hoje já conta.
   const today = new Date().toISOString().slice(0, 10);
   skipToday = !data.daily.some(d => d.day === today);
 
@@ -507,9 +747,10 @@ function render(data) {
       barList(order.map(b => ({ label: Object.hasOwn(BUCKET_LABEL, b) ? BUCKET_LABEL[b] : b, ...e.buckets.get(b) })))));
   }
 
-  const counts = { problems: failTotal, log: logs.length, usage: total("message_sent"), speed: times.length,
-    machines: a.machines_30d, settings: settings.count, raw: data.counters.length };
-  drawChips(counts, { problems: failTotal > 0, log: logs.some(l => l.level === "error") });
+  const records = data.records || [];
+  const counts = { problems: failTotal, log: logs.length, usage: total("message_sent"), trail: data.trail_days_total ?? data.trail_days?.length,
+    speed: times.length, machines: a.machines_30d, settings: settings.count, raw: data.counters.length };
+  drawChips(counts, { problems: failTotal > 0 || records.some(r => r.level === "error"), log: logs.some(l => l.level === "error") });
 
   const nodes = [];
   const kpi = (sec, ic, label, key, value, note, bad) => {
@@ -521,36 +762,47 @@ function render(data) {
 
   if (!data.period.batches) {
     nodes.push(sectionBlock("overview", null, null, el("div", { class: "card empty big" }, icon("calendar"),
-      "Nenhum pacote chegou neste período.", el("span", { class: "minor", text: "Cada máquina manda o dia depois que ele fecha em UTC (21h em Brasília)." }))));
+      "Nenhum pacote chegou neste período.", el("span", { class: "minor", text: "Nas versões com envio horário, cada máquina atualiza o dia a cada hora e manda o pacote final depois que o dia fecha em UTC." }))));
     root.replaceChildren(...nodes);
     applyFilter();
     spy();
     return;
   }
 
-  const topFailures = failures.length
+  const onlyRecords = !failTotal && records.length > 0;
+  const topFailures = failTotal
     ? card("Falhas mais comuns", "O que mais deu errado no período.", barList(failures.slice(0, 5)),
         el("a", { class: "more", href: "#s-problems" }, "Ver as " + fmt.format(failTotal) + " falhas", icon("chevron")))
-    : el("div", { class: "card empty" }, icon("check"), "Nenhuma falha no período.");
+    : onlyRecords
+      ? card("Falhas no diário", "Há falhas com detalhe que não aparecem nos contadores do período.")
+      : el("div", { class: "card empty" }, icon("check"), "Nenhuma falha no período.");
+  const failureKpi = kpi("problems", "problems", onlyRecords ? "Falhas nos contadores" : "Falhas", "f", failTotal,
+    onlyRecords ? "Ver falhas com detalhe" : failTotal ? quantity(failures.length, "tipo de falha", "tipos de falha") : "nenhuma no período", failTotal > 0);
+  if (onlyRecords) failureKpi.href = "#" + failureDetailsId;
   topFailures.style.setProperty("--hue", HUE.problems);
   topFailures.style.setProperty("--hue-soft", "color-mix(in srgb, " + HUE.problems + " 15%, transparent)");
+  const partial = data.period.partial_batches || 0, dropped = total("diary_dropped");
   nodes.push(sectionBlock("overview", null, null,
+    partial || dropped ? el("div", { class: "report-note" },
+      partial ? el("p", { text: "Dados parciais: " + quantity(partial, "pacote ainda não é final", "pacotes ainda não são finais") + "." }) : null,
+      dropped ? el("p", { text: "Corte no envio: " + quantity(dropped, "registro do diário não coube", "registros do diário não couberam") + "." }) : null) : null,
     el("div", { class: "kpis" },
       kpi("machines", "machines", "Máquinas ativas", "m", a.machines_30d, a.machines_7d + " nos últimos 7 dias"),
       kpi("overview", "users", "Pessoas", "p", a.owners_30d, "cada pessoa conta uma vez"),
       kpi("usage", "usage", "Mensagens enviadas", "msg", total("message_sent"), fmt.format(total("turn_finished")) + " respostas do agente"),
-      kpi("problems", "problems", "Falhas", "f", failTotal, failTotal ? failures.length + " tipo" + (failures.length === 1 ? "" : "s") + " de falha" : "nenhuma no período", failTotal > 0)),
+      failureKpi),
     el("div", { class: "split" },
       chartCard("Máquinas ativas por dia", "Quantas máquinas mandaram pacote em cada dia (UTC).", machinesDaily, ["máquina", "máquinas"], 240),
       topFailures)));
 
-  nodes.push(sectionBlock("problems", fmt.format(failTotal), "falhas no período",
+  nodes.push(sectionBlock("problems", fmt.format(failTotal), "falhas nos contadores",
     failures.length
       ? el("div", { class: "split" },
           card("Todas as falhas", "Cada linha é uma falha com o motivo; a barra compara com a maior.", barList(failures.slice(0, 15)),
             failures.length > 15 ? el("div", { class: "minor", text: "+ " + (failures.length - 15) + " em Dados brutos" }) : null),
           chartCard("Falhas por dia", "Soma das falhas de cada dia.", perDay(failed), ["falha", "falhas"], 220))
-      : el("div", { class: "card empty" }, icon("check"), "Nenhuma falha registrada no período.")));
+      : el("div", { class: "card empty" }, icon("check"), "Nenhuma falha nos contadores do período."),
+    recordsCard(records, data.records_total ?? records.length)));
 
   nodes.push(sectionBlock("log", fmt.format(logs.length), "linhas distintas", logCard(logs)));
 
@@ -568,6 +820,8 @@ function render(data) {
       chartCard("Mensagens enviadas por dia", EVENTS.message_sent[2], daily("message_sent"), ["mensagem", "mensagens"], 180),
       chartCard("Respostas do agente por dia", EVENTS.turn_finished[2], daily("turn_finished"), ["resposta", "respostas"], 180)),
     usage.length ? groupTitle("Em detalhe") : null, usage.length ? el("div", { class: "grid" }, ...usage) : null));
+
+  nodes.push(trailSection(data));
 
   if (times.length) nodes.push(sectionBlock("speed", null, null, el("div", { class: "grid" }, ...times)));
 
@@ -657,6 +911,7 @@ const q = document.getElementById("q"), qClear = document.getElementById("q-clea
 function applyFilter() {
   const text = q.value.trim().toLowerCase();
   qClear.hidden = !text; qKey.hidden = !!text;
+  document.body.classList.toggle("searching", !!text);
   let hits = 0;
   for (const sec of document.querySelectorAll(".sec")) {
     if (sec.id === "s-overview") { sec.hidden = !!text; continue; }
@@ -670,10 +925,12 @@ function applyFilter() {
         const show = titleHit || r.dataset.q.includes(text);
         r.hidden = !show; if (show && text) rowHits++;
       }
-      const show = !text || titleHit || rowHits > 0;
-      c.hidden = !show;
-      if (show && text) { secHits++; hits += Math.max(1, rowHits); }
-      if (show && text && c.tagName === "DETAILS" && rowHits) c.open = true;
+      const matches = titleHit || rowHits > 0;
+      // Carregamento e erro da trilha continuam visíveis, mas não são resultados da busca.
+      c.hidden = !(matches || c.dataset.trailState);
+      if (!c.hidden && text) secHits++;
+      if (matches && text) hits += Math.max(1, rowHits);
+      if (matches && text && c.tagName === "DETAILS" && rowHits) c.open = true;
     }
     sec.hidden = !!text && !secHits;
     sec.querySelectorAll(".group-title").forEach(g => { g.hidden = !!text && !(g.nextElementSibling && [...g.nextElementSibling.children].some(c => !c.hidden)); });
@@ -696,7 +953,9 @@ document.addEventListener("keydown", e => {
 });
 
 let current = Number(new URLSearchParams(location.search).get("days")) || 30;
-let last = null, request = 0, resizing = 0;
+let request = 0, resizing = 0;
+const panelContent = document.getElementById("content"), panelStatus = document.getElementById("panel-status");
+const panelLoading = panelContent.firstElementChild;
 let lastWidth = innerWidth;
 window.addEventListener("resize", () => {
   clearTimeout(resizing);
@@ -705,26 +964,36 @@ window.addEventListener("resize", () => {
 async function load(days) {
   current = days;
   const mine = ++request;
+  trailRequest?.abort();
   document.querySelectorAll("#period button").forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.days) === days)));
   history.replaceState(null, "", "?days=" + days + location.hash);
+  document.getElementById("chips").replaceChildren();
+  document.getElementById("notice").hidden = true;
+  panelStatus.textContent = "Carregando dados do painel…";
+  panelContent.setAttribute("aria-busy", "true");
+  panelContent.replaceChildren(panelLoading);
   try {
     const res = await fetch("/panel/data?days=" + days, { cache: "no-store" });
+    if (mine !== request) return;
     if (res.status === 401) { location.replace("/panel"); return; }
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     if (mine !== request) return;
-    last = data;
     render(data);
+    panelStatus.textContent = "";
     const m = data.active.machines_30d, p = data.active.owners_30d;
     document.getElementById("sub").textContent = m + (m === 1 ? " máquina · " : " máquinas · ") + p + (p === 1 ? " pessoa" : " pessoas") + " · dados anônimos";
   } catch (err) {
     if (mine !== request) return;
-    document.getElementById("chips").replaceChildren();
-    document.getElementById("notice").hidden = true;
+    panelStatus.textContent = "Não foi possível ler os dados do painel.";
     const retry = el("button", { class: "btn", type: "button", text: "Tentar de novo" });
-    retry.addEventListener("click", () => load(current));
-    document.getElementById("content").replaceChildren(el("div", { class: "error-box" }, icon("alertCircle"),
-      el("div", {}, el("b", { text: "Não foi possível ler os dados." }), el("div", { class: "minor", text: err.message })), retry));
+    retry.addEventListener("click", () => {
+      (document.querySelector('#period [aria-pressed="true"]') || q).focus();
+      load(current);
+    });
+    panelContent.replaceChildren(el("div", { class: "error-box" }, icon("alertCircle"), el("span", { text: err.message }), retry));
+  } finally {
+    if (mine === request) panelContent.setAttribute("aria-busy", "false");
   }
 }
 document.querySelectorAll("#period button").forEach(b => b.addEventListener("click", () => load(Number(b.dataset.days))));
