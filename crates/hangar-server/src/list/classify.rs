@@ -166,7 +166,7 @@ fn headless_state(row: &mut SessionRow, retrato: Option<&BTreeMap<String, Value>
         // Sem ator não há turno: o marcador fica em "working" quando o turno acaba sem o hook final (Esc,
         // limite de uso, queda), e o chat (feed estacionado) já diz parada.
         row.state = "idle".into();
-        (row.label, row.question, row.options, row.interaction_id) = (None, None, None, None);
+        (row.label, row.question, row.options, row.interaction_id, row.ask_form) = (None, None, None, None, None);
         row.asleep = candidate;
         return;
     };
@@ -190,7 +190,10 @@ fn codex_question(row: &mut SessionRow, question: Option<&serde_json::Map<String
     if row.state != "working" { row.state = "awaiting_input".into(); }
     row.question = q.get("questions").and_then(|qs| qs[0]["question"].as_str()).map(str::to_owned);
     // Sem terminal o ID da pergunta só vem no formulário: sem ele, a filha ligada não avisa o pai nem é respondida.
-    row.ask_form = Some(Value::Object(q.clone()));
+    // Fora: Codex com terminal (resposta escrita sem confirmação), aprovação aberta (é ela que bloqueia) e
+    // pergunta secreta, cujo valor não pode ir ao transcript do pai.
+    let secret = q.get("questions").and_then(Value::as_array).is_some_and(|qs| qs.iter().any(|item| item["isSecret"] == true));
+    if row.headless && row.interaction_id.is_none() && !secret { row.ask_form = Some(Value::Object(q.clone())); }
 }
 
 /// Contagem de perguntas assíncronas sem resposta, do ator do Rust (os fatos do Python não o veem).
@@ -976,19 +979,32 @@ mod tests {
 
     #[test]
     fn a_headless_question_reaches_the_row_with_its_form_and_id() {
-        let mut row: SessionRow = serde_json::from_value(serde_json::json!({"name": "f", "provider": "claude", "headless": true,
-            "state": "idle"})).unwrap();
-        let retrato = BTreeMap::from([("f".to_owned(), serde_json::json!({"error": null, "view": {"alive": true, "public_state": {
-            "state": "awaiting_input", "question": "Qual cor?", "interaction_id": null,
+        let row = |headless: bool| -> SessionRow { serde_json::from_value(serde_json::json!({"name": "f", "provider": "claude",
+            "headless": headless, "state": "idle"})).unwrap() };
+        let view = |approval: Option<&str>, secret: bool| BTreeMap::from([("f".to_owned(), serde_json::json!({"error": null,
+            "view": {"alive": true, "public_state": {"state": "awaiting_input", "question": "Qual cor?", "interaction_id": approval,
             "codex_question": {"provider": "claude", "request_id": 1, "interaction_id": "form-1", "questions": [{"header": "Cor",
-                "question": "Qual cor?", "multiSelect": false, "options": [{"label": "Azul", "description": ""}, {"label": "Verde", "description": ""}]}]}}}}))]);
-        headless_state(&mut row, Some(&retrato), None);
-        assert_eq!((row.state.as_str(), row.question.as_deref()), ("awaiting_input", Some("Qual cor?")));
-        let form: hangar_api::ask::AskQuestion = serde_json::from_value(row.ask_form.clone().unwrap()).unwrap();
+                "question": "Qual cor?", "multiSelect": false, "isSecret": secret,
+                "options": [{"label": "Azul", "description": ""}, {"label": "Verde", "description": ""}]}]}}}}))]);
+        let mut asked = row(true);
+        headless_state(&mut asked, Some(&view(None, false)), None);
+        assert_eq!((asked.state.as_str(), asked.question.as_deref()), ("awaiting_input", Some("Qual cor?")));
+        let form: hangar_api::ask::AskQuestion = serde_json::from_value(asked.ask_form.clone().unwrap()).unwrap();
         assert_eq!((form.interaction_id.as_deref(), form.questions[0].options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>()),
                    (Some("form-1"), vec!["Azul", "Verde"]));
         // É o ID que o aviso ao pai cita e o `child_answer` devolve.
-        assert_eq!(crate::groups::link_return::open_interaction(&row).as_deref(), Some("form-1"));
+        assert_eq!(crate::groups::link_return::open_interaction(&asked).as_deref(), Some("form-1"));
+        // A aprovação aberta segue sendo o pedido citado; a pergunta secreta não vai ao pai.
+        let mut approval = row(true);
+        headless_state(&mut approval, Some(&view(Some("perm-1"), false)), None);
+        assert_eq!((approval.ask_form.is_none(), crate::groups::link_return::open_interaction(&approval).as_deref()), (true, Some("perm-1")));
+        let mut secret = row(true);
+        headless_state(&mut secret, Some(&view(None, true)), None);
+        assert!(secret.ask_form.is_none() && crate::groups::link_return::open_interaction(&secret).is_none());
+        // Com terminal (Codex do ator do Rust) o formulário fica fora: a resposta escrita não tem confirmação.
+        let mut terminal = row(false);
+        codex_question(&mut terminal, view(None, false)["f"]["view"]["public_state"]["codex_question"].as_object());
+        assert!(terminal.ask_form.is_none());
     }
 
     #[tokio::test]
