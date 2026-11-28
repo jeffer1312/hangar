@@ -750,6 +750,22 @@ test('/clear aceito só retira seu eco quando o servidor confirma a troca de con
   chat.release();
 });
 
+test('comando de barra aceito não fica como eco: o servidor não o põe na fila e a conversa não o repete', async () => {
+  historyResponses = [[]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  created[0].trigger('state', JSON.stringify({ session: 'sess', provider: 'claude', state: 'working' }));
+  const requests = fetchManual();
+  const sending = chat.send('/compact');
+  expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/compact']);
+  expect(chat.use.getState().pending[0].queue).toBeUndefined();
+  requests[0].responder({ ok: true });
+  await sending;
+  expect(chat.use.getState().pending).toEqual([]);
+  chat.release();
+});
+
 test('(c) preview some quando o assistant_msg real chega', async () => {
   historyResponses = [[]];
   const chat = chatStore('srv1', 'sess');

@@ -1186,7 +1186,10 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         const solid = state === 'idle';
         // "Na conversa" fica no fim da conversa, inteiro; trabalhando, o resto que não é Direto espera no painel.
         const conversation = typeof mode === 'object' && mode.kind === 'conversation';
-        const queue = state === 'working' && mode !== 'steer' && !conversation && !(typeof mode === 'object' && mode.kind === 'direct');
+        // Comando de barra nunca entra na fila do servidor, e os do Claude Code (/compact, /model) não voltam à conversa
+        // com o mesmo texto: o eco dele só vale enquanto o POST está em voo, fora do painel "Na fila".
+        const command = trimmed.trimStart().startsWith('/');
+        const queue = state === 'working' && mode !== 'steer' && !conversation && !command && !(typeof mode === 'object' && mode.kind === 'direct');
         // A bolha `queued-` da fila durável sai depois, e o registro real chega com outro id.
         const afterId = useChatStore.getState().events.findLast((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'))?.id;
         const known = useChatStore.getState().queuePanel?.entries.map((entry) => entry.id) ?? [];
@@ -1204,6 +1207,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
             } else showDeliveryFeedback(sent);
           }
           else await sendInputForServer(target, name, trimmed);
+          // O /clear espera o reset da conversa para sair; os outros comandos já rodaram.
+          if (command && trimmed.trim() !== '/clear') useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
         } catch (err) {
           // O /steer também usa 409 quando escreveu sem confirmar: não presumir recusa.
           const steer = mode === 'steer' || (typeof mode === 'object' && mode.kind === 'direct' && !mode.terminalClaude);
