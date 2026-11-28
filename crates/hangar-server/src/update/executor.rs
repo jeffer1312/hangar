@@ -315,19 +315,28 @@ pub enum StartError {
     Busy,
     /// O executor não subiu; o motivo também vai ao estado.
     Launch(String),
+    /// Recusado antes de gravar o estado: nada foi trocado nem reiniciado.
+    Refused(String),
 }
+
+/// O servidor no ar não saiu de um pacote: o lançador prefere o `CP_RUST_SERVER_BIN` ao `bin/` da versão.
+pub(crate) const TEST_SERVER: &str = "servidor no ar fora de pacote (binário de teste, CP_RUST_SERVER_BIN)";
 
 /// Uma decisão de lançar por vez neste processo (rota e verificação periódica).
 static STARTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Lança o executor. O estado de "começando" é gravado antes, sem pid: quem grava o pid é o próprio
-/// executor, e um pid escrito por aqui poderia correr com a primeira escrita dele. Bloqueante.
-pub fn start(home: &Path, claude_base: &Path, args: &Args, spawner: &dyn Spawner) -> Result<Started, StartError> {
+/// executor, e um pid escrito por aqui poderia correr com a primeira escrita dele. `running`: a versão
+/// do pacote de onde este servidor subiu (`super::running_package`). Bloqueante.
+pub fn start(home: &Path, claude_base: &Path, args: &Args, spawner: &dyn Spawner, running: Option<&str>) -> Result<Started, StartError> {
     let _one = STARTING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Antes do estado: a recusa não vira atualização falha (nem relatório automático).
+    if matches!(args.task, Task::Update { .. }) && running.is_none() {
+        return Err(StartError::Refused(format!("{TEST_SERVER}: a atualização trocaria a versão e reiniciaria o mesmo binário; tire o CP_RUST_SERVER_BIN e reinicie para atualizar")));
+    }
     let layout = Layout::new(home);
     let state_dir = super::state_dir(claude_base);
     // Com a versão no ar: executor que morreu no reinício que deu certo conta como concluído.
-    let running = super::running_package().map(|p| p.version.as_str());
     if super::for_screen(&state_dir, &layout, running).get("fase").and_then(serde_json::Value::as_str) == Some("rodando") {
         return Err(StartError::Busy);
     }
@@ -372,9 +381,10 @@ impl Spawner for Missing {
 /// Lança o executor destacado deste servidor. `require_scope`: a máquina roda pela unit do systemd.
 /// Bloqueante.
 pub fn launch(home: &Path, claude_base: &Path, args: &Args, require_scope: bool) -> Result<Started, StartError> {
+    let running = super::running_package().map(|p| p.version.as_str());
     match Detached::current(require_scope, super::state_dir(claude_base)) {
-        Ok(spawner) => start(home, claude_base, args, &spawner),
-        Err(e) => start(home, claude_base, args, &Missing(e.to_string())),
+        Ok(spawner) => start(home, claude_base, args, &spawner, running),
+        Err(e) => start(home, claude_base, args, &Missing(e.to_string()), running),
     }
 }
 
@@ -711,6 +721,9 @@ mod tests {
         assert_eq!(Parts::new(&env(home, None), &asked, "x").health_url, "http://127.0.0.1:8765");
     }
 
+    /// O servidor do teste como se tivesse subido do pacote.
+    const PACKAGED: Option<&str> = Some("0.1.0.5");
+
     #[derive(Default)]
     struct FakeSpawner {
         spawned: Mutex<Vec<Vec<String>>>,
@@ -731,17 +744,17 @@ mod tests {
         let (home, claude) = (dir.path(), dir.path().join(".claude"));
         let spawner = FakeSpawner::default();
         let args = Args { task: Task::Update { channel: None, origin: Origin::Auto }, listen: DEFAULT_LISTEN.parse().unwrap() };
-        assert_eq!(start(home, &claude, &args, &spawner), Ok(Started { pid: 4242, request_id: None }));
+        assert_eq!(start(home, &claude, &args, &spawner, PACKAGED), Ok(Started { pid: 4242, request_id: None }));
         let state = StateFile::new(&super::super::state_dir(&claude)).read();
         assert_eq!((state["fase"].clone(), state["pid"].clone(), state["texto"].clone()), (json!("rodando"), json!(null), json!("Começando")));
         assert_eq!(state["origem"], "auto");
         assert_eq!(spawner.spawned.lock().unwrap().as_slice(), [args.argv()]);
-        assert_eq!(start(home, &claude, &args, &spawner), Err(StartError::Busy), "o executor ainda sobe");
+        assert_eq!(start(home, &claude, &args, &spawner, PACKAGED), Err(StartError::Busy), "o executor ainda sobe");
         assert_eq!(spawner.spawned.lock().unwrap().len(), 1);
 
         StateFile::new(&super::super::state_dir(&claude)).write(json!({"fase": "pronto", "ok": true}));
         let restart = Args { task: Task::Restart { request_id: "pedido-1".into() }, listen: DEFAULT_LISTEN.parse().unwrap() };
-        assert_eq!(start(home, &claude, &restart, &spawner), Ok(Started { pid: 4242, request_id: Some("pedido-1".into()) }));
+        assert_eq!(start(home, &claude, &restart, &spawner, PACKAGED), Ok(Started { pid: 4242, request_id: Some("pedido-1".into()) }));
         let state = StateFile::new(&super::super::state_dir(&claude)).read();
         assert_eq!(state["request_id"], "pedido-1");
         assert_eq!(state["origem"], json!(null), "o reinício não é lido como a atualização de antes");
@@ -749,7 +762,7 @@ mod tests {
         // A trava de um executor de pé recusa também.
         StateFile::new(&super::super::state_dir(&claude)).write(json!({"fase": "pronto", "ok": true}));
         let _held = UpdateLock::try_acquire(&Layout::new(home)).unwrap();
-        assert_eq!(start(home, &claude, &args, &spawner), Err(StartError::Busy));
+        assert_eq!(start(home, &claude, &args, &spawner, PACKAGED), Err(StartError::Busy));
     }
 
     #[test]
@@ -757,10 +770,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let claude = dir.path().join(".claude");
         let args = Args { task: Task::Update { channel: None, origin: Origin::Manual }, listen: DEFAULT_LISTEN.parse().unwrap() };
-        let Err(StartError::Launch(why)) = start(dir.path(), &claude, &args, &FakeSpawner { fail: true, ..FakeSpawner::default() }) else { panic!() };
+        let Err(StartError::Launch(why)) = start(dir.path(), &claude, &args, &FakeSpawner { fail: true, ..FakeSpawner::default() }, PACKAGED) else { panic!() };
         assert!(why.contains("sem permissão"));
         let state = StateFile::new(&super::super::state_dir(&claude)).read();
         assert_eq!((state["fase"].clone(), state["ok"].clone()), (json!("pronto"), json!(false)));
+    }
+
+    #[test]
+    fn update_start_refuses_an_update_while_a_test_server_is_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let (home, claude) = (dir.path(), dir.path().join(".claude"));
+        let spawner = FakeSpawner::default();
+        let args = Args { task: Task::Update { channel: None, origin: Origin::Manual }, listen: DEFAULT_LISTEN.parse().unwrap() };
+        let refused = start(home, &claude, &args, &spawner, None);
+        assert!(matches!(&refused, Err(StartError::Refused(why)) if why.contains("CP_RUST_SERVER_BIN")), "{refused:?}");
+        assert!(spawner.spawned.lock().unwrap().is_empty(), "nada lançado");
+        assert!(!StateFile::new(&super::super::state_dir(&claude)).path().exists(), "o estado não vira falha (nem relatório)");
+        // O reinício avulso não troca versão: segue com o servidor de teste.
+        let restart = Args { task: Task::Restart { request_id: "pedido-1".into() }, listen: DEFAULT_LISTEN.parse().unwrap() };
+        assert!(start(home, &claude, &restart, &spawner, None).is_ok());
     }
 
     /// Conta os reinícios e guarda a intenção de cada um.

@@ -283,6 +283,7 @@ fn started(started: Result<Started, StartError>) -> Response {
         Ok(Started { pid, request_id: Some(id) }) => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "pid": pid, "request_id": id})),
         Err(StartError::Busy) => busy(),
         Err(StartError::Launch(why)) => detail(StatusCode::INTERNAL_SERVER_ERROR, "erro_atualizacao_lancamento", &why, json!({})),
+        Err(StartError::Refused(why)) => detail(StatusCode::CONFLICT, "erro_atualizacao_servidor_de_teste", &why, json!({})),
     }
 }
 
