@@ -284,14 +284,23 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .fetch_all(&mut *pool)
     .await?;
     let records_total = records.first().map_or(0, |r| r.13);
-    // Vezes por dia de cada assinatura nos últimos 14 dias, para a minibarra da lista de problemas.
-    let record_days: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>, String, i64)> = sqlx::query_as(
-        "SELECT r.event, r.fields->>'codigo', r.fields->>'etapa', r.fields->>'erro_tipo', r.fields->>'action',
-                to_char(b.day, 'YYYY-MM-DD'), LEAST(sum(r.count), 9223372036854775807)::bigint
-         FROM records r JOIN batches b ON b.batch_id = r.batch_id
-         WHERE b.day BETWEEN (now() AT TIME ZONE 'utc')::date - 13 AND (now() AT TIME ZONE 'utc')::date
-         GROUP BY 1, 2, 3, 4, 5, b.day ORDER BY b.day",
-    )
+    // Vezes por dia no período de cada assinatura devolvida acima (só as do corte), para a minibarra da lista de problemas.
+    let record_days: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>, String, i64)> = sqlx::query_as(concat!(
+        "WITH s AS (SELECT * FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::text[]) AS s(event, codigo, etapa, erro_tipo, action))
+         SELECT s.event, s.codigo, s.etapa, s.erro_tipo, s.action, to_char(b.day, 'YYYY-MM-DD'), LEAST(sum(r.count), 9223372036854775807)::bigint
+         FROM s JOIN records r ON r.event = s.event AND r.fields->>'codigo' IS NOT DISTINCT FROM s.codigo
+                  AND r.fields->>'etapa' IS NOT DISTINCT FROM s.etapa AND r.fields->>'erro_tipo' IS NOT DISTINCT FROM s.erro_tipo
+                  AND r.fields->>'action' IS NOT DISTINCT FROM s.action
+              JOIN batches b ON b.batch_id = r.batch_id
+         WHERE ", in_period!("b.day"), "
+         GROUP BY s.event, s.codigo, s.etapa, s.erro_tipo, s.action, b.day ORDER BY b.day"
+    ))
+    .bind(days)
+    .bind(records.iter().map(|r| r.1.as_str()).collect::<Vec<_>>())
+    .bind(records.iter().map(|r| r.2.as_deref()).collect::<Vec<_>>())
+    .bind(records.iter().map(|r| r.3.as_deref()).collect::<Vec<_>>())
+    .bind(records.iter().map(|r| r.4.as_deref()).collect::<Vec<_>>())
+    .bind(records.iter().map(|r| r.12.as_deref()).collect::<Vec<_>>())
     .fetch_all(&mut *pool)
     .await?;
     let mut daily_of: HashMap<RecordKey, Vec<serde_json::Value>> = HashMap::new();

@@ -593,6 +593,8 @@ mod tests {
         }
         let data = store::summary(&pool, 7).await.unwrap();
         assert_eq!(data["records"].as_array().unwrap().len(), 300);
+        // Toda assinatura devolvida está no período, então tem ao menos um dia na minibarra (campos nulos casam também).
+        assert!(data["records"].as_array().unwrap().iter().all(|r| !r["daily"].as_array().unwrap().is_empty()));
         assert!(data["records_total"].as_i64().unwrap() >= 302, "{}", data["records_total"]);
         forget(&pool, &ids).await;
     }

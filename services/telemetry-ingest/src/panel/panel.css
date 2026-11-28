@@ -328,6 +328,7 @@ body { background: radial-gradient(1200px 600px at 10% -10%, rgba(124,135,232,.1
 .row-eq { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s4); align-items: start; }
 @media (max-width: 900px) { .row2, .row-eq { grid-template-columns: minmax(0, 1fr); } }
 .logo-i { display: block; flex: none; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 
 /* Barras empilhadas por dia */
 .chart2 { position: relative; height: 250px; margin: 18px 0 26px 38px; --gap: 4px; }
@@ -466,6 +467,11 @@ body { background: radial-gradient(1200px 600px at 10% -10%, rgba(124,135,232,.1
 .iss-go .ic { width: 16px; height: 16px; display: block; transition: transform .15s var(--e-out); }
 .rec-head.iss:hover .iss-go { transform: translateX(3px); color: var(--text); }
 .rec.open .iss-go .ic { transform: rotate(90deg); }
+/* Entre o celular e o PC a coluna do evento ficaria espremida: saem a minibarra e as máquinas. */
+@media (max-width: 980px) {
+  .rec-head.iss { grid-template-columns: 40px minmax(0, 1fr) 64px 92px 18px; }
+  .rec-head.iss .spark, .rec-head.iss .iss-m2 { display: none; }
+}
 @media (max-width: 760px) {
   .rec-head.iss { grid-template-columns: 36px minmax(0, 1fr) 64px; gap: var(--s3); padding: var(--s3) var(--s2); }
   .rec-head.iss .spark, .rec-head.iss .iss-m2, .rec-head.iss .iss-t, .rec-head.iss .iss-go { display: none; }

@@ -558,7 +558,7 @@ const failureDetailsId = "failure-details";
 function recordsCard(records, total) {
   if (!records.length) return card("Falhas com detalhe", null, el("p", { class: "empty", text: "Nenhuma falha com detalhe no período." }));
   const list = el("div", { class: "rec-list short", id: "failure-records" }, ...records.map(recordRow));
-  const details = card("Falhas com detalhe", "A mesma falha de todas as máquinas numa linha. Abra para ver os campos e os passos da amostra ou copiar o contexto para um agente.",
+  const details = card("Falhas com detalhe", "A mesma falha de todas as máquinas numa linha; a minibarra mostra as vezes " + sparkNote() + ". Abra para ver os campos e os passos da amostra ou copiar o contexto para um agente.",
     cutNote(total, records.length, "falhas distintas"), list, moreButton(list, records.length, 20));
   details.id = failureDetailsId;
   return details;
@@ -719,13 +719,15 @@ function logo(provider, size, color) {
 const pct = new Intl.NumberFormat("pt-BR", { style: "percent", maximumFractionDigits: 1 });
 const pct0 = new Intl.NumberFormat("pt-BR", { style: "percent", maximumFractionDigits: 0 });
 
-// Número que rola até o valor quando o cartão aparece na tela (watchCards).
+// Número que rola até o valor quando o cartão aparece na tela (watchCards). Quem lê com leitor de tela
+// recebe o valor final num texto escondido, sem esperar a animação.
 function counter(tag, key, value, format, attrs) {
   const node = el(tag, attrs);
-  node.dataset.counter = "";
-  node._count = { key, value, format };
-  node.textContent = format(animate && lastShown.has(key) ? lastShown.get(key) : animate ? 0 : value);
+  const shown = el("span", { "aria-hidden": "true", "data-counter": "" });
+  shown._count = { key, value, format };
+  shown.textContent = format(animate && lastShown.has(key) ? lastShown.get(key) : animate ? 0 : value);
   if (!animate) lastShown.set(key, value);
+  node.append(shown, el("span", { class: "sr-only", text: format(value) }));
   return node;
 }
 const fmtInt = v => fmt.format(Math.round(v));
@@ -737,6 +739,11 @@ function tipRows(title, rows, total) {
   if (total != null) out.push(el("div", { class: "tt-r tt-t" }, el("i"), el("span", { text: "Total" }), el("em", { text: fmt.format(total) })));
   return out;
 }
+// Dica aberta por toque: some no próximo toque fora do gráfico que a abriu.
+let touchTip = null;
+document.addEventListener("pointerdown", e => {
+  if (touchTip && !touchTip.contains(e.target)) { touchTip = null; hideTip(); }
+});
 function showTipNodes(nodes, x, y) {
   tip.replaceChildren(...nodes); tip.style.display = "block";
   const w = tip.offsetWidth, h = tip.offsetHeight;
@@ -780,8 +787,14 @@ function stackChart(rows, keys) {
     const stack = el("div", { class: "stack", style: "--i:" + i + ";height:" + (r.total / top * 100).toFixed(2) + "%" });
     for (const k of [...keys].reverse()) if (r.parts[k]) stack.append(el("span", { "data-a": k, style: "flex:" + r.parts[k] + " 0 0;background:" + AGENT_COLOR[k] }));
     const col = el("div", { class: "col" }, stack);
-    col.addEventListener("pointermove", e => showTipNodes(tipOf(r), e.clientX, e.clientY));
-    col.addEventListener("pointerleave", hideTip);
+    col.addEventListener("pointermove", e => { if (e.pointerType !== "touch") showTipNodes(tipOf(r), e.clientX, e.clientY); });
+    // No toque o pointerleave vem logo depois do toque: a dica fica até o próximo toque fora das colunas.
+    col.addEventListener("pointerleave", e => { if (e.pointerType !== "touch") hideTip(); });
+    col.addEventListener("pointerup", e => {
+      if (e.pointerType !== "touch") return;
+      touchTip = cols;
+      showTipNodes(tipOf(r), e.clientX, e.clientY);
+    });
     return col;
   });
   cols.append(...colNodes);
@@ -1001,17 +1014,27 @@ function ago(stamp) {
   if (min < 48 * 60) return "ontem";
   return "há " + Math.round(min / 1440) + " dias";
 }
-// Vezes por dia nos últimos 14 dias (UTC), terminando hoje.
-const SPARK_DAYS = 14;
+// Vezes no período escolhido, como o resto do painel: por dia até 31 dias, por semana acima disso.
+let sparkDays = 30;
+const SPARK_WEEKLY_FROM = 32;
+const sparkNote = () => sparkDays < SPARK_WEEKLY_FROM ? "por dia no período" : "por semana no período";
 function spark(daily, level) {
   if (!Array.isArray(daily)) return el("span", { class: "spark" });
   const counts = new Map(daily.map(d => [d.day, d.count]));
-  const end = new Date(); end.setUTCHours(0, 0, 0, 0);
-  const days = Array.from({ length: SPARK_DAYS }, (_, i) => new Date(end.getTime() - (SPARK_DAYS - 1 - i) * 86400000).toISOString().slice(0, 10));
-  const values = days.map(d => counts.get(d) || 0), max = Math.max(1, ...values);
+  let slots = series(sparkDays, day => counts.get(day) || 0).map(s => ({ label: dayMonth(s.day), value: s.value }));
+  if (sparkDays >= SPARK_WEEKLY_FROM) {
+    const weeks = [];
+    // Semanas contadas a partir do fim: a última termina no último dia mostrado; a primeira pode ser menor.
+    for (let end = slots.length; end > 0; end -= 7) {
+      const week = slots.slice(Math.max(0, end - 7), end);
+      weeks.unshift({ label: "semana até " + week.at(-1).label, value: week.reduce((s, d) => s + d.value, 0) });
+    }
+    slots = weeks;
+  }
+  const max = Math.max(1, ...slots.map(s => s.value));
   return el("span", { class: "spark" + (level === "error" ? "" : " warn"), role: "img",
-    "aria-label": "Últimos 14 dias: " + days.map((d, i) => dayMonth(d) + " " + values[i]).join(", ") },
-    ...values.map((v, j) => el("i", { class: v ? "" : "z", style: "--h:" + (v / max).toFixed(3) + ";--j:" + j })));
+    "aria-label": "Vezes " + sparkNote() + ": " + slots.map(s => s.label + " " + s.value).join(", ") },
+    ...slots.map((s, j) => el("i", { class: s.value ? "" : "z", style: "--h:" + (s.value / max).toFixed(3) + ";--j:" + Math.min(j, 30) })));
 }
 
 function render(data) {
@@ -1026,6 +1049,7 @@ function render(data) {
   // Sem pacote de hoje, o gráfico para em ontem; um parcial de hoje já conta.
   const today = new Date().toISOString().slice(0, 10);
   skipToday = !data.daily.some(d => d.day === today);
+  sparkDays = data.days;
 
   // Falha é o evento de falha inteiro, ou a linha que diz que deu errado (ferramenta com erro, passo que não deu certo).
   // Uma atualização que falha conta uma vez, pelo código (update_failed_code); a etapa e o fim dela ficam em Saúde do servidor.
