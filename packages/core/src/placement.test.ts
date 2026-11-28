@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
 import * as m from './paraglide/messages';
 import { placementLimits, placementProjects, placementReasonText, placementScheduleRule, placementStatus, placementSuggested,
-  placementSuggestionFor, readPlacementAll, samePlacementConfig, type Placement, type PlacementConfig } from './placement';
+  placementSuggestionFor, readPlacementAll, samePlacementConfig, placementElsewhereBody, placementRuleOf, placementRuleOfferFor,
+  type Placement, type PlacementConfig } from './placement';
 
 const config: PlacementConfig = {
   ui_mode: 'suggest', agent_mode: 'auto', limits: { mem_free_pct: 15, working: 6, cpu_pct: 80 },
@@ -74,6 +75,46 @@ it('sugerida fora da lista do aparelho não marca nada; servidor sem a rota reje
   expect(await placementSuggestionFor(pc, [pc, nb])).toBeNull();
   routes({});
   await expect(placementSuggestionFor(pc, [pc])).rejects.toMatchObject({ status: 404 });
+});
+
+const rule: Placement = { server: 'nb', reason: { code: 'project_rule', project: 'git:github.com/a/b' }, clone: null, warnings: [] };
+
+it('só a regra de projeto vira oferta, com o projeto sem o prefixo', () => {
+  expect(placementRuleOf(rule)).toEqual({ server: 'nb', project: 'github.com/a/b' });
+  expect(placementRuleOf(least)).toBeNull();
+  expect(placementRuleOf({ ...rule, server: '' })).toBeNull();
+});
+
+it('a oferta da pasta é pedida à máquina marcada com a pasta e acha a máquina da regra na lista', async () => {
+  routes({
+    'https://pc.test/api/placement/config': config,
+    'https://pc.test/api/placement/suggest': rule,
+    'https://pc.test/api/peers/identificador': { identificador: 'pc' },
+    'https://nb.test/api/peers/identificador': { identificador: 'nb' },
+  });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toEqual({ server: 'nb', serverId: 'nb-app', project: 'github.com/a/b', cwd: '/h/hangar' });
+  const sent = vi.mocked(globalThis.fetch).mock.calls.find(([url]) => String(url).endsWith('/api/placement/suggest'));
+  expect(JSON.parse(String(sent?.[1]?.body))).toEqual({ cwd: '/h/hangar', machine: 'auto' });
+});
+
+it('sem oferta: tela desligada não pergunta, carga não oferece, regra para a própria marcada nem fora da lista', async () => {
+  routes({ 'https://pc.test/api/placement/config': { ...config, ui_mode: 'off' } });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toBeNull();
+  expect(vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).endsWith('/suggest'))).toBe(false);
+  routes({ 'https://pc.test/api/placement/config': config, 'https://pc.test/api/placement/suggest': least });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toBeNull();
+  routes({ 'https://pc.test/api/placement/config': config, 'https://pc.test/api/placement/suggest': { ...rule, server: 'pc' },
+    'https://pc.test/api/peers/identificador': { identificador: 'pc' } });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toBeNull();
+  routes({ 'https://pc.test/api/placement/config': config, 'https://pc.test/api/placement/suggest': { ...rule, server: 'vm' },
+    'https://pc.test/api/peers/identificador': { identificador: 'pc' }, 'https://nb.test/api/peers/identificador': { identificador: 'nb' } });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toBeNull();
+});
+
+it('o corpo encaminhado leva a máquina e nada que só vale aqui', () => {
+  expect(placementElsewhereBody({ cwd: '/h/hangar', provider: 'claude', model: 'opus', config_dir: '/h/.claude-x', force_account: true,
+    engine: null, engine_account: 'a', codex_account: '', omp_profile: 'p', prewarm: 'r1', headless: true }, 'nb'))
+    .toEqual({ cwd: '/h/hangar', provider: 'claude', model: 'opus', headless: true, machine: 'nb' });
 });
 
 it('lê cada máquina: versão sem a rota é antiga, e as regras comparam sem a ordem das pastas', async () => {

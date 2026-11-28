@@ -10,7 +10,8 @@ import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount, getAn
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
   PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory, getRootsForServer, pickFolderRoot,
-  isOwnMachine, ownUpdatableServers, placementSuggestionFor, type PlacementSuggestion } from '@hangar/core';
+  isOwnMachine, ownUpdatableServers, placementSuggestionFor, placementRuleOfferFor, placementElsewhereBody,
+  type PlacementRuleOffer, type PlacementSuggestion } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
   CREATE_SESSION_PROVIDERS, canChooseSurface, permissionModes, effortLevels, contextRefsPlainText, machineLabel, serverColor, tagHex } from '@hangar/core';
 import type { AccountBadge } from '@hangar/core';
@@ -87,7 +88,8 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
 }) {
   const servers = useServers((s) => s.servers);
   const activeId = useServers((s) => s.activeId);
-  // Máquina pedida por quem abriu, trocada à mão ou pasta já escolhida: a sugestão que chega depois não a desfaz.
+  // Máquina pedida por quem abriu, trocada à mão ou qualquer escolha na tela (nome, provedor, modelo, conta, modo, pasta):
+  // a troca remontaria o formulário e perderia essas escolhas, então a sugestão que chega depois só mostra o motivo.
   const chosen = useRef(!!initial?.server);
   const [suggestion, setSuggestion] = useState<PlacementSuggestion | null>(null);
   // A máquina escolhida na pílula vale só para onde a conversa nasce; o servidor ativo é das Configurações.
@@ -116,21 +118,21 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
     asked.current = true;
     const others = ownUpdatableServers(servers).filter((s) => !isDemoUrl(`${s.baseUrl}/`));
     placementSuggestionFor(active, others).then((found) => {
-      if (!mounted.current || !found || chosen.current) return;
+      if (!mounted.current || !found) return;
       setSuggestion(found);
-      setMachine(found.serverId);
+      if (!chosen.current) setMachine(found.serverId);
     }, (error: unknown) => console.warn('[nova-conversa] sugestão de máquina não lida', error));
   }, [servers, activeId, home?.mode]);
   // O motor é de uma máquina: trocar a pílula de máquina descarta o pedido.
   const initialEngine = initial?.engine && (!initial.server || initial.server === target?.id) ? initial.engine : undefined;
   return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine}
-    suggestion={suggestion} onFolderPicked={keepChoice} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} initialEngine={initialEngine} />
+    suggestion={suggestion} onTouched={keepChoice} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} initialEngine={initialEngine} />
     : home?.mode === 'sessions' ? <View style={{ flex: 1 }}>{home.sessions}</View>
       : <Text accessibilityRole="alert">{m.servidor_nao_existe()}</Text>;
 }
 
-function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFolderPicked, onClose, keyboardOffset, home, layout, initialEngine }: {
-  active: Server; machines: Server[]; onPickMachine: (id: string) => void; suggestion: PlacementSuggestion | null; onFolderPicked: () => void;
+function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouched, onClose, keyboardOffset, home, layout, initialEngine }: {
+  active: Server; machines: Server[]; onPickMachine: (id: string) => void; suggestion: PlacementSuggestion | null; onTouched: () => void;
   onClose?: () => void; keyboardOffset?: number; home?: HomePresentation;
   layout: 'conversation' | 'form'; initialEngine?: string;
 }) {
@@ -183,6 +185,9 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
   const startAgyRetry = useCanceledLoadRetry(useCallback(() => setAgyTry((n) => n + 1), []));
   const [projectWarning, setProjectWarning] = useState('');
   const pickGeneration = useRef(0);
+  // A pasta escolhida tem regra de projeto para outra máquina; com o "Abrir na <máquina>", a sessão é pedida para lá.
+  const [ruleOffer, setRuleOffer] = useState<PlacementRuleOffer | null>(null);
+  const [ruleTaken, setRuleTaken] = useState(false);
 
   // O inicial vem da sonda de providers, que segue o último provedor que o servidor guardou.
   const [provider, setProvider] = useState<Provider>('claude');
@@ -662,6 +667,15 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
       catch { setProjectWarning(m.criar_projeto_salvar_erro()); }
     }
     setHasSameFolder(false);
+    setRuleOffer(null);
+    setRuleTaken(false);
+    // Só o formulário cria por aqui: a conversa nova manda a primeira mensagem pela fila de uma máquina só.
+    if (layout === 'form' && p !== NO_PROJECT_CWD && isOwnMachine(active)) {
+      const others = ownUpdatableServers(machines).filter((s) => !isDemoUrl(`${s.baseUrl}/`));
+      placementRuleOfferFor(active, others, p).then((offer) => {
+        if (mounted.current && generation === pickGeneration.current) setRuleOffer(offer);
+      }, (cause: unknown) => console.warn('[nova-conversa] regra de projeto da pasta não lida', cause));
+    }
     try {
       const sessions = await fetchSessionsForServer(active);
       if (!mounted.current || generation !== pickGeneration.current) return;
@@ -670,9 +684,9 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
       if (!mounted.current || generation !== pickGeneration.current) return;
       setError(cause instanceof Error ? cause.message : m.criar_sessao_erro());
     }
-  }, [active]);
+  }, [active, layout, machines]);
   // Escolha da pessoa, não a pasta que o seletor marca sozinho ao abrir: a sugestão de máquina que chega depois não a tira.
-  const pickByHand = useCallback((p: string, root?: string) => { onFolderPicked(); return handlePick(p, root); }, [handlePick, onFolderPicked]);
+  const pickByHand = useCallback((p: string, root?: string) => { onTouched(); return handlePick(p, root); }, [handlePick, onTouched]);
 
   // O formulário abre na última pasta usada nesta máquina, como a conversa nova. Uma vez por montagem:
   // o objeto do servidor muda de identidade (rede local, token) e não pode desfazer a escolha da pessoa.
@@ -763,6 +777,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
 
   // Nada daqui é guardado no aparelho: o padrão da próxima abertura é o do servidor.
   const chooseProvider = (p: Provider) => {
+    onTouched();
     providerTouched.current = true;
     seededEngine.current = '';
     setSeedPending(false);
@@ -773,6 +788,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
     setProvider(p);
   };
   const chooseModel = (v: string) => {
+    onTouched();
     choiceTouched.current = true;
     if (!v) setServiceTier(undefined);
     providerTouched.current = true;
@@ -784,18 +800,21 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
     setEsforco(effort);
   };
   const chooseEffort = (v: string) => {
+    onTouched();
     choiceTouched.current = true;
     providerTouched.current = true;
     setProvidersError('');
     desired.current = { ...desired.current, effort: v };
     setEsforco(v);
   };
-  const chooseHeadless = (v: boolean) => setHeadlessPick(v);
+  const chooseHeadless = (v: boolean) => { onTouched(); setHeadlessPick(v); };
   const choosePermission = (value: string) => {
+    onTouched();
     permissionTouched.current = true;
     setPermissao(value);
   };
   const chooseConfig = (v: string) => {
+    onTouched();
     providerTouched.current = true;
     setProvidersError('');
     accountTouched.current = true;
@@ -821,6 +840,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
     setSelectedConfig(target);
   };
   const chooseCodexAccount = (value: string) => {
+    onTouched();
     providerTouched.current = true;
     setProvidersError('');
     codexGeneration.current++;
@@ -1090,7 +1110,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
       <TextInput
         style={styles.input}
         value={name}
-        onChangeText={setName}
+        onChangeText={(v) => { onTouched(); setName(v); }}
         placeholder={m.criar_nome_placeholder()}
         accessibilityLabel={m.comum_nome()}
         autoCapitalize="none"
@@ -1107,7 +1127,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
       <PanelSelect
         value={engine}
         options={[{ value: '', label: m.criar_claude_sua_conta() }, ...Object.entries(motores).map(([k, v]) => ({ value: k, label: (v as any).label ?? k, hint: (v as any).model }))]}
-        onChange={(v) => { choiceTouched.current = false; seededEngine.current = ''; setSeedPending(false); setEngine(v); }}
+        onChange={(v) => { onTouched(); choiceTouched.current = false; seededEngine.current = ''; setSeedPending(false); setEngine(v); }}
       />
     </View>
   ) : null;
@@ -1266,8 +1286,14 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
   // para a mesma pasta e nome digitado: repetir depois de uma falha de rede não abre uma segunda sessão.
   const createInFlight = useRef(false);
   const attemptName = useRef<{ key: string; name: string; known: boolean } | null>(null);
+  // A oferta vale para a pasta escolhida agora e para uma máquina que segue na lista do app.
+  const ruleServer = ruleOffer && ruleOffer.cwd === picked ? machines.find((sv) => sv.id === ruleOffer.serverId) ?? null : null;
+  const ruleLabel = ruleServer ? machineView(ruleServer, machines.indexOf(ruleServer)).label : '';
+  const elsewhere = ruleTaken && ruleOffer && ruleServer ? { server: ruleOffer.server, at: ruleServer } : null;
   const createSession = async () => {
     if (!body || !canCreate || createInFlight.current) return;
+    // "Abrir na <máquina>": o servidor desta tela traduz a pasta e encaminha; nome livre, conversa e conferência são de lá.
+    const born = elsewhere?.at ?? active;
     createInFlight.current = true;
     setCreating(true);
     setError('');
@@ -1277,28 +1303,30 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
     const retry = previous?.key === key;
     // Antes do POST: renovação atrasada subiria outra reserva depois da adoção. O nome da reserva já
     // está guardado para ela no servidor.
-    const ticket = takePrewarm();
+    // A reserva é desta máquina: encaminhada, a sessão nasce fria lá.
+    const ticket = elsewhere ? null : takePrewarm();
     let chosen = retry ? previous : typed ? { name: typed, known: true }
-      : ticket ? { name: ticket.name, known: true } : await autoSessionName(active, body.cwd);
+      : ticket ? { name: ticket.name, known: true } : await autoSessionName(born, body.cwd);
     // Quem cancelou já saiu: a sessão nasceu e fica na lista, sem puxar a pessoa de volta.
     const open = (session: string) => {
-      resetCreatedChat(active.id, session);
-      if (mounted.current) router.replace(`/s/${active.id}/${session}` as never);
+      resetCreatedChat(born.id, session);
+      if (mounted.current) router.replace(`/s/${born.id}/${session}` as never);
     };
     try {
       for (let first = true; ; first = false) {
         attemptName.current = { key, ...chosen };
         try {
-          const session = await createSessionForServer(active, { ...body, name: chosen.name,
+          const asked = { ...body, name: chosen.name,
             // Só com o nome da reserva: o digitado, a repetição ou o próximo automático vão sem ela.
             ...(ticket && ticket.name === chosen.name ? { prewarm: ticket.id } : {}),
-            ...(body.new_branch && !body.branch?.trim() ? { branch: sanitizeSessionName(chosen.name) } : {}) });
+            ...(body.new_branch && !body.branch?.trim() ? { branch: sanitizeSessionName(chosen.name) } : {}) };
+          const session = await createSessionForServer(active, elsewhere ? placementElsewhereBody(asked, elsewhere.server) : asked);
           open(session.name);
           return;
         } catch (cause: unknown) {
           // Nome automático em uso (lista fora do ar, ou outra tela criou no meio): uma tentativa com o próximo.
           if (!typed && !retry && first && (cause as { code?: unknown } | null)?.code === 'erro_nome_em_uso') {
-            chosen = await autoSessionName(active, body.cwd, [chosen.name]);
+            chosen = await autoSessionName(born, body.cwd, [chosen.name]);
             continue;
           }
           throw cause;
@@ -1313,9 +1341,9 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
       const lost = typeof status !== 'number' || status >= 500 || status === 408 || (status === 409 && retry && chosen.known);
       // Recusa respondida encerra a tentativa: o próximo toque escolhe o nome de novo, sem contar como repetição.
       if (!lost) attemptName.current = null;
-      const exists = !lost ? false : await fetchSessionsForServer(active)
+      const exists = !lost ? false : await fetchSessionsForServer(born)
         .then((list) => list.some((session) => session.name === finalName), () => null);
-      const empty = exists && await getHistory(finalName, 1, undefined, 8_000, active)
+      const empty = exists && await getHistory(finalName, 1, undefined, 8_000, born)
         .then((events) => events.length === 0, () => false);
       if (empty) open(finalName);
       else if (mounted.current) {
@@ -1358,15 +1386,27 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
             {/* No topo: o Criar fica no cabeçalho e a falha dele precisa aparecer sem rolar. */}
             {notices}
             <RowGroup>
-              <SettingRow icon="Monitor" label={m.native_new_chat_machine()} value={active.label}
-                actions={machines.map((sv) => ({ id: sv.id, title: sv.label, state: on(sv.id === active.id),
+              <SettingRow icon="Monitor" label={m.native_new_chat_machine()} value={elsewhere ? elsewhere.at.label : active.label}
+                actions={machines.map((sv) => ({ id: sv.id, title: sv.label, state: on(sv.id === (elsewhere?.at.id ?? active.id)),
                   subtitle: sv.id === suggestion?.serverId ? m.native_new_chat_machine_suggested({ motivo: suggestion.text }) : undefined }))}
-                onAction={(id) => { if (id !== active.id) onPickMachine(id); }} />
+                // Voltar a esta máquina depois do clique só desfaz a oferta; outra troca a máquina e descarta a oferta.
+                onAction={(id) => { if (id === active.id) setRuleTaken(false); else if (id !== elsewhere?.at.id) onPickMachine(id); }} />
               <SettingRow ref={folderRef} icon="Folder" label={m.native_new_chat_folder()} detail={picked ?? undefined}
                 value={picked ? folderLabel : m.criar_escolher_pasta()} onPress={() => setFolderOpen(true)} />
               {picked && !noProject ? <SettingRow ref={branchRef} icon="GitBranch" label={m.native_create_checkout_branch()} value={branchLabel}
                 onPress={() => setBranchOpen(true)} /> : null}
             </RowGroup>
+            {ruleServer && ruleOffer ? (
+              <View style={styles.ruleLine}>
+                <Text style={styles.ruleText}>{m.native_placement_rule_offer({ projeto: ruleOffer.project, maquina: ruleLabel })}</Text>
+                {!ruleTaken ? (
+                  <Pressable onPress={() => setRuleTaken(true)} disabled={creating} hitSlop={LINK_SLOP} accessibilityRole="button"
+                    accessibilityState={{ disabled: creating }}>
+                    <Text style={styles.headingLink}>{m.native_placement_rule_open({ maquina: ruleLabel })}</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
             {/* Os seis agentes à vista, como o seletor do PC: um menu preso à linha cortava os de baixo. */}
             <ProviderTrack value={provider} onChange={chooseProvider} probe={providerProbe} disabled={creating} />
             <RowGroup>
@@ -1533,6 +1573,8 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onFold
 
 const styles = StyleSheet.create((theme) => ({
   form: { flex: 1 },
+  ruleLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: theme.base.space[2], rowGap: theme.base.space[1], paddingHorizontal: theme.base.space[2] },
+  ruleText: { flexShrink: 1, fontSize: theme.base.text.xs, color: theme.tokens.text.secondary },
   navbar: { minHeight: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: theme.base.space[3] },
   navSide: { minWidth: 72, minHeight: 44, justifyContent: 'center' },
   navRight: { alignItems: 'flex-end' },

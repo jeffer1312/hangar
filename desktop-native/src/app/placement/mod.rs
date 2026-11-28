@@ -82,6 +82,62 @@ pub(crate) fn reason_text(placement: &Value) -> String {
     text
 }
 
+/// A pasta escolhida tem regra de projeto para outra máquina: a Nova conversa oferece abrir lá. `server`: o id que
+/// a máquina informa (vai no `machine` do pedido); `key`: a mesma máquina na lista deste aparelho; `cwd`: a pasta
+/// para a qual a oferta vale; `taken`: a pessoa clicou em "Abrir na <máquina>".
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct RuleOffer { pub(super) server: String, pub(super) key: String, pub(super) project: String, pub(super) cwd: String, pub(super) taken: bool }
+
+impl RuleOffer {
+    pub(super) fn notice(&self, machine: &str) -> String {
+        tr("placement_rule_offer").replace("{projeto}", &self.project).replace("{maquina}", machine)
+    }
+
+    pub(super) fn action(&self, machine: &str) -> String { tr("placement_rule_open").replace("{maquina}", machine) }
+}
+
+/// Conta, motor, perfil e reserva são desta máquina: com eles o servidor recusa abrir noutra. Lá vale o padrão de lá.
+const LOCAL_FIELDS: [&str; 8] = ["config_dir", "force_account", "engine", "engine_account", "engine_binding", "codex_account", "omp_profile", "prewarm"];
+
+/// O corpo de abertura que o servidor daqui encaminha à máquina da regra (`server`): ele troca a pasta pela do mesmo projeto lá.
+pub(super) fn elsewhere(body: &mut Value, server: &str) {
+    let Some(fields) = body.as_object_mut() else { return };
+    for key in LOCAL_FIELDS { fields.remove(key); }
+    fields.insert("machine".into(), json!(server));
+}
+
+/// A máquina e o projeto da regra, quando o motivo da escolha é uma regra de projeto.
+fn rule_of(placement: &Value) -> Option<(String, String)> {
+    if placement.pointer("/reason/code")?.as_str()? != "project_rule" { return None; }
+    let server = placement["server"].as_str().filter(|s| !s.is_empty())?;
+    let project = placement.pointer("/reason/project")?.as_str()?;
+    Some((server.to_owned(), project.trim_start_matches("git:").to_owned()))
+}
+
+/// A oferta da regra para `cwd`, perguntada à máquina marcada; com a tela em "desligado" nada é pedido.
+/// `Ok(None)`: sem regra, regra para a própria marcada, ou máquina fora da lista deste aparelho.
+pub(super) async fn rule_offer(marked: Api, machines: Vec<ServerChoice>, cwd: String) -> Result<Option<RuleOffer>, Failure> {
+    let config = marked.server_read(&["placement", "config"], &[], WAIT).await?;
+    if config["ui_mode"].as_str().is_none_or(|mode| mode == "off") { return Ok(None); }
+    let body = json!({"cwd": cwd, "machine": "auto"});
+    let placement = marked.server_send(reqwest::Method::POST, &["placement", "suggest"], Some(body), WAIT * 2).await?;
+    let Some((server, project)) = rule_of(&placement) else { return Ok(None) };
+    let here = super::servers::norm(&marked.identity());
+    Ok(key_of(&marked, machines, &server).await.filter(|key| *key != here)
+        .map(|key| RuleOffer { server, key, project, cwd, taken: false }))
+}
+
+/// A máquina da lista (`ServerChoice::key`) cujo id é `server`; quase sempre é a própria `active`, uma pergunta só.
+async fn key_of(active: &Api, machines: Vec<ServerChoice>, server: &str) -> Option<String> {
+    let here = super::servers::norm(&active.identity());
+    if ident(active).await.as_deref() == Some(server) { return Some(here); }
+    let others = machines.into_iter().filter(|m| m.key != here && !m.offline).collect::<Vec<_>>();
+    let idents = futures::future::join_all(others.iter().map(|m| async {
+        match Api::new(&m.address, &m.token) { Ok(api) => ident(&api).await, Err(_) => None }
+    })).await;
+    others.into_iter().zip(idents).find(|(_, id)| id.as_deref() == Some(server)).map(|(m, _)| m.key)
+}
+
 /// A máquina da lista (`ServerChoice::key`) que a Nova conversa marca e o motivo, perguntados ao servidor ativo.
 /// `Ok(None)`: nada a marcar, ou a sugerida não está na lista deste aparelho.
 pub(super) async fn suggestion(active: Api, machines: Vec<ServerChoice>) -> Result<Option<(String, String)>, Failure> {
@@ -91,19 +147,12 @@ pub(super) async fn suggestion(active: Api, machines: Vec<ServerChoice>) -> Resu
         // A escolha espera até 2 s pelos fatos de cada máquina.
         active.server_send(reqwest::Method::POST, &["placement", "suggest"], Some(body), WAIT * 2));
     let Some((server, text)) = suggested(&config?, &placement?) else { return Ok(None) };
-    let here = super::servers::norm(&active.identity());
-    // Quase sempre a sugerida é a ativa: uma pergunta só.
-    if ident(&active).await.as_deref() == Some(server.as_str()) { return Ok(Some((here, text))); }
-    let others = machines.into_iter().filter(|m| m.key != here && !m.offline).collect::<Vec<_>>();
-    let idents = futures::future::join_all(others.iter().map(|m| async {
-        match Api::new(&m.address, &m.token) { Ok(api) => ident(&api).await, Err(_) => None }
-    })).await;
-    Ok(others.into_iter().zip(idents).find(|(_, id)| id.as_deref() == Some(server.as_str())).map(|(m, _)| (m.key, text)))
+    Ok(key_of(&active, machines, &server).await.map(|key| (key, text)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{reason_text, suggested};
+    use super::{RuleOffer, elsewhere, reason_text, rule_of, suggested};
     use serde_json::json;
 
     #[test]
@@ -117,6 +166,34 @@ mod tests {
         assert_eq!(suggested(&suggest, &kept), None);
         assert_eq!(suggested(&suggest, &json!({"server": "", "reason": {"code": "local_within_limits"}})), None);
         assert_eq!(suggested(&suggest, &json!({"server": "pc"})), None, "resposta sem motivo não marca");
+    }
+
+    #[test]
+    fn only_a_project_rule_becomes_an_offer() {
+        let rule = json!({"server": "vm", "reason": {"code": "project_rule", "project": "git:github.com/a/b"}, "warnings": []});
+        assert_eq!(rule_of(&rule), Some(("vm".into(), "github.com/a/b".into())));
+        let loaded = json!({"server": "vm", "reason": {"code": "least_loaded", "local_out": "working"}});
+        assert_eq!(rule_of(&loaded), None, "carga não oferece: só a regra do dono");
+        assert_eq!(rule_of(&json!({"server": "", "reason": {"code": "project_rule", "project": "git:x"}})), None);
+        assert_eq!(rule_of(&json!({"server": "vm", "reason": {"code": "project_rule"}})), None, "regra sem projeto não tem o que dizer");
+    }
+
+    #[test]
+    fn the_body_sent_elsewhere_has_the_machine_and_nothing_of_this_one() {
+        let mut body = json!({"name": "s", "cwd": "/home/j/hangar", "provider": "claude", "model": "opus", "config_dir": "/home/j/.claude-x",
+            "force_account": true, "engine": null, "engine_account": "a", "engine_binding": {"id": 1}, "codex_account": "", "omp_profile": "p",
+            "prewarm": "r1", "headless": true, "branch": "feat"});
+        elsewhere(&mut body, "vm");
+        assert_eq!(body, json!({"name": "s", "cwd": "/home/j/hangar", "provider": "claude", "model": "opus", "headless": true, "branch": "feat",
+            "machine": "vm"}));
+    }
+
+    #[test]
+    fn the_offer_names_the_project_and_the_machine_in_the_app_language() {
+        crate::i18n::english_in_this_thread(true);
+        let offer = RuleOffer { server: "vm".into(), key: "k".into(), project: "github.com/a/b".into(), cwd: "/x".into(), taken: false };
+        assert_eq!(offer.notice("VM"), "github.com/a/b has a rule for VM");
+        assert_eq!(offer.action("VM"), "Open on VM");
     }
 
     #[test]

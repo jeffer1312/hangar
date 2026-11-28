@@ -145,6 +145,40 @@ export async function placementSuggestionFor(active: Server, machines: readonly 
   return found ? reply(found) : null;
 }
 
+/** A pasta escolhida tem regra de projeto para outra máquina: a Nova conversa oferece abrir lá. `server`: o id que a
+ *  máquina informa (vai no `machine` do pedido); `serverId`: a mesma máquina na lista do app; `cwd`: a pasta da oferta. */
+export interface PlacementRuleOffer { server: string; serverId: string; project: string; cwd: string }
+
+/** A máquina e o projeto da regra, quando o motivo da escolha é uma regra de projeto. */
+export function placementRuleOf(placement: Partial<Placement>): { server: string; project: string } | null {
+  const r = placement.reason;
+  if (r?.code !== 'project_rule' || !r.project || !placement.server) return null;
+  return { server: placement.server, project: placementProjectTitle(r.project) };
+}
+
+/** A oferta da regra para `cwd`, perguntada à máquina marcada; com a tela em "desligado" nada é pedido.
+ *  `null`: sem regra, regra para a própria marcada, ou máquina fora de `machines`. Falha de leitura rejeita. */
+export async function placementRuleOfferFor(marked: Server, machines: readonly Server[], cwd: string): Promise<PlacementRuleOffer | null> {
+  const config = await getPlacementConfig(marked);
+  if (config.ui_mode === 'off') return null;
+  const rule = placementRuleOf(await suggestPlacement(marked, { cwd, machine: 'auto' }));
+  if (!rule || await identOf(marked) === rule.server) return null;
+  const others = machines.filter((s) => s.id !== marked.id);
+  const idents = await Promise.all(others.map(identOf));
+  const found = others.find((_, i) => idents[i] === rule.server);
+  return found ? { server: rule.server, serverId: found.id, project: rule.project, cwd } : null;
+}
+
+// Conta, motor, perfil e reserva são da máquina daqui: com eles o servidor recusa abrir noutra. Lá vale o padrão de lá.
+const LOCAL_FIELDS = ['config_dir', 'force_account', 'engine', 'engine_account', 'engine_binding', 'codex_account', 'omp_profile', 'prewarm'];
+
+/** O corpo de abertura que o servidor daqui encaminha à máquina da regra (`server`): ele troca a pasta pela do mesmo projeto lá. */
+export function placementElsewhereBody<T extends object>(body: T, server: string): T & { machine: string } {
+  const out: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+  for (const key of LOCAL_FIELDS) delete out[key];
+  return { ...out, machine: server } as T & { machine: string };
+}
+
 export type PlacementRead = { state: 'ready'; config: PlacementConfig } | { state: 'old' } | { state: 'failed'; error: string };
 /** Uma máquina vista pela tela Balanceamento. */
 export interface PlacementMachine { serverId: string; ident: string | null; read: PlacementRead; facts: PlacementFacts | null }

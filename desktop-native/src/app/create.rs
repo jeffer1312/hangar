@@ -434,6 +434,8 @@ pub(super) enum CreateReply {
     Spread(choices::SpreadOf, u64, String, choices::Applied),
     /// A máquina sugerida pelo balanceamento e o motivo, no pedido `u64`.
     Placement(u64, Result<Option<(String, String)>, Failure>),
+    /// A oferta da regra de projeto para a pasta escolhida.
+    RuleOffer(u64, Result<Option<super::placement::RuleOffer>, Failure>),
 }
 
 /// A regra do backend (`names.sanitize_session_name`): acento vira a letra sem ele, o que não for letra, número, `_` ou `-` vira `-`,
@@ -763,6 +765,11 @@ pub(in crate::app) struct NewSession {
     placement_seq: u64,
     /// A pessoa trocou a máquina à mão: a sugestão que chega depois não a desfaz.
     machine_touched: bool,
+    /// A pasta escolhida tem regra de projeto para outra máquina; com o clique, a sessão é pedida para lá.
+    rule_offer: Option<super::placement::RuleOffer>,
+    rule_seq: u64,
+    /// A máquina onde a última criação nasceu, quando foi encaminhada pela regra: a conversa abre lá.
+    born_on: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -846,6 +853,7 @@ impl NewSession {
             baton_preview: Remote::default(), suggested_name: String::new(), prewarm, tags: HashMap::new(),
             recent: Vec::new(), repos: Remote::default(), copies_open: HashSet::new(), merged_open: HashSet::new(),
             room: Rc::new(Cell::new([0.; 5])), recents_fit: true, placement: None, placement_seq: 0, machine_touched: false,
+            rule_offer: None, rule_seq: 0, born_on: None,
             _subscriptions: subscriptions,
         };
         dialog.start_prewarm(cx);
@@ -993,6 +1001,9 @@ impl NewSession {
     fn pick_machine(&mut self, key: String, window: &mut Window, cx: &mut Context<Self>) {
         self.machine_touched = true;
         self.menu.set(None);
+        // Troca à mão descarta a oferta da regra; voltar à máquina desta tela depois do clique só a desfaz.
+        (self.rule_offer, self.rule_seq) = (None, self.rule_seq + 1);
+        if key == super::servers::norm(&self.link.api.identity()) { cx.notify(); return; }
         if self.creating || self.account_busy || self.baton.is_some() { return; }
         let Some(choice) = self.servers.ok().and_then(|list| list.iter().find(|c| c.key == key)).cloned() else { return };
         match Api::new(&choice.address, &choice.token) {
@@ -1061,20 +1072,23 @@ impl NewSession {
             1 => Some(tr("create_servers_offline_one")),
             n => Some(tr("create_servers_offline").replace("{n}", &n.to_string())),
         };
+        let marked = self.shown_key();
         Some(div().flex().flex_col().gap(px(6.))
             .when(shown.len() > 1, |el| el.child(div().id("create-machines").role(Role::Group).aria_label(tr("new_chat_server"))
                 .flex().flex_wrap().items_center().gap(px(6.))
                 .child(div().text_sm().text_color(theme::muted()).child(tr("new_chat_server")))
                 .children(shown.iter().map(|machine| {
-                    let on = self.current_server(machine);
+                    let on = machine.key == marked;
                     let key = machine.key.clone();
                     let tip = if machine.offline { tr("create_server_offline").replace("{label}", &machine.label) } else { machine.address.clone() };
+                    let tip = self.machine_reason(&machine.key).map_or(tip.clone(), |reason| format!("{tip}\n{reason}"));
                     choice(SharedString::from(format!("create-machine-{}", machine.key)), on, cx).small().rounded_full()
                         .when(machine.offline, |b| b.icon(IconName::TriangleAlert))
                         .label(machine.label.clone()).tooltip(tip).disabled(!on && locked)
                         .when(!on, |b| b.on_click(cx.listener(move |this, _, window, cx| this.pick_machine(key.clone(), window, cx))))
                 }))))
             .children(hint.map(muted))
+            .children(self.render_rule_offer(cx))
             .when(self.baton.is_some() && shown.len() > 1, |el| el.child(muted(tr("create_baton_server_locked").replace("{s}", &self.server_label()))))
             .into_any_element())
     }
@@ -1102,6 +1116,58 @@ impl NewSession {
         }));
     }
 
+    /// A pasta escolhida pode ter regra de projeto para outra máquina: pergunta à máquina marcada. Pasta nova refaz a pergunta.
+    fn ask_rule(&mut self, cx: &mut Context<Self>) {
+        (self.rule_offer, self.rule_seq) = (None, self.rule_seq + 1);
+        if self.baton.is_some() || self.scheduled { return; }
+        let Some(cwd) = self.picked.clone().filter(|cwd| cwd != NO_PROJECT_CWD) else { return };
+        let (seq, machines) = (self.rule_seq, self.link.servers.clone());
+        self.request(cx, move |api, send| Box::pin(async move {
+            send(CreateReply::RuleOffer(seq, super::placement::rule_offer(api, machines, cwd).await)).await
+        }));
+    }
+
+    /// A oferta que vale para a pasta escolhida agora.
+    fn offer(&self) -> Option<&super::placement::RuleOffer> {
+        self.rule_offer.as_ref().filter(|offer| self.picked.as_deref() == Some(offer.cwd.as_str()))
+    }
+
+    fn taken_offer(&self) -> Option<&super::placement::RuleOffer> { self.offer().filter(|offer| offer.taken) }
+
+    /// A máquina que a pílula mostra: a da regra depois do clique, senão a desta tela.
+    fn shown_key(&self) -> String {
+        self.taken_offer().map_or_else(|| super::servers::norm(&self.link.api.identity()), |offer| offer.key.clone())
+    }
+
+    fn choice_of(&self, key: &str) -> Option<&ServerChoice> { self.servers.ok().and_then(|list| list.iter().find(|c| c.key == key)) }
+
+    /// O nome da máquina `key` como a pessoa o conhece: o da etiqueta, senão o desta tela.
+    fn machine_title(&self, key: &str) -> String {
+        self.choice_of(key).map_or_else(|| key.to_owned(), |c| super::tags::machine_name(self.machine_tag(key), &c.label, &c.address))
+    }
+
+    /// A pessoa já mexeu na tela (nome, provedor, modelo, conta, modo ou pasta): a sugestão de máquina que chega depois não
+    /// troca a máquina, porque a troca desfaria essas escolhas.
+    fn edited(&self, cx: &App) -> bool {
+        self.provider_touched || self.model_choice_touched || self.account_touched || self.headless_touched || self.picked.is_some()
+            || !self.name.read(cx).value().trim().is_empty()
+    }
+
+    /// O aviso da regra e o "Abrir na <máquina>", junto da máquina; sem o clique nada muda.
+    fn render_rule_offer(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let offer = self.offer().filter(|offer| !offer.taken)?;
+        let machine = self.machine_title(&offer.key);
+        let notice = offer.notice(&machine);
+        Some(div().flex().items_center().gap(px(6.)).text_size(px(12.5)).min_w_0()
+            .child(div().id("new-chat-rule-notice").max_w(px(260.)).truncate().text_color(theme::faint()).child(notice.clone())
+                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(notice.clone()).build(window, cx)))
+            .child(Button::new("new-chat-rule-open").outline().xsmall().label(offer.action(&machine)).disabled(self.creating)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(offer) = this.rule_offer.as_mut() { offer.taken = true; }
+                    cx.notify();
+                }))))
+    }
+
     /// Uma leitura por máquina escolhida, sem medir o disco: o menu de pasta não mostra espaço.
     fn load_repos(&mut self, cx: &mut Context<Self>) {
         let seq = self.repos.start();
@@ -1113,7 +1179,8 @@ impl NewSession {
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.load_servers(window, cx);
         self.load_target(cx);
-        if self.compact { self.ask_placement(self.link.api.clone(), cx); return; }
+        self.ask_placement(self.link.api.clone(), cx);
+        if self.compact { return; }
         // A continuação trabalha na mesma árvore: a pasta da origem já vem escolhida. Sem pasta conhecida, o nome sai já e a
         // pasta fica por escolher.
         match self.baton.as_ref().map(|b| (b.cwd.clone().filter(|c| !c.is_empty()), b.name.clone())) {
@@ -1220,6 +1287,7 @@ impl NewSession {
         // A escolhida vira a realçada: um realce velho de antes da escolha não rouba o Enter seguinte.
         (self.folder_active, self.picked, self.error, self.same_folder) = (Some(path.clone()), Some(path), None, false);
         (self.picked_query, self.picked_dir, self.create_when_ready) = (self.query.read(cx).value().to_string(), self.dir.clone(), false);
+        self.ask_rule(cx);
         if self.compact {
             self.menu.set(None);
             self.reset_git();
@@ -1527,8 +1595,22 @@ impl NewSession {
         // Worktree que já existe: a sessão nasce dentro dela, sem pedir worktree nova.
         let cwd = self.existing.clone().filter(|_| !self.new_branch).unwrap_or(cwd);
         let mut name = if self.compact { basename(&cwd).to_owned() } else { self.name.read(cx).value().trim().to_owned() };
-        // A reserva deste mesmo pedido vai no POST; sem nome digitado pela pessoa, o nome é o dela.
-        let reserve = self.prewarm_want(cx).and_then(|want| self.prewarm.adoptable(&want));
+        // "Abrir na <máquina>" da regra: o servidor desta tela traduz a pasta e encaminha; a sessão é de lá.
+        let there = match self.taken_offer().map(|offer| (offer.server.clone(), offer.key.clone())) {
+            None => None,
+            Some((server, key)) => match self.choice_of(&key).map(|c| Api::new(&c.address, &c.token)) {
+                Some(Ok(api)) => Some((server, api)),
+                Some(Err(error)) => { self.error = Some(Hangar::failure(&error)); cx.notify(); return; }
+                None => {
+                    self.error = Some(tr("placement_rule_machine_missing").replace("{maquina}", &self.machine_title(&key)));
+                    self.rule_offer = None;
+                    cx.notify();
+                    return;
+                }
+            },
+        };
+        // A reserva deste mesmo pedido vai no POST; sem nome digitado pela pessoa, o nome é o dela. A reserva é desta máquina.
+        let reserve = self.prewarm_want(cx).and_then(|want| self.prewarm.adoptable(&want)).filter(|_| there.is_none());
         let named = reserve.as_ref().filter(|_| self.compact || name == self.suggested_name).map(|(_, reserved)| reserved.clone());
         if let Some(reserved) = &named { name = reserved.clone(); }
         let provider = self.provider;
@@ -1565,6 +1647,9 @@ impl NewSession {
         }
         // Nome digitado diferente do da reserva: o servidor a descartaria, então ela fica para a próxima.
         if let Some((id, _)) = reserve.as_ref().filter(|_| named.is_some()) { body["prewarm"] = json!(id); }
+        if let Some((server, _)) = &there { super::placement::elsewhere(&mut body, server); }
+        self.born_on = there.as_ref().map(|(_, api)| api.identity());
+        let there = there.map(|(_, api)| api);
         // A renovação para antes do POST: atrasada, ela subiria outra reserva depois da adoção.
         self.prewarm.stop();
         self.create_seq += 1;
@@ -1575,8 +1660,10 @@ impl NewSession {
             if !this.update(cx, |this, cx| { cx.notify(); this.creating }).unwrap_or(false) { break; }
         }));
         self.request(cx, move |api, send| Box::pin(async move {
+            // Onde a sessão nasce: lá ficam o nome livre, a etapa da criação, a lista e a primeira mensagem.
+            let born = there.unwrap_or_else(|| api.clone());
             if first.is_some() && named.is_none() {
-                let sessions = match api.sessions().await {
+                let sessions = match born.sessions().await {
                     Ok(sessions) => sessions,
                     Err(error) => { send(CreateReply::Created(seq, Err(Hangar::fetch_failure(&error)))).await; return; }
                 };
@@ -1592,7 +1679,7 @@ impl NewSession {
                 && let Err(error) = api.server_send(reqwest::Method::POST, &["config"], Some(json!({"jev_padrao": on})), 8).await {
                 eprintln!("jev-padrao-salvar: {}", error.detail);
             }
-            let (poll_api, poll_send, poll_name) = (api.clone(), send.clone(), name.clone());
+            let (poll_api, poll_send, poll_name) = (born.clone(), send.clone(), name.clone());
             let poll = tokio::spawn(async move {
                 loop {
                     let step = poll_api.server_read(&["sessions", "creation-progress"], &[("name", poll_name.as_str())], 5).await.ok();
@@ -1610,7 +1697,7 @@ impl NewSession {
                 None => {
                     let result = api.server_send(reqwest::Method::POST, &["sessions"], Some(body), 120).await;
                     poll.abort();
-                    opened(&api, result, &name, &cwd, requested_branch.as_deref()).await
+                    opened(&born, result, &name, &cwd, requested_branch.as_deref()).await
                 }
             };
             match (first, opened) {
@@ -1620,7 +1707,7 @@ impl NewSession {
                     let mut failed = None;
                     let mut gaps = Vec::new();
                     for (file, bytes, image) in files {
-                        match api.upload(&opened.session.name, &file, composer::mime_for(&file), bytes.to_vec()).await {
+                        match born.upload(&opened.session.name, &file, composer::mime_for(&file), bytes.to_vec()).await {
                             Ok(up) => {
                                 if let Some(gap) = up.note { gaps.push(format!("{file}: {}", gap.shown())); }
                                 uploads.push((image, up));
@@ -1630,7 +1717,7 @@ impl NewSession {
                         }
                     }
                     let message = composer::compose_prompt(&text, &uploads, |speech| tr("attach_video_speech").replace("{texto}", speech));
-                    let result = match failed { Some(error) => Err(error), None => api.send(&opened.session.name, &message).await };
+                    let result = match failed { Some(error) => Err(error), None => born.send(&opened.session.name, &message).await };
                     // Como no campo da conversa: o vídeo que foi sem quadros nem fala fica dito, senão o agente o recebe calado.
                     if result.is_ok() && !gaps.is_empty() {
                         let gaps = gaps.join(" ");
@@ -1688,18 +1775,26 @@ impl NewSession {
                 self.worktrees.finish(seq, list);
             }
             CreateReply::Placement(seq, result) => {
-                // Troca à mão ou pasta escolhida enquanto a sugestão vinha: a escolha da pessoa vence.
-                if seq != self.placement_seq || self.machine_touched || self.picked.is_some() { return None; }
+                // Troca à mão enquanto a sugestão vinha: a escolha da pessoa vence.
+                if seq != self.placement_seq || self.machine_touched { return None; }
                 match result {
                     Err(error) => eprintln!("[nova-conversa] sugestão de máquina não lida: {}", error.detail),
                     Ok(None) => {}
                     Ok(Some((key, text))) => {
-                        if key != super::servers::norm(&self.link.api.identity()) {
+                        // Depois de a pessoa mexer na tela, a troca de máquina zeraria o que ela escolheu: fica só o motivo.
+                        if key != super::servers::norm(&self.link.api.identity()) && !self.edited(cx) {
                             self.pick_machine(key.clone(), window, cx);
                             self.machine_touched = false;
                         }
                         self.placement = Some((key, text));
                     }
+                }
+            }
+            CreateReply::RuleOffer(seq, result) => {
+                if seq != self.rule_seq { return None; }
+                match result {
+                    Err(error) => eprintln!("[nova-conversa] regra de projeto da pasta não lida: {}", error.detail),
+                    Ok(offer) => self.rule_offer = offer,
                 }
             }
             CreateReply::Repos(seq, result) => {
@@ -2927,13 +3022,19 @@ impl NewSession {
         let badge = credential.as_deref().and_then(|id| self.account_badge(id)).cloned();
         // A conta forçada acima do limite mostra o uso na pílula, na cor do menu de contas.
         let forced = self.forced_window().map(|(window, pct)| format!("{window} {}%", pct.round()));
-        let tag = self.machine_tag(&super::servers::norm(&self.link.api.identity())).cloned();
-        let machine = super::tags::machine_name(tag.as_ref(), &self.server_label(), &self.link.api.identity());
+        // Depois do "Abrir na <máquina>" da regra, a pílula mostra a máquina da regra; a pasta continua a escolhida aqui.
+        let shown = self.shown_key();
+        let tag = self.machine_tag(&shown).cloned();
+        let (machine, mark_id) = match self.taken_offer().and(self.choice_of(&shown)) {
+            Some(choice) => (super::tags::machine_name(tag.as_ref(), &choice.label, &choice.address), choice.id.clone()),
+            None => (super::tags::machine_name(tag.as_ref(), &self.server_label(), &self.link.api.identity()), self.machine_id()),
+        };
         let place = if self.no_project() { None } else { self.place_label() };
         let text = place.map_or_else(|| machine.clone(), |place| format!("{machine} · {place}"));
         div().flex().items_center().gap(px(2.)).pt(px(2.)).pl(px(6.))
-            .child(mark_pill(Menu::Machine, open == Some(Menu::Machine), machine_mark(tag.as_ref(), &self.machine_id(), 14.), text, None, tr("new_chat_where"),
+            .child(mark_pill(Menu::Machine, open == Some(Menu::Machine), machine_mark(tag.as_ref(), &mark_id, 14.), text, None, tr("new_chat_where"),
                 self.machine_pill_tip(cx), false, cx))
+            .children(self.render_rule_offer(cx))
             .children(account.map(|(label, aria)| {
                 let label = badge.as_ref().map(|b| b.name.trim()).filter(|n| !n.is_empty()).map_or(label, str::to_owned);
                 mark_pill(Menu::Account, open == Some(Menu::Account), account_mark(badge.as_ref(), self.provider, 14.), label, forced.clone(), aria, None,
@@ -2943,11 +3044,17 @@ impl NewSession {
     }
 
     /// A dica da pílula de máquina: o motivo da sugestão, enquanto a máquina é a sugerida, e a branch.
+    /// O motivo do balanceamento na linha da máquina sugerida, também quando ela não foi marcada porque a pessoa já mexeu.
+    fn machine_reason(&self, key: &str) -> Option<String> {
+        self.placement.as_ref().filter(|(suggested, _)| suggested == key).map(|(_, text)| tr("new_chat_machine_suggested").replace("{motivo}", text))
+    }
+
     fn machine_pill_tip(&self, cx: &App) -> Option<String> {
         let here = super::servers::norm(&self.link.api.identity());
-        let reason = self.placement.as_ref().filter(|(key, _)| *key == here)
+        let reason = self.placement.as_ref().filter(|(key, _)| *key == here && self.taken_offer().is_none())
             .map(|(_, text)| tr("new_chat_machine_suggested").replace("{motivo}", text));
-        let lines = [reason, self.branch_pill_label(cx).filter(|_| !self.no_project())].into_iter().flatten().collect::<Vec<_>>();
+        let rule = self.taken_offer().map(|offer| offer.notice(&self.machine_title(&offer.key)));
+        let lines = [reason, rule, self.branch_pill_label(cx).filter(|_| !self.no_project())].into_iter().flatten().collect::<Vec<_>>();
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
@@ -3107,8 +3214,9 @@ impl NewSession {
                     _ if self.servers.loading => popup::skeleton("new-chat-machines", 2).into_any_element(),
                     (Some(Err(error)), _) => Self::menu_failure("new-chat-machines-error", error.clone(), |this, window, cx| this.load_servers(window, cx), cx),
                     (_, Some(list)) => {
+                        let shown = self.shown_key();
                         let rows = list.iter().filter(|c| wanted(&query, &c.label, &c.address)).map(|choice| {
-                            let current = self.current_server(choice);
+                            let current = choice.key == shown;
                             let key = choice.key.clone();
                             let tag = self.machine_tag(&choice.key);
                             let name = super::tags::machine_name(tag, &choice.label, &choice.address);
@@ -3119,7 +3227,8 @@ impl NewSession {
                                 .into_iter().flatten().collect::<Vec<_>>().join(" · ");
                             let aria = [Some(name.clone()), (!hint.is_empty()).then(|| hint.clone()), current.then(|| tr("create_current"))]
                                 .into_iter().flatten().collect::<Vec<_>>().join(", ");
-                            let tip = self.accounts_tip(&choice.key);
+                            let tip = [self.machine_reason(&choice.key), self.accounts_tip(&choice.key)].into_iter().flatten().collect::<Vec<_>>();
+                            let tip = (!tip.is_empty()).then(|| tip.join("\n"));
                             menu_row_marked(SharedString::from(format!("new-chat-machine-{}", choice.key)), current,
                                 Some(machine_tile(tag, &choice.id)), name, hint, self.machine_accounts(&choice.key))
                                 .accessibility_label(aria)
@@ -3891,7 +4000,7 @@ impl Hangar {
         let current = first.as_ref().is_none_or(|(selection, ..)| *selection == self.selection && self.selected.is_none());
         // Nasceu em outra máquina: abre lá sem trocar o servidor ativo. A lista guardada já a inclui, para a leitura
         // que chega primeiro não fechá-la.
-        let server = entity.read(cx).link.api.identity();
+        let server = entity.read(cx).born_on.clone().unwrap_or_else(|| entity.read(cx).link.api.identity());
         let target = super::servers::norm(&server);
         if let Some(list) = self.remote.get_mut(&target).filter(|l| l.loaded && !l.sessions.iter().any(|s| s.name == session.name)) {
             list.sessions.push(session.clone());
