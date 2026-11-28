@@ -450,11 +450,12 @@ class L(FX["H"]):
         return super().authorized()
 
     def do_POST(self):
-        # o app do celular assina push ao entrar; o fixture não manda push
         path = urlparse(self.path).path
-        # a resposta do celular só confirma: quem segue a conversa é a linha do tempo da cena
-        if path.endswith("/answer") or path.endswith("/select") or path.endswith("/select/submit"):
+        parts = path.split("/")
+        # resposta à folha da cena phone só confirma: quem segue a conversa é a linha do tempo da cena
+        if path.startswith("/api/sessions/") and parts[-1] == "answer" and len(parts) > 3 and live(parts[3])["ask"] is not None:
             self.send_json({"ok": True}); return
+        # o app do celular assina push ao entrar; o fixture não manda push
         if path.startswith("/api/push/"):
             self.send_json({"ok": True}); return
         super().do_POST()

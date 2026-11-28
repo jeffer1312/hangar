@@ -55,7 +55,7 @@ def render_bench(i):
         top = max((v for v in values.values() if v is not None), default=0)
         bars = []
         for key, name in S.BENCH_APPS:
-            v = values[key]
+            v = values.get(key)
             width = f"{v / top * 100:.1f}%" if v is not None and top else "0%"
             label = f"{v:g} {unit}".replace(".", ",") if i == 0 and v is not None else (f"{v:g} {unit}" if v is not None else S.T["bn_todo"][i])
             bars.append(f'<li class="bar bar-{key}"><span class="bar-name">{name}</span><span class="bar-track"><span class="bar-fill" style="width:{width}"></span></span><span class="bar-val mono">{label}</span></li>')
@@ -63,12 +63,15 @@ def render_bench(i):
     return "\n".join(rows)
 
 
+def lang_media(i, name):
+    return media(("pt/" if S.LANGS[i] == "pt" else "") + name)
+
+
 def render_news_cards(i):
-    folder = "pt/" if S.LANGS[i] == "pt" else ""
     return "\n".join(
         '<article class="card">'
         f'<div class="card-text"><h3>{esc(title[i])}</h3><p>{esc(text[i])}</p></div>'
-        f'<div class="card-media news-media"><video class="shot loop" src="{media(folder + key + ".mp4")}" poster="{media(folder + key + ".jpg")}" muted loop playsinline preload="metadata" aria-label="{esc(title[i])}"></video></div>'
+        f'<div class="card-media news-media"><video class="shot loop" src="{lang_media(i, key + ".mp4")}" poster="{lang_media(i, key + ".jpg")}" muted loop playsinline preload="metadata" aria-label="{esc(title[i])}"></video></div>'
         '</article>'
         for key, title, text in S.NEWS_CARDS
     )
@@ -146,7 +149,7 @@ def render_page(i):
         "NOVEMBER": render_november(i),
         "BENCH": render_bench(i),
         "NEWS_CARDS": render_news_cards(i),
-        "VIDEO_wa": media(("pt/" if lang == "pt" else "") + "news-whatsapp.mp4"), "POSTER_wa": media(("pt/" if lang == "pt" else "") + "news-whatsapp.jpg"),
+        "VIDEO_wa": lang_media(i, "news-whatsapp.mp4"), "POSTER_wa": lang_media(i, "news-whatsapp.jpg"),
         "COMPAT": "".join(f'<li class="ag-{key}">{agent_icon(key)}<span>{name}</span></li>' for key, name in S.AGENTS),
         "VIDEO_orq": media(clip["orq"]["video"][i]), "POSTER_orq": media(clip["orq"]["poster"][i]),
         "VIDEO_pair": media(clip["pair"]["video"][i]), "POSTER_pair": media(clip["pair"]["poster"][i]),
