@@ -547,15 +547,8 @@ impl ServerConfig {
 
     fn filled(&self, key: &str) -> bool { !text_of(&self.current(key)).trim().is_empty() }
 
-    /// Ajuda pela sessão: a escolha; sem escolha, a falta de um endereço de auxiliar gravado (sem ele nenhum modelo
-    /// por API é chamado). O endereço é o salvo, não o rascunho: apagar o campo para redigitar não esconde a seção.
-    fn aux_by_session(&self) -> bool {
-        match text_of(&self.current(AUX_MODE)).trim() {
-            "session" => true,
-            "api" => false,
-            _ => self.fields.get("jev_aux_base_url").and_then(|f| f.get("valor")).map(text_of).unwrap_or_default().trim().is_empty(),
-        }
-    }
+    /// Ajuda pela sessão só com a escolha gravada ou no rascunho: vazio, o servidor segue com o auxiliar.
+    fn aux_by_session(&self) -> bool { text_of(&self.current(AUX_MODE)).trim() == "session" }
 
     /// Chave guardada no servidor e que não sai no próximo Salvar.
     fn key_set(&self, key: &str) -> bool { self.secret_mask(key).is_some() && !self.removing(key) }
@@ -2543,6 +2536,18 @@ mod tests {
         assert!(!s.dirty(), "desfeito o endereço, não sobra pedido de chave");
         s.reconnected("outro".into());
         assert!(s.aux_use_cliproxy.is_none(), "outro servidor não herda o pedido");
+    }
+
+    #[test]
+    fn the_session_helps_only_when_chosen() {
+        let mut s = ServerConfig::default();
+        s.fields.insert(AUX_MODE.into(), json!({"valor": ""}));
+        s.fields.insert("jev_aux_base_url".into(), json!({"valor": ""}));
+        assert!(!s.aux_by_session(), "vazio é o auxiliar de antes, como no servidor, mesmo sem endereço");
+        s.stage(AUX_MODE, json!("session"));
+        assert!(s.aux_by_session() && s.dirty(), "tocar em A própria sessão grava a escolha");
+        s.stage(AUX_MODE, json!("api"));
+        assert!(!s.aux_by_session());
     }
 
     #[test]

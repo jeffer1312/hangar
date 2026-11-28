@@ -1020,7 +1020,8 @@ if (cmd === 'objetivo') {
     roteiro: resultado.roteiro ?? null, feito: resultado.feito, segundos: (Date.now() - inicio) / 1000 });
   fechado = true;
   console.log(`\nparou: ${resultado.parou}`);
-  if (sessionHelps && resultado.sucesso !== true) {
+  // Parada por risco espera a ordem do usuário (permitir_risco), nunca o clique da sessão.
+  if (sessionHelps && resultado.sucesso !== true && !String(resultado.parou ?? '').startsWith('operacao arriscada')) {
     console.log('a decisão volta para esta sessão: veja a página com `shot` ou `snapshot --refs` e siga com click/fill, ou chame objetivo de novo com o que falta');
   }
   if (resultado.roteiro) console.log(`roteiro: ${resultado.roteiro}`);

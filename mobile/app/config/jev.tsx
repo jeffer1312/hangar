@@ -60,11 +60,8 @@ export default function Jev() {
   const url = textOf(cfg.current('jev_aux_base_url')).trim();
   // Servidor que não publica a escolha (mais antigo) fica só com o auxiliar por API, como antes.
   const modeSupported = 'jev_aux_mode' in cfg.fields;
-  const savedMode = textOf(cfg.current('jev_aux_mode')).trim();
-  // Sem escolha, a falta de um endereço salvo (sem ele nenhum modelo por API é chamado). O salvo, não o rascunho:
-  // apagar o campo para redigitar não esconde a seção.
-  const savedUrl = textOf(cfg.fields.jev_aux_base_url?.valor).trim();
-  const bySession = modeSupported && (savedMode === 'session' || (savedMode !== 'api' && !savedUrl));
+  // Só a escolha gravada ou no rascunho: vazio, o servidor segue com o auxiliar.
+  const bySession = modeSupported && textOf(cfg.current('jev_aux_mode')).trim() === 'session';
   const model = textOf(cfg.current('jev_aux_modelo')).trim();
   const fetchKey = `${url}\n${textOf(cfg.draft.jev_aux_api_key).trim()}`;
   const fetchValid = fetchedFor === fetchKey;

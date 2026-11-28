@@ -1775,8 +1775,12 @@ tinha a TypeSafe fixa.
 - **27/11/2026: a ajuda pode ser a própria sessão (`jev_aux_mode`).** Vazio segue o de antes (o
   auxiliar gravado, quando há um); `api` usa o auxiliar; `session` não manda a página nem a tela a
   nenhum modelo por API. Nesse modo a sessão recebe `JEV_AUX_MODE=session` e nenhum `JEV_AUX_*`, o
-  `objetivo` do hangar-preview para na dúvida e diz a quem chamou para olhar a página, e o MCP do
-  Computer Use fica sem `LLM_*`. Motivo: a sessão que chamou o Jev já é um modelo de texto e imagem
+  `objetivo` do hangar-preview para na dúvida e diz a quem chamou para olhar a página (menos na
+  parada por operação arriscada, que espera a ordem do usuário), e o MCP do Computer Use fica sem
+  `LLM_*`. O texto dos campos do formulário passa a sair do comando local (`jev_texto_cmd`, padrão
+  `claude -p` com o Haiku); sem ele instalado, o `objetivo` para no campo e a decisão volta à
+  sessão. A tela só marca "A própria sessão" com o valor `session`: vazio aparece como "Um modelo
+  por API", que é o que o servidor faz. Motivo: a sessão que chamou o Jev já é um modelo de texto e imagem
   com o contexto do trabalho, e um auxiliar por API era uma segunda conta a manter. Em 27/11/2026 a
   chave da Anthropic do auxiliar ficou sem crédito, e as sessões culpavam o Jev pelo
   `Your credit balance is too low`. Limite: sem `LLM_*`, o binário do `hangar-computer-control`
