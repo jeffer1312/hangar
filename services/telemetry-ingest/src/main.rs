@@ -86,15 +86,19 @@ async fn post_batch(State(ingest): State<Ingest>, body: Bytes) -> Response {
 }
 
 /// Campo a mais (um identificador) ou tipo fora da lista é 400, como no pacote.
-async fn post_declined(State(pool): State<PgPool>, body: Bytes) -> Response {
+async fn post_declined(State(ingest): State<Ingest>, body: Bytes) -> Response {
     let Ok(refusal) = serde_json::from_slice::<Refusal>(&body) else {
         return refused(StatusCode::BAD_REQUEST, "json");
     };
     if let Err(field) = refusal.validate() {
         return refused(StatusCode::BAD_REQUEST, field);
     }
-    match store::count_refusal(&pool, &refusal).await {
-        Ok(()) => reply(StatusCode::OK, r#"{"ok":true}"#.to_owned()),
+    match store::count_refusal(&ingest.pool, &refusal).await {
+        Ok(()) => {
+            // O cartão de aceite do painel aberto relê na hora.
+            let _ = ingest.live.notify.send(());
+            reply(StatusCode::OK, r#"{"ok":true}"#.to_owned())
+        }
         Err(error) => {
             eprintln!("telemetry-ingest: refusal: {error}");
             refused(StatusCode::SERVICE_UNAVAILABLE, "store")
