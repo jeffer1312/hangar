@@ -193,7 +193,7 @@ mod tests {
         let response = router.oneshot(request.unwrap()).await.unwrap();
         let (status, headers) = (response.status(), response.headers().clone());
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        (status, headers, String::from_utf8(bytes.to_vec()).unwrap())
+        (status, headers, String::from_utf8_lossy(&bytes).into_owned())
     }
 
     /// O par `nome=valor` do Set-Cookie, como o navegador o devolve.
@@ -212,6 +212,41 @@ mod tests {
         // Consulta que nem desserializa também é 401 sem sessão.
         assert_eq!(call(app_with_panel(offline()), "GET", "/panel/trail?machine=a&machine=b", None, None).await.0, StatusCode::UNAUTHORIZED);
         assert_eq!(call(app_with_panel(offline()), "GET", "/panel/data?days=abc", None, None).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn the_panel_installs_as_an_app_without_caching_pages() {
+        let (status, headers, body) = call(app_with_panel(offline()), "GET", "/panel/manifest.webmanifest", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/manifest+json");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+        let manifest: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!((manifest["start_url"].as_str(), manifest["display"].as_str()), (Some("/panel"), Some("standalone")));
+        let icons = manifest["icons"].as_array().unwrap();
+        for size in ["192x192", "512x512"] {
+            for purpose in ["any", "maskable"] {
+                assert!(icons.iter().any(|i| i["sizes"] == size && i["purpose"] == purpose), "{size} {purpose}");
+            }
+        }
+        for src in icons.iter().map(|i| i["src"].as_str().unwrap()).chain(["/panel/apple-touch-icon.png"]) {
+            let (status, headers, _) = call(app_with_panel(offline()), "GET", src, None, None).await;
+            assert!(status == StatusCode::OK && headers[header::CONTENT_TYPE] == "image/png", "{src}");
+        }
+
+        let (status, headers, body) = call(app_with_panel(offline()), "GET", "/panel/sw.js", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/javascript");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+        assert_eq!(headers["service-worker-allowed"], "/panel");
+        assert!(body.contains("fetch(e.request)"), "{body}");
+
+        let (status, headers, page) = call(app_with_panel(offline()), "GET", "/panel", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store", "a página nunca fica guardada");
+        assert!(page.contains("/panel/manifest.webmanifest") && page.contains("/panel/sw.js"));
+        assert!(headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("worker-src 'self'"));
+        let (_, headers, _) = call(app_with_panel(offline()), "GET", "/panel/join", None, None).await;
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
     }
 
     #[tokio::test]

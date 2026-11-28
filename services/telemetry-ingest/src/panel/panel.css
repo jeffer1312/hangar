@@ -16,7 +16,9 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { background: var(--bg); scrollbar-color: var(--raised) transparent; }
-body { margin: 0; color: var(--text); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; min-height: 100vh; font-feature-settings: "cv11", "ss01"; }
+body { margin: 0; color: var(--text); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; min-height: 100vh; font-feature-settings: "cv11", "ss01";
+  /* Instalado no iPhone a página vai até as bordas: o conteúdo fica fora do entalhe e da barra de início. */
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 ::selection { background: rgba(124,135,232,.34); color: #fff; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 10px; border: 2px solid var(--bg); }
@@ -56,7 +58,7 @@ button, input { font: inherit; color: inherit; }
 .foot { margin-top: var(--s6); color: var(--muted); font-size: 12px; text-align: center; }
 
 /* Painel: uma cor por seção (--hue), ícone, chip e barras dela */
-.bar { position: sticky; top: 0; z-index: 6; background: rgba(18,16,19,.92); backdrop-filter: blur(16px); }
+.bar { position: sticky; top: 0; z-index: 6; padding-top: env(safe-area-inset-top); background: rgba(18,16,19,.92); backdrop-filter: blur(16px); }
 .top { border-bottom: 1px solid var(--line); }
 .top-in { max-width: 1240px; margin: 0 auto; padding: 0 var(--s8); height: 64px; display: flex; align-items: center; gap: var(--s5); }
 .brand-line { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
