@@ -2237,6 +2237,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-runtime-queue"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hangar-api",
+ "hangar-codex",
+ "hangar-core",
+ "hangar-transcript",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-scheduled-tasks"
 version = "0.1.0"
 dependencies = [
@@ -2327,6 +2345,7 @@ dependencies = [
  "hangar-psmux",
  "hangar-registration",
  "hangar-reviews",
+ "hangar-runtime-queue",
  "hangar-scheduled-tasks",
  "hangar-send",
  "hangar-session-open-fields",

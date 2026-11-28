@@ -13,7 +13,7 @@ pub(super) fn claim(state: &mut State, min_ts: f64, clock: ClockSample, call_id:
             break;
         }
         let text = row["text"].as_str().unwrap_or("");
-        if !super::queue_text_ok(text) || crate::terminal_input::message_prefix(text).is_some() {
+        if !super::queue_text_ok(text) || hangar_core::queue_row::message_prefix(text).is_some() {
             if indices.is_empty() { indices.push(index); individual = true; break; }
             continue;
         }
@@ -29,7 +29,7 @@ pub(super) fn claim(state: &mut State, min_ts: f64, clock: ClockSample, call_id:
     let id = if indices.len() == 1 {row_id(&state.rows[first]).to_owned()}
         else {format!("batch-{}", sha1_smol::Sha1::from(format!("{}:{}:{call_id}", state.owner_key, state.generation)).digest())};
     let text = entries.iter().map(|row| row["text"].as_str().unwrap_or("")).collect::<Vec<_>>().join("\n");
-    if text.len() > super::super::protocol::MAX_FRAME { return Err(super::invalid(super::BATCH_SIZE_MESSAGE)); }
+    if text.len() > hangar_core::net::MAX_FRAME { return Err(super::invalid(super::BATCH_SIZE_MESSAGE)); }
     let mut row = state.rows[first].clone();
     row["id"] = json!(id);
     row["text"] = json!(text);

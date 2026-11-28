@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
-pub const MAX_FRAME: usize = 16 * 1024 * 1024;
+pub use hangar_core::{clock::ClockSample, net::MAX_FRAME};
 pub const MAX_ENVELOPE: usize = 2 * MAX_FRAME + 1024;
 
 /// Identidade estável do trabalho em andamento; prévias e alterações da fila não a modificam.
@@ -19,13 +19,6 @@ pub fn turn_marker(view: &Value) -> Option<Value> {
         }
     }
     None
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ClockSample {
-    pub monotonic_s: f64,
-    pub epoch_s: f64,
 }
 
 /// Barra o pedido de linha de status repetido: o mesmo dado só volta ao Python depois de

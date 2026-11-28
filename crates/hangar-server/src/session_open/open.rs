@@ -810,10 +810,10 @@ pub(crate) fn headless_sidecar(spec: &SessionSpec, sid: &str, previous_non_plan:
 /// A linha da primeira mensagem na fila da sessão nova (`runtime/<key>.json`), carimbada antes da
 /// conversa existir (`pre_transcript`, como o kick-off do bastão). Bloqueante.
 fn enqueue_first(queue_dir: &Path, key: &str, name: &str, text: &str) -> std::io::Result<()> {
-    use crate::runtime::queue::{Action, State, Store, acquire_lease_within};
+    use crate::runtime::queue::{Action, State, acquire_lease_within, open_observed_store};
     let runtime = queue_dir.join("runtime");
     let _lease = acquire_lease_within(&runtime.join(format!("{key}.lock")), Duration::from_secs(3))?;
-    let mut store = Store::open(&runtime.join(format!("{key}.json")), queue_dir, State::new(key, 1, name, Vec::new()))?;
+    let mut store = open_observed_store(&runtime.join(format!("{key}.json")), queue_dir, State::new(key, 1, name, Vec::new()))?;
     let epoch_s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let id = crate::mods::state::random_hex(16);
     store.exec(1, &format!("append:{id}"), crate::runtime::protocol::ClockSample { monotonic_s: 0.0, epoch_s },

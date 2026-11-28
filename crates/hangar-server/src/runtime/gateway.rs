@@ -1,4 +1,4 @@
-use super::{actor::{LaunchConfig,PolicyClient,RuntimeActor,RuntimeEngine,RuntimeHandle},cano,process,protocol::*,queue::{Action,QueueActor,State as QueueState,Status,Store,acquire_lease_within}};
+use super::{actor::{LaunchConfig,PolicyClient,RuntimeActor,RuntimeEngine,RuntimeHandle},cano,process,protocol::*,queue::{Action,QueueActor,State as QueueState,Status,Store,acquire_lease_within,open_observed_store}};
 use super::codex_terminal::{Adoption,AdoptionCell,CodexTerminalTarget};
 use axum::{Router,body::to_bytes,extract::{ConnectInfo,State,Request},http::StatusCode,
     middleware::{self,Next},response::{IntoResponse,Response,sse::{Event,KeepAlive,Sse}},routing::{get,post}};
@@ -227,7 +227,7 @@ async fn open_store(state_path:&std::path::Path,projection_dir:&std::path::Path,
     let call_id = format!("open-recover:{}:{}:{}",std::process::id(),epoch_s,OPENS.fetch_add(1,std::sync::atomic::Ordering::Relaxed));
     tokio::task::spawn_blocking(move || {
         let _lease = lease;
-        let mut store = Store::open(&state_path,&projection_dir,initial)?;
+        let mut store = open_observed_store(&state_path,&projection_dir,initial)?;
         if store.state().generation != generation { return Ok(Err(failure("runtime_generation"))); }
         store.exec(generation,&call_id,ClockSample { monotonic_s:0.0,epoch_s },Action::Recover)?;
         store.ensure_projection()?;
@@ -788,7 +788,7 @@ impl RuntimeRegistry {
             let (state_path,lease_path) = super::codex_terminal::queue_files(&queue_dir,&key);
             if let Some(dir) = state_path.parent() { std::fs::create_dir_all(dir).map_err(|_|failure("queue_io"))?; }
             let _lease = acquire_lease_within(&lease_path,Duration::from_secs(3)).map_err(|_|RuntimeError::new("runtime_lease","a fila da sessão já tem dono"))?;
-            let mut store = Store::open(&state_path,&queue_dir,QueueState::new(&key,1,&name,Vec::new())).map_err(|_|failure("queue_io"))?;
+            let mut store = open_observed_store(&state_path,&queue_dir,QueueState::new(&key,1,&name,Vec::new())).map_err(|_|failure("queue_io"))?;
             let epoch_s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
             let generation = store.state().generation;
             store.exec(generation,&call_id,ClockSample { monotonic_s:0.0,epoch_s },action).map_err(|_|failure("queue_io"))
@@ -805,7 +805,7 @@ impl RuntimeRegistry {
             let (state_path,lease_path) = super::codex_terminal::queue_files(&queue_dir,&key);
             if !state_path.exists() { return Ok(0); }
             let _lease = acquire_lease_within(&lease_path,Duration::from_secs(3)).map_err(|_|RuntimeError::new("runtime_lease","a fila da sessão já tem dono"))?;
-            let mut store = Store::open(&state_path,&queue_dir,QueueState::new(&key,1,"",Vec::new())).map_err(|_|failure("queue_io"))?;
+            let mut store = open_observed_store(&state_path,&queue_dir,QueueState::new(&key,1,"",Vec::new())).map_err(|_|failure("queue_io"))?;
             let generation = store.state().generation;
             let rows:Vec<Value> = store.state().rows.iter()
                 .filter(|row|super::queue::row_waits(row) && row["ts"].as_f64().is_some_and(|ts|ts >= since)).cloned().collect();
@@ -2357,7 +2357,7 @@ impl RuntimeRegistry {
                 // Ator parado e processo morto: falha ao gravar o fechamento na fila não prende a sessão
                 // em `runtime_stopping`; vai ao log e ao diário, e a entrada sai.
                 let recorded:std::io::Result<Option<Store>>=(|| {
-                    let mut store=Store::open(&closed.state_path,&closed.projection,QueueState::new(key,generation,&closed.name,vec![]))?;
+                    let mut store=open_observed_store(&closed.state_path,&closed.projection,QueueState::new(key,generation,&closed.name,vec![]))?;
                     if store.state().owner_key!=key || store.state().generation!=generation {return Ok(None);}
                     let clock=ClockSample {monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())};
                     store.exec(generation,&format!("close-clear:{key}:{generation}"),clock,Action::Clear)?;
@@ -2623,7 +2623,7 @@ impl RuntimeRegistry {
         let retained=self.entries.lock().await.get(key).and_then(|entry|entry.relaunch.clone());
         self.close_locked(key,generation,false).await?;
         let lease=wait_lease(&target.lease_path).await?;
-        let mut store=Store::open(&target.state_path,&target.projection_dir,QueueState::new(key,generation,name,vec![])).map_err(|_|failure("queue_io"))?;
+        let mut store=open_observed_store(&target.state_path,&target.projection_dir,QueueState::new(key,generation,name,vec![])).map_err(|_|failure("queue_io"))?;
         if store.state().owner_key!=key || store.state().generation!=generation {return Err(failure("runtime_generation"));}
         let mut next=target.clone();next.generation=generation.checked_add(1).ok_or_else(||failure("runtime_generation"))?;
         next.binding.generation=next.generation;next.binding.conversation=sid.clone();
@@ -2736,7 +2736,7 @@ impl RuntimeRegistry {
         let original=procs.recipe(i64::from(target.metadata.agent_pid)).map_err(|_|failure("lifecycle_process_read"))?;
         self.close_locked(key,generation,false).await?;
         let lease=wait_lease(&target.lease_path).await?;
-        let mut store=Store::open(&target.state_path,&target.projection_dir,QueueState::new(key,generation,name,vec![])).map_err(|_|failure("queue_io"))?;
+        let mut store=open_observed_store(&target.state_path,&target.projection_dir,QueueState::new(key,generation,name,vec![])).map_err(|_|failure("queue_io"))?;
         if store.state().owner_key!=key || store.state().generation!=generation {return Err(failure("runtime_generation"));}
         // O Claude novo já subiu no destino: a origem morreu antes, então a limpeza não pode matá-lo.
         let started=std::sync::atomic::AtomicBool::new(false);
@@ -2905,7 +2905,7 @@ impl RuntimeRegistry {
             self.close_locked(key,generation,false).await?;
         }
         let lease=wait_lease(&target.lease_path).await?;
-        let mut store=Store::open(&target.state_path,&target.projection_dir,QueueState::new(key,generation,name,vec![])).map_err(|_|failure("queue_io"))?;
+        let mut store=open_observed_store(&target.state_path,&target.projection_dir,QueueState::new(key,generation,name,vec![])).map_err(|_|failure("queue_io"))?;
         let cancelled=context.as_ref().is_some_and(|ctx|ctx.cancelled.load(std::sync::atomic::Ordering::Acquire));
         let (current_generation,next_generation)=super::lifecycle::retry_fence(&binding,store.state(),id,attempt,cancelled,None)?;
         let intent=json!({"operation_id":id,"key":key,"conversation":binding.conversation,"from_generation":generation,"target_generation":next_generation});
@@ -3043,7 +3043,7 @@ impl RuntimeRegistry {
             }
             if headless.is_some() {self.close_locked(key,generation,false).await?;}
             let lease=wait_lease(&closed.lease_path).await?;
-            let mut store=Store::open(&closed.state_path,&closed.projection,QueueState::new(key,generation,name,vec![])).map_err(|_|failure("queue_io"))?;
+            let mut store=open_observed_store(&closed.state_path,&closed.projection,QueueState::new(key,generation,name,vec![])).map_err(|_|failure("queue_io"))?;
             if store.state().owner_key!=key || store.state().generation!=generation {return Ok(Dead::InTransfer);}
             let clock=ClockSample {monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())};
             store.exec(generation,&format!("dead-clear:{key}:{generation}"),clock,Action::Clear).map_err(|_|failure("queue_io"))?;
@@ -3080,7 +3080,7 @@ impl RuntimeRegistry {
         let target=target.clone();
         tokio::task::spawn_blocking(move || {
             let _lease=lease;
-            let mut store=Store::open(&target.state_path,&target.projection_dir,QueueState::new(&target.key,target.generation,&target.name,vec![])).map_err(|_|failure("queue_io"))?;
+            let mut store=open_observed_store(&target.state_path,&target.projection_dir,QueueState::new(&target.key,target.generation,&target.name,vec![])).map_err(|_|failure("queue_io"))?;
             if store.state().owner_key!=target.key || store.state().generation!=generation {return Err(failure("runtime_generation"));}
             let clock=ClockSample {monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())};
             if gone {store.exec(generation,&format!("dead-clear:{key}:{generation}",key=target.key),clock,Action::Clear).map_err(|_|failure("queue_io"))?;}

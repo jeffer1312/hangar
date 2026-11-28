@@ -74,6 +74,7 @@ fn bytes_before(file: &mut File, offset: u64) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(data))
 }
 
+#[cfg_attr(windows, allow(unsafe_code))]
 fn identity(file: &File) -> io::Result<String> {
     #[cfg(unix)] {
         use std::os::unix::fs::MetadataExt;
@@ -106,17 +107,17 @@ impl ReceiptIndex {
         Self { provider:provider.into(),conversation:conversation.into(),identity:None,tail:Vec::new(),occurrences:Vec::new(),enqueued:Vec::new(),scan_offset:0,meta_conversation:None,turn_end:None,other_rows:None }
     }
 
-    pub(super) fn set_other_rows(&mut self, state: std::sync::Arc<super::queue::State>) {
+    pub fn set_other_rows(&mut self, state: std::sync::Arc<super::queue::State>) {
         if matches!(self.provider.as_str(), "pi" | "omp" | "kimi" | "antigravity") {
             self.other_rows = Some(state);
         }
     }
 
-    pub(crate) fn matching_text(&self, row: &Value, text: &str) -> Option<String> {
+    pub fn matching_text(&self, row: &Value, text: &str) -> Option<String> {
         if let Some(state) = &self.other_rows {
             return other_matching_text(row, text, &state.rows);
         }
-        let committed = crate::transcript::history::chaves_de_commit(text);
+        let committed = hangar_transcript::history::chaves_de_commit(text);
         super::queue::entry_lines(row).into_iter().find(|candidate| committed.contains(candidate))
     }
 
@@ -170,17 +171,17 @@ impl ReceiptIndex {
         if !unchanged { self.occurrences.clear(); self.enqueued.clear(); self.scan_offset = 0; self.meta_conversation = None; self.turn_end = None; }
         file.seek(SeekFrom::Start(self.scan_offset))?;
         let mut reader = io::BufReader::with_capacity(1 << 16,&mut file);
-        let provider = crate::transcript::Provider::parse(&self.provider).unwrap_or(crate::transcript::Provider::Claude);
-        let other = matches!(provider, crate::transcript::Provider::Pi | crate::transcript::Provider::Omp | crate::transcript::Provider::Kimi | crate::transcript::Provider::Antigravity);
-        let mut parser = crate::transcript::LineParser::new(provider);
-        if provider == crate::transcript::Provider::Antigravity { parser = parser.with_path(path); }
+        let provider = hangar_transcript::Provider::parse(&self.provider).unwrap_or(hangar_transcript::Provider::Claude);
+        let other = matches!(provider, hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp | hangar_transcript::Provider::Kimi | hangar_transcript::Provider::Antigravity);
+        let mut parser = hangar_transcript::LineParser::new(provider);
+        if provider == hangar_transcript::Provider::Antigravity { parser = parser.with_path(path); }
         let mut offset = self.scan_offset;
         let mut raw = Vec::new();
         loop {
             raw.clear();
             if reader.read_until(b'\n',&mut raw)? == 0 || raw.last() != Some(&b'\n') { break; }
             let start = offset; offset += raw.len() as u64;
-            let Some(obj) = crate::transcript::decode_line(&raw) else { continue };
+            let Some(obj) = hangar_transcript::decode_line(&raw) else { continue };
             if !obj.is_object() { continue; }
             if other {
                 self.record_other(parser.feed(&raw, start), &id, offset);
@@ -196,7 +197,7 @@ impl ReceiptIndex {
             } else {
                 if obj["isSidechain"] != true {
                     if obj["type"] == "assistant" && obj["message"]["stop_reason"] == "end_turn" || obj["type"] == "system" && obj["subtype"] == "stop_hook_summary" {
-                        self.turn_end = Some((start,obj["timestamp"].as_str().and_then(crate::transcript::ts_of_iso)));
+                        self.turn_end = Some((start,obj["timestamp"].as_str().and_then(hangar_transcript::ts_of_iso)));
                         continue;
                     }
                     // O turno seguiu depois do fim (hook de parada que bloqueou): o fim de antes não vale mais.
@@ -213,7 +214,7 @@ impl ReceiptIndex {
                         if let Some(text) = obj["content"].as_str() {
                             self.enqueued.push(Occurrence { id:String::new(),conversation:self.conversation.clone(),file_identity:id.clone(),
                                 offset:start,end_offset:offset,text:text.to_owned(),kind:"enqueue".into(),
-                                timestamp:obj["timestamp"].as_str().and_then(crate::transcript::ts_of_iso),
+                                timestamp:obj["timestamp"].as_str().and_then(hangar_transcript::ts_of_iso),
                                 recorded_conversation:obj["sessionId"].as_str().map(str::to_owned),identity_unprovable:false });
                         }
                         continue;
@@ -224,14 +225,14 @@ impl ReceiptIndex {
             if text.trim().is_empty() { continue; }
             let provider_id = obj["uuid"].as_str().or_else(||obj["id"].as_str()).or_else(||obj["payload"]["id"].as_str());
             let record = provider_id.filter(|s|!s.is_empty()).map_or_else(||format!("offset:{start}"),|id|format!("id:{id}"));
-            let timestamp = obj["timestamp"].as_str().and_then(crate::transcript::ts_of_iso);
+            let timestamp = obj["timestamp"].as_str().and_then(hangar_transcript::ts_of_iso);
             let recorded_conversation = if self.provider == "codex" { self.meta_conversation.clone() }
                 else { obj["sessionId"].as_str().map(str::to_owned) };
             let identity_unprovable = self.provider == "codex" && recorded_conversation.is_none();
             // Mensagens que chegaram durante o turno: a CLI as junta num `user` só, um bloco de texto por entrada (cada
             // entrada do Hangar é um bloco). Cada bloco é uma ocorrência, senão a primeira gasta o registro.
             let blocks = if self.provider != "codex" && kind == "user" { text_blocks(&obj["message"]["content"]) } else { Vec::new() };
-            let image_receipt=(self.provider!="codex" && kind=="user").then(||super::local_policy::image_receipt(&text,&obj["message"]["content"])).flatten();
+            let image_receipt=(self.provider!="codex" && kind=="user").then(||image_receipt(&text,&obj["message"]["content"])).flatten();
             let records = if blocks.len() > 1 { blocks } else { vec![text] };
             let tagged = records.len() > 1;
             let mut parts:Vec<(String,String)> = Vec::new();
@@ -241,7 +242,7 @@ impl ReceiptIndex {
             for (b,record) in records.into_iter().enumerate() {
                 let tag = if tagged { format!("#block{b}") } else { String::new() };
                 // Vários recados num registro só: cada um é uma ocorrência, senão o primeiro gasta o registro e os outros nunca confirmam.
-                let peers:Vec<String> = if kind == "user" { crate::transcript::history::peer_bodies(&record).into_iter().map(str::to_owned).collect() } else { Vec::new() };
+                let peers:Vec<String> = if kind == "user" { hangar_transcript::history::peer_bodies(&record).into_iter().map(str::to_owned).collect() } else { Vec::new() };
                 parts.extend(peers.into_iter().enumerate().map(|(n,body)|(format!("{tag}#peer{n}"),body)));
                 // O registro inteiro vem por último: o que foi digitado junto com os recados também confirma.
                 if !record.trim().is_empty() { parts.push((tag,record)); }
@@ -364,7 +365,7 @@ impl ReceiptProof {
     pub fn validates(&self, cursor: &DispatchCursor, row: &Value) -> bool {
         self.validates_cursor(cursor)
             && super::queue::entry_lines(row).contains(&self.normalized_text)
-            && crate::transcript::history::chaves_de_commit(&self.occurrence.text).contains(&self.normalized_text)
+            && hangar_transcript::history::chaves_de_commit(&self.occurrence.text).contains(&self.normalized_text)
     }
 
     pub(super) fn validates_other(&self, cursor: &DispatchCursor, row: &Value, rows: &[Value]) -> bool {
@@ -377,7 +378,7 @@ impl ReceiptProof {
 pub(super) fn other_matching_text(row: &Value, text: &str, rows: &[Value]) -> Option<String> {
     if row["delivered"] != true || row["confirmed"] == true { return None; }
     let candidates = super::queue::entry_lines(row);
-    let committed = crate::transcript::history::chaves_de_commit(text);
+    let committed = hangar_transcript::history::chaves_de_commit(text);
     if let Some(exact) = candidates.iter().find(|candidate| committed.contains(candidate)) {
         return Some(exact.clone());
     }
@@ -404,4 +405,14 @@ fn cursor_accepts(cursor:&DispatchCursor,occurrence:&Occurrence)->bool {
     // Carimbo em segundos inteiros (o `created_at` do `agy`) cai antes do despacho do mesmo segundo.
     occurrence.recorded_conversation.as_deref() == Some(cursor.conversation.as_str())
         && occurrence.timestamp.is_some_and(|ts|ts >= since || (ts.fract() == 0.0 && ts >= since.floor()))
+}
+
+/// O texto inteiro e os bytes de todas as imagens formam uma prova só, mesmo quando a TUI tira os paths.
+pub fn image_receipt(text:&str,content:&Value) -> Option<String> {
+    let images:Vec<_>=content.as_array()?.iter().filter(|block|block["type"]=="image")
+        .map(|block|block["source"]["data"].as_str().map(|data|sha1_smol::Sha1::from(data).digest().to_string())).collect::<Option<_>>()?;
+    if images.is_empty() {return None;}
+    static PREFIX:std::sync::LazyLock<regex::Regex>=std::sync::LazyLock::new(||regex::Regex::new(r"\A(?:\[Image #\d+\])+\s*").unwrap());
+    let text=PREFIX.replace(text.trim(),"");
+    Some(format!("hangar-image-receipt:{}:{}",sha1_smol::Sha1::from(text.trim()).digest(),images.join(":")))
 }

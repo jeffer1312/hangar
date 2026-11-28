@@ -69,6 +69,7 @@ indexmap.workspace = true
 hangar-api.workspace = true
 hangar-codex.workspace = true
 hangar-core.workspace = true
+hangar-runtime-queue.workspace = true
 hangar-session-open-fields.workspace = true
 hangar-codex-account-sync.workspace = true
 hangar-transcript.workspace = true

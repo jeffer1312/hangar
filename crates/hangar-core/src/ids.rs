@@ -1,4 +1,4 @@
-//! Identificadores aleatórios.
+//! Identificadores e impressões digitais.
 
 pub fn random_hex(bytes: usize) -> String {
     use ring::rand::SecureRandom;
@@ -17,4 +17,13 @@ pub fn valid_slug(value: &str, max: usize) -> bool {
     let mut bytes = value.bytes();
     value.len() <= max && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
         && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+/// Impressão digital em hexadecimal minúsculo.
+pub fn sha256_hex(raw: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, raw)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }

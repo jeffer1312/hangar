@@ -69,13 +69,7 @@ impl From<std::io::Error> for Error {
     }
 }
 
-pub fn sha256(raw: &[u8]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, raw)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
+pub use hangar_core::ids::sha256_hex as sha256;
 
 /// O hash publicado já usa os separadores do json.dumps; alterar espaços quebraria a comparação.
 pub fn python_json(value: &Value, sorted: bool) -> String {

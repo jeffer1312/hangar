@@ -228,7 +228,7 @@ async fn rename_queue(
     );
     tokio::task::spawn_blocking(move || -> Result<(), RuntimeError> {
         let _lease = lease;
-        let mut store = Store::open(
+        let mut store = open_observed_store(
             &state_path,
             &projection_dir,
             QueueState::new(&key, generation, &name, vec![]),

@@ -1827,13 +1827,8 @@ pub fn presses_keys(facts: &InputFacts, text: &str) -> bool {
     !(facts.plugin_live && !slash && user_mode(facts, text, false))
 }
 
-pub(crate) fn message_prefix(text: &str) -> Option<(&str, &str)> {
-    let rest = text.strip_prefix('[')?;
-    let (prefix, body) = rest.split_once(']')?;
-    let sender = ["de:", "grupo:", "painel:"].iter().find_map(|kind| prefix.strip_prefix(kind))?.trim();
-    if sender.is_empty() { return None; }
-    Some((sender, body.trim_start()))
-}
+pub(crate) use hangar_core::queue_row::message_prefix;
+
 /// Recado de outra sessão com o socket nativo do agente: vai pelo canal do próprio Claude Code, não pelo teclado.
 pub fn native_message(facts: &InputFacts, text: &str) -> bool { facts.native.is_some() && recognized_message(text).is_some() }
 fn recognized_message(text: &str) -> Option<&str> { message_prefix(text).map(|(_, body)| body) }
