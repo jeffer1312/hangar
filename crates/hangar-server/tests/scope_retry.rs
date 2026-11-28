@@ -37,9 +37,8 @@ async fn only_the_transient_unit_refusal_is_retried_three_times() {
     let capture = output.clone();
     tracing::subscriber::set_global_default(tracing_subscriber::fmt().without_time().with_ansi(false)
         .with_writer(move || Buffer(capture.clone())).finish()).unwrap();
-    let exe = std::env::current_exe().unwrap();
-    let cano = exe.ancestors().skip(1).map(|dir| dir.join("hangar-cano")).find(|cano| cano.is_file())
-        .unwrap_or_else(|| panic!("rode `cargo build -p hangar-cano` antes: nenhum acima de {}", exe.display()));
+    let cano = std::path::Path::new(env!("CARGO_BIN_EXE_hangar-server")).with_file_name("hangar-cano");
+    assert!(cano.is_file(), "compile `hangar-cano` no mesmo target e perfil: {}", cano.display());
     process::use_cano_binary(cano).unwrap();
 
     let dir = tempfile::tempdir().unwrap();

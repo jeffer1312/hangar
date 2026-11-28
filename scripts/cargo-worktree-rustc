@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# O Cargo usa o caminho absoluto deste wrapper na identidade dos crates do checkout.
+exec "$@"

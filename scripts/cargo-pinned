@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Roda o cargo do crates/ no target compartilhado da máquina (target-dir do ~/.cargo/config.toml)
+# Roda o cargo do crates/ com cache de dependências compartilhado entre worktrees
 # e só publica executáveis/biblioteca após o sucesso, em crates/target/<perfil>/ deste checkout,
 # dentro da mesma trava. Quem executa fora do cargo (pytest, CP_RUST_SERVER_BIN) usa a cópia: o
 # build de outra worktree reescreve o executável do target comum, nunca o deste checkout.
@@ -30,6 +30,7 @@ artifacts="$(mktemp)"
 trap 'rm -f "$metadata" "$artifacts"' EXIT
 cargo metadata --format-version 1 --no-deps > "$metadata"
 alvo="$(jq -r .target_directory "$metadata")"
+intermediarios="$(realpath -m "$(jq -r '.build_directory // .target_directory' "$metadata")")"
 proprio="$(realpath -m "$raiz/crates/target")"
 
 args=("$@")
@@ -47,8 +48,40 @@ for ((i=0; i<${#args[@]}; i++)); do
     fi
 done
 alvo="$(realpath -m "$alvo")"
+
+workspace_cache() {
+    local arg compiler_version
+    [[ "$OSTYPE" == linux* || "$OSTYPE" == darwin* ]] || return 1
+    [[ -x "$raiz/scripts/cargo-worktree-rustc" ]] || return 1
+    [[ -z ${RUSTC_WRAPPER+x} && -z ${CARGO_BUILD_RUSTC_WRAPPER+x} &&
+       -z ${RUSTC_WORKSPACE_WRAPPER+x} && -z ${CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER+x} ]] || return 1
+    case "${1:-}" in build|check|test) ;; *) return 1 ;; esac
+    for arg; do
+        case "$arg" in
+            --config|--config=*|--manifest-path|--manifest-path=*|-Z*) return 1 ;;
+            --) break ;;
+        esac
+    done
+    compiler_version="$(cargo --version)"
+    [[ "$compiler_version" =~ ^cargo\ ([0-9]+)\.([0-9]+)\. ]] || return 1
+    (( BASH_REMATCH[1] > 1 || (BASH_REMATCH[1] == 1 && BASH_REMATCH[2] >= 100) )) || return 1
+    python3 "$raiz/scripts/cargo-worktree-cache.py" "$metadata"
+}
+
+cache_mode="$(workspace_cache "$@")" || cache_mode=
+if [[ "$cache_mode" == default && "$alvo" == "$proprio" && "$target_arg" == -1 &&
+      -z ${CARGO_TARGET_DIR+x} && -z ${CARGO_BUILD_TARGET_DIR+x} && -z ${CARGO_BUILD_BUILD_DIR+x} ]]; then
+    common_git="$(git rev-parse --path-format=absolute --git-common-dir)"
+    common_checkout="${common_git%/*}"
+    if [[ "${common_git##*/}" == .git && -d "$common_checkout/crates" ]]; then
+        intermediarios="$(realpath -m "$common_checkout/crates/target/.cargo-pinned-shared")"
+        export CARGO_BUILD_BUILD_DIR="$intermediarios"
+    fi
+fi
+
 if [[ "$alvo" == "$proprio" ]]; then
     # O Cargo não pode escrever no par publicado antes de terminar a rodada.
+    if [[ "$intermediarios" == "$proprio" ]]; then cache_mode=; fi
     alvo="$proprio/.cargo-pinned-build"
     if (( target_arg >= 0 )); then
         if (( target_inline )); then args[target_arg]="--target-dir=$alvo"; else args[target_arg]="$alvo"; fi
@@ -56,7 +89,11 @@ if [[ "$alvo" == "$proprio" ]]; then
         export CARGO_TARGET_DIR="$alvo"
     fi
 fi
-bash "$raiz/scripts/cargo-freshness.sh" "$metadata" "$alvo"
+if [[ -n "$cache_mode" ]]; then
+    export RUSTC_WORKSPACE_WRAPPER="$raiz/scripts/cargo-worktree-rustc"
+else
+    bash "$raiz/scripts/cargo-freshness.sh" "$metadata" "$alvo"
+fi
 # Cada job paralelo precisa caber na memória livre: o rustc do hangar_server é o maior do workspace.
 gib=$((1024 * 1024))
 folga=$((2 * gib))
