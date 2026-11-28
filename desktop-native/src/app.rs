@@ -119,7 +119,7 @@ pub(crate) use sign_in::{account_top as sign_in_account_top, default_picks as si
 pub(crate) use viewer::{STRIP_THUMB, play_badge, show_in_chat_button, strip_day, strip_frame, strip_row, strip_thumb, strip_window, viewer_counter,
     viewer_stage, viewer_title};
 pub(crate) use media_panel::{media_cell, media_cell_side, media_day_title, media_filter_chip, media_filter_row, media_grid_row, media_section_tabs};
-pub(crate) use machines::{Consent, ConsentChoice, SETTINGS_CONSENT_SCOPE, TELEMETRY_DOC, consent_row, telemetry_doc_row};
+pub(crate) use machines::{Consent, ConsentChoice, TELEMETRY_B_SCOPE, consent_row, telemetry_doc_row};
 pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news_kind_pill, news_markdown_block, setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};

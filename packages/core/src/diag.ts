@@ -12,6 +12,8 @@ export type Nivel = 'ok' | 'aviso' | 'erro';
 
 export interface Evento {
   evento: string;
+  /** Fica no diagnóstico local; o cliente pode excluir uma linha da coleta, nunca habilitá-la. */
+  local_only?: boolean;
   nivel?: Nivel;
   tela?: string;
   sessao?: string;
@@ -19,6 +21,8 @@ export interface Evento {
   codigo?: string;
   detalhe?: string;
   ms?: number;
+  /** Início dos intervalos somados em `app.visible_time`; não vira campo do diário. */
+  started_at?: string;
   /** Id do pedido HTTP — o MESMO valor aparece na linha que o servidor gravou. */
   req?: string;
   pilha?: string;

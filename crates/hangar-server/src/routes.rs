@@ -178,7 +178,10 @@ pub struct AppState {
 
 impl AppState {
     /// A telemetria só quando ela conta: desligada, os ganchos nem montam as dimensões.
-    pub fn counting(&self) -> Option<&hangar_telemetry::Telemetry> { self.telemetry.as_deref().filter(|t| t.enabled()) }
+    pub fn counting(&self) -> Option<&hangar_telemetry::Telemetry> {
+        if crate::telemetry_hooks::NO_TELEMETRY.try_with(|_| ()).is_ok() { return None; }
+        self.telemetry.as_deref().filter(|t| t.enabled())
+    }
 
     /// O boot inicializa antes de servir; o lazy permite injetar contas nas provas isoladas.
     pub fn settings_snapshot(&self)->Result<Arc<crate::machine_peers::dotenv::SettingsSnapshot>,String>{

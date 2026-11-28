@@ -5985,8 +5985,11 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   fora do ar ou sem a rota não muda nada. O anúncio entre máquinas não serve: só sai na troca de
   identificador. Limite aceito: registrar a máquina de outra pessoa no `peers.json` junta os dois
   donos.
-- **Dia em UTC, um envio por dia.** Hora a hora entregaria rotina e fuso. Fila de até 14 dias em
-  `~/.hangar/telemetry-scope-2/queue/`, espera aleatória de até 1 h depois que o dia fecha.
+- **Dia em UTC: o final uma vez por dia; na opção B, também o parcial de hora em hora.** O pacote
+  final do dia sai depois que ele fecha em UTC, com espera aleatória de até 1 h; fila de até 14 dias em
+  `~/.hangar/telemetry-v3/queue/`. Antes da opção B só saía o final, porque hora a hora entregaria
+  rotina e fuso. Na opção B o dia aberto sai a cada hora como parcial do mesmo `batch_id`, que o
+  receptor troca até chegar o final (ver "Opção B, escopo 3").
 - **Revisão da spec.** `problem_shown` conta uma vez por problema, na passagem de esperando para
   mostrado no portão da lista: o `admit` devolve `Show` a cada tique, e contar ali repetiria o
   mesmo aviso a cada 1,5 s. `feature_used` sai de uma camada depois do handler, pelo modelo de rota
@@ -6017,6 +6020,27 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   da atualização, guardado só como marca `settings:<cliente>:<aparelho>` em `snapshot_keys` do arquivo do
   dia, que nunca vai no pacote. O painel mostra máquinas, não vezes. O canal de
   atualização não entrou: já vai no `env` do pacote.
+- **Opção B, escopo 3 (27/11/2026).** O
+  `GET /api/telemetry` anuncia o escopo; o sim precisa citar exatamente o do aviso, e o não antigo
+  continua válido. A escolha de B é separada do booleano legado (gravado como `false`) e a pasta
+  `telemetry-v3` nunca é lida por uma versão revertida. Lotes antigos não são importados.
+  O servidor marca a linha de tela só depois de autenticar o dono, preservando o horário original;
+  HTTP usa rota registrada e autenticação verificada, MCP exige chave da sessão e confirmação de
+  propriedade e de que não está compartilhada. Campos saem de listas fechadas, não de texto raspado
+  dos logs. Parcial horário e final UTC substituem o mesmo lote no receptor; o servidor grava ID e
+  projeção antes de enviar, congela o final no disco e limita os bytes entregues a 2 MiB. A revogação
+  impede novos envios, não apaga os já recebidos (retenção atual: 400 dias). A opção B ainda não foi
+  publicada.
+- **Um aceite cobre tudo (27/11/2026, opção A).** Decisão do dono: no servidor com a opção B, o aceite
+  do escopo 3 também libera o retrato diário de preferências do servidor e dos apps do PC e do
+  celular, pela mesma rota `POST /api/telemetry` e pela mesma lista fechada de `events::SETTINGS`;
+  sem ele o painel perderia as preferências dos apps, e um segundo aviso pediria a mesma coisa duas
+  vezes. O texto do aviso do escopo 3 diz que as preferências dos apps vão junto. O app continua a
+  negociar pelo `consent_scope` do `GET`: escopo 3 recebe o aviso de B, escopo 2 o aviso de
+  preferências daquela versão, nenhum escopo o aviso antigo (sem retrato do app), e escopo
+  desconhecido só a revogação. Um sim gravado sem escopo ou com o escopo 2 sai do `telemetry.json`
+  na subida: o servidor com B pergunta de novo. A recusa apaga também as filas `telemetry/` e
+  `telemetry-scope-2/` das versões anteriores.
 
 ## Servidor tmux antigo vivo não ganha outro por cima (27/11/2026)
 

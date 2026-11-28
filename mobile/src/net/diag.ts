@@ -2,7 +2,7 @@ import { AppState, Platform } from 'react-native';
 import { updateId } from 'expo-updates';
 import Constants from 'expo-constants';
 import { baseOf, configureDiag, criarTransporteDiag, getTelemetry, isOwnMachine, isServerParked, registrarDiag,
-  SETTINGS_CONSENT_SCOPE, subscribeRoutes, UNCONFIRMED_BASE, type EventoDiag, type Server, type TelemetrySetting } from '@hangar/core';
+  SETTINGS_CONSENT_SCOPE, subscribeRoutes, TELEMETRY_CONSENT_SCOPE, UNCONFIRMED_BASE, type EventoDiag, type Server, type TelemetrySetting } from '@hangar/core';
 import { useServers } from '../stores/servers';
 import { fatalTelemetryEvent, replayFatalError } from './fatalErrors';
 import { setTelemetrySavedListener } from './telemetrySaved';
@@ -25,10 +25,12 @@ export function withMachineRequestDiagnostics(fetcher: typeof fetch): typeof fet
     if (!/^\/api\/(peers(?:\/.*)?|sessions)$/.test(url.pathname)) return fetcher(input, init);
     const started = Date.now();
     const own = useServers.getState().servers.filter(isOwnMachine);
-    const server = own.find((s) => url.href.startsWith(`${trimBase(baseOf(s))}/api/`)
-      || url.href.startsWith(`${destination(s)}/api/`)) ?? own[0];
+    const source = own.find((s) => url.href.startsWith(`${trimBase(baseOf(s))}/api/`)
+      || url.href.startsWith(`${destination(s)}/api/`));
+    const server = source ?? own[0];
     const report = (code: string) => server && registrarDiag({
       evento: 'machines.request_failed', nivel: 'aviso', codigo: code, ms: Date.now() - started,
+      local_only: !source,
       operacao: url.host,
       detalhe: `${init?.method ?? 'GET'} ${url.pathname}`,
     }, destination(server));
@@ -116,14 +118,18 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'values' | 'device
   let visibleSince: number | null = (AppState.currentState ?? 'active') === 'active' ? Date.now() : null;
   // Só minutos inteiros saem: o servidor arredonda cada evento, e idas curtas ao fundo somariam zero.
   let visibleRest = 0;
+  let restSince: number | null = null;
   const visibleTime = () => {
     if (visibleSince === null) return;
     const now = Date.now();
-    visibleRest = Math.min(visibleRest + now - visibleSince, VISIBLE_EVERY_MS);
+    const elapsed = Math.max(0, now - visibleSince);
+    const started = restSince ?? visibleSince;
+    visibleRest = Math.min(visibleRest + elapsed, VISIBLE_EVERY_MS);
     visibleSince = now;
     const ms = visibleRest - (visibleRest % 60_000);
     visibleRest -= ms;
-    if (ms > 0) registrar({ evento: 'app.visible_time', ms });
+    restSince = visibleRest === 0 ? null : visibleRest <= elapsed ? now - visibleRest : started;
+    if (ms > 0) registrar({ evento: 'app.visible_time', ms, started_at: new Date(started).toISOString() });
   };
   // A confirmação deste POST não se confunde com a baixa das entradas do diário.
   const settingsDay = new Map<string, string>();
@@ -147,7 +153,8 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'values' | 'device
     try {
       const state = saved ?? await getTelemetry(server);
       const period = state?.snapshot_period;
-      if (!current() || !period || state?.consent_scope !== SETTINGS_CONSENT_SCOPE || state.disabled_by) return;
+      const covers = state?.consent_scope === SETTINGS_CONSENT_SCOPE || state?.consent_scope === TELEMETRY_CONSENT_SCOPE;
+      if (!current() || !period || !covers || state.disabled_by) return;
       const ts = new Date().toISOString();
       const mark = `${server.id}:${ts.slice(0, 10)}:${period}`;
       if (settingsDay.get(key) === mark) return;
@@ -194,7 +201,7 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'values' | 'device
     if (estado === 'active') { if (visibleSince === null) visibleSince = Date.now(); }
     else { visibleTime(); visibleSince = null; }
     registrar({ evento: estado === 'active' ? 'app.visivel' : 'app.oculto' });
-    if (estado === 'active') settingsSnapshot();
+    if (estado === 'active') void settingsSnapshot();
     void transporte.enviar();
     if (estado === 'active') replay();
   });

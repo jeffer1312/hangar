@@ -53,6 +53,8 @@ const ROUTE_BODY_LIMIT: usize = 16 << 20;
 
 type Outcome = Result<CallToolResult, String>;
 
+tokio::task_local! { pub(super) static ARGUMENTS_REJECTED: std::cell::Cell<bool>; }
+
 pub struct Tools {
     st: Arc<AppState>,
     api: Router,
@@ -86,9 +88,12 @@ fn image(path: &Path) -> Option<ContentBlock> {
 }
 
 fn args<T: DeserializeOwned>(tool: &str, raw: JsonObject) -> Result<T, String> {
-    serde_json::from_value(Value::Object(raw)).map_err(|e| match super::expected_fields(tool) {
-        Some(fields) => format!("argumentos inválidos para {tool}: {e}. Campos: {fields}"),
-        None => format!("argumentos inválidos para {tool}: {e}"),
+    serde_json::from_value(Value::Object(raw)).map_err(|e| {
+        let _ = ARGUMENTS_REJECTED.try_with(|rejected| rejected.set(true));
+        match super::expected_fields(tool) {
+            Some(fields) => format!("argumentos inválidos para {tool}: {e}. Campos: {fields}"),
+            None => format!("argumentos inválidos para {tool}: {e}"),
+        }
     })
 }
 
@@ -573,22 +578,40 @@ impl Tools {
             _ => Err(format!("Unknown tool: {name}")),
         };
         let result = outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]));
-        if let Some(telemetry) = self.st.counting() && self.owner_session(headers).await {
-            use hangar_telemetry::events::{Code, Dims, Event};
-            let dims = Dims::new().with("tool", Code::known(name, &super::TOOL_NAMES)).with("error", result.is_error == Some(true));
-            telemetry.count(Event::McpTool, dims, 1);
-        }
         result
     }
 
-    /// A tool vem de sessão do dono: a de convidado com login usa o token do dono, e só o `guests.json`
-    /// a separa. Sessão que não se resolve, ou convidados ilegíveis, também não contam.
-    async fn owner_session(&self, headers: &HeaderMap) -> bool {
-        let Ok((name, _)) = self.resolve(headers).await else { return false };
-        let life = crate::login_guests::gate::session_life(&self.st, &name).await;
+    pub(super) fn telemetry(&self) -> Option<&hangar_telemetry::Telemetry> { self.st.counting() }
+
+    /// O bearer também serve a agentes de convidados; só a chave da vida, a propriedade e o
+    /// compartilhamento conferidos em conjunto permitem atribuir a ação ao dono.
+    pub(super) async fn owner_session(&self, headers: &HeaderMap) -> Option<(String, String)> {
+        let (name, Origin::Key) = self.resolve(headers).await.ok()? else { return None };
+        let key = header(headers, "x-hangar-key").filter(|key| !key.is_empty())?;
+        let life = crate::login_guests::gate::fresh_session_life(&self.st, &name).await?;
+        let binding = if let Some(life_key) = life.strip_prefix("k:") { life_key == key }
+            else if life.starts_with("t:") { self.st.list.env().mux.session_env(&name, "CP_SESSION_KEY").await.as_deref() == Some(key.as_str()) }
+            else { false };
+        if !binding { return None; }
         let base = self.st.accounts.env.claude_base.clone();
-        tokio::task::spawn_blocking(move || counts_as_owner(crate::session_open::server::read_guests(&base), &name, life.as_deref()))
-            .await.unwrap_or(false)
+        let (checked_name, checked_life) = (name.clone(), life.clone());
+        let owner = tokio::task::spawn_blocking(move || counts_as_owner(
+            crate::session_open::server::read_guests(&base), &checked_name, Some(&checked_life)))
+            .await.ok()?;
+        if !owner { return None; }
+        super::shared_guard::ensure_unshared(&self.st, &self.api, &name, super::shared_guard::INTEGRATIONS).await.ok()?;
+        if crate::login_guests::gate::fresh_session_life(&self.st, &name).await.as_deref() != Some(life.as_str()) { return None; }
+        Some((name, life))
+    }
+
+    pub(super) async fn observe(&self, period: hangar_telemetry::Collection, epoch: u64, name: &str,
+                                stage: &'static str, code: Option<&str>, took: std::time::Duration) {
+        use hangar_telemetry::events::{Code, Dims, Event};
+        let Some(telemetry) = self.telemetry() else { return };
+        let tool = Code::known(name, super::tool_names());
+        let dims = Dims::new().with("tool", tool).with("error", code.is_some());
+        telemetry.count_in(epoch, Event::McpTool, dims, 1);
+        crate::telemetry_hooks::record_action(&self.st, period, hangar_usage_diary::OwnerAction::Mcp, tool.as_str(), stage, code, took).await;
     }
 
     /// O convidado com login dono da sessão `name`; `None` = sessão do dono. Convidados ilegíveis sem última leitura
@@ -1896,7 +1919,8 @@ pub(super) async fn call_route(mut api: Router, token: &str, caller: Option<&str
         return (500, json!({"detail": "caminho inválido"}));
     };
     request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-    let Ok(response) = api.call(request).await;
+    request.extensions_mut().insert(crate::telemetry_hooks::NoTelemetry);
+    let Ok(response) = crate::telemetry_hooks::NO_TELEMETRY.scope((), api.call(request)).await;
     let status = response.status().as_u16();
     let raw = match axum::body::to_bytes(response.into_body(), ROUTE_BODY_LIMIT).await {
         Ok(raw) => raw,

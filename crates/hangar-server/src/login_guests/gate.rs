@@ -115,23 +115,21 @@ impl Watcher {
         }
     }
 }
-pub(crate) async fn session_life(st: &AppState, name: &str) -> Option<String> {
-    if let Some(share) = &st.share {
-        return share.lives.life(name, false).await;
-    }
-    st.login_guests
-        .lives
-        .get_or_init(|| {
-            Arc::new(Lives::new(
-                Arc::new(crate::share::life::MuxProbe::new(
-                    st.list.env().capture_program.clone(),
-                    st.accounts.env.home.clone(),
-                )),
-                Arc::default(),
-            ))
-        })
-        .life(name, false)
-        .await
+pub(crate) async fn session_life(st: &AppState, name: &str) -> Option<String> { session_lives(st).life(name, false).await }
+
+pub(crate) async fn fresh_session_life(st: &AppState, name: &str) -> Option<String> {
+    let lives = session_lives(st);
+    if lives.facts().changing_mode(name) { return None; }
+    let life = lives.life(name, true).await?;
+    (!lives.facts().changing_mode(name)).then_some(life)
+}
+
+fn session_lives(st: &AppState) -> &Lives {
+    if let Some(share) = &st.share { return &share.lives; }
+    st.login_guests.lives.get_or_init(|| Arc::new(Lives::new(
+        Arc::new(crate::share::life::MuxProbe::new(st.list.env().capture_program.clone(), st.accounts.env.home.clone())),
+        Arc::default(),
+    )))
 }
 async fn check(st: &AppState, guest: &Guest, method: &str, path: &str) -> bool {
     if !allowed(method, path, |_| true) {

@@ -8,6 +8,7 @@ use axum::Router;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use tokio::sync::Semaphore;
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
@@ -99,6 +100,13 @@ struct Period {
     days: Option<i32>,
 }
 
+/// Opcionais para a sessão ser conferida antes: sem login é 401 mesmo com o pedido torto.
+#[derive(Deserialize)]
+struct TrailQuery {
+    machine: Option<String>,
+    day: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct Login {
     email: String,
@@ -119,6 +127,7 @@ pub fn router(pool: PgPool) -> Router {
         .route("/panel", get(home))
         .route("/panel/join", get(|| async { page(2) }))
         .route("/panel/data", get(data))
+        .route("/panel/trail", get(trail))
         .route("/panel/api/me", get(me))
         .route("/panel/api/login", post(login))
         .route("/panel/api/logout", post(logout))
@@ -193,17 +202,39 @@ async fn me(State(panel): State<Panel>, headers: HeaderMap) -> Response {
     }
 }
 
-async fn data(State(panel): State<Panel>, headers: HeaderMap, Query(period): Query<Period>) -> Response {
+// A consulta torta só é recusada depois da sessão: sem ela, 401 não diz o formato da rota.
+async fn data(State(panel): State<Panel>, headers: HeaderMap, period: Result<Query<Period>, QueryRejection>) -> Response {
     let pool = &panel.pool;
     match user(pool, &headers).await {
         Ok(Some(_)) => {}
         Ok(None) => return error(StatusCode::UNAUTHORIZED, "session"),
         Err(response) => return response,
     }
+    let Ok(Query(period)) = period else { return error(StatusCode::BAD_REQUEST, "query") };
     let days = period.days.unwrap_or(DEFAULT_DAYS).clamp(1, 400);
     match store::summary(pool, days).await {
         Ok(summary) => ([(header::CACHE_CONTROL, "no-store")], axum::Json(summary)).into_response(),
         Err(e) => unavailable("summary", &e),
+    }
+}
+
+async fn trail(State(panel): State<Panel>, headers: HeaderMap, query: Result<Query<TrailQuery>, QueryRejection>) -> Response {
+    let pool = &panel.pool;
+    match user(pool, &headers).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return error(StatusCode::UNAUTHORIZED, "session"),
+        Err(response) => return response,
+    }
+    let Ok(Query(query)) = query else { return error(StatusCode::BAD_REQUEST, "query") };
+    let is_hex_id = |v: &str| v.len() == 32 && v.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let is_day = |v: &str| v.len() == 10 && v.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });
+    let (Some(machine), Some(day)) = (query.machine.filter(|m| is_hex_id(m)), query.day.filter(|d| is_day(d))) else {
+        return error(StatusCode::BAD_REQUEST, "query");
+    };
+    match store::trail(pool, &machine, &day).await {
+        Ok(steps) => ([(header::CACHE_CONTROL, "no-store")], axum::Json(steps)).into_response(),
+        Err(e) if store::is_bad_value(&e) => error(StatusCode::BAD_REQUEST, "day"),
+        Err(e) => unavailable("trail", &e),
     }
 }
 

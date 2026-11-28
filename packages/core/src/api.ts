@@ -3013,14 +3013,22 @@ export async function putAutoReportEm(s: Server, value: boolean, fetcher?: typeo
   return res?.auto_report === true;
 }
 
-/** O único aviso que este app sabe exibir; sem identificação do escopo, só se pode revogar. */
+/** Os avisos que este app sabe exibir: 3 (opção B e preferências), 2 (só preferências) e, sem escopo, o antigo. */
+export const TELEMETRY_CONSENT_SCOPE = 3;
 export const SETTINGS_CONSENT_SCOPE = 2;
+/** Telemetria anônima da máquina: `consent` `null` = não respondido; `disabled_by` = desligada pelo ambiente. */
 export interface TelemetrySetting {
   consent: boolean | null;
   disabled_by: 'env' | 'ci' | null;
   consent_scope?: number;
   enabled?: boolean;
   snapshot_period?: string;
+}
+
+/** Sem `consent_scope` o servidor é anterior aos escopos e recebe o aviso antigo; escopo anunciado que o
+ *  app não conhece nunca recebe um "sim". */
+export function knowsTelemetryScope(scope: number | undefined): boolean {
+  return scope === undefined || scope === TELEMETRY_CONSENT_SCOPE || scope === SETTINGS_CONSENT_SCOPE;
 }
 
 type TelemetryReply = Partial<Record<keyof TelemetrySetting, unknown>>;
@@ -3031,18 +3039,15 @@ function telemetryView(res: TelemetryReply | null | undefined): TelemetrySetting
   if (typeof consent !== 'boolean' && consent !== null) throw new Error(m.atualizar_resposta_invalida());
   const by = res?.disabled_by;
   const scope = res?.consent_scope;
-  if (scope !== undefined && (typeof scope !== 'number' || !Number.isSafeInteger(scope) || scope <= 0)) {
+  if (scope !== undefined && (typeof scope !== 'number' || !Number.isSafeInteger(scope) || scope < 1)) {
     throw new Error(m.atualizar_resposta_invalida());
   }
   const period = res?.snapshot_period;
+  // O retrato do app só tem período com aceite ligado de um aviso que cobre preferências.
+  const snapshots = (scope === SETTINGS_CONSENT_SCOPE || scope === TELEMETRY_CONSENT_SCOPE) && res?.enabled === true && consent === true;
   return { consent, disabled_by: by === 'env' || by === 'ci' ? by : null,
     ...(scope === undefined ? {} : { consent_scope: scope, enabled: res?.enabled === true }),
-    ...(scope === SETTINGS_CONSENT_SCOPE && res?.enabled === true && consent === true
-      && typeof period === 'string' && /^[a-f0-9]{32}$/.test(period) ? { snapshot_period: period } : {}) };
-}
-
-export function knowsTelemetryScope(scope: number | undefined): boolean {
-  return scope === SETTINGS_CONSENT_SCOPE;
+    ...(snapshots && typeof period === 'string' && /^[a-f0-9]{32}$/.test(period) ? { snapshot_period: period } : {}) };
 }
 
 // 404 = servidor sem telemetria; 503 `telemetry_unavailable` = esta vida dele sem ela. Nos dois, a tela some.
@@ -3063,11 +3068,10 @@ export async function getTelemetry(s: Server, fetcher?: typeof fetch): Promise<T
 
 /** `scope` vem do aviso mostrado, não de releitura feita depois do clique. */
 export async function putTelemetry(s: Server, consent: boolean, scope: number | undefined, fetcher?: typeof fetch): Promise<TelemetrySetting> {
-  if (consent && !knowsTelemetryScope(scope)) throw new Error(m.telemetry_update_required());
-  const body = JSON.stringify(consent ? { consent, consent_scope: scope } : { consent });
-  const res = await apiFetchForServer<TelemetryReply>(s, '/api/telemetry',
-    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body }, 8000, false, fetcher);
-  const saved = telemetryView(res);
+  if (consent && !knowsTelemetryScope(scope)) throw new Error(m.telemetry_scope_unknown());
+  const body = { consent, ...(consent && scope !== undefined ? { consent_scope: scope } : {}) };
+  const saved = telemetryView(await apiFetchForServer<TelemetryReply>(s, '/api/telemetry',
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 8000, false, fetcher));
   if (saved.consent !== consent || (consent && saved.consent_scope !== scope)) throw new Error(m.atualizar_resposta_invalida());
   return saved;
 }
