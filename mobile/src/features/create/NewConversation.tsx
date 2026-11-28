@@ -30,7 +30,7 @@ import {
 import { HomeIntroMark, HomeQuietMark } from './HomeAmbient';
 import { useHomeDictation } from './useHomeDictation';
 import * as m from '../../paraglide/messages';
-import { useTourAnchor } from '../tour/TourAnchor';
+import { TourHidden, useTourAnchor } from '../tour/TourAnchor';
 import { reportTourAction } from '../tour/anchors';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -376,7 +376,7 @@ export function NewConversation({
       <View style={styles.middle}>
       {home ? <Animated.View style={[styles.homeList, listStyle]} pointerEvents={collapsed ? 'auto' : 'none'}
         accessibilityElementsHidden={!collapsed} importantForAccessibility={collapsed ? 'auto' : 'no-hide-descendants'}>
-        {home.sessions}
+        <TourHidden.Provider value={!collapsed}>{home.sessions}</TourHidden.Provider>
       </Animated.View> : null}
       <Animated.View style={[styles.states, home && conversationStyle]} pointerEvents={collapsed ? 'none' : 'auto'}
         accessibilityElementsHidden={collapsed} importantForAccessibility={collapsed ? 'no-hide-descendants' : 'auto'}>

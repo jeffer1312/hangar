@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, type ReactNode } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { WorkingMarkPaused } from '../../ui/WorkingMark';
 import { anchorMoved, registerAnchor, unregisterAnchor } from './anchors';
@@ -7,9 +7,14 @@ import { anchorMoved, registerAnchor, unregisterAnchor } from './anchors';
  * Registra uma peça que o tour aponta; `id` nulo não registra (a mesma peça fora da tela real ou escondida).
  * Tela sem foco (a inicial por baixo da conversa) tira as peças dela: o balão não pode apontar o que está coberto.
  */
+/** Peças montadas mas escondidas por outra camada da mesma tela (a lista sob o formulário de nova conversa). */
+export const TourHidden = createContext(false);
+
 export function useTourAnchor(id: string | null) {
   // `WorkingMarkPaused` é o "esta tela perdeu o foco" que a inicial e a conversa já publicam.
-  const covered = useContext(WorkingMarkPaused);
+  const paused = useContext(WorkingMarkPaused);
+  const hidden = useContext(TourHidden);
+  const covered = paused || hidden;
   const key = covered ? null : id;
   const node = useRef<View | null>(null);
   const ref = useCallback((view: View | null) => {
