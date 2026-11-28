@@ -1,6 +1,6 @@
 //! `settings.json` do CLI: o Hangar acrescenta a pasta da sessão em `trustedWorkspaces`, para o `agy` não abrir
 //! a pergunta "Do you trust the contents of this project?" num pane que ninguém está olhando, e as liberações
-//! do recado em `permissions.allow`. O resto do arquivo é da pessoa.
+//! do recado em `permissions.allow`, e ocupa o `statusLine` vazio para receber a cota. O resto do arquivo é da pessoa.
 use std::io;
 use std::path::Path;
 
@@ -9,6 +9,16 @@ use serde_json::{Map, Value};
 use crate::hooks::Error;
 
 const TRUSTED: &str = "trustedWorkspaces";
+const STATUS_LINE: &str = "statusLine";
+
+/// O que coube ao `statusLine` da conta.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StatusLine {
+    Written,
+    Unchanged,
+    /// A pessoa tem statusline própria ou desligou a dela: fica como está, e a cota não chega ao Hangar.
+    Taken,
+}
 
 /// O que o Hangar libera: as tools de recado do MCP `hangar` e o CLI de recado e do navegador, que só rodam
 /// fora do sandbox do terminal (lá dentro o `~/.hangar` some e IP direto é recusado). Criar sessão
@@ -51,6 +61,29 @@ pub fn allow(path: &Path, rules: &[&str]) -> Result<bool, Error> {
     allowed.extend(missing);
     write(path, &doc)?;
     Ok(true)
+}
+
+/// Põe `command` no `statusLine` vazio ou já do Hangar (`ours` reconhece o comando antigo, de outra versão).
+/// `stack_with_default` mantém a barra padrão do `agy`, de onde o pane lê modo e modelo.
+pub fn status_line(path: &Path, command: &str, ours: impl Fn(&str) -> bool) -> Result<StatusLine, Error> {
+    let mut doc = read(path)?;
+    let mut line = match doc.get(STATUS_LINE) {
+        None => Map::new(),
+        Some(Value::Object(line)) => line.clone(),
+        Some(_) => return Ok(StatusLine::Taken),
+    };
+    let current = line.get("command").and_then(Value::as_str).unwrap_or("").trim();
+    if (!current.is_empty() && !ours(current)) || line.get("enabled") == Some(&Value::Bool(false)) {
+        return Ok(StatusLine::Taken);
+    }
+    let before = line.clone();
+    line.insert("type".into(), "command".into());
+    line.insert("command".into(), command.into());
+    line.insert("stack_with_default".into(), true.into());
+    if doc.contains_key(STATUS_LINE) && line == before { return Ok(StatusLine::Unchanged); }
+    doc.insert(STATUS_LINE.into(), Value::Object(line));
+    write(path, &doc)?;
+    Ok(StatusLine::Written)
 }
 
 fn read(path: &Path) -> Result<Map<String, Value>, Error> {
@@ -133,6 +166,47 @@ mod tests {
         let doc: Value = serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
         assert_eq!(doc["permissions"]["allow"].as_array().unwrap().len(), HANGAR_RULES.len());
         assert_eq!(doc[TRUSTED], serde_json::json!(["/home/u/proj"]));
+    }
+
+    const OURS: &str = "\"/opt/hangar/hangar-server\" agy-statusline";
+    fn ours(command: &str) -> bool { command.ends_with(" agy-statusline") }
+
+    #[test]
+    fn an_empty_status_line_is_taken_and_keeps_the_default_bar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"model":"x","statusLine":{"type":"","command":"","enabled":true}}"#).unwrap();
+        assert_eq!(status_line(&path, OURS, ours).unwrap(), StatusLine::Written);
+        assert_eq!(status_line(&path, OURS, ours).unwrap(), StatusLine::Unchanged, "segunda vez não regrava");
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(doc[STATUS_LINE], serde_json::json!({"type":"command","command":OURS,"enabled":true,"stack_with_default":true}));
+        assert_eq!(doc["model"], "x");
+    }
+
+    #[test]
+    fn a_missing_status_line_is_created_and_an_old_hangar_command_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(status_line(&path, OURS, ours).unwrap(), StatusLine::Written);
+        let newer = "\"/novo/hangar-server\" agy-statusline";
+        assert_eq!(status_line(&path, newer, ours).unwrap(), StatusLine::Written);
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(doc[STATUS_LINE]["command"], newer);
+    }
+
+    #[test]
+    fn the_status_line_of_the_person_is_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for own in [r#"{"statusLine":{"type":"command","command":"~/minha-barra.sh"}}"#,
+                    r#"{"statusLine":{"type":"","command":"","enabled":false}}"#,
+                    r#"{"statusLine":true}"#] {
+            std::fs::write(&path, own).unwrap();
+            assert_eq!(status_line(&path, OURS, ours).unwrap(), StatusLine::Taken, "{own}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), own);
+        }
+        std::fs::write(&path, "[1,2").unwrap();
+        assert!(status_line(&path, OURS, ours).is_err());
     }
 
     #[test]

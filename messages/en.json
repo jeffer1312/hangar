@@ -12679,7 +12679,7 @@
   "native_accounts_agy_signed_in": "signed in",
   "native_accounts_agy_signed_out": "not signed in",
   "native_accounts_agy_terms_server_changed": "The Terms session was created on the previous server; it was not opened on this one.",
-  "native_accounts_agy_no_quota": "Quota not read yet: it comes from agy's own /usage.",
+  "native_accounts_agy_no_quota": "The quota shows up once Antigravity is open in a session: it comes from agy's own status line.",
   "native_accounts_remove_desc_antigravity": "Deletes this Google account folder on this server, with the agy sign-in and conversations stored in it.",
   "native_create_agy_account": "Google account",
   "native_create_agy_default": "Google (default)",

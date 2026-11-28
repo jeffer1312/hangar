@@ -186,6 +186,9 @@ pub fn agy_pretrust(home: &Path, account: &Account, cwd: &str) {
     if let Err(error) = crate::harness_setup::agy_hooks::install(home, &hooks) {
         tracing::warn!(file = %hooks.display(), %error, "hook do Antigravity não gravado; a sessão abre sem ligar a conversa");
     }
+    if let Err(error) = crate::harness_setup::agy_hooks::status_line(home, &account) {
+        tracing::warn!(file = %path.display(), %error, "statusline do Antigravity não gravada; a cota da conta não atualiza");
+    }
     crate::harness_setup::persona::sync_agy(home);
 }
 

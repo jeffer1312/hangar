@@ -589,7 +589,7 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
     }
     let subtitle = (line, marks);
 
-    // A cota do agy vem do `/usage` dele; sem leitura ainda, a nota diz de onde ela virá.
+    // A cota do agy vem da statusline dele; sem leitura ainda, a nota diz quando ela aparece.
     let quota = if c.kind == "antigravity" && c.quota.is_none() { QuotaView::Note(tr("accounts_agy_no_quota")) } else { match (c.read_windows(), c.quota.as_ref()) {
         (Some(windows), Some(q)) => {
             let mut bars: Vec<Bar> = windows.iter().map(|w| Bar {

@@ -42,6 +42,9 @@ impl Account {
 
     pub fn settings_path(&self, home: &Path) -> PathBuf { self.data_dir(home).join("settings.json") }
 
+    /// A última cota que a statusline do `agy` passou ao Hangar.
+    pub fn quota_path(&self, home: &Path) -> PathBuf { self.data_dir(home).join(crate::quota::FILE) }
+
     /// Os servidores MCP do usuário (`agy mcp add` grava aqui).
     pub fn mcp_config_path(&self, home: &Path) -> PathBuf { self.gemini_dir(home).join("config").join("mcp_config.json") }
 }

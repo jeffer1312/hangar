@@ -110,7 +110,7 @@ pub(crate) fn listed_ids(service: &AccountService, config: &other::Config) -> (V
         })),
         Err(err) => problems.push((Provider::Codex, err.code)),
     }
-    // Contas Google do Antigravity: sem cota (o Hangar não lê o login do agy).
+    // Contas Google do Antigravity: o Hangar não lê o login do agy; a cota vem da statusline dele.
     // A padrão só aparece onde o agy já foi usado; máquina sem ele não ganha linha.
     for account in hangar_antigravity::paths::known_accounts(&service.env.home).into_iter()
         .filter(|a| !a.is_default() || a.data_dir(&service.env.home).is_dir()) {
