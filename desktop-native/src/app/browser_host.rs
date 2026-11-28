@@ -259,7 +259,7 @@ fn refusal(id: u64, error: &str) -> Out { Out::Text(json!({"id": id, "ok": false
 
 fn reply_out(id: u64, reply: Reply, pairs: &[(u16, u16)]) -> Out {
     match reply {
-        Reply::Text(text) => Out::Text(json!({"id": id, "ok": true, "text": to_remote(&text, pairs)}).to_string()),
+        Reply::Text(text) | Reply::Error(_, text) => Out::Text(json!({"id": id, "ok": true, "text": to_remote(&text, pairs)}).to_string()),
         Reply::Png(png) => Out::Png(id, png),
     }
 }
@@ -454,7 +454,7 @@ impl Hangar {
                     }
                 }
             };
-            let failed = matches!(&first, Some(Reply::Text(t)) if t.starts_with("erro:")) || first.is_none();
+            let failed = matches!(&first, Some(Reply::Text(t)) if t.starts_with("erro:")) || matches!(&first, Some(Reply::Error(..)) | None);
             let reply = if verb == "open" && !failed { run(&this, cx, "url", Vec::new()).await } else { first };
             let reply = reply.unwrap_or_else(|| Reply::Text("erro: o navegador fechou no meio do comando".into()));
             let ok = matches!(&reply, Reply::Text(t) if !t.starts_with("erro:"));

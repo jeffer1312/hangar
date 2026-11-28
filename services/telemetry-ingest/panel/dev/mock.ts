@@ -3,7 +3,7 @@ import type { Plugin } from "vite";
 import type { ServerResponse } from "node:http";
 import { bump, summary, trail } from "./sample";
 
-type State = "normal" | "empty" | "error" | "slow";
+type State = "normal" | "empty" | "error" | "slow" | "legacy";
 
 export const mock = (): Plugin => ({
   name: "telemetry-mock",
@@ -58,6 +58,11 @@ export const mock = (): Plugin => ({
         const s = summary(days);
         return json(res, 200, { ...s, records: [], records_total: 0, transitions: [], transitions_total: 0, trail_days: [], trail_days_total: 0, refusals: { declined: 0, revoked: 0 },
           period: { batches: 0, machines: 0, partial_batches: 0 }, daily: [], env: [], per_owner: [], by_dims: [], by_bucket: [], speed: [], logs: [], trend: [], counters: [] });
+      }
+      // Receptor antigo: as falhas sem retrato, passos da última vez, desfecho e lote.
+      if (state === "legacy") {
+        const s = summary(days);
+        return json(res, 200, { ...s, records: s.records.map(({ trail_last: _t, ctx_first: _f, ctx_last: _l, after: _a, capped: _c, batch: _b, ...r }) => r) });
       }
       return json(res, 200, summary(days));
     });

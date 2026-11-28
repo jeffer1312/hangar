@@ -1129,6 +1129,11 @@ impl ListBridge {
                 // A linha não traz o detalhe do problema: vão o estado e o tipo da sessão, que situam o código.
                 list_facts::note_with("rust.problem_hidden", &row.name, code.to_owned(), "aviso de diagnóstico fora da tela",
                     serde_json::json!({"via": "lista", "estado": &row.state, "provider": &row.provider, "sem_terminal": if row.headless { 1 } else { 0 }}));
+                // A lista não tem o detalhe: a causa sai `other`, num registro separado do que a conversa grava com causa.
+                if let Some((code, cause)) = crate::problem_gate::health(code, None)
+                    && crate::warn_limit::allow(Some(&row.name), &format!("health_list:{code}")) {
+                    crate::telemetry_hooks::report_health(code, cause, hangar_usage_diary::Severity::Warn, Some(&row.name), Vec::new(), None);
+                }
                 row.problema = None;
             }
             let (gate, first) = gates.entry(row.name.clone()).or_default().admit_noting(row.problema.as_deref(), now, hold);

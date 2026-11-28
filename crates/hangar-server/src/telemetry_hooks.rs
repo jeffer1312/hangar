@@ -73,6 +73,9 @@ static ANCHOR: LazyLock<Instant> = LazyLock::new(Instant::now);
 /// Desde quando o `Monitor` de cada sessão lê a tela: sinal dele só vale para o que aconteceu depois.
 static WATCHERS: LazyLock<Mutex<HashMap<String, (Instant, u64)>>> = LazyLock::new(Default::default);
 
+/// Há quanto o servidor desta vida está de pé (a âncora nasce na subida, em `spawn`).
+pub(crate) fn uptime() -> Duration { since_anchor(Instant::now()) }
+
 fn epoch_now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()) }
 fn since_anchor(at: Instant) -> Duration { at.saturating_duration_since(*ANCHOR) }
 /// A hora de parede gravada na fila vira o relógio monotônico pela idade dela agora: a suspensão da máquina não
@@ -188,6 +191,14 @@ impl TurnClock {
 
 /// `feature_used`, decidido depois do handler: modelo de rota da lista, resposta 2xx e só o dono. O MCP
 /// chama o roteador interno, que não passa por esta camada.
+/// O `{name}` das rotas `/api/sessions/{name}/…`, já decodificado.
+fn session_of(req: &Request) -> Option<String> {
+    let template = req.extensions().get::<MatchedPath>()?.as_str();
+    if !template.starts_with("/api/sessions/{name}") { return None; }
+    let raw = req.uri().path().split('/').nth(3)?;
+    Some(percent_encoding::percent_decode_str(raw).decode_utf8_lossy().into_owned())
+}
+
 pub(crate) async fn count_feature(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
     let Some(telemetry) = st.counting() else { return next.run(req).await };
     let epoch = telemetry.consent_epoch();
@@ -197,6 +208,7 @@ pub(crate) async fn count_feature(State(st): State<Arc<AppState>>, req: Request,
     let (Some(feature), Some(period)) = (feature, telemetry.collection()) else { return next.run(req).await };
     let auth = req.extensions().get::<hangar_core::edge::RequestAuth>().cloned();
     let marker = req.extensions().get::<crate::routes::NotOwner>().cloned();
+    let session = session_of(&req);
     let start = std::time::Instant::now();
     let response = next.run(req).await;
     if marker.is_some_and(|marker| marker.seen()) || telemetry.consent_epoch() != epoch || !telemetry.enabled()
@@ -205,26 +217,34 @@ pub(crate) async fn count_feature(State(st): State<Arc<AppState>>, req: Request,
         let status = response.status();
         if status.is_success() {
             telemetry.count_in(epoch, Event::FeatureUsed, Dims::new().with("feature", feature), 1);
-            record_action(&st, period, OwnerAction::Http, feature.as_str(), "request", None, start.elapsed()).await;
+            record_action(&st, period, OwnerAction::Http, feature.as_str(), "request", None, None, None, start.elapsed()).await;
         } else if status.is_client_error() || status.is_server_error() {
             let failure = response.extensions().get::<crate::diag::FailureCode>().map(|code| code.0)
                 .filter(|code| hangar_telemetry::diary::known_failure(code));
             let fallback = format!("http_{}", status.as_u16());
-            record_action(&st, period, OwnerAction::Http, feature.as_str(), "request", Some(failure.unwrap_or(&fallback)), start.elapsed()).await;
+            record_action(&st, period, OwnerAction::Http, feature.as_str(), "request", Some(failure.unwrap_or(&fallback)), None,
+                session.as_deref(), start.elapsed()).await;
         }
     }
     response
 }
 
-pub(crate) async fn record_action(st: &AppState, period: Collection, origin: OwnerAction, action: &str,
-                                  stage: &'static str, code: Option<&str>, took: Duration) {
+/// `cause` diz onde a ação parou; o retrato da máquina (e da sessão `session`) só vai nas falhas.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn record_action(st: &AppState, period: Collection, origin: OwnerAction, action: &str, stage: &'static str,
+                                  code: Option<&str>, cause: Option<&str>, session: Option<&str>, took: Duration) {
     if st.counting().and_then(Telemetry::collection).is_none_or(|current| current.id != period.id) { return; }
     let Some(base) = crate::diag::diary_base(st) else { return };
     let now = chrono::Local::now().fixed_offset();
-    let (action, code) = (action.to_owned(), code.map(str::to_owned));
+    let mut ctx = Vec::new();
+    if code.is_some() {
+        ctx = crate::telemetry_ctx::machine(st);
+        if let Some(name) = session { ctx.extend(crate::telemetry_ctx::session(st, name)); }
+    }
+    let (action, code, cause) = (action.to_owned(), code.map(str::to_owned), cause.map(str::to_owned));
     let ms = took.as_millis().min(3_600_000) as u64;
     match tokio::task::spawn_blocking(move || hangar_usage_diary::record_owner_action(
-        &base, origin, &period.id, now, &action, stage, code.as_deref(), ms, None, &[])).await {
+        &base, origin, &period.id, now, &action, stage, code.as_deref(), ms, cause.as_deref(), &ctx)).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::warn!(code = "telemetry_diary_write_failed", ?error, "falha ao gravar ação no diário da telemetria"),
         Err(_) => crate::telemetry_routes::task_failed(&st.diag),
@@ -381,6 +401,25 @@ mod tests {
             let method = axum::http::Method::from_bytes(method.as_bytes()).unwrap();
             assert!(crate::owned_routes::rust_route(&method, &path), "{method} {template} fora da tabela das rotas do Rust");
         }
+    }
+
+    #[tokio::test]
+    async fn telemetry_action_failure_carries_its_cause_and_the_machine() {
+        let home = tempfile::tempdir().unwrap();
+        let mut st = test_state(home.path(), true);
+        Arc::get_mut(&mut st).unwrap().accounts.env.home = home.path().to_path_buf();
+        let base = crate::diag::diary_base(&st).expect("diário na casa de teste");
+        let period = st.counting().and_then(Telemetry::collection).expect("coleta ligada");
+        record_action(&st, period.clone(), OwnerAction::Mcp, "browser", "dispatch", Some("tool_failed"), Some("unknown_verb"),
+            Some("minha-sessao"), Duration::from_millis(5)).await;
+        record_action(&st, period, OwnerAction::Mcp, "browser", "dispatch", None, None, Some("minha-sessao"), Duration::ZERO).await;
+        let rows = crate::diag::test_support::rows(&base);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        let failed = rows.iter().find(|row| row["nivel"] == "erro").unwrap();
+        assert_eq!(failed["causa"], "unknown_verb");
+        assert!(failed["ctx"]["up"].is_string(), "{failed}");
+        assert!(rows.iter().find(|row| row["nivel"] == "ok").unwrap().get("ctx").is_none(), "sucesso não leva retrato");
+        assert!(!serde_json::to_string(&rows).unwrap().contains("minha-sessao"), "nome de sessão nunca sai");
     }
 
     #[test]

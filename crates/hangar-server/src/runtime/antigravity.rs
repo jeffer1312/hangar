@@ -571,6 +571,7 @@ impl Engine {
         match input {
             EngineInput::Line(line) => {
                 if line["type"] == "cano_saiu" {
+                    super::actor::report_crash("headless_caiu",&self.state.session,&line,self.in_progress);
                     self.alive = false; self.in_progress = false; self.ready = false; self.initialized = false; self.turn_id = None;
                     self.open_tools.clear(); self.held = false; self.reply_open = false; self.settle_at = None;
                     self.clear_live(&mut effects);

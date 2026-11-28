@@ -111,6 +111,19 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
             tokio::time::sleep(SNAPSHOT_EVERY).await;
         }
     }));
+    let (machine, machine_st) = (telemetry.clone(), st.clone());
+    tasks.push(tokio::spawn(async move {
+        // O ambiente muda pouco (versão de CLI, contas): na subida e depois uma vez por dia, só com a coleta ligada.
+        let mut done: Option<String> = None;
+        loop {
+            let today = machine.today();
+            if machine.enabled() && done.as_deref() != Some(today.as_str()) {
+                machine.set_machine(crate::telemetry_ctx::environment(&machine_st).await);
+                done = Some(today);
+            }
+            tokio::time::sleep(SNAPSHOT_EVERY).await;
+        }
+    }));
     let peers = st.peers.clone();
     tasks.push(tokio::spawn(async move {
         loop {

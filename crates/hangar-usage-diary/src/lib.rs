@@ -80,8 +80,8 @@ pub fn record_screen(base: &Path, body: &[u8], now: DateTime<FixedOffset>) -> Re
 /// # Errors
 /// Devolve `WriteError` se não puder preparar a pasta. Falha no append mantém o contrato de reenvio.
 pub fn record_screen_with_owner(base: &Path, body: &[u8], now: DateTime<FixedOffset>,
-                                owner: Option<(&str, &[(&'static str, String)])>) -> Result<usize, WriteError> {
-    let owner_collection = owner.map(|(collection, _)| collection);
+                                owner: Option<(&str, &[(&'static str, String)], DateTime<FixedOffset>)>) -> Result<usize, WriteError> {
+    let owner_collection = owner.map(|(collection, _, _)| collection);
     let Some(batch) = parse_body(body) else { return Ok(0) };
     let batch = match batch {
         Value::Object(mut fields) => fields.shift_remove("eventos").unwrap_or(Value::Null),
@@ -98,7 +98,10 @@ pub fn record_screen_with_owner(base: &Path, body: &[u8], now: DateTime<FixedOff
             // O diário local pode corrigir o horário para a chegada; a coleta nunca usa esse substituto.
             line.insert("telemetry_at".into(), json!(at.to_rfc3339()));
             if line.get("nivel").and_then(Value::as_str).is_some_and(|level| level != "ok") {
-                put_ctx(&mut line, owner.map_or(&[], |(_, ctx)| ctx));
+                let (ctx, started) = owner.map_or((&[][..], at), |(_, ctx, started)| (ctx, started));
+                // O retrato é o do servidor na chegada: falha de antes da subida dele aconteceu com ele fora.
+                let ctx: Vec<_> = ctx.iter().map(|(key, value)| (*key, if *key == "up" && at < started { "down".to_owned() } else { value.clone() })).collect();
+                put_ctx(&mut line, &ctx);
             }
             mark_telemetry(&mut line, "owner_screen", collection);
         }

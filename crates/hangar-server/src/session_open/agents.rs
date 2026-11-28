@@ -25,7 +25,7 @@ pub struct AgentContext<'a> {
     pub windows: bool,
 }
 
-fn invalid_id() -> OpenError { OpenError::new(409, "erro_criacao_sessao", "session_id invalido") }
+fn invalid_id() -> OpenError { OpenError::new(409, "erro_criacao_sessao", "session_id invalido").because("session_id_invalid") }
 
 static UUID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z").unwrap());
 static KIMI_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\Asession_[0-9a-fA-F-]{36}\z").unwrap());
@@ -98,7 +98,7 @@ pub fn pane(spec: &SessionSpec, conversation: Conversation, ctx: &AgentContext) 
         (AgentProvider::Omp, Conversation::Resume(_)) => {
             let sessions = omp_agent_dir(ctx.home, ctx.server_env, profile).join("sessions");
             let found = omp_transcript(&sessions, &spec.cwd, id)
-                .ok_or_else(|| OpenError::new(409, "erro_criacao_sessao", "transcript do omp nao encontrado para retomar"))?;
+                .ok_or_else(|| OpenError::new(409, "erro_criacao_sessao", "transcript do omp nao encontrado para retomar").because("resume_transcript_missing"))?;
             vec!["omp".into(), "-r".into(), found.to_string_lossy().into_owned()]
         }
         // O Kimi não aceita id escolhido: o da conversa nova nasce no 1º prompt e chega pelo bilhete do hook.
@@ -107,7 +107,7 @@ pub fn pane(spec: &SessionSpec, conversation: Conversation, ctx: &AgentContext) 
         // O `agy` também não aceita id escolhido: a conversa nova chega pelo bilhete do hook.
         (AgentProvider::Antigravity, Conversation::New(_)) => vec!["agy".into()],
         (AgentProvider::Antigravity, Conversation::Resume(_)) => vec!["agy".into(), "--conversation".into(), id.into()],
-        (other, _) => return Err(OpenError::new(500, "erro_criacao_sessao", format!("{} não abre por este plano", other.name()))),
+        (other, _) => return Err(OpenError::new(500, "erro_criacao_sessao", format!("{} não abre por este plano", other.name())).because("provider_not_here")),
     };
     command.extend(choice(spec));
     if spec.provider == AgentProvider::Kimi && matches!(conversation, Conversation::New(_)) {

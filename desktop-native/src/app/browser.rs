@@ -2432,10 +2432,11 @@ impl Hangar {
         cx: &mut Context<Self>) {
         use crate::browser::control::Reply;
         fn answer(reply: futures::channel::oneshot::Sender<Reply>, text: String) { let _ = reply.send(Reply::Text(text)); }
-        let missing = |key: &str| format!("erro: a sessao {key} nao tem navegador aberto");
+        fn refuse(reply: futures::channel::oneshot::Sender<Reply>, refusal: Reply) { let _ = reply.send(refusal); }
+        let missing = |key: &str| unavailable(key, false, None);
         if tab.is_some() { return answer(reply, "erro: o app nativo ainda nao tem abas: e um navegador por sessao".into()); }
         if verb == "login" {
-            let Some(browser) = self.side.browsers.get(&key).cloned() else { return answer(reply, missing(&key)) };
+            let Some(browser) = self.side.browsers.get(&key).cloned() else { return refuse(reply, missing(&key)) };
             let site = match args.first().map(|a| crate::browser::chrome_import::site_of(a)) {
                 Some(None) => return answer(reply, "erro: login [site]: site invalido (ex.: hangar-preview login github.com)".into()),
                 Some(site) => site,
@@ -2451,23 +2452,15 @@ impl Hangar {
         if verb == "close" {
             let closed = self.side.browsers.remove(&key).inspect(|b| b.read(cx).end_viewer()).is_some();
             if closed { crate::browser::server::remove_sidecar(&key); self.side.browser_open.remove(&key); cx.notify(); }
-            return answer(reply, if closed { "ok: close".into() } else { format!("erro: a sessao {key} nao tem navegador aberto") });
+            return if closed { answer(reply, "ok: close".into()) } else { refuse(reply, missing(&key)) };
         }
-        let Some(browser) = self.side.browsers.get(&key).cloned() else { return answer(reply, missing(&key)) };
+        let Some(browser) = self.side.browsers.get(&key).cloned() else { return refuse(reply, missing(&key)) };
         #[cfg(target_os = "windows")]
         let woke = browser.update(cx, |panel, cx| panel.touch(cx));
         let panel = browser.read(cx);
         // Página que caiu não responde: sem isto cada verbo esperava o prazo inteiro do controlador.
-        if panel.engine().is_some_and(|e| !e.alive()) {
-            return answer(reply, format!("erro: a pagina da sessao {key} caiu; abra de novo com hangar-preview open <url>"));
-        }
-        let Some(ctl) = panel.controller() else {
-            return answer(reply, match panel.engine_status() {
-                Some(Err(e)) => format!("erro: o navegador da sessao {key} falhou ao iniciar: {e}"),
-                Some(Ok(())) => format!("erro: o navegador da sessao {key} ainda esta iniciando, tente de novo em instantes"),
-                None => format!("erro: a sessao {key} nao tem navegador aberto"),
-            });
-        };
+        let fell = panel.engine().is_some_and(|e| !e.alive());
+        let Some(ctl) = panel.controller().filter(|_| !fell) else { return refuse(reply, unavailable(&key, fell, panel.engine_status())) };
         let browser = browser.downgrade();
         let _ = browser.update(cx, |panel, _| panel.agent_started());
         #[cfg(target_os = "windows")]
@@ -2478,5 +2471,32 @@ impl Hangar {
             let _ = reply.send(ctl.run_until(&verb, &args, secret, deadline).await);
             let _ = browser.update(cx, |panel, cx| panel.agent_finished(cx));
         }).detach();
+    }
+}
+
+/// Por que o verbo não chega à página da sessão `key`: `fell`, a página caiu; `status`, o motor que ainda não atende.
+#[cfg(not(target_os = "macos"))]
+fn unavailable(key: &str, fell: bool, status: Option<Result<(), &str>>) -> crate::browser::control::Reply {
+    use crate::browser::control::Reply;
+    if fell { return Reply::Error("page_gone", format!("erro: a pagina da sessao {key} caiu; abra de novo com hangar-preview open <url>")); }
+    match status {
+        Some(Err(e)) => Reply::Error("browser_start_failed", format!("erro: o navegador da sessao {key} falhou ao iniciar: {e}")),
+        Some(Ok(())) => Reply::Error("browser_starting", format!("erro: o navegador da sessao {key} ainda esta iniciando, tente de novo em instantes")),
+        None => Reply::Error("browser_not_open", format!("erro: a sessao {key} nao tem navegador aberto")),
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod tests {
+    use crate::browser::control::Reply;
+
+    fn code(r: Reply) -> Option<&'static str> { match r { Reply::Error(code, _) => Some(code), _ => None } }
+
+    #[test]
+    fn a_verb_that_never_reaches_the_page_says_why() {
+        assert_eq!(code(super::unavailable("s::a", true, Some(Ok(())))), Some("page_gone"));
+        assert_eq!(code(super::unavailable("s::a", false, Some(Err("sem gpu")))), Some("browser_start_failed"));
+        assert_eq!(code(super::unavailable("s::a", false, Some(Ok(())))), Some("browser_starting"));
+        assert_eq!(code(super::unavailable("s::a", false, None)), Some("browser_not_open"));
     }
 }

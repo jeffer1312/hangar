@@ -170,7 +170,7 @@ fn allowed_root(host: &dyn OpenHost, caller: &OpenCaller, cwd: &str, runtime: &V
     };
     let target = Path::new(cwd).canonicalize().unwrap_or_else(|_| PathBuf::from(cwd));
     roots.into_iter().find(|root| target.starts_with(root))
-        .ok_or_else(|| OpenError::new(403, "erro_criacao_sessao", "root not allowed"))
+        .ok_or_else(|| OpenError::new(403, "erro_criacao_sessao", "root not allowed").because("root_not_allowed"))
 }
 
 fn creation(msg: impl Into<String>) -> OpenError { OpenError::new(409, "erro_criacao_sessao", msg) }
@@ -279,7 +279,8 @@ async fn read_only_prefix(host: &dyn OpenHost, cwd: &str, config_dir: Option<&st
 /// Codex (que o reaplica) usam o mesmo.
 pub(crate) async fn read_only_envelope<'a>(env: &BTreeMap<String, String>, home: &Path, cwd: &str, config_dir: Option<&str>,
     run: &'a (dyn Fn(Vec<String>, Duration) -> BoxFuture<'a, MuxOutput> + Sync)) -> Result<Vec<String>, OpenError> {
-    let refuse = |msg: String| OpenError::new(400, "erro_criacao_sessao", msg);
+    let refuse = |msg: String| OpenError::new(400, "erro_criacao_sessao", msg).because("read_only_unavailable");
+    let refused = |msg: String| refuse(msg).because("read_only_refused");
     if !cfg!(target_os = "linux") { return Err(refuse("read-only exige Linux com bubblewrap (bwrap)".into())); }
     let bwrap = crate::runtime::process::resolve_program("bwrap", env)
         .ok_or_else(|| refuse("read-only exige bubblewrap: instale bwrap antes de criar a sessão".into()))?;
@@ -299,7 +300,7 @@ pub(crate) async fn read_only_envelope<'a>(env: &BTreeMap<String, String>, home:
     }
     let home_real = home.canonicalize().unwrap_or_else(|_| home.to_owned());
     if paths.iter().any(|p| home_real.starts_with(p)) {
-        return Err(refuse("read-only não pode proteger a HOME inteira ou um diretório acima dela".into()));
+        return Err(refused("read-only não pode proteger a HOME inteira ou um diretório acima dela".into()));
     }
     let mut runtimes: Vec<PathBuf> = [".claude", ".codex", ".pi", ".omp", ".kimi-code", ".hangar"].iter().map(|n| home.join(n)).collect();
     runtimes.extend(config_dir.map(PathBuf::from));
@@ -313,7 +314,7 @@ pub(crate) async fn read_only_envelope<'a>(env: &BTreeMap<String, String>, home:
     let runtimes = runtimes.iter().map(resolved).collect::<Result<Vec<_>, _>>()
         .map_err(|e| refuse(format!("read-only não pôde preparar a proteção: {e}")))?;
     if runtimes.iter().any(|r| paths.iter().any(|p| r.starts_with(p))) {
-        return Err(refuse("read-only recusado: o código protegido contém o runtime de um agente".into()));
+        return Err(refused("read-only recusado: o código protegido contém o runtime de um agente".into()));
     }
     paths.sort_by_key(|p| (p.components().count(), p.to_string_lossy().into_owned()));
     let mut argv: Vec<String> = [bwrap.to_string_lossy().as_ref(), "--bind", "/", "/", "--dev-bind", "/dev", "/dev", "--setenv", "HANGAR_ORQ_READ_ONLY", "1"]
@@ -326,7 +327,7 @@ pub(crate) async fn read_only_envelope<'a>(env: &BTreeMap<String, String>, home:
     match out.code {
         Some(0) => Ok(argv),
         None => Err(refuse(format!("read-only não pôde preparar a proteção: {}", out.stderr.trim()))),
-        Some(_) => Err(refuse(format!("read-only recusado pelo bubblewrap: {}", out.stderr.trim()))),
+        Some(_) => Err(refused(format!("read-only recusado pelo bubblewrap: {}", out.stderr.trim()))),
     }
 }
 
@@ -374,7 +375,7 @@ pub struct WorktreeUndo { pub source: String, pub path: String, pub branch: Stri
 impl WorktreeUndo {
     /// O `git` roda fora do runtime.
     pub async fn undo(self) -> Result<(), OpenError> {
-        let failed = |detail: String| OpenError::new(500, "erro_criacao_sessao", format!("falha ao desfazer a worktree: {detail}"));
+        let failed = |detail: String| OpenError::new(500, "erro_criacao_sessao", format!("falha ao desfazer a worktree: {detail}")).because("worktree_undo_failed");
         tokio::task::spawn_blocking(move || {
             let made = hangar_workspace::git::Worktree { path: self.path.clone(), branch: self.branch.clone(), created: true, branch_created: self.branch_created };
             hangar_workspace::git::undo_worktree(Path::new(&self.source), &made, &self.branch)
@@ -413,16 +414,16 @@ async fn claim_name(host: &dyn OpenHost, name: &str) -> Result<NameClaim, OpenEr
 pub async fn open_adopting(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCaller, adopting: Option<&mut super::adopt::Adopting>)
     -> Result<Opened, OpenError> {
     // Toda recusa daqui em diante, antes ou dentro do `launch`, conta aqui.
-    let provider = resolved.spec.provider.name();
+    let (provider, name, ctx) = (resolved.spec.provider.name(), resolved.spec.name.clone(), failure_ctx(&resolved.spec));
     let opened = open_resolved(host, resolved, caller, adopting, None).await;
-    if let Err(error) = &opened { count_open_failed(host.telemetry(), caller, provider, error.code); }
+    if let Err(error) = &opened { count_open_failed(host.telemetry(), caller, provider, error, &name, ctx); }
     opened
 }
 
 pub(super) async fn reopen_orphan(host: &dyn OpenHost, resolved: Resolved, fallen: &super::fallen::Fallen) -> Result<Opened, OpenError> {
-    let provider = resolved.spec.provider.name();
+    let (provider, name, ctx) = (resolved.spec.provider.name(), resolved.spec.name.clone(), failure_ctx(&resolved.spec));
     let opened = open_resolved(host, resolved, &OpenCaller::Owner, None, Some(fallen)).await;
-    if let Err(error) = &opened { count_open_failed(host.telemetry(), &OpenCaller::Owner, provider, error.code); }
+    if let Err(error) = &opened { count_open_failed(host.telemetry(), &OpenCaller::Owner, provider, error, &name, ctx); }
     opened
 }
 
@@ -462,8 +463,8 @@ async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCal
                 .location_path(&home)?;
             let base = if wt.fresh && wt.new_branch { remote_base(Path::new(&source), wt.base.as_deref()) } else { wt.base.clone() };
             hangar_workspace::git::create_branch_worktree(Path::new(&source), &wt.branch, &stem, &root, wt.new_branch, base.as_deref(), &location)
-        }).await.map_err(|_| creation("a criação da worktree não terminou"))?
-            .map_err(|e| OpenError::new(e.status, "erro_criacao_sessao", e.detail.as_str().map_or_else(|| e.detail.to_string(), str::to_owned)))?;
+        }).await.map_err(|_| creation("a criação da worktree não terminou").because("task_panic"))?
+            .map_err(|e| OpenError::new(e.status, "erro_criacao_sessao", e.detail.as_str().map_or_else(|| e.detail.to_string(), str::to_owned)).because("worktree_failed"))?;
         if made.created {
             undo = Some(WorktreeUndo { source: spec.cwd.clone(), path: made.path.clone(), branch: made.branch.clone(),
                 branch_created: made.branch_created });
@@ -471,7 +472,7 @@ async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCal
         if fresh {
             let (path, branch, created) = (made.path.clone(), made.branch.clone(), made.created);
             let updated = tokio::task::spawn_blocking(move || fresh_update(Path::new(&path), &branch, created)).await
-                .unwrap_or_else(|_| Err(creation("a atualização da worktree não terminou")));
+                .unwrap_or_else(|_| Err(creation("a atualização da worktree não terminou").because("task_panic")));
             match updated {
                 Ok(warning) => warnings.extend(warning),
                 Err(error) => { if let Some(undo) = undo { undo.undo().await?; } return Err(error); }
@@ -534,7 +535,7 @@ fn upstream(dir: &Path, branch: &str) -> Option<String> {
 fn fresh_update(dir: &Path, branch: &str, created: bool) -> Result<Option<String>, OpenError> {
     let git = |args: &[&str]| hangar_workspace::process::run(dir, args, Duration::from_secs(120));
     if !created {
-        let status = git(&["status", "--porcelain", "--untracked-files=no"]).map_err(|_| creation("não consegui ler o estado da pasta"))?;
+        let status = git(&["status", "--porcelain", "--untracked-files=no"]).map_err(|_| creation("não consegui ler o estado da pasta").because("git_status_failed"))?;
         if status.code != 0 || !status.stdout.trim().is_empty() {
             return Err(OpenError::new(409, "placement_branch_busy", format!("a branch {branch} está aberta em {} com mudança não \
                 commitada: a sessão vinda de outra máquina não abre por cima dela", dir.display()))
@@ -599,12 +600,28 @@ fn count_opened(telemetry: Option<&hangar_telemetry::Telemetry>, caller: &OpenCa
     telemetry.duration(Event::SessionOpened, dims, took);
 }
 
-/// `session_open_failed` da abertura e da recusa da resolução (`refusal_diary`), só do dono.
-pub(crate) fn count_open_failed(telemetry: Option<&hangar_telemetry::Telemetry>, caller: &OpenCaller, provider: &str, code: Option<&'static str>) {
+/// `session_open_failed` da abertura e da recusa da resolução (`refusal_diary`), só do dono. A recusa de criação
+/// também vai ao registro de saúde da sessão `name`, com `ctx` (de `failure_ctx`, quando o spec foi resolvido).
+pub(crate) fn count_open_failed(telemetry: Option<&hangar_telemetry::Telemetry>, caller: &OpenCaller, provider: &str, error: &OpenError,
+                                name: &str, ctx: Vec<(&'static str, String)>) {
     use hangar_telemetry::events::{Code, Dims, Event};
     let Some(telemetry) = telemetry.filter(|_| matches!(caller, OpenCaller::Owner)) else { return };
-    let dims = Dims::new().with("provider", wire_provider(provider)).with("code", Code::fixed(code.unwrap_or("none")));
+    let creation = error.code == Some("erro_criacao_sessao");
+    let cause = error.cause.filter(|_| creation);
+    let dims = Dims::new().with("provider", wire_provider(provider)).with("code", Code::fixed(error.code.unwrap_or("none")))
+        .with("cause", Code::fixed(cause.unwrap_or("none")));
     telemetry.count(Event::SessionOpenFailed, dims, 1);
+    let cause = cause.unwrap_or("other");
+    if creation && crate::warn_limit::allow(Some(name), &format!("health:erro_criacao_sessao:{cause}")) {
+        crate::telemetry_hooks::report_health("erro_criacao_sessao", cause, hangar_usage_diary::Severity::Error, Some(name), ctx, None);
+    }
+}
+
+/// Provedor, superfície e modelo do spec, para o registro da abertura que falhou: a sessão não existe para o retrato.
+pub(crate) fn failure_ctx(spec: &SessionSpec) -> Vec<(&'static str, String)> {
+    let (provider, surface) = wire_session(spec);
+    let model = hangar_telemetry::events::model(provider, spec.model.as_deref().unwrap_or("default"), matches!(spec.account, Account::Engine { .. }));
+    vec![("provider", provider.as_str().to_owned()), ("surface", surface.as_str().to_owned()), ("model", model.as_str().to_owned())]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -642,7 +659,7 @@ pub(crate) fn account_key(host: &dyn OpenHost, spec: &SessionSpec, codex_home: O
     match codex_home {
         Some(home) => crate::accounts::AccountKey::new(crate::accounts::Provider::Codex, Path::new(home)),
         None => crate::accounts::AccountKey::new(crate::accounts::Provider::Claude, &account_home),
-    }.map_err(|e| creation(format!("conta inválida: {e}")))
+    }.map_err(|e| creation(format!("conta inválida: {e}")).because("account_invalid"))
 }
 
 /// O começo de toda abertura e da reserva pré-aquecida: login da conta do Hangar, guarda compartilhada
@@ -668,7 +685,7 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         true => Some(crate::accounts::claude_refresh::acquire_for_session(&locks, &key, Instant::now() + Duration::from_secs(5)).await
             .map_err(|e| match e {
                 crate::accounts::LockError::Busy => OpenError::new(409, "account_busy", "a conta está ocupada por outra operação"),
-                crate::accounts::LockError::Io(e) => creation(format!("trava da conta: {e}")),
+                crate::accounts::LockError::Io(e) => creation(format!("trava da conta: {e}")).because("account_lock_io"),
             })?),
         false => None,
     };
@@ -715,7 +732,7 @@ fn engine_route(host: &dyn OpenHost, spec: &SessionSpec) -> Result<Option<claude
     if let Account::Engine { .. } = spec.account {
         if crate::runtime::process::resolve_program("hangar-engine", host.env()).is_none() {
             return Err(creation("hangar-engine nao esta no PATH deste servidor — sem ele a sessao com motor nasce e morre na \
-                hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no Windows, install.ps1."));
+                hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no Windows, install.ps1.").because("engine_missing"));
         }
     }
     let Account::Engine { name, account, binding, .. } = &spec.account else { return Ok(None) };
@@ -757,7 +774,7 @@ async fn claude_plan(host: &dyn OpenHost, spec: &SessionSpec, sid: &str, read_on
     let windows = host.terminal().windows;
     let settings_file = match settings.as_ref().filter(|s| windows && s.as_object().is_some_and(|o| !o.is_empty())) {
         Some(settings) => Some(claude::settings_file(host.home(), settings)
-            .map_err(|e| OpenError::new(500, "erro_criacao_sessao", format!("as escolhas da conversa não foram gravadas: {e}")))?),
+            .map_err(|e| OpenError::new(500, "erro_criacao_sessao", format!("as escolhas da conversa não foram gravadas: {e}")).because("choices_unwritten"))?),
         None => None,
     };
     let ctx = claude::ClaudeContext { plugin_roots: &roots, bridge: bridge.as_ref(), bridge_key: &key, runtime_config: runtime,
@@ -874,13 +891,13 @@ async fn headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, previous_non
             .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
         if let Err(error) = queued {
             diary.refused("erro", "fila_nao_gravada", Some("sidecar_gravado"), Some(&error.kind().to_string()));
-            return Err(OpenError::new(500, "erro_criacao_sessao", format!("a primeira mensagem não entrou na fila: {error}")));
+            return Err(OpenError::new(500, "erro_criacao_sessao", format!("a primeira mensagem não entrou na fila: {error}")).because("first_message_unqueued"));
         }
     }
     let mut meta = headless_sidecar(spec, &sid, previous_non_plan, settings.as_ref(), route.as_ref()).as_object().cloned().unwrap_or_default();
     if let Some(reserve) = adopting.as_deref().and_then(super::adopt::Adopting::reserve) {
         // O `cano` inteiro, como a subida grava: o `wake` acha o processo vivo e conecta sem subir outro.
-        let cano = serde_json::to_value(&reserve.cano).map_err(|e| OpenError::new(500, "erro_criacao_sessao", format!("o processo da reserva não foi gravado: {e}")))?;
+        let cano = serde_json::to_value(&reserve.cano).map_err(|e| OpenError::new(500, "erro_criacao_sessao", format!("o processo da reserva não foi gravado: {e}")).because("prewarm_unwritten"))?;
         meta.insert("cano".into(), cano);
     }
     persist(host, spec, diary, "sidecar_gravado", &sidecars.join("claude-headless"), &meta)?;
@@ -896,7 +913,7 @@ async fn headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, previous_non
 fn write_record(host: &dyn OpenHost, spec: &SessionSpec, diary: &mut Diary, stage: &'static str) -> Result<(), OpenError> {
     super::record::write(host.home(), spec).map_err(|error| {
         diary.refused("erro", "registro_nao_gravado", Some(stage), Some(&error.kind().to_string()));
-        OpenError::new(500, "erro_criacao_sessao", format!("o registro da sessão não foi gravado: {error}"))
+        OpenError::new(500, "erro_criacao_sessao", format!("o registro da sessão não foi gravado: {error}")).because("record_unwritten")
     })
 }
 
@@ -913,7 +930,7 @@ fn persist(host: &dyn OpenHost, spec: &SessionSpec, diary: &mut Diary, stage: &'
     crate::runtime::codex_sidecar::put(dir, &spec.name, meta).map_err(|error| {
         diary.refused("erro", "sidecar_nao_gravado", Some(stage), Some(&error.kind().to_string()));
         forget_record(host, &spec.key);
-        OpenError::new(500, "erro_criacao_sessao", format!("o arquivo da sessão não foi gravado: {error}"))
+        OpenError::new(500, "erro_criacao_sessao", format!("o arquivo da sessão não foi gravado: {error}")).because("sidecar_unwritten")
     })
 }
 
@@ -966,7 +983,7 @@ async fn antigravity_headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, 
             .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
         if let Err(error) = queued {
             diary.refused("erro", "fila_nao_gravada", Some("sidecar_gravado"), Some(&error.kind().to_string()));
-            return Err(OpenError::new(500, "erro_criacao_sessao", format!("a primeira mensagem não entrou na fila: {error}")));
+            return Err(OpenError::new(500, "erro_criacao_sessao", format!("a primeira mensagem não entrou na fila: {error}")).because("first_message_unqueued"));
         }
     }
     let account = agents::agy_account(&spec.account);
@@ -1023,7 +1040,7 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         spec.service_tier = tokio::task::spawn_blocking(move || {
             let facts = super::facts::LocalFacts::new(crate::accounts::environment::AccountEnvironment::from_map(env), handle);
             claude::relaunch_tier(&saved, &facts)
-        }).await.map_err(|_| creation("a velocidade da sessão não pôde ser conferida"))?;
+        }).await.map_err(|_| creation("a velocidade da sessão não pôde ser conferida").because("service_tier_unchecked"))?;
     }
     let (pane, jsonl, route) = if claude {
         let (pane, jsonl, route) = claude_plan(host, spec, &sid, read_only, initial_prompt, runtime, resume.is_some()).await?;
@@ -1085,7 +1102,7 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
                 Err(error) => {
                     diary.refused("erro", "prompt_inicial_nao_gravado", Some("criar_terminal"), Some(&error.kind().to_string()));
                     forget_record(host, &spec.key);
-                    return Err(OpenError::new(500, "erro_criacao_sessao", format!("o prompt inicial não entrou na fila: {error}")));
+                    return Err(OpenError::new(500, "erro_criacao_sessao", format!("o prompt inicial não entrou na fila: {error}")).because("first_message_unqueued"));
                 }
             }
         }
@@ -1098,7 +1115,7 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         if let Err(error) = crate::runtime::claude_terminal::queue_first_message(&queue_dir, &spec.key, &spec.name, text) {
             diary.refused("erro", "prompt_inicial_nao_gravado", Some("criar_terminal"), Some(error.code.as_str()));
             forget_record(host, &spec.key);
-            return Err(OpenError::new(500, "erro_criacao_sessao", format!("o prompt inicial não entrou na fila: {}", error.message)));
+            return Err(OpenError::new(500, "erro_criacao_sessao", format!("o prompt inicial não entrou na fila: {}", error.message)).because("first_message_unqueued"));
         }
     }
     if let Err(error) = terminal::spawn(host.mux(), host.terminal(), &pane).await {
@@ -1121,10 +1138,10 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         if first_message.is_some() && let Err(error) = crate::runtime::claude_terminal::forget_first_message(&queue_dir, &spec.key) {
             tracing::warn!(kind = ?error.kind(), "prompt inicial da abertura que não nasceu ficou na fila");
         }
-        return Err(creation(match error.code {
-            "terminal_morreu_ao_nascer" => format!("o terminal fechou logo depois de abrir: {}", error.stderr),
-            _ => "falha ao criar sessao no tmux".to_owned(),
-        }));
+        return Err(match error.code {
+            "terminal_morreu_ao_nascer" => creation(format!("o terminal fechou logo depois de abrir: {}", error.stderr)).because("terminal_died_at_birth"),
+            _ => creation("falha ao criar sessao no tmux").because("tmux_new_session_failed"),
+        });
     }
     diary.step("limpar_estado_anterior");
     let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: jsonl.clone(), remember_provider, codex_terminal: codex_home.map(str::to_owned), restored: restore,
@@ -1172,10 +1189,28 @@ mod telemetry_tests {
     fn telemetry_session_open_failed_counts_the_owner_only() {
         let home = tempfile::tempdir().unwrap();
         let telemetry = crate::telemetry_hooks::test_telemetry(home.path(), true);
-        count_open_failed(Some(&*telemetry), &OpenCaller::Guest { root: "/x".into() }, "claude", Some("erro_nome_em_uso"));
+        let in_use = OpenError::new(409, "erro_nome_em_uso", "x");
+        count_open_failed(Some(&*telemetry), &OpenCaller::Guest { root: "/x".into() }, "claude", &in_use, "s", Vec::new());
         assert!(telemetry.counters().is_empty(), "falha de convidado não conta");
-        count_open_failed(Some(&*telemetry), &OpenCaller::Owner, "claude", Some("erro_nome_em_uso"));
+        count_open_failed(Some(&*telemetry), &OpenCaller::Owner, "claude", &in_use, "s", Vec::new());
         assert_eq!(telemetry.counters().len(), 1);
+    }
+
+    #[test]
+    fn telemetry_session_open_failed_carries_the_creation_cause() {
+        let home = tempfile::tempdir().unwrap();
+        let telemetry = crate::telemetry_hooks::test_telemetry(home.path(), true);
+        let tmux = creation("falha ao criar sessao no tmux").because("tmux_new_session_failed");
+        count_open_failed(Some(&*telemetry), &OpenCaller::Owner, "claude", &tmux, "s", failure_ctx(&spec()));
+        // Causa só vale com o código de criação.
+        count_open_failed(Some(&*telemetry), &OpenCaller::Owner, "claude", &name_in_use().because("tmux_new_session_failed"), "s", Vec::new());
+        let mut causes = crate::telemetry_hooks::counted(&telemetry, hangar_telemetry::events::Event::SessionOpenFailed, "cause");
+        causes.sort();
+        assert_eq!(causes, [("none".to_owned(), 1), ("tmux_new_session_failed".to_owned(), 1)]);
+        for (key, value) in failure_ctx(&spec()) {
+            assert_eq!(hangar_telemetry::events::closed(hangar_telemetry::events::CONTEXT, key, &value).as_deref(), Some(value.as_str()), "{key}");
+        }
+        assert_eq!(failure_ctx(&spec())[2].1, "engine", "motor nunca sai pelo nome");
     }
 }
 

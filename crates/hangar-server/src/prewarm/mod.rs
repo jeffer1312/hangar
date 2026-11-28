@@ -153,7 +153,7 @@ fn runtime_env(st: &crate::routes::AppState) -> AccountEnvironment {
     st.state.runtime.get().map_or_else(AccountEnvironment::capture, |runtime| runtime.codex_environment())
 }
 
-fn failed(detail: String) -> OpenError { OpenError::new(500, "erro_criacao_sessao", detail) }
+fn failed(detail: String) -> OpenError { OpenError::new(500, "erro_criacao_sessao", detail).because("prewarm_failed") }
 
 /// `Launcher::plan` sobre um `ServerHost` que quem chama já tem (a abertura reusa o dela).
 pub(crate) async fn plan_on(st: &crate::routes::AppState, host: &crate::session_open::server::ServerHost, request: &SessionOpenRequest, sid: &str)

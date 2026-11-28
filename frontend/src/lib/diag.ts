@@ -147,7 +147,7 @@ export function registrar(e: Evento, destino = getBaseUrl()): void {
   // sobrescrevê-los. `tela` é o oposto — vem antes de propósito, pra quem sabe onde está poder
   // dizer. Um `ts` vindo de dentro de um evento traria de volta exatamente o defeito acima.
   transporte.registrar(alvo, { tela: telaCorrente || undefined, ...e, nivel: e.nivel ?? 'ok',
-              ts: new Date().toISOString(), cli: CLI, seq: ++seq });
+              ts: new Date().toISOString(), cli: CLI, seq: ++seq, cliente: 'pwa' });
   // Erro vai na hora: se a página estiver prestes a quebrar, um lote de 4s depois não sai.
   if (e.nivel === 'erro') void enviar();
 }

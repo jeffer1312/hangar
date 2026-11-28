@@ -46,9 +46,79 @@ pub fn report_hidden(diag: &crate::diag::DiagClient, session: &str, code: &str, 
             use hangar_telemetry::events::{Code, Dims, Event};
             telemetry.count(Event::ProblemHidden, Dims::new().with("code", Code::known(code, &DIAGNOSTIC)), 1);
         }
+        if let Some((code, cause)) = health(code, detail) {
+            crate::telemetry_hooks::report_health(code, cause, hangar_usage_diary::Severity::Warn, Some(session), Vec::new(), None);
+        }
     }
     diag.report_with("rust.problem_hidden", session, code, "aviso de diagnóstico fora da tela",
         serde_json::json!({"detalhe": detail, "via": "conversa"}));
+}
+
+/// A falha de saúde (`events::HEALTH`) que o aviso escondido é, e a causa tirada do detalhe. O detalhe
+/// é um código fixo deste binário ou o texto fixo do `TerminalError`; o que não está aqui sai `other`.
+pub fn health(code: &str, detail: Option<&str>) -> Option<(&'static str, &'static str)> {
+    use crate::state::{facts::UNAVAILABLE, monitor::{OBSERVATION_FAILED, PERMISSION_FAILED}};
+    let detail = detail.unwrap_or_default();
+    // Vínculo da vida: igual nos três, só o nome do cofre de permissões muda.
+    let binding = match detail {
+        "plugin_runtime_absent" | "state_runtime_unbound" | "state_lifecycle_unbound" => Some("runtime_unbound"),
+        "runtime_binding" | "state_lifecycle_binding_missing" => Some("binding_missing"),
+        "erro_interacao_desatualizada" | "state_binding_changed" | "permission_binding_changed" => Some("binding_changed"),
+        _ => None,
+    };
+    let (code, cause) = if code == UNAVAILABLE {
+        (UNAVAILABLE, binding.unwrap_or(match detail {
+            "plugin_store_unavailable" => "plugin_store_unavailable",
+            "plugin_facts_invalid" => "plugin_facts_invalid",
+            "plugin_question_invalid" => "plugin_question_invalid",
+            "permission_store_unavailable" => "permission_store_poisoned",
+            "askq_unreadable" | "askq_transcript_unreadable" | "askq_path" => "askq_sidecar_unreadable",
+            "askq_malformed" | "askq_serialize" => "askq_sidecar_malformed",
+            "askq_changed_during_read" => "askq_race",
+            "askq_consumed_lock" | "askq_scan_lock" => "askq_lock_poisoned",
+            "askq_frame_unavailable" => "askq_frame_missing",
+            "askq_timeout" => "askq_timeout",
+            "plan_notice_missing" => "plan_notice_missing",
+            "erro_interacao_indisponivel" => "interaction_id_missing",
+            "state_files_timeout" | "state_facts_timeout" => "files_timeout",
+            "state_files_panic" | "state_files_cancelled" | "askq_task_failed" => "task_panic",
+            "list_dirs_missing" => "files_dirs_missing",
+            "state_plugin_binding_changed" | "state_feed_binding_changed" => "feed_binding_changed",
+            lifecycle if lifecycle.starts_with("lifecycle_") => "dead_unproven",
+            _ => "other",
+        }))
+    } else if code == OBSERVATION_FAILED {
+        (OBSERVATION_FAILED, binding.unwrap_or(match detail {
+            "permission_store_unavailable" => "permission_store_poisoned",
+            "terminal capture timeout" | "capture_timeout" => "capture_timeout",
+            "terminal startup timeout" | "terminal acquire timeout" => "startup_timeout",
+            "terminal command timeout" | "terminal release timeout" => "command_timeout",
+            "terminal observer closed" | "terminal observer exited" | "terminal observer EOF" => "observer_died",
+            "terminal read failed" | "terminal write failed" => "observer_io",
+            "tmux command failed" | "capture_refused" => "mux_command_failed",
+            "control payload too large" | "control line too large" | "invalid frame UTF-8" | "control frame too large"
+            | "invalid notification UTF-8" | "invalid control frame" | "unfinished control frame" | "unexpected control frame"
+            | "terminal command marker mismatch" | "invalid terminal metadata" | "invalid terminal cursor" | "capture_undecodable" => "protocol_error",
+            "terminal target changed" => "target_changed",
+            "invalid terminal target" | "invalid capture request" | "capture_session_missing" => "target_invalid",
+            "too many terminal consumers" | "too many terminal observers" | "too many terminal retries" | "terminal queue full"
+            | "terminal event queue full" => "pool_saturated",
+            "terminal control unavailable" | "terminal mux missing" | "capture_mux_no_answer" => "mux_unavailable",
+            "cannot start terminal observer" | "cannot start terminal watch" | "capture_spawn_failed" => "observer_spawn_failed",
+            "terminal watch without output" | "psmux_direct_panicked" => "mux_process_failed",
+            _ => "other",
+        }))
+    } else if code == PERMISSION_FAILED {
+        (PERMISSION_FAILED, binding.unwrap_or(match detail {
+            "permission_frame_unavailable" => "frame_lock_poisoned",
+            "permission_store_unavailable" => "store_poisoned",
+            "permission_capture_stale" => "capture_stale",
+            "permission_mode_missing" => "mode_unconfirmed",
+            "permission_mode_unknown" => "mode_unknown",
+            _ => "other",
+        }))
+    } else { return None };
+    Some((code, cause))
 }
 
 /// A entrega incerta segura a fila com ou sem texto no campo: a troca do motivo não é problema novo.
@@ -147,6 +217,44 @@ mod tests {
         assert!(diagnostic("interacao_indisponivel", "idle"));
         assert!(!diagnostic("interacao_indisponivel", "awaiting_input"), "P1: esperando a pessoa, tela");
         assert!(diagnostic("session_port_map_stale", "idle"), "mapa do túnel vencido: só log");
+    }
+
+    #[test]
+    fn telemetry_hidden_warnings_become_health_with_a_closed_cause() {
+        use crate::state::{facts::UNAVAILABLE, monitor::{OBSERVATION_FAILED, PERMISSION_FAILED}};
+        let known: [(&str, &[&str]); 3] = [
+            (UNAVAILABLE, &["plugin_runtime_absent", "state_runtime_unbound", "state_lifecycle_unbound", "runtime_binding",
+                "state_lifecycle_binding_missing", "erro_interacao_desatualizada", "state_binding_changed", "plugin_store_unavailable",
+                "plugin_facts_invalid", "plugin_question_invalid", "permission_store_unavailable", "askq_unreadable",
+                "askq_transcript_unreadable", "askq_path", "askq_malformed", "askq_serialize", "askq_changed_during_read",
+                "askq_consumed_lock", "askq_scan_lock", "askq_frame_unavailable", "askq_timeout", "plan_notice_missing",
+                "erro_interacao_indisponivel", "state_files_timeout", "state_facts_timeout", "state_files_panic",
+                "state_files_cancelled", "askq_task_failed", "list_dirs_missing", "lifecycle_closed_record",
+                "lifecycle_binding_unavailable", "state_plugin_binding_changed", "state_feed_binding_changed"]),
+            (OBSERVATION_FAILED, &["state_runtime_unbound", "runtime_binding", "state_binding_changed", "permission_store_unavailable",
+                "terminal capture timeout", "capture_timeout", "terminal startup timeout", "terminal acquire timeout",
+                "terminal command timeout", "terminal release timeout", "terminal observer closed", "terminal observer exited",
+                "terminal observer EOF", "terminal read failed", "terminal write failed", "tmux command failed", "capture_refused",
+                "invalid control frame", "unexpected control frame", "capture_undecodable", "terminal command marker mismatch",
+                "terminal target changed", "invalid terminal target", "capture_session_missing", "too many terminal consumers",
+                "terminal queue full", "terminal control unavailable", "terminal mux missing", "capture_mux_no_answer",
+                "cannot start terminal observer", "capture_spawn_failed", "terminal watch without output", "psmux_direct_panicked"]),
+            (PERMISSION_FAILED, &["state_runtime_unbound", "runtime_binding", "permission_binding_changed", "permission_frame_unavailable",
+                "permission_store_unavailable", "permission_capture_stale", "permission_mode_missing", "permission_mode_unknown"]),
+        ];
+        for (code, details) in known {
+            let causes = hangar_telemetry::events::HEALTH.iter().find(|h| h.code == code).unwrap().causes;
+            for detail in details {
+                let (health_code, cause) = health(code, Some(detail)).unwrap_or_else(|| panic!("{code} {detail}"));
+                assert!(health_code == code && causes.contains(&cause), "{code} {detail} -> {cause}");
+            }
+        }
+        assert_eq!(health(UNAVAILABLE, Some("askq_scan_lock")), Some((UNAVAILABLE, "askq_lock_poisoned")));
+        assert_eq!(health(OBSERVATION_FAILED, Some("terminal read failed")), Some((OBSERVATION_FAILED, "observer_io")));
+        assert_eq!(health(PERMISSION_FAILED, Some("permission_store_unavailable")), Some((PERMISSION_FAILED, "store_poisoned")));
+        assert_eq!(health(UNAVAILABLE, Some("texto que ninguém conhece")), Some((UNAVAILABLE, "other")));
+        assert_eq!(health(UNAVAILABLE, None), Some((UNAVAILABLE, "other")));
+        assert_eq!(health("list_capture_failed", Some("capture_timeout")), None, "só os códigos de HEALTH");
     }
 
     #[test]

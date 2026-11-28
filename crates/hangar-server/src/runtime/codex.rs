@@ -1987,6 +1987,7 @@ impl Engine {
                 if line.get("method").is_some() { self.notification(line,&mut effects)?; }
                 else if line.get("id").is_some() { self.reply(line,&mut effects)?; }
                 else if line["type"] == "cano_saiu" {
+                    super::actor::report_crash("headless_caiu",&self.state.session,&line,self.in_progress);
                     self.alive = false; self.in_progress = false; self.ready = false; self.clear_preview(&mut effects);
                     self.connected = false; self.subscribed = false; self.subscribe_due = None;
                     // Os comandos morrem com o app-server: o Encerrar deles não teria a quem pedir.

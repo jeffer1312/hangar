@@ -244,6 +244,29 @@ pub fn decide(spec:&SessionSpec,current:&str,catalog:&Value,quotas:&[Value],spen
     }
 }
 
+/// Por que nenhuma conta serviu (`events::HEALTH` de `limit_switch_no_room`) e, em faixas, quantas havia em cada
+/// situação. Cada conta fora a atual para na primeira etapa que a barra (login, gasta, cota lida, janela, cheia); a
+/// causa é a etapa mais adiante a que alguma chegou.
+pub fn no_room(current:&str,catalog:&Value,quotas:&[Value],logged_in:impl Fn(&str)->bool,spent:&Spent,now:f64) -> (&'static str,Vec<(&'static str,String)>) {
+    let current = crate::list::discover::real(current);
+    let others:Vec<String> = catalog.as_array().into_iter().flatten().filter_map(|row|row["path"].as_str().map(crate::list::discover::real))
+        .filter(|path|*path != current).collect();
+    let (mut no_login,mut gasta,mut unread,mut no_window,mut full) = (0u64,0u64,0u64,0u64,0u64);
+    for path in &others {
+        let row = quotas.iter().find(|row|row["id"].as_str().and_then(|id|id.strip_prefix("claude:")).is_some_and(|id|crate::list::discover::real(id) == *path));
+        if !logged_in(path) { no_login += 1; }
+        else if spent.blocks(path,row,now) { gasta += 1; }
+        else { match row {
+            Some(row) if row["estado"] == "lida" => if crate::accounts::quotas::suggestion(std::slice::from_ref(row)).is_some() { full += 1 } else { no_window += 1 },
+            _ => unread += 1,
+        } }
+    }
+    let cause = if others.is_empty() { "no_other_account" } else if full > 0 { "all_full" } else if no_window > 0 { "quota_no_window" }
+        else if unread > 0 { "quota_unread" } else if gasta > 0 { "all_spent" } else { "no_login" };
+    let band = |n:u64|hangar_telemetry::events::count_band(n).as_str().to_owned();
+    (cause,vec![("accounts",band(others.len() as u64)),("no_login",band(no_login)),("spent",band(gasta)),("quota_unread",band(unread + no_window)),("full",band(full))])
+}
+
 /// Vai à sessão pela fila, depois de reaberta: sem ele a conversa ficaria parada no aviso de limite.
 pub const CONTINUE:&str = hangar_auto_continue::text::LIMIT;
 
@@ -417,7 +440,13 @@ impl Switcher {
         let quotas:Vec<Value> = quotas.into_iter().filter(|row|row["id"].as_str().and_then(|id|id.strip_prefix("claude:")).is_some_and(|path|host.logged_in(path))).collect();
         let (path,label) = match decide(spec,current,&catalog,&quotas,&self.spent,now) {
             Decision::Switch { path,label }=>(path,label),
-            Decision::Stay(code)=>return Outcome::Stayed(code),
+            Decision::Stay(code)=>{
+                if code == "limit_switch_no_room" && crate::warn_limit::allow(Some(name),code) {
+                    let (cause,extra) = no_room(current,&catalog,&quotas,|path|host.logged_in(path),&self.spent,now);
+                    crate::telemetry_hooks::report_health(code,cause,hangar_usage_diary::Severity::Warn,Some(name),extra,None);
+                }
+                return Outcome::Stayed(code)
+            },
         };
         match Self::reopen_when_free(host,name,current,||host.reopen(name,spec,&path)).await {
             Ok(())=>Outcome::Switched { label,explicit:spec.account_source == AccountSource::Explicit },
@@ -844,6 +873,26 @@ mod tests {
         assert_eq!(decide(&spec(claude("/b")),"/b",&cat,&quotas,&spent,1000.0),Decision::Stay("limit_switch_no_room"));
         // Passado o reset, as contas voltam a valer, e a de mais folga é a primeira.
         assert_eq!(decide(&spec(claude("/b")),"/b",&cat,&quotas,&spent,2001.0),Decision::Switch { path:"/a".into(),label:"a".into() });
+    }
+
+    #[test]
+    fn telemetry_no_room_says_how_far_the_accounts_got() {
+        let spent = Spent::default();
+        let all = |_:&str|true;
+        let band = |extra:&[(&str,String)],key:&str| extra.iter().find(|(k,_)|*k == key).map(|(_,v)|v.clone()).unwrap();
+        assert_eq!(no_room("/a",&catalog(&["/a"]),&[],all,&spent,1000.0).0,"no_other_account");
+        let cat = catalog(&["/a","/b","/c","/d"]);
+        assert_eq!(no_room("/a",&cat,&[],|path:&str|path == "/a",&spent,1000.0).0,"no_login");
+        spent.mark("/b",2000.0,1000.0);
+        let (cause,extra) = no_room("/a",&cat,&[quota("/b",10.0)],|path:&str|path != "/c" && path != "/d",&spent,1000.0);
+        assert_eq!((cause,band(&extra,"accounts"),band(&extra,"no_login"),band(&extra,"spent")),("all_spent","2-3".into(),"2-3".into(),"1".into()));
+        let unread = json!({"provedor":"claude","id":"claude:/c","label":"c","estado":"erro","janelas":[]});
+        assert_eq!(no_room("/a",&cat,&[quota("/b",10.0),unread],|path:&str|path != "/d",&spent,1000.0).0,"quota_unread");
+        let windowless = json!({"provedor":"claude","id":"claude:/c","label":"c","estado":"lida","janelas":[]});
+        assert_eq!(no_room("/a",&cat,&[windowless],|path:&str|path != "/d",&spent,1000.0).0,"quota_no_window");
+        let (cause,extra) = no_room("/a",&cat,&[quota("/c",99.5),quota("/d",100.0)],all,&spent,1000.0);
+        assert_eq!((cause,band(&extra,"full"),band(&extra,"spent"),band(&extra,"quota_unread")),("all_full","2-3".into(),"1".into(),"0".into()));
+        for (key,_) in &extra { assert!(hangar_telemetry::events::closed(hangar_telemetry::events::CONTEXT,key,"0").is_some(),"{key}"); }
     }
 
     #[test]

@@ -1,0 +1,90 @@
+// Cada falha com detalhe em português: o que aconteceu, em que estado a máquina estava e os passos até ela.
+// Importa com a extensão: o teste roda direto no node, sem bundler.
+import { AFTER_LABEL, AGENTS, CAUSES, CLI_LABEL, CLIENT_CODE_LABEL, CONTEXT_LABEL, HEALTH_CODES, INSTALL_LABEL, MACHINE_LABEL, OS_LABEL,
+  SCREEN_LABEL, STEP_LABEL, TOOLS, VALUES } from "./labels.ts";
+import type { FailureRecord } from "./types";
+
+const has = (o: object, k: string) => Object.hasOwn(o, k);
+const text = (v: unknown) => (typeof v === "string" && v ? v : null);
+
+export interface Happened { summary: string; tool: string | null; cause: string | null; technical: string }
+
+export function happened(r: FailureRecord): Happened {
+  const f = r.fields ?? {};
+  const code = text(f.codigo), cause = text(f.causa), action = r.action ?? text(f.action);
+  const summary = text(f.detalhe) ?? (code && has(HEALTH_CODES, code) ? HEALTH_CODES[code] : "Falha em " + r.event + ".");
+  const tool = action ? (has(TOOLS, action) ? TOOLS[action][0] : has(VALUES.feature, action) ? VALUES.feature[action] : null) : null;
+  // A causa explica; sem ela, o código do app diz o que houve na rede.
+  const said = cause ? (has(CAUSES, cause) ? CAUSES[cause] : null) : code && has(CLIENT_CODE_LABEL, code) ? CLIENT_CODE_LABEL[code] : null;
+  return { summary, tool, cause: said, technical: [r.event, action, code, cause].filter(Boolean).join(" · ") };
+}
+
+export function stepText(step: string): { text: string; known: boolean } {
+  const [name, screen] = step.split(":");
+  const where = screen ? (has(SCREEN_LABEL, screen) ? SCREEN_LABEL[screen] : screen) : null;
+  if (name === "tela.ver") return { text: "Abriu a tela" + (where ? ": " + where : ""), known: true };
+  let said: string | null = null;
+  if (has(STEP_LABEL, name)) said = STEP_LABEL[name];
+  else if (has(TOOLS, name)) said = "Chamou a ferramenta " + TOOLS[name][0];
+  else if (has(VALUES.feature, name)) said = "Pediu: " + VALUES.feature[name];
+  if (!said) return { text: step, known: false };
+  return { text: said + (where ? " (tela: " + where + ")" : ""), known: true };
+}
+
+export const afterText = (after: string | null | undefined) => (after ? (has(AFTER_LABEL, after) ? AFTER_LABEL[after] : after) : null);
+
+export function skewText(s: number | null | undefined) {
+  if (s == null) return "sem a hora do envio (versão antiga)";
+  // A ida pela rede soma alguns segundos: abaixo de um minuto conta como certo.
+  if (Math.abs(s) < 60) return "certo";
+  const a = Math.abs(s);
+  const size = a < 3600 ? Math.round(a / 60) + " min" : a < 2 * 86400 ? Math.round(a / 3600) + " h" : Math.round(a / 86400) + " dias";
+  return size + (s > 0 ? " atrasado" : " adiantado");
+}
+
+export interface StateRow { key: string; label: string; value: string; first?: string }
+
+const say = (values: Record<string, string> | null, v: string) => (values && has(values, v) ? values[v] : v);
+
+// Retrato da falha (primeira e última vez) e o ambiente da máquina no lote da amostra.
+export function stateRows(r: FailureRecord) {
+  const b = r.batch;
+  const build: StateRow[] = [];
+  if (b) {
+    build.push({ key: "version", label: "Versão", value: b.version + (b.commit === "dev" ? " · build de desenvolvimento" : " · commit " + b.commit) });
+    if (b.install) build.push({ key: "install", label: "Instalação", value: say(INSTALL_LABEL, b.install) });
+    build.push({ key: "clock", label: "Relógio da máquina", value: skewText(b.clock_skew_s) });
+  }
+  const m = b?.machine ?? {};
+  const machine: StateRow[] = [];
+  if (m.os || m.os_name) {
+    const name = m.os_name ? say(OS_LABEL, m.os_name) : say(OS_LABEL, m.os);
+    machine.push({ key: "os", label: "Sistema", value: name + (m.os_version && m.os_version !== "absent" ? " " + m.os_version : "") });
+  }
+  for (const [k, [label, values]] of Object.entries(MACHINE_LABEL)) if (m[k]) machine.push({ key: k, label, value: say(values, m[k]) });
+  if (m.mux) machine.push({ key: "mux", label: "Terminal", value: m.mux === "none" ? "nenhum" : m.mux + (m.mux_version && m.mux_version !== "absent" ? " " + m.mux_version : "") });
+  for (const [p, label] of Object.entries(CLI_LABEL)) {
+    const v = m["cli." + p];
+    if (v) machine.push({ key: "cli." + p, label, value: v === "absent" ? "não instalado" : v === "other" ? "versão fora do formato" : v });
+  }
+  for (const [p, label] of Object.entries(CLI_LABEL)) {
+    const v = m["accounts." + p];
+    if (v && v !== "0") machine.push({ key: "accounts." + p, label: "Contas " + (AGENTS[p] ?? label), value: say(CONTEXT_LABEL.accounts[1], v) });
+  }
+
+  const first = r.ctx_first ?? {}, last = r.ctx_last ?? {};
+  const keys = [...new Set([...Object.keys(first), ...Object.keys(last)])];
+  const label = (k: string): [string, Record<string, string> | null] => {
+    if (has(CONTEXT_LABEL, k)) return CONTEXT_LABEL[k];
+    const [, p, surface] = k.split(".");
+    if (k.startsWith("sessions.") && p) return ["Sessões " + (has(AGENTS, p) ? AGENTS[p] : p) + " " + (VALUES.surface[surface] ?? surface), CONTEXT_LABEL.sessions[1]];
+    return [k, null];
+  };
+  const order = (k: string) => { const i = Object.keys(CONTEXT_LABEL).indexOf(k.startsWith("sessions.") ? "sessions" : k); return i < 0 ? 99 : i; };
+  const moment: StateRow[] = keys.sort((x, y) => order(x) - order(y) || x.localeCompare(y)).map(k => {
+    const [name, values] = label(k);
+    const now = has(last, k) ? say(values, last[k]) : "não informado", before = has(first, k) ? say(values, first[k]) : "não informado";
+    return { key: k, label: name, value: now, ...(now !== before ? { first: before } : {}) };
+  });
+  return { build, machine, moment };
+}

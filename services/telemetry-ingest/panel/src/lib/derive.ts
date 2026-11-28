@@ -2,6 +2,7 @@
 import { AGENT_ORDER, agentKey, type AgentKey } from "./agents";
 import { BAD, BUCKET_LABEL, BUCKETS, EFFORTS, EVENTS, FIELD_LABEL, FLAGS, KEYS, SETTING_GROUPS, SETTINGS, SETTING_VALUES, AGENTS, VALUES } from "./labels";
 import { fmt, quantity } from "./format";
+import { afterText, happened, stateRows, stepText } from "./failure";
 import { SPEED_EVENTS } from "./speed";
 import type { Dims, FailureRecord, Summary } from "./types";
 
@@ -202,16 +203,31 @@ export function recordMarkdown(r: FailureRecord) {
     "- Primeira vez no período: " + r.first + " UTC; última: " + r.last + " UTC",
     ...(r.sample_at ? ["- " + SAMPLE_TIME + ": " + r.sample_at + " UTC"] : []),
     "- Versões: " + (r.versions ?? []).join(", "),
-    "- Sistemas: " + (r.os ?? []).join(", "), "", "### Campos da amostra", ""];
+    "- Sistemas: " + (r.os ?? []).join(", ")];
+  const h = happened(r);
+  out.push("", "### O que aconteceu", "", h.summary, ...(h.tool ? ["Ferramenta ou ação: " + h.tool] : []),
+    ...(h.cause ? ["Por quê: " + h.cause + "."] : []), ...(r.capped ? ["A contagem bateu no teto: foram mais vezes."] : []), "Nomes técnicos: " + h.technical);
+  const state = stateRows(r);
+  const rows = [...state.moment, ...state.machine, ...state.build];
+  out.push("", "### Em que estado a máquina estava", "");
+  if (rows.length) out.push(...rows.map(s => "- " + s.label + ": " + s.value + (s.first ? " (na primeira vez: " + s.first + ")" : "") + " [" + s.key + "]"));
+  else out.push("Esta falha veio de uma versão que ainda não mandava o estado da máquina.");
+  const steps = (title: string, xs: string[]) => {
+    out.push("", "### " + title, "");
+    if (xs.length) xs.forEach((s, i) => { const t = stepText(s); out.push(i + 1 + ". " + t.text + (t.known ? " [" + s + "]" : "")); });
+    else out.push("O diário não guardou passos antes desta falha.");
+  };
+  steps("Como reproduzir: " + SAMPLE_TRAIL.toLowerCase(), r.trail ?? []);
+  if (r.count > 1 && r.trail_last?.length) steps("Passos antes da última vez", r.trail_last);
+  const after = afterText(r.after);
+  if (after) out.push("", "Depois da última vez: " + after);
+  out.push("", "### Campos da amostra", "");
   const fields = fieldsOf(r).map(({ key, value }) => key + ": " + value).join("\n");
   if (fields) {
     let fence = "~~~";
     while (fields.includes(fence)) fence += "~";
     out.push(fence, fields, fence);
   } else out.push("Sem campos nesta falha.");
-  out.push("", "### " + SAMPLE_TRAIL, "");
-  if (r.trail?.length) r.trail.forEach((s, i) => out.push(i + 1 + ". " + s));
-  else out.push("O diário não guardou passos antes desta falha.");
   return out.join("\n") + "\n";
 }
 
