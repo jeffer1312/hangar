@@ -281,7 +281,7 @@ impl AccountService {
         let saved = match hangar_antigravity::quota::read(&path) {
             Ok(saved) => saved?,
             Err(error) => {
-                tracing::warn!(code = "agy_quota_unreadable", ?error, "cota do Antigravity gravada não lida");
+                tracing::warn!(code = "agy_quota_unreadable", file = %path.display(), ?error, "cota do Antigravity gravada não lida");
                 let reason = if matches!(error, hangar_antigravity::quota::ReadError::Format) { "formato-desconhecido" } else { "leitura-falhou" };
                 return Some(reading("indisponivel", vec![], Some(reason)));
             }
