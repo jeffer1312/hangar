@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Consultas só de leitura no receptor da telemetria (Postgres no Coolify da VPS).
+set -euo pipefail
+HOST="${TELEMETRIA_SSH:-root@187.77.36.64}"
+DB_FILTER="${TELEMETRIA_DB_CONTAINER:-l5eeuiari1pshtkcf4cujqp4}"
+q="${1:-}"; shift || true
+dias="7"
+case "$q" in detalhe|sql) ;; *) dias="${1:-7}";; esac
+[[ "$dias" =~ ^[0-9]+$ ]] || { echo "dias deve ser número" >&2; exit 2; }
+P="b.day >= current_date - $dias"
+lit() { printf "'%s'" "${1//\'/\'\'}"; }
+case "$q" in
+  resumo) sql="select count(distinct machine_id) maquinas, count(*) pacotes, string_agg(distinct version, ' ') versoes, string_agg(distinct os, ' ') sistemas, string_agg(distinct channel, ' ') canais, min(day), max(day) from batches b where $P";;
+  falhas) sql="select r.level, r.event, r.fields->>'codigo' codigo, r.fields->>'etapa' etapa, sum(r.count) vezes, count(distinct b.machine_id) maquinas, string_agg(distinct b.os, ',') sistemas, string_agg(distinct b.version, ',') versoes, min(b.day) desde, max(b.day) ate from records r join batches b using(batch_id) where $P group by 1,2,3,4 order by maquinas desc, vezes desc limit 40";;
+  contadores) sql="select c.event, coalesce(c.dims->>'code', '') codigo, sum(c.count) vezes, count(distinct b.machine_id) maquinas, string_agg(distinct b.os, ',') sistemas, string_agg(distinct b.version, ',') versoes from counters c join batches b using(batch_id) where $P and c.event in ('problem_shown','problem_hidden','session_open_failed','send_failed','session_fallen','client_fatal','update_failed_code','server_exit','limit_switch','log_dropped','diary_dropped') group by 1,2 order by maquinas desc, vezes desc limit 40";;
+  logs) sql="select l.level, l.target, left(l.message, 160) mensagem, sum(l.count) vezes, count(distinct b.machine_id) maquinas, string_agg(distinct b.os, ',') sistemas from logs l join batches b using(batch_id) where $P group by 1,2,3 order by maquinas desc, vezes desc limit 40";;
+  detalhe)
+    ev="${1:?evento}"; cod="${2:-}"; dias="${3:-7}"; [[ "$dias" =~ ^[0-9]+$ ]] || exit 2; P="b.day >= current_date - $dias"
+    filtro="r.event = $(lit "$ev")"; [ -n "$cod" ] && filtro="$filtro and r.fields->>'codigo' = $(lit "$cod")"
+    sql="select b.day, b.os, b.version, b.commit, b.channel, b.partial, left(b.machine_id, 8) maquina, r.count, r.first_at, r.last_at, r.fields::text, r.trail::text from records r join batches b using(batch_id) where $P and $filtro order by b.day desc, r.last_at desc limit 30";;
+  sql) sql="${1:?select}";;
+  *) echo "uso: consultar resumo|falhas|contadores|logs [dias] | detalhe <evento> [codigo] [dias] | sql \"<select>\"" >&2; exit 2;;
+esac
+printf '%s\n' "$sql" | ssh -o ConnectTimeout=10 "$HOST" "docker exec -i -e PGOPTIONS='-c default_transaction_read_only=on' \$(docker ps -q -f name=$DB_FILTER | head -1) psql -U telemetry telemetry -v ON_ERROR_STOP=1 -F ' | ' -A -P footer=off"
