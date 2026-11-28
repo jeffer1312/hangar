@@ -41,6 +41,7 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 | `mcp_tool` | `tool` (nome da tool do MCP `hangar`), `error` (sim/não) | Chamada de tool do MCP `hangar` por um agente. Sessão de convidado com login não conta |
 | `voice_call` (faixa) | — | Duração da chamada de voz |
 | `dictation` (faixa) | `route` (`ditado`, `relimpar`, `sessao`), `status` (`ok`, `warning`, `error`, `cancelled`) | Ditado, com o tempo total |
+| `session_placed` | `outcome` (`here`, `elsewhere`, `refused`), `reason` (`same_folder`, `unpublished`, `plain_dir`, `project_rule`, `local_within_limits`, `least_loaded`, `no_candidate`, `not_balanced`), `clone` (sim/não) | Sessão que você pediu com a escolha automática de máquina: onde ela ficou e por quê. A sugestão que a tela mostra antes não conta; máquina e projeto não saem |
 
 `provider` é `claude`, `codex`, `pi`, `omp`, `kimi`, `antigravity` ou `other`.
 

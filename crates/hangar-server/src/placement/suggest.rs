@@ -35,6 +35,30 @@ pub enum Step {
 /// A escolha do `POST /api/sessions` com `machine`. `auto` fora do balanceamento abre aqui com o motivo;
 /// máquina explícita com campo que só vale aqui é recusada, nunca aberta lá sem ele.
 pub async fn step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &OpenCaller) -> Step {
+    let mut chosen = None;
+    let step = choose_step(st, request, caller, &mut chosen).await;
+    if request.machine.as_deref() == Some(AUTO) { count_placed(st.counting(), caller, chosen.as_ref(), &step); }
+    step
+}
+
+/// `session_placed` da abertura com `auto`, só do dono. `chosen`: o motivo da escolha; `None` é o pedido que
+/// ficou fora do balanceamento antes dela. A sugestão da tela (`suggest`) não passa aqui.
+fn count_placed(telemetry: Option<&hangar_telemetry::Telemetry>, caller: &OpenCaller, chosen: Option<&ReasonCode>, step: &Step) {
+    use hangar_telemetry::events::{Code, Dims, Event, PLACEMENT_REASONS, PlacementOutcome};
+    let Some(telemetry) = telemetry.filter(|_| matches!(caller, OpenCaller::Owner)) else { return };
+    let (outcome, clone) = match step {
+        Step::Here(_) => (PlacementOutcome::Here, false),
+        Step::There { warnings, .. } => (PlacementOutcome::Elsewhere, warnings.iter().any(|w| w == crate::session_open::baton::FRESH_CLONE_NOTE)),
+        Step::Refused(_) => (PlacementOutcome::Refused, false),
+    };
+    // Só a etiqueta `code` do motivo: projeto e `why` ficam de fora.
+    let code = chosen.map_or_else(|| "not_balanced".to_owned(),
+        |reason| serde_json::to_value(reason).ok().and_then(|v| v["code"].as_str().map(str::to_owned)).unwrap_or_default());
+    let dims = Dims::new().with("outcome", outcome).with("reason", Code::known(&code, PLACEMENT_REASONS)).with("clone", clone);
+    telemetry.count(Event::SessionPlaced, dims, 1);
+}
+
+async fn choose_step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &OpenCaller, chosen: &mut Option<ReasonCode>) -> Step {
     let local = st.current_server_id();
     let Some(machine) = request.machine.as_deref() else { return Step::Here(None) };
     let auto = machine == AUTO;
@@ -73,6 +97,7 @@ pub async fn step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &Ope
     }
     let (placement, dest) = if auto {
         let (placement, facts) = place(st, &ctx, &config).await;
+        *chosen = Some(placement.reason.clone());
         if matches!(placement.reason, ReasonCode::NotBalanced { .. }) { return Step::Here(Some(wire(&placement))) }
         // Também no Ask: a pessoa costuma confirmar a sugestão, e a segunda abertura na pasta não se separa dela.
         if let Some(root) = &ctx.cwd_root { st.placement_reservations.reserve(root, &placement.server); }
@@ -493,6 +518,31 @@ mod tests {
         assert!(error.msg.contains("--machine"), "{}", error.msg);
         let error = clone_unavailable("vm", None);
         assert_eq!((error.status, error.code), (409, Some("placement_clone_unavailable")));
+    }
+
+    #[test]
+    fn telemetry_session_placed_counts_the_owner_with_closed_dims() {
+        use hangar_telemetry::events::Event;
+        let home = tempfile::tempdir().unwrap();
+        let telemetry = crate::telemetry_hooks::test_telemetry(home.path(), true);
+        let rule = ReasonCode::ProjectRule { project: ProjectId("git:github.com/a/segredo".into()) };
+        count_placed(Some(&telemetry), &OpenCaller::Guest { root: "/g".into() }, Some(&rule), &Step::Here(None));
+        assert!(telemetry.counters().is_empty(), "convidado não conta");
+        count_placed(Some(&telemetry), &OpenCaller::Owner, None, &Step::Here(None));
+        count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&ReasonCode::NotBalanced { why: "orq".into() }), &Step::Here(None));
+        let there = Step::There { server: "notebook".into(), body: json!({}), placement: None,
+            warnings: vec![crate::session_open::baton::FRESH_CLONE_NOTE.to_owned()] };
+        count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&ReasonCode::LeastLoaded { local_out: Exclusion::Working }), &there);
+        count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&rule), &Step::Refused(ask(&Placement { server: "nb".into(),
+            reason: rule.clone(), clone: None, warnings: Vec::new() })));
+        let mut seen: Vec<_> = telemetry.counters().into_iter().filter(|c| c.event == Event::SessionPlaced.as_str())
+            .map(|c| (c.dims["outcome"].clone(), c.dims["reason"].clone(), c.dims["clone"].clone(), c.count)).collect();
+        seen.sort();
+        let row = |o: &str, r: &str, c: &str, n| (o.to_owned(), r.to_owned(), c.to_owned(), n);
+        assert_eq!(seen, [row("elsewhere", "least_loaded", "true", 1), row("here", "not_balanced", "false", 2),
+            row("refused", "project_rule", "false", 1)]);
+        assert!(telemetry.counters().iter().all(|c| c.dims.values().all(|v| !["segredo", "notebook", "nb", "orq"].iter().any(|s| v.contains(s)))),
+            "projeto, máquina e `why` nunca saem");
     }
 
     #[test]
