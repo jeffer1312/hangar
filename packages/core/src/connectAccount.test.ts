@@ -278,12 +278,13 @@ describe('aparelho da conta', () => {
   });
 
   it('404 do serviço conta como já removido', async () => {
-    network(() => json({ error: 'não encontrado' }, 404));
+    network(() => json({ error: 'não encontrado', reason: null }, 404));
     await expect(removeAccountMachine(released, 'outra')).resolves.toBeUndefined();
   });
 
   it('404 que não veio do serviço não conta como removido', async () => {
-    for (const answer of [new Response('<html>not found</html>', { status: 404 }), json({ error: 5 }, 404), json(['error'], 404)]) {
+    for (const answer of [new Response('<html>not found</html>', { status: 404 }), json({ error: 5 }, 404), json(['error'], 404),
+      json({ error: 'Not Found' }, 404)]) {
       network(() => answer);
       const error: unknown = await removeAccountMachine(released, 'outra').catch((e: unknown) => e);
       expect(error).toMatchObject({ code: 'connect_machine_remove_unavailable', status: 404 });

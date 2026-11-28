@@ -50,9 +50,9 @@ async function request(base: string, path: string, init: RequestInit): Promise<u
   if (!response.ok) {
     // Do corpo do erro só sai o motivo conhecido, nunca o texto: ele pode ecoar o que recebeu.
     const body = record(await response.json().catch(() => undefined));
-    // `fromService`: o corpo é o `{"error": …}` do serviço, não o de um proxy no caminho.
+    // `fromService`: o corpo é o `{"error", "reason"}` do serviço (reason nulo inclusive), não o de um proxy no caminho.
     throw fail(REASONS.includes(body.reason) ? `connect_${String(body.reason)}` : 'connect_request_failed', response.status,
-      typeof body.error === 'string');
+      typeof body.error === 'string' && 'reason' in body);
   }
   return response.status === 204 ? null : await response.json() as unknown;
 }

@@ -1245,7 +1245,7 @@ impl Hangar {
                 .role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error.to_owned())));
         let list = self.connect.machines.ok();
         let this_name = identity_of(host).map(|(machine, _)| machine.to_owned())
-            .or_else(|| list.map(|list| list.this.machine_id.clone())).unwrap_or_default();
+            .or_else(|| list.map(|list| list.this.machine_id.clone())).unwrap_or_else(|| tr("connect_computer_this"));
         let mut blocks = Vec::new();
         for machine in computer_slots(list) { blocks.push(self.render_account_computer(machine, &this_name, cx)); }
         let section = section.child(computers_grid(columns).children(blocks));

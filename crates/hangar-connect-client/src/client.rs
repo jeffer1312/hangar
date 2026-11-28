@@ -76,7 +76,8 @@ impl<T: Transport> ConnectClient<T> {
                 Some("device_revoked") => Code::ConnectDeviceRevoked,
                 _ => Code::ConnectRequestFailed,
             };
-            let service_body = answer.as_ref().is_some_and(|body| body.get("error").is_some_and(Value::is_string));
+            // O serviço responde sempre `{"error", "reason"}` (reason nulo inclusive); proxy com JSON próprio não traz o par.
+            let service_body = answer.as_ref().is_some_and(|body| body.get("error").is_some_and(Value::is_string) && body.get("reason").is_some());
             return Err(fail_with(code, status).with_service_body(service_body));
         }
         if status == 204 {
