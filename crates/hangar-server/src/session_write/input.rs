@@ -817,7 +817,7 @@ pub async fn steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
             }
         }
         // O Ctrl+S do Kimi não leva texto: a mensagem é digitada na fila da TUI e então orientada, como no Direto.
-        crate::runtime::gateway::EntryHandle::OtherTerminal { .. } if text.is_some() => {
+        crate::runtime::gateway::EntryHandle::OtherTerminal { .. } if text.is_some() && ctx.target.provider == "kimi" => {
             send_with_receipt(&ctx.st, &ctx.name, &ctx.target, text.as_deref().unwrap_or_default(), true, false, None, false).await
         }
         headless => {
