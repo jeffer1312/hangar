@@ -81,6 +81,68 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 | `server_startup` (faixa) | — | Tempo de subida do servidor |
 | `chat_open` (faixa) | `client` | Tempo para abrir uma conversa |
 
+### Preferências
+
+Depois do aceite do aviso que inclui preferências, o app do PC e o do celular mandam ao servidor
+ativo (nunca a um convite) o retrato das preferências daquele aparelho, e o servidor conta as dele.
+O servidor confirma o retrato em `POST /api/telemetry`, fora do diário. Só aceita o período de coleta
+ativo e uma captura do dia UTC da chegada, com até um minuto de diferença para o futuro. Envio
+atrasado não ocupa a vaga do dia nem reabre pacote fechado. Cada par vira um contador
+`settings` com `client` (`native`, `ios`, `android` ou `server`), `setting` e `value`. O
+servidor conta no máximo um retrato por dia de cada app e aparelho: o app manda junto o id aleatório
+que já guarda para as novidades da atualização. A marca do aparelho e os contadores são gravados
+juntos no arquivo local do dia antes da confirmação; o id não entra no pacote. Preferência fora
+da tabela é descartada; valor fora da lista sai `other`. Nome de fonte, cor escolhida, modelo e
+qualquer número não saem.
+
+As contagens de preferências são por máquina servidora, não por pessoa nem por aparelho único: cada
+servidor manda no próprio pacote os retratos que contou. Tanto o celular quanto o desktop podem
+mandar uma vez por dia a cada máquina que ficou ativa naquele aparelho, desde que ela tenha aceitado
+esse aviso. Se um celular ou PC alternar entre três máquinas no mesmo dia, pode aparecer nas três.
+
+| `setting` | Valores | De onde |
+|---|---|---|
+| `theme` | `auto`, `light`, `dark`, `desktop` | PC, celular (`system` do celular sai `auto`) |
+| `panels` | `attached`, `floating` | PC |
+| `palette` | `classic`, `neutral` | PC, celular |
+| `background` | `plain`, `texture`, `aurora`, `image`, `desktop` | PC, celular (o liso do celular sai `plain`; o fundo com luz do PC sai `aurora`) |
+| `background_effect` | `none`, `dither`, `ascii`, `halftone`, `scanlines` | PC, celular |
+| `wallpaper` | `window`, `glass` | PC |
+| `surface_material` | `glass`, `opaque` | PC |
+| `reading` | `auto`, `none`, `text`, `sheet` | PC, celular |
+| `font` | `system`, `mono`, `custom` (outra fonte instalada; o nome não sai) | PC |
+| `code_font` | `jetbrains_mono`, `system`, `custom` | PC |
+| `text_size` | `small`, `normal`, `large`: menor, igual ou maior que o tamanho de fábrica do app | PC, celular |
+| `compact_style` | `on`, `off`: a aparência é a do atalho "Estilo compacto" | PC |
+| `tool_look` | `classic`, `chips`, `tree`, `terminal`, `claude_desktop` | PC, celular |
+| `thinking_tools` | `none`, `search`, `all` | PC, celular |
+| `thinking_collapsed`, `task_list`, `table_chart` | `on`, `off` | PC (`task_list` e `table_chart` também no celular) |
+| `ask_highlight` | `accent`, `amber` | PC, celular |
+| `delivery` | `queue`, `direct`, `jev`, `conversation` | PC, celular |
+| `hands_free` | `on`, `off` | PC, celular |
+| `navigation` | `tabs`, `bottom_tabs`, `conversations`, `sidebar` | PC |
+| `sidebar_compact`, `tabs_full` | `on`, `off` | PC |
+| `sidebar_height` | `full`, `content` | PC |
+| `sidebar_group` | `none`, `project`, `machine` | PC |
+| `list_group` | `none`, `server`, `project` | celular |
+| `list_organize` | `sessions`, `conversations` | celular |
+| `home_screen` | `sessions`, `new_conversation` | celular |
+| `tablet_bar` | `left`, `bottom`, `top` | só tablet |
+| `language` | `system`, `pt`, `en` | PC, celular |
+| `tips` | `on`, `off` | PC |
+| `tour` | `done`, `skipped`, `none` | PC |
+| `conversation_beta`, `code_mode` | `on`, `off` (opções da tela Beta, guardadas no servidor) | servidor |
+| `default_provider` | `claude`, `codex`, `pi`, `omp`, `kimi`, `antigravity` | servidor |
+| `default_effort` | `unset`, `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` (o padrão salvo do agente padrão) | servidor |
+| `auto_report` | `on`, `off`, `unanswered` | servidor |
+| `dictation_org` | `none`, `harness`, `external_api` | servidor |
+| `dictation_provider` | `openai`, `groq`, `elevenlabs`, `whisper_cpp`, `none` (o primeiro serviço da lista; `groq` é a chave Groq antiga, sem lista) | servidor |
+| `connect`, `computer_use` | `on`, `off` | servidor |
+| `whatsapp` | `installed`, `no` | servidor |
+| `jev` | `configured`, `no` (só se há chave; a chave não sai) | servidor |
+
+O canal de atualização não entra aqui: ele já vai em `env` em todo pacote.
+
 ### Linhas de aviso e erro do servidor
 
 Cada linha de nível aviso (`warn`) ou erro (`error`) que o `hangar-server` escreve no log dele
@@ -142,21 +204,25 @@ Fim de turno, erros, quedas e troca por limite contam para todas as sessões da 
 
 ## Ver o que está guardado
 
-- `~/.hangar/telemetry/queue/<dia>.json`: um arquivo por dia ainda não enviado, com os contadores
-  exatamente como vão sair (o dia de hoje está lá desde a última gravação).
-- `~/.hangar/telemetry.json`: sua resposta (`consent`) e os dois números aleatórios.
-- `~/.hangar/telemetry/once.json`: marcas do que só conta uma vez (o retrato do dia, cada
-  atualização).
+- `~/.hangar/telemetry-scope-2/queue/<dia>.json`: um arquivo por dia ainda não enviado, com os contadores
+  e as marcas privadas dos retratos do dia (máquinas e preferências do servidor e de cada app), gravadas
+  junto com as contagens deles. Só os contadores e as linhas limpas saem no pacote.
+- `~/.hangar/telemetry.json`: sua resposta e os dois números aleatórios. O aceite do aviso de
+  preferências fica em `consent_scope: 2`; a recusa continua em `consent: false`.
+- `~/.hangar/telemetry-scope-2/once.json`: marcas do que só conta uma vez, como cada atualização.
 
 No Windows, `~` é a pasta do seu usuário.
 
 ## Responder e mudar
 
 - Ao abrir o app (desktop nativo ou celular), o aviso "Ajudar a melhorar o Hangar" pergunta pelas
-  suas máquinas que ainda não responderam. "Pode enviar" ou "Não enviar" grava em todas elas de
-  uma vez. Fechar sem escolher não grava nada: o aviso volta na próxima abertura.
+  máquinas que ainda não responderam e identificam o aviso de preferências. Sem essa identificação,
+  só é possível revogar o aceite existente. Fechar sem escolher não grava nada.
+- O "Pode enviar" antigo não inclui preferências. Ao atualizar, a máquina deixa de enviar e pede
+  o novo aceite, sem importar a fila anterior. O "Não enviar" continua valendo.
 - Para mudar depois: linha "Contagens anônimas de uso" nas Configurações da máquina.
-- "Não enviar" apaga a fila na hora.
+- "Não enviar" apaga a fila na hora (também a da versão anterior, em `~/.hangar/telemetry/`), sem
+  apagar o que o receptor já recebeu.
 
 Sem resposta, nenhum contador é contado nem gravado: só existe o `telemetry.json`, com `consent: null` e
 os dois números aleatórios.

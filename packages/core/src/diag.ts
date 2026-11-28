@@ -28,6 +28,10 @@ export interface Evento {
   quantidade?: number;
   etapa?: string;
   motivo?: string;
+  /** Retrato das preferências (`POST /api/telemetry`): preferência → valor de lista; o diário não guarda. */
+  values?: Record<string, string>;
+  /** Id do aparelho para o servidor contar um retrato por dia; fica fora do diário. */
+  device?: string;
 }
 
 export interface DiagSink {

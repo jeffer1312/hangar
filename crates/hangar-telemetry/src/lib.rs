@@ -22,4 +22,6 @@ pub use aggregate::{Clock, Config, EnvLookup, Telemetry};
 #[cfg(feature = "runtime")]
 pub use send::{DEFAULT_URL, Failure, Post, PostFuture};
 #[cfg(feature = "runtime")]
+pub use state::SETTINGS_CONSENT_SCOPE;
+#[cfg(feature = "runtime")]
 pub use switch::Disabled;

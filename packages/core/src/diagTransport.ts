@@ -3,7 +3,7 @@ const RESEND_DELAY_MS = 10_000;
 const UNREACHABLE_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000];
 
 /** Fila limitada em memória. O destino pertence ao evento; credenciais são consultadas no envio. */
-export function criarTransporteDiag(tokenPara: (destino: string) => string | null | undefined) {
+export function criarTransporteDiag(addressFor: (destino: string) => string | { token: string; baseUrl: string } | null | undefined) {
   const fila: { destino: string; evento: Record<string, unknown> }[] = [];
   const unreachable = new Map<string, { failures: number; retryAt: number }>();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -27,7 +27,7 @@ export function criarTransporteDiag(tokenPara: (destino: string) => string | nul
     const now = Date.now();
     return Math.min(...fila.map(({ destino }) => {
       const wait = unreachable.get(destino);
-      return wait ? Math.max(0, wait.retryAt - now) : RESEND_DELAY_MS;
+      return wait && wait.retryAt > now ? wait.retryAt - now : RESEND_DELAY_MS;
     }));
   }
 
@@ -39,15 +39,17 @@ export function criarTransporteDiag(tokenPara: (destino: string) => string | nul
       const destinos = [...new Set(fila.map((item) => item.destino))]
         .filter((destino) => (unreachable.get(destino)?.retryAt ?? 0) <= now);
       await Promise.allSettled(destinos.map(async (destino) => {
-        const token = tokenPara(destino);
-        if (!token) return;
         const pendentes = fila.filter((item) => item.destino === destino);
         try {
-          // O servidor aceita no máximo 50 linhas por POST.
+          // A prova da rota pode cair enquanto o POST anterior espera resposta.
           for (let offset = 0; offset < pendentes.length; offset += 50) {
             const lote = pendentes.slice(offset, offset + 50);
             const body = JSON.stringify({ eventos: lote.map((item) => item.evento) });
-            const resposta = await fetch(`${destino}/api/diag`, {
+            const address = addressFor(destino);
+            const token = typeof address === 'string' ? address : address?.token;
+            if (!token) return;
+            const baseUrl = typeof address === 'object' && address ? address.baseUrl : destino;
+            const resposta = await fetch(`${baseUrl}/api/diag`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
               body,

@@ -152,7 +152,7 @@ export default function Layout() {
       const report = await autoReportUnanswered(servers);
       if (report.length) await askAutoReport(report);
       const telemetry = await telemetryPending;
-      if (telemetry.length) await askTelemetry(telemetry);
+      if (telemetry.length) await askTelemetry(telemetry, useServers.getState().servers);
     })().catch((e) => {
       registrarDiag({ evento: 'startup.questions_failed', nivel: 'erro', codigo: 'startup_questions_failed', detalhe: e instanceof Error ? e.message : String(e) });
     });

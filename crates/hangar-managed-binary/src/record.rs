@@ -1,4 +1,5 @@
 //! `install.json` `{tag,binary}`: a versão que o Hangar instalou e o programa que o serviço roda.
+use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9,10 +10,28 @@ pub struct Installed {
 
 /// A instalação que o registro aponta, só com o programa no disco.
 pub fn read(record: &Path) -> Option<Installed> {
-    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(record).ok()?).ok()?;
-    let tag = value["tag"].as_str().filter(|t| !t.is_empty())?.to_owned();
-    let binary = PathBuf::from(value["binary"].as_str()?);
-    binary.is_file().then_some(Installed { tag, binary })
+    read_checked(record).ok().flatten()
+}
+
+/// Ausência do registro ou do programa não é falha de leitura.
+///
+/// # Errors
+/// Erro de E/S diferente de ausência, ou registro fora do formato (`InvalidData`).
+pub fn read_checked(record: &Path) -> io::Result<Option<Installed>> {
+    let raw = match std::fs::read(record) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "registro de instalação inválido");
+    let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|_| invalid())?;
+    let tag = value["tag"].as_str().filter(|t| !t.is_empty()).ok_or_else(invalid)?.to_owned();
+    let binary = PathBuf::from(value["binary"].as_str().filter(|b| !b.is_empty()).ok_or_else(invalid)?);
+    match std::fs::metadata(&binary) {
+        Ok(info) => Ok(info.is_file().then_some(Installed { tag, binary })),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Grava o registro, criando a pasta dele.

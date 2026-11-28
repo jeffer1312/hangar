@@ -1,5 +1,6 @@
-//! A fila em disco: um arquivo por dia (UTC) em `~/.hangar/telemetry/queue/<dia>.json`, e as marcas
+//! A fila em disco: um arquivo por dia (UTC) em `~/.hangar/telemetry-scope-2/queue/<dia>.json`, e as marcas
 //! de `once`.
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -18,11 +19,14 @@ pub(crate) struct DayFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) batch_id: Option<String>,
     pub(crate) counters: Vec<Counter>,
+    /// Marcas dos retratos do dia (servidor e apps), gravadas com os contadores e nunca copiadas ao pacote.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) snapshot_keys: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) logs: Vec<LogLine>,
 }
 
-fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry") }
+fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry-scope-2") }
 
 fn queue_dir(home: &Path) -> PathBuf { root(home).join("queue") }
 
@@ -80,9 +84,15 @@ pub(crate) fn cap(home: &Path) -> io::Result<usize> {
     Ok(excess.len())
 }
 
-pub(crate) fn wipe(home: &Path) -> io::Result<()> {
-    match std::fs::remove_dir_all(queue_dir(home)) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+pub(crate) fn wipe(home: &Path) -> io::Result<()> { remove_tree(&root(home)) }
+
+/// A fila e as marcas da versão sem escopo (`~/.hangar/telemetry/`): só a recusa as apaga; o aceite as deixa
+/// para o binário revertido.
+pub(crate) fn wipe_legacy(home: &Path) -> io::Result<()> { remove_tree(&home.join(".hangar").join("telemetry")) }
+
+fn remove_tree(root: &Path) -> io::Result<()> {
+    match std::fs::remove_dir_all(root) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound && !root.try_exists()? => Ok(()),
         outcome => outcome,
     }
 }
@@ -108,7 +118,7 @@ mod tests {
     fn fifteen_days_keep_fourteen() {
         let home = tempfile::tempdir().unwrap();
         for n in 1..=15 {
-            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), logs: Vec::new() }).unwrap();
+            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), snapshot_keys: Default::default(), logs: Vec::new() }).unwrap();
         }
         assert_eq!(cap(home.path()).unwrap(), 1);
         let days = days(home.path()).unwrap();

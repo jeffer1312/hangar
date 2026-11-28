@@ -1,4 +1,4 @@
-import { acceptUpdateWarningsEm, getAtualizacaoEm, getAutoReportEm, getIdentificadorEm, getTelemetry, getUpdateNotesEm, iniciarAtualizacaoEm, type UpdateAcceptResult } from './api';
+import { acceptUpdateWarningsEm, getAtualizacaoEm, getAutoReportEm, getIdentificadorEm, getTelemetry, getUpdateNotesEm, iniciarAtualizacaoEm, knowsTelemetryScope, type UpdateAcceptResult } from './api';
 import { isOwnMachine } from './machineImport';
 import { registrar as registerDiagnostic } from './diag';
 import type { Server } from './servers';
@@ -94,9 +94,10 @@ export function autoReportUnanswered(list: readonly Server[], fetcher?: typeof f
   return unanswered(list, (server) => getAutoReportEm(server, fetcher), (answer) => answer === null, 'auto_report.read_failed');
 }
 
-/** Telemetria sem resposta; máquina sem telemetria ou desligada pelo ambiente não pergunta. */
+/** Só pergunta se o app tem o texto exato do servidor e o ambiente permite. */
 export function telemetryUnanswered(list: readonly Server[], fetcher?: typeof fetch): Promise<Server[]> {
-  return unanswered(list, (server) => getTelemetry(server, fetcher), (answer) => answer?.consent === null && !answer?.disabled_by, 'telemetry.read_failed');
+  return unanswered(list, (server) => getTelemetry(server, fetcher),
+    (answer) => answer?.consent === null && !answer.disabled_by && knowsTelemetryScope(answer.consent_scope), 'telemetry.read_failed');
 }
 
 /** O que a pessoa aceitou na folha para uma máquina: os ids lidos e, com o aviso da migração, o modo. */

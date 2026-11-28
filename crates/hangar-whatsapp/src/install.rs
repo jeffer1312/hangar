@@ -274,6 +274,14 @@ pub fn current(paths: &Paths) -> Option<Installed> {
     record::read(&paths.record())
 }
 
+/// A instalação atual, sem confundir registro ilegível com ausência.
+///
+/// # Errors
+/// Propaga falhas de leitura do registro ou de acesso ao programa.
+pub fn current_checked(paths: &Paths) -> std::io::Result<Option<Installed>> {
+    record::read_checked(&paths.record())
+}
+
 /// Quando a pessoa aceitou o aviso de risco, ou `None`.
 pub fn accepted_at(paths: &Paths) -> Option<String> {
     let raw = std::fs::read(paths.accepted()).ok()?;

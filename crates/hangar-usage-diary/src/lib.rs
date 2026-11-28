@@ -103,7 +103,9 @@ fn parse_body(body: &[u8]) -> Option<Value> {
 /// Uma linha da tela virando uma linha do arquivo.
 fn clean(raw: &Value, now: DateTime<FixedOffset>) -> Option<Map<String, Value>> {
     let raw = raw.as_object()?;
-    if py::strip(raw.get("evento")?.as_str()?).is_empty() {
+    let event = py::strip(raw.get("evento")?.as_str()?);
+    // O retrato é só da telemetria; confirmar o lote não exige escrevê-lo no diário geral.
+    if event.is_empty() || event == "settings.snapshot" {
         return None;
     }
     let mut out = Map::new();

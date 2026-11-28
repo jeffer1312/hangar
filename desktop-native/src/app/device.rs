@@ -1262,6 +1262,8 @@ pub(super) struct ClientTelemetry {
     visible_since: Option<Instant>,
     /// A conversa aberta esperando aparecer: quando o clique veio e a máquina dela.
     chat_open: Option<(Instant, Api)>,
+    settings_probe: u64,
+    settings_day: HashMap<String, (String, String)>,
     unsent: Arc<Unsent>,
 }
 
@@ -1304,7 +1306,7 @@ impl ClientTelemetry {
     /// Do pânico só fica o "houve": o texto leva caminho e mensagem.
     pub(super) fn new(crash: Option<&str>) -> Self {
         let unsent = Unsent { crashed: AtomicBool::new(crash.is_some()), ..Unsent::default() };
-        Self { visible: Duration::ZERO, visible_since: None, chat_open: None, unsent: Arc::new(unsent) }
+        Self { visible: Duration::ZERO, visible_since: None, chat_open: None, settings_probe: 0, settings_day: HashMap::new(), unsent: Arc::new(unsent) }
     }
     pub(super) fn hidden(&mut self, now: Instant) {
         if let Some(since) = self.visible_since.take() { self.visible += now.saturating_duration_since(since); }
@@ -1326,10 +1328,54 @@ impl ClientTelemetry {
     }
     /// O tempo à vista que um envio que falhou devolveu.
     fn returned_visible(&self) -> Duration { Duration::from_millis(self.unsent.ms.swap(0, Ordering::SeqCst)) }
+    /// Captura só em período ativo; a marca fica para a confirmação do servidor.
+    fn capture_settings(&self, key: &str, now: chrono::DateTime<chrono::Utc>, consent: &Value,
+        read: impl FnOnce() -> Value, device: impl FnOnce() -> Option<String>) -> Option<((String, String), Value)> {
+        let period = super::machines::settings_snapshot_period(consent)?;
+        let mark = (now.format("%Y-%m-%d").to_string(), period.to_owned());
+        if self.settings_day.get(key) == Some(&mark) { return None; }
+        let mut body = serde_json::json!({"cliente": "native", "values": read(), "snapshot_period": period,
+            "ts": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)});
+        if let Some(device) = device() { body["device"] = Value::from(device); }
+        Some((mark, body))
+    }
+    fn settings_sent_today(&self, key: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+        self.settings_day.get(key).is_some_and(|(day, _)| *day == now.format("%Y-%m-%d").to_string())
+    }
+    fn confirm_settings(&mut self, key: String, mark: (String, String), reply: &Value) {
+        if reply["snapshot_period"].as_str() == Some(mark.1.as_str()) {
+            self.settings_day.insert(key, mark);
+        }
+    }
     /// Uma vez por queda.
     fn take_crash(&mut self) -> Option<Value> {
         self.unsent.crashed.swap(false, Ordering::SeqCst).then(|| telemetry_batch(serde_json::json!({"evento": "app.crash", "codigo": "panic"})))
     }
+}
+
+/// As preferências deste computador no `settings.snapshot`, nos nomes de `hangar_telemetry::events::SETTINGS`:
+/// nome de fonte, cor e número nunca saem.
+fn settings_values(a: &appearance::Appearance, seen: &crate::tour::state::Seen) -> Value {
+    use appearance::{Background, CodeFont, Font};
+    fn wire<T: serde::Serialize>(value: T) -> Value { serde_json::to_value(value).unwrap_or(Value::Null) }
+    let on = |on: bool| Value::from(if on { "on" } else { "off" });
+    serde_json::json!({
+        "theme": wire(a.theme), "panels": wire(a.panels), "palette": wire(a.palette),
+        // `Light` é o fundo que o Expo chama `aurora` (o Electron já os juntava): um nome só no painel.
+        "background": if a.background == Background::Light { Value::from("aurora") } else { wire(a.background) },
+        "background_effect": wire(a.background_effect), "wallpaper": wire(a.wallpaper),
+        "surface_material": wire(a.surface_material), "reading": wire(a.reading),
+        "font": match a.font { Font::Named(_) => Value::from("custom"), font => wire(font) },
+        "code_font": match a.code_font { CodeFont::JetBrainsMono => "jetbrains_mono", CodeFont::System => "system", CodeFont::Named(_) => "custom" },
+        "text_size": match a.text_size.cmp(&appearance::Appearance::default().text_size) {
+            std::cmp::Ordering::Less => "small", std::cmp::Ordering::Equal => "normal", std::cmp::Ordering::Greater => "large" },
+        "tool_look": wire(a.tool_look), "thinking_tools": wire(a.thinking_tools), "thinking_collapsed": on(a.thinking_collapsed),
+        "task_list": on(a.task_list), "table_chart": on(a.table_chart), "ask_highlight": wire(a.ask_highlight),
+        "delivery": wire(a.delivery_mode()), "hands_free": on(a.hands_free), "compact_style": on(a.compact_style() == *a),
+        "navigation": wire(a.navigation), "sidebar_compact": on(a.sidebar_compact), "sidebar_height": wire(a.sidebar_height),
+        "sidebar_group": wire(a.sidebar_group), "tabs_full": on(a.tabs_full), "language": wire(a.language),
+        "tips": on(!seen.tips_off()), "tour": seen.tour.map_or(Value::from("none"), wire),
+    })
 }
 
 /// Um evento no lote do diário, com o tipo do cliente.
@@ -1367,7 +1413,7 @@ impl Hangar {
         self.client_telemetry.shown(Instant::now());
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(VISIBLE_EVERY).await;
-            if this.update(cx, |this, _| this.send_visible_time()).is_err() { break; }
+            if this.update(cx, |this, cx| { this.send_visible_time(); this.send_settings_snapshot(false, cx); }).is_err() { break; }
         }).detach();
     }
 
@@ -1379,6 +1425,44 @@ impl Hangar {
             let body = telemetry_batch(serde_json::json!({"evento": "app.visible_time", "ms": ms}));
             send_telemetry(&self.runtime, api, body, self.client_telemetry.unsent.clone(), move |u| { u.ms.fetch_add(ms, Ordering::SeqCst); });
         }
+    }
+
+    /// O retrato das preferências, uma vez por dia (UTC), à máquina ativa e nunca a convite, como o tempo à vista.
+    /// Dia já confirmado não relê o aceite; `consent_saved` (aceite gravado daqui) relê.
+    pub(super) fn send_settings_snapshot(&mut self, consent_saved: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let key = self.active_key();
+        if !consent_saved && self.client_telemetry.settings_sent_today(&key, chrono::Utc::now()) { return; }
+        self.client_telemetry.settings_probe += 1;
+        let (probe, connection) = (self.client_telemetry.settings_probe, self.connection);
+        let runtime = self.runtime.clone();
+        let read = runtime.spawn({
+            let api = api.clone();
+            async move { api.server_read(&["telemetry"], &[], 8).await }
+        });
+        cx.spawn(async move |this, cx| {
+            let consent = match read.await {
+                Ok(Ok(consent)) => consent,
+                Ok(Err(error)) if error.status == Some(404) || error.code.as_deref() == Some("telemetry_unavailable") => return,
+                _ => { crate::log_line("telemetria: estado do aceite do retrato não lido"); return; }
+            };
+            let captured = this.update(cx, |this, _| {
+                if this.connection != connection || this.client_telemetry.settings_probe != probe { return None; }
+                this.client_telemetry.capture_settings(&key, chrono::Utc::now(), &consent,
+                    || settings_values(&appearance::get(), &this.tour.seen), crate::update::confirm::device_id)
+            });
+            let Ok(Some((mark, body))) = captured else { return };
+            let sent = runtime.spawn(async move { api.server_send(reqwest::Method::POST, &["telemetry"], Some(body), 10).await }).await;
+            let Ok(Ok(reply)) = sent else {
+                crate::log_line("telemetria: retrato não confirmado pelo servidor");
+                return;
+            };
+            let _ = this.update(cx, |this, _| {
+                if this.connection == connection && this.client_telemetry.settings_probe == probe {
+                    this.client_telemetry.confirm_settings(key, mark, &reply);
+                }
+            });
+        }).detach();
     }
 
     pub(super) fn send_crash_telemetry(&mut self) {
@@ -1409,9 +1493,54 @@ impl Hangar {
 
 #[cfg(test)]
 mod telemetry_tests {
-    use super::{ClientTelemetry, millis};
+    use super::{ClientTelemetry, millis, settings_values};
     use std::sync::atomic::Ordering;
     use std::time::Duration;
+
+    #[test]
+    fn telemetry_settings_snapshot_uses_the_list_names_and_never_a_font_name() {
+        use crate::appearance::{Appearance, Background, Font, FontName};
+        let mut a = Appearance { background: Background::Light, font: Font::Named(FontName::intern("Fira Code")), text_size: 120, ..Appearance::default() };
+        let seen = crate::tour::state::Seen { tour: Some(crate::tour::state::Outcome::Skipped), ..Default::default() };
+        let values = settings_values(&a, &seen);
+        let get = |key: &str| values[key].as_str().unwrap_or_default().to_owned();
+        assert_eq!((get("theme"), get("background"), get("font"), get("code_font"), get("text_size")),
+            ("dark".into(), "aurora".into(), "custom".into(), "jetbrains_mono".into(), "large".into()));
+        assert_eq!((get("navigation"), get("delivery"), get("tool_look"), get("tips"), get("tour"), get("compact_style")),
+            ("sidebar".into(), "queue".into(), "classic".into(), "on".into(), "skipped".into(), "off".into()));
+        assert!(!values.to_string().contains("Fira"), "{values}");
+        a = a.compact_style();
+        assert_eq!(settings_values(&a, &crate::tour::state::Seen::default())["compact_style"], "on");
+        assert_eq!(settings_values(&a, &crate::tour::state::Seen::default())["tour"], "none");
+    }
+
+    #[test]
+    fn telemetry_settings_snapshot_checks_consent_before_capture_or_marking_the_day() {
+        use serde_json::json;
+        let mut telemetry = ClientTelemetry::new(None);
+        let stamp = chrono::DateTime::parse_from_rfc3339("2026-11-28T01:59:59.125+02:00").unwrap().to_utc();
+        for state in [json!({"consent": true}), json!({"consent": null, "consent_scope": 2, "enabled": false}),
+            json!({"consent": true, "consent_scope": 2, "enabled": true}), json!({"consent": true, "consent_scope": 3, "enabled": true})] {
+            assert!(telemetry.capture_settings("a", stamp, &state, || panic!("leu antes do aceite"), || panic!("leu o id")).is_none());
+        }
+        let period = "a".repeat(32);
+        let state = json!({"consent": true, "consent_scope": 2, "enabled": true, "disabled_by": null, "snapshot_period": period});
+        let capture = |telemetry: &ClientTelemetry, key: &str, now| telemetry.capture_settings(key, now, &state,
+            || json!({"theme": "dark"}), || Some("fixture-device".into()));
+        let (mark, body) = capture(&telemetry, "a", stamp).unwrap();
+        assert_eq!(mark.0, "2026-11-27");
+        assert_eq!(body, json!({"snapshot_period": period, "values": {"theme": "dark"},
+            "ts": "2026-11-27T23:59:59.125Z", "device": "fixture-device", "cliente": "native"}));
+        telemetry.confirm_settings("a".into(), mark.clone(), &json!({"snapshot_period": "b".repeat(32)}));
+        assert!(capture(&telemetry, "a", stamp).is_some(), "confirmação de outro período não marca o dia");
+        assert!(!telemetry.settings_sent_today("a", stamp), "sem confirmação o próximo ciclo relê");
+        telemetry.confirm_settings("a".into(), mark, &json!({"snapshot_period": period}));
+        assert!(telemetry.settings_sent_today("a", stamp) && !telemetry.settings_sent_today("b", stamp));
+        assert!(!telemetry.settings_sent_today("a", stamp + chrono::TimeDelta::seconds(1)), "o dia novo relê");
+        assert!(capture(&telemetry, "b", stamp).is_some());
+        assert!(capture(&telemetry, "a", stamp).is_none(), "voltar à máquina A não envia de novo");
+        assert!(capture(&telemetry, "a", stamp + chrono::TimeDelta::seconds(1)).is_some());
+    }
 
     #[test]
     fn telemetry_crash_event_never_carries_the_panic_text() {
