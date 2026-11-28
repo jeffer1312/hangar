@@ -248,6 +248,8 @@ pub fn last_event_before(provider: Provider, jsonl: &Path, floor: u64, before: u
     };
     let before = before.min(f.metadata()?.len());
     let floor = floor.min(before);
+    // A linha que começa exatamente no teto também conta.
+    let floor_starts_line = floor == 0 || { let mut prev = Vec::new(); read_at(&mut f, floor - 1, 1, &mut prev)?; prev == b"\n" };
     let mut agy = super::AgyStream::for_transcript(Some(jsonl));
     let (mut block, mut spill) = (Vec::new(), Vec::new());
     let (mut pos, mut end) = (before, before);
@@ -261,7 +263,7 @@ pub fn last_event_before(provider: Provider, jsonl: &Path, floor: u64, before: u
             let nl = memchr::memrchr(b'\n', &block[..cut]);
             let start = match nl {
                 Some(nl) => from + nl as u64 + 1,
-                None if from == 0 => 0,
+                None if from == floor && floor_starts_line => floor,
                 // A linha começa antes do bloco (ou antes do teto): o próximo bloco a fecha.
                 None => break,
             };

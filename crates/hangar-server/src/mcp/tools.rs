@@ -985,10 +985,14 @@ impl Tools {
         let produced = self.st.list.snapshot().await.map_err(|_| "child_status_list_failed: a lista de sessões não respondeu")?;
         let row = produced.rows.iter().find(|r| r.name == alvo);
         // A mesma leitura do retorno (cauda e varredura): `returned` e `notified` batem com a chave gravada por ele.
-        let local = row.and_then(|r| Some((crate::transcript::Provider::parse(&r.provider)?, PathBuf::from(r.jsonl.as_deref().filter(|j| !j.is_empty())?))));
+        let local = row.and_then(|r| Some((crate::transcript::Provider::parse(&r.provider).filter(|p| crate::transcript::history::scans(*p))?,
+            PathBuf::from(r.jsonl.as_deref().filter(|j| !j.is_empty())?), r.last_reply_at)));
         let read = match local {
-            Some((provider, jsonl)) => link_state::blocking(move || link_return::child_turn(provider, &jsonl)).await
-                .map_err(|e| format!("child_status_history_failed: histórico de '{alvo}' ilegível ({:?})", e.kind()))?,
+            Some((provider, jsonl, reply_at)) => {
+                let child = alvo.to_owned();
+                link_state::blocking(move || link_return::child_turn(&child, provider, &jsonl, reply_at)).await
+                    .map_err(|e| format!("child_status_history_failed: histórico de '{alvo}' ilegível ({:?})", e.kind()))?
+            }
             None => None,
         };
         let (events, checked) = match read {

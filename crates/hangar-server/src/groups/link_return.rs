@@ -256,8 +256,6 @@ struct Watcher {
     parked: HashMap<String, Resolving>,
     /// Pais Claude nesta rodada: só eles repassam por `AskUserQuestion` com a marca.
     claude_parents: HashSet<String>,
-    /// Pedido achado pela varredura, por filha, para a resposta (`last_reply_at`) e o transcript em que foi achado.
-    scans: HashMap<String, (f64, PathBuf, Scanned)>,
 }
 
 impl Watcher {
@@ -289,7 +287,6 @@ impl Watcher {
         self.closed.retain(|n, _| present(n));
         self.closing.retain(|n, _| present(n));
         self.parked.retain(|n, _| present(n));
-        self.scans.retain(|n, _| present(n));
         self.rate.forget_old(now);
         self.question_rate.forget_old(now);
         // Já na primeira vista: o registro criado aqui só deixa voltar resposta posterior a ele.
@@ -361,7 +358,7 @@ impl Watcher {
             self.handled.insert(row.name.clone(), reply_at);
             if !settled(&check) { continue; }
             check.continues = continues_alone(st, row).await;
-            let outcome = give_back(st, row, &check, reply_at, &mut self.rate, &mut self.scans, current).await;
+            let outcome = give_back(st, row, &check, reply_at, &mut self.rate, current).await;
             self.finish(&row.name, outcome, now);
         }
     }
@@ -1033,8 +1030,8 @@ enum TurnRead {
     Found(Turn),
     /// Nem a varredura achou o pedido do turno: só a cauda, para o aviso ao pai.
     Unchecked(Vec<ChatEvent>),
-    /// Pedido fora do teto num provedor sem varredura: fica no diário.
-    Unknown,
+    /// Pedido fora do teto sem varredura possível (provedor, transcript sumido, cauda vazia): fica no diário, com o motivo.
+    Unknown(&'static str),
 }
 
 /// O que a varredura achou antes da cauda; guardado para a mesma resposta, a tentativa seguinte não varre de novo.
@@ -1218,21 +1215,27 @@ fn report(st: &AppState, child: &str, code: &str, reason: &'static str, detail: 
 
 /// `known`: a varredura já feita para esta mesma resposta. Volta a feita agora, para ser guardada.
 fn read_history(provider: Provider, jsonl: &Path, max_read: u64, known: Option<&Scanned>) -> io::Result<(TurnRead, Option<Scanned>)> {
-    let file_len = std::fs::metadata(jsonl).map_or(u64::MAX, |m| m.len());
+    let meta = std::fs::metadata(jsonl);
+    let file_len = meta.as_ref().map_or(u64::MAX, |m| m.len());
     let tail = match read_turn(|limit| merged_history_capped(&HistoryRequest {
         provider, jsonl: jsonl.to_path_buf(), queue: None, limit: Some(limit), tail_window: TAIL_WINDOW,
     }, max_read), file_len, max_read)? {
         Ok(turn) => return Ok((TurnRead::Found(turn), None)),
         Err(tail) => tail,
     };
-    if !history::scans(provider) { return Ok((TurnRead::Unknown, None)); }
+    // Só a conversa que existe e passa do teto é varrida: transcript sumido ou ilegível não é turno longo.
+    let len = match meta {
+        Ok(meta) => meta.len(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((TurnRead::Unknown("transcript_gone"), None)),
+        Err(e) => return Err(e),
+    };
+    if !history::scans(provider) { return Ok((TurnRead::Unknown("no_scan"), None)); }
+    let before = history::tail_offset(jsonl, max_read);
+    if len <= max_read || before == 0 || tail.is_empty() { return Ok((TurnRead::Unknown("tail_unread"), None)); }
     // Turno maior que o teto (horas de prints): só o pedido é procurado antes da cauda, sem ler o resto.
     let scanned = match known {
         Some(scanned) => scanned.clone(),
-        None => {
-            let before = history::tail_offset(jsonl, max_read);
-            history::last_event_before(provider, jsonl, before.saturating_sub(max_read.saturating_mul(SCAN_REACH)), before, user_request)?
-        }
+        None => history::last_event_before(provider, jsonl, before.saturating_sub(max_read.saturating_mul(SCAN_REACH)), before, user_request)?,
     };
     let read = match scanned.clone() {
         Some(asked) => TurnRead::Found(Turn { events: std::iter::once(asked).chain(tail).collect(), whole: false }),
@@ -1241,41 +1244,71 @@ fn read_history(provider: Provider, jsonl: &Path, max_read: u64, known: Option<&
     Ok((read, Some(scanned)))
 }
 
+/// Pedido achado pela varredura, por filha, para a resposta (`last_reply_at`) e o transcript em que foi achado. O
+/// vigia e o `child_status` dividem: nenhum dos dois varre de novo a mesma resposta.
+static SCANS: LazyLock<std::sync::Mutex<HashMap<String, (f64, PathBuf, Scanned)>>> = LazyLock::new(Default::default);
+
+const SCANS_MAX: usize = 256;
+
+fn scans() -> std::sync::MutexGuard<'static, HashMap<String, (f64, PathBuf, Scanned)>> {
+    SCANS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn known_scan(child: &str, reply_at: Option<f64>, jsonl: &Path) -> Option<Scanned> {
+    let reply_at = reply_at?;
+    scans().get(child).filter(|(at, path, _)| *at == reply_at && path == jsonl).map(|(_, _, scanned)| scanned.clone())
+}
+
+fn keep_scan(child: &str, reply_at: Option<f64>, jsonl: &Path, scanned: Option<Scanned>) {
+    match (reply_at, scanned) {
+        (Some(at), Some(scanned)) => {
+            let mut scans = scans();
+            // Uma entrada por filha; filha que some não é podada, então o teto segura o mapa.
+            if scans.len() >= SCANS_MAX && !scans.contains_key(child) { scans.clear(); }
+            scans.insert(child.to_owned(), (at, jsonl.to_path_buf(), scanned));
+        }
+        _ => { scans().remove(child); }
+    }
+}
+
+/// Lê o turno e guarda a varredura feita para a resposta `reply_at`.
+fn read_child(child: &str, provider: Provider, jsonl: &Path, reply_at: Option<f64>, max_read: u64) -> io::Result<TurnRead> {
+    let known = known_scan(child, reply_at, jsonl);
+    let (read, scanned) = read_history(provider, jsonl, max_read, known.as_ref())?;
+    keep_scan(child, reply_at, jsonl, scanned);
+    Ok(read)
+}
+
 /// O fim da conversa da filha pela mesma leitura do retorno, para o `child_status`: os eventos e se o pedido do
-/// turno foi achado. `None` = provedor sem varredura e pedido fora do teto.
-pub(crate) fn child_turn(provider: Provider, jsonl: &Path) -> io::Result<Option<(Vec<ChatEvent>, bool)>> {
-    Ok(match read_history(provider, jsonl, MAX_READ, None)?.0 {
+/// turno foi achado. `None` = pedido fora do teto sem varredura possível (provedor, transcript, cauda).
+pub(crate) fn child_turn(child: &str, provider: Provider, jsonl: &Path, reply_at: Option<f64>) -> io::Result<Option<(Vec<ChatEvent>, bool)>> {
+    Ok(match read_child(child, provider, jsonl, reply_at, MAX_READ)? {
         TurnRead::Found(turn) => Some((turn.events, true)),
         TurnRead::Unchecked(tail) => Some((tail, false)),
-        TurnRead::Unknown => None,
+        TurnRead::Unknown(_) => None,
     })
 }
 
 /// Lê o turno, decide e entrega; `returned_at` só depois da entrega: perder um retorno é pior que
 /// repetir um após queda no meio.
 async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at: f64, rate: &mut RateLimit,
-    scans: &mut HashMap<String, (f64, PathBuf, Scanned)>, current: &Rows<'_>) -> Outcome {
+    current: &Rows<'_>) -> Outcome {
     let child = row.name.as_str();
     let (Some(provider), Some(jsonl)) = (Provider::parse(&row.provider), row.jsonl.as_deref().filter(|j| !j.is_empty())) else {
         report(st, child, "link_return_no_transcript", "filha parada sem transcript", "");
         return Outcome::Done;
     };
     let jsonl = PathBuf::from(jsonl);
-    let known = scans.get(child).filter(|(at, path, _)| *at == reply_at && *path == jsonl).map(|(_, _, scanned)| scanned.clone());
-    let path = jsonl.clone();
-    let (read, scanned) = match blocking(move || read_history(provider, &path, MAX_READ, known.as_ref())).await {
+    let name = child.to_owned();
+    let read = match blocking(move || read_child(&name, provider, &jsonl, Some(reply_at), MAX_READ)).await {
         Ok(read) => read,
         Err(e) => { report(st, child, "link_return_history_failed", "histórico da filha ilegível", &io_kind(&e)); return Outcome::Retry }
     };
-    match scanned {
-        Some(scanned) => { scans.insert(child.to_owned(), (reply_at, jsonl, scanned)); }
-        None => { scans.remove(child); }
-    }
     let found = match &read {
         TurnRead::Found(turn) => decide(check, turn),
         TurnRead::Unchecked(tail) => Err(unchecked(check, tail)),
-        TurnRead::Unknown => {
-            report(st, child, "link_return_turn_unknown", "começo do turno da filha fora do teto de leitura; resposta não volta", "");
+        TurnRead::Unknown(why) => {
+            report(st, child, "link_return_turn_unknown", "começo do turno da filha fora do teto de leitura; resposta não volta", why);
             return Outcome::Done;
         }
     };
@@ -1367,7 +1400,7 @@ struct Reply { text: String, key: String, dropped: Option<(&'static str, &'stati
 
 const RATE_LIMITED: (&str, &str) = ("link_return_rate_limited", "retornos demais da filha em 10 min; parece laço com o pai");
 const NO_ANSWER: (&str, &str) = ("link_return_no_answer", "turno da filha sem resposta final em texto (interrompido ou parado em ferramenta)");
-const UNCHECKED: (&str, &str) = ("link_return_turn_unknown", "começo do turno da filha não achado nem pela varredura; o pai recebeu aviso");
+const UNCHECKED: (&str, &str) = ("link_return_turn_unchecked", "começo do turno da filha não achado nem pela varredura; o pai recebeu aviso");
 /// Prefixo do `returned_key` do aviso de turno não conferido: não colide com a identidade de uma resposta.
 const UNCHECKED_KEY: &str = "sem-conferir:";
 
@@ -1723,6 +1756,8 @@ mod tests {
         assert!(history::last_event_before(Provider::Claude, &path, first.offset.unwrap() + 1, len, user_request).unwrap()
             .is_some_and(|e| e.text.as_deref() == Some("[de: pai] tira os prints")), "a linha que começa antes do teto não conta");
         assert!(history::last_event_before(Provider::Claude, &path, last.offset.unwrap() + 1, len, user_request).unwrap().is_none());
+        assert!(history::last_event_before(Provider::Claude, &path, last.offset.unwrap(), len, user_request).unwrap().is_some(),
+            "a linha que começa exatamente no teto conta");
     }
 
     #[test]
@@ -1761,7 +1796,10 @@ mod tests {
             link: Some(LinkReturn { linked_at: NOW - MAX_AGE - 100.0, ..LinkReturn::default() }), ..check() };
         assert_eq!(unchecked(&old, &tail), Refusal::TooOld);
         let (_dir, path) = transcript(claude_turn(Some("[de: pai] x"), 20));
-        assert!(matches!(read_history(Provider::Pi, &path, SMALL_CAP, None).unwrap(), (TurnRead::Unknown, None)), "Pi fica no diário");
+        assert!(matches!(read_history(Provider::Pi, &path, SMALL_CAP, None).unwrap(), (TurnRead::Unknown("no_scan"), None)), "Pi fica no diário");
+        // Transcript sumido não é turno longo: fica no diário, sem aviso ao pai.
+        let gone = path.with_file_name("sumiu.jsonl");
+        assert!(matches!(read_history(Provider::Claude, &gone, SMALL_CAP, None).unwrap(), (TurnRead::Unknown("transcript_gone"), None)));
     }
 
     /// Pedido além do alcance da varredura (`SCAN_REACH` tetos) não é procurado mais longe; o achado volta guardado.
@@ -1773,6 +1811,20 @@ mod tests {
         let (read, scanned) = read_history(Provider::Claude, &path, SMALL_CAP, Some(&Some(asked.clone()))).unwrap();
         assert_eq!(scanned, Some(Some(asked)), "a varredura guardada não se refaz");
         assert_eq!(decide(&check(), &found(read)).map(|(a, _)| a), Ok("pronto"));
+    }
+
+    /// A leitura do vigia e do `child_status` usa a varredura guardada da mesma resposta, sem varrer de novo.
+    #[test]
+    fn the_child_read_reuses_the_scan_of_the_same_reply() {
+        let (_dir, path) = transcript(claude_turn(Some("[de: pai] tira os prints"), 20));
+        let first = |read: TurnRead| found(read).events[0].text.clone();
+        keep_scan("filha-cache-teste", Some(1.0), &path, Some(Some(ev(ChatKind::UserMsg, "[de: pai] guardado"))));
+        let cached = read_child("filha-cache-teste", Provider::Claude, &path, Some(1.0), SMALL_CAP).unwrap();
+        assert_eq!(first(cached).as_deref(), Some("[de: pai] guardado"), "veio da varredura guardada");
+        let fresh = read_child("filha-cache-teste", Provider::Claude, &path, Some(2.0), SMALL_CAP).unwrap();
+        assert_eq!(first(fresh).as_deref(), Some("[de: pai] tira os prints"), "outra resposta varre de novo");
+        assert!(known_scan("filha-cache-teste", Some(2.0), &path).is_some_and(|s| s.is_some()), "e guarda a nova");
+        keep_scan("filha-cache-teste", None, &path, None);
     }
 
     #[test]
