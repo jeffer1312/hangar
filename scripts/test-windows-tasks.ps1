@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/windows-tasks.ps1"
+# A leitura real, antes da troca abaixo: o teste dela substitui so a espera pelo Job.
+$realProcessTable = ${function:Get-HangarProcessTable}
 function Assert($value, $message) { if (-not $value) { throw $message } }
 $testLocalData = $env:LOCALAPPDATA
 if (-not $env:LOCALAPPDATA) { $env:LOCALAPPDATA = [IO.Path]::GetTempPath() }
@@ -409,6 +411,20 @@ try {
         try { Restart-HangarTasks 'C:\repo' 8765 0 } catch { $failed = "$_" }
         Assert ($failed -match 'em andamento' -and -not $script:events.Count) "Reinicio do atualizador interferiu com instalacao em outro processo: $failed"
     } finally { Remove-Job $lockJob -Force }
+    # Leitura que estoura o prazo tenta de novo uma vez: nada foi parado antes dela.
+    $tabela = @((Row 1 0 'System' ''))
+    function Read-HangarProcessJob([int]$seconds) {
+        $script:jobWaits += $seconds
+        if ($script:jobWaits.Count -le $script:jobTimeouts) { return $null }
+        return ,@($tabela)
+    }
+    $script:jobWaits = @(); $script:jobTimeouts = 1
+    $lidas = & $realProcessTable
+    Assert (($script:jobWaits -join ',') -eq '30,30' -and @($lidas).Count -eq 1) "Leitura que estourou o prazo nao foi repetida: esperas '$($script:jobWaits -join ',')'"
+    $script:jobWaits = @(); $script:jobTimeouts = 2
+    $failed = $null
+    try { & $realProcessTable | Out-Null } catch { $failed = "$_" }
+    Assert (($script:jobWaits -join ',') -eq '30,30' -and $failed -match 'nenhuma instancia sera encerrada') "Duas leituras estouradas: esperas '$($script:jobWaits -join ',')', erro: $failed"
 
     $tokens = $null; $errors = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile("$PSScriptRoot/../install.ps1", [ref]$tokens, [ref]$errors)

@@ -1,16 +1,27 @@
 # Funcoes compartilhadas pelo instalador e pelo atualizador, sem iniciar processos ao carregar.
-function Get-HangarProcessTable {
+# Uma leitura pelo Job; $null quando ele estoura o prazo.
+function Read-HangarProcessJob([int]$seconds) {
     $job = Start-Job {
         Get-CimInstance Win32_Process -ErrorAction Stop |
             Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate
     }
     try {
-        # O Job abre um PowerShell novo, que em maquina lenta gasta segundos preparando modulos antes da consulta.
-        if (-not (Wait-Job $job -Timeout 30)) { throw 'WMI nao respondeu em 30 s; nenhuma instancia sera encerrada ou iniciada' }
-        $rows = @(Receive-Job $job -ErrorAction Stop)
-        if (-not $rows.Count) { throw 'Tabela de processos vazia; nao e seguro recuperar a tarefa' }
-        return $rows
+        if (-not (Wait-Job $job -Timeout $seconds)) { return $null }
+        return ,@(Receive-Job $job -ErrorAction Stop)
     } finally { Remove-Job $job -Force -ErrorAction SilentlyContinue }
+}
+
+function Get-HangarProcessTable {
+    # O Job abre um PowerShell novo, que em maquina lenta gasta segundos preparando modulos antes da
+    # consulta. Nada foi parado antes desta leitura: repetir quando estoura o prazo e seguro.
+    $rows = $null
+    foreach ($attempt in 1..2) {
+        $rows = Read-HangarProcessJob 30
+        if ($null -ne $rows) { break }
+    }
+    if ($null -eq $rows) { throw 'WMI nao respondeu em 2 tentativas de 30 s; nenhuma instancia sera encerrada ou iniciada' }
+    if (-not $rows.Count) { throw 'Tabela de processos vazia; nao e seguro recuperar a tarefa' }
+    return $rows
 }
 
 function Get-HangarTaskProcesses($rows, [string]$name, [string]$directory) {
