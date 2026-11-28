@@ -1,7 +1,7 @@
 //! Testes HTTP, SSE, OAuth, Keyring e isolamento de segredos das integrações MCP externas.
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -44,18 +44,14 @@ use zeroize::Zeroizing;
 use crate::fake::{OWNER, client, config};
 
 fn fixture_mcp_bin() -> PathBuf {
-    let exe = std::env::current_exe().expect("executável de testes");
-    let name = format!("hangar-fixture-mcp{}", std::env::consts::EXE_SUFFIX);
-    exe.ancestors()
-        .skip(1)
-        .map(|dir| dir.join(&name))
-        .find(|bin| bin.is_file())
-        .unwrap_or_else(|| {
-            panic!(
-                "rode `scripts/cargo-pinned build -p hangar-integrations --bin hangar-fixture-mcp` antes: nenhum acima de {}",
-                exe.display()
-            )
-        })
+    let bin = Path::new(env!("CARGO_BIN_EXE_hangar-server"))
+        .with_file_name(format!("hangar-fixture-mcp{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        bin.is_file(),
+        "compile `hangar-fixture-mcp` no mesmo target e perfil: {}",
+        bin.display()
+    );
+    bin
 }
 
 /// Chaveiro falso isolado para o Cofre de senhas, separado do chaveiro das integrações.

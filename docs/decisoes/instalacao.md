@@ -257,10 +257,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   testes fica fora desses limites: sob eles, teste de prazo falharia por carga. A
   segunda faixa só abre ao lado da do cargo com a reserva dela sobrando. Evidência em
   [Verificação local leve](#verificação-local-leve-11112026).
-- **Build e teste locais: target comum, binário fixado na worktree, mensagens com carimbo.** Toda
-  worktree compila no target comum da máquina pelo `scripts/cargo-pinned`, que pega a trava
-  `/tmp/hangar-build.lock` e copia os executáveis para o `crates/target` do checkout na mesma trava:
-  pytest e `CP_RUST_SERVER_BIN` rodam essa cópia, nunca o executável do target comum. Jobs e teto de
+- **Build e teste locais: cache compartilhado, binário fixado na worktree, mensagens com carimbo.**
+  No Linux e no macOS, `scripts/cargo-pinned` respeita o target configurado. Por padrão, guarda os
+  intermediários em `crates/target/.cargo-pinned-shared` do checkout principal e deixa os
+  executáveis finais na worktree. O Cargo identifica os artefatos dos
+  membros pelo caminho do wrapper na worktree e reaproveita as dependências externas entre elas.
+  A cada 24 horas, durante um build, o script poda os intermediários marcados de worktrees que
+  saíram do registro do Git e do disco, sob a trava de build, também no target configurado pelo
+  usuário. Dependências externas ficam fora dessa poda. Sem a marca da worktree dona (target passado
+  por `--target-dir`), o wrapper não entra.
+  Com wrapper do usuário, fontes substituídas, dependência local fora do workspace ou Cargo anterior
+  à 1.100, continua valendo a invalidação de fingerprints na troca de árvore. O script pega a
+  trava `/tmp/hangar-build.lock` e copia os executáveis para o `crates/target` do checkout na mesma
+  trava. O pytest e `CP_RUST_SERVER_BIN` rodam essa cópia. Jobs e teto de
   memória saem da memória livre ao pegar a trava: um job por 9 GB livres além de 2 GB de folga
   (`HANGAR_BUILD_GB_POR_JOB`), entre 1 e o número de núcleos, e `MemoryHigh` num escopo do systemd do
   usuário igual ao livre menos a folga (mínimo 4 GB), preso à unidade de quem chamou (`BindsTo`) para
@@ -269,6 +278,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `~/.hangar/bin` usa o release do target aquecido; o perfil dev não é mais rápido na mudança
   incremental. O `i18n:compile` de front, core e app passa por `scripts/i18n-compile.mjs` e pula
   quando entrada e saída batem com o carimbo da última compilação. Evidência em
+  [Cache Rust entre worktrees](#cache-rust-entre-worktrees-28112026) e
   [Build e teste locais rápidos](#build-e-teste-locais-rápidos-23102026).
 - **Nada depende de onde o cargo guarda os intermediários do target.** Script e teste só contam com
   o que o cargo publica na raiz do perfil (`target/<perfil>/<binário>`) e com o `executable` das
@@ -1148,6 +1158,39 @@ O que dependia do layout antigo e o que cada um fazia com a 1.100 antes do conse
   não invalidava nada.
 - `scripts/podar-target` achava o perfil pela pasta `deps/`: não podava nada, nem no cache do CI nem na
   máquina. A poda por teto do `verificar-local` não achava executável e apagava o target inteiro.
+
+## Cache Rust entre worktrees (28/11/2026)
+
+O Cargo calcula a identidade de um membro do workspace com o caminho absoluto do
+`RUSTC_WORKSPACE_WRAPPER`. Cada worktree conserva os próprios intermediários dos membros no cache,
+com a mesma identidade para as dependências externas. No cache padrão, o wrapper identifica a
+worktree dona da unidade e coloca o incremental junto dela antes de passar o comando ao
+compilador. O Cargo continua verificando alterações no código e na configuração de cada worktree.
+No target configurado pelo usuário vale a mesma marca: sem ela, cada worktree deixava uma cópia dos
+membros e do incremental que nenhuma poda alcançava. Como outro clone pode dividir esse target, a
+poda só remove a unidade cuja worktree saiu do registro e não existe mais no disco.
+
+No cache criado pelo script, `CARGO_BUILD_BUILD_DIR` aponta para o diretório compartilhado e
+`CARGO_TARGET_DIR` para o diretório de compilação da worktree. Os testes que executam o
+`hangar-cano` ou o `hangar-fixture-mcp` procuram o auxiliar no diretório do servidor indicado
+por `CARGO_BIN_EXE_hangar-server`. O script publica o par servidor e `hangar-auth` na worktree
+depois do sucesso, sob a mesma trava.
+
+Os cenários do `scripts/test-cargo-freshness.sh --with-cargo` usam duas árvores com executáveis
+distintos. Na sequência A → B → A, o teste verifica o executável de cada árvore, o cache na volta,
+o executável auxiliar de integração e a configuração de wrapper do usuário. A prova também remove
+uma worktree do Git, executa a poda e verifica que a outra continua voltando sem recompilar.
+
+**Medição no Linux, Cargo 1.100, perfil `dev`, dois jobs.** As duas worktrees tinham o mesmo
+código da `main` (`b9b65ccc0`). A sequência usou `cargo-pinned build --locked --timings -p hangar-server`
+com o mesmo target compartilhado. Na volta a A, a versão anterior levou **384,622 s** e compilou
+**70 unidades de 66 pacotes locais**. Com a identidade por worktree, levou **3,132 s** e compilou
+**zero unidades**. A primeira compilação de cada worktree com a identidade nova ainda compilou
+as 70 unidades locais e reaproveitou as dependências externas.
+
+Com o cache aquecido e o diretório final separado, o script publicou o par na worktree em
+**2,597 s**. Os SHA-256 do servidor e da biblioteca publicados foram conferidos contra o
+`hangar-server.auth.json`.
 
 ## Build e teste locais rápidos (23/10/2026)
 

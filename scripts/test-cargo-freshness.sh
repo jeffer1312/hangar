@@ -49,33 +49,170 @@ mkdir "$build/.hangar-cargo-workspace.json"
 if prepare 2>"$sandbox/error"; then exit 1; fi
 [[ -s "$sandbox/error" ]]
 printf 'Invalidação seletiva, cache, caminhos com espaços e links: OK\n'
+# A poda só apaga a unidade cuja worktree sumiu do disco: outro clone pode usar o mesmo target.
+repo="$sandbox/repo"
+shared="$sandbox/shared cache"
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init -q "$repo"
+mkdir -p "$sandbox/other clone"
+owned_unit() {
+    mkdir -p "$shared/debug/build/pkg/$1"
+    printf '%s' "$2" > "$shared/debug/build/pkg/$1/.hangar-worktree"
+}
+owned_unit 0123456789abcdef "$repo"
+owned_unit 1111111111111111 "$sandbox/other clone"
+owned_unit 2222222222222222 "$sandbox/removed"
+(cd "$repo" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HANGAR_CARGO_CACHE_WORKTREE="$repo" \
+    python3 "$root/scripts/cargo-worktree-cache.py" --prune "$shared")
+[[ -d "$shared/debug/build/pkg/0123456789abcdef" && -d "$shared/debug/build/pkg/1111111111111111" ]]
+[[ ! -e "$shared/debug/build/pkg/2222222222222222" ]]
+printf 'Poda preserva outro clone no mesmo target e remove a worktree apagada: OK\n'
 [[ ${1:-} == --with-cargo ]] || exit 0
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 CARGO_HOME="$temporary/cargo-home" CARGO_TERM_COLOR=never
+unset RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER
+unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR CARGO_BUILD_BUILD_DIR
 for name in first second; do
     checkout="$sandbox/$name"
-    mkdir -p "$checkout/scripts" "$checkout/crates/library/src" "$checkout/crates/app/src"
-    cp "$root/scripts/cargo-pinned" "$root/scripts/pin-auth-pair.py" "$root/scripts/cargo-freshness.sh" "$checkout/scripts/"
+    mkdir -p "$checkout/scripts" "$checkout/crates/library/src/bin" "$checkout/crates/app/src" "$checkout/crates/app/tests"
+    cp "$root/scripts/cargo-pinned" "$root/scripts/pin-auth-pair.py" "$root/scripts/cargo-freshness.sh" \
+        "$root/scripts/cargo-worktree-cache.py" "$root/scripts/cargo-worktree-rustc" "$checkout/scripts/"
     # O layout do target muda com a versão do cargo: a prova usa a do repositório.
     cp "$root/crates/rust-toolchain.toml" "$checkout/crates/"
     git init -q "$checkout"
     printf '[workspace]\nmembers=["library","app"]\nresolver="3"\n' > "$checkout/crates/Cargo.toml"
     printf '[package]\nname="cargo-freshness-library"\nversion="0.1.0"\nedition="2024"\n[lib]\ncrate-type=["rlib","cdylib"]\n' > "$checkout/crates/library/Cargo.toml"
     printf "pub fn value()->&'static str{\"%s\"}\n" "$name" > "$checkout/crates/library/src/lib.rs"
+    printf 'fn main(){println!("{}",cargo_freshness_library::value());}\n' > "$checkout/crates/library/src/bin/cargo-freshness-helper.rs"
     printf '[package]\nname="cargo-freshness-app"\nversion="0.1.0"\nedition="2024"\n[dependencies]\ncargo-freshness-library={path="../library"}\n' > "$checkout/crates/app/Cargo.toml"
     printf 'fn main(){println!("{}",cargo_freshness_library::value());}\n' > "$checkout/crates/app/src/main.rs"
+    cat > "$checkout/crates/app/tests/auxiliary.rs" <<'RS'
+#[test]
+fn reads_the_helper_from_the_same_target() {
+    let app = std::path::Path::new(env!("CARGO_BIN_EXE_cargo-freshness-app"));
+    let output = std::process::Command::new(app.with_file_name("cargo-freshness-helper"))
+        .output().expect("executável auxiliar do mesmo target");
+    assert!(output.status.success());
+    let marker = String::from_utf8(output.stdout).expect("saída UTF-8");
+    assert_eq!(marker.trim(), std::env::var("WORKTREE_CACHE_EXPECTED").unwrap());
+}
+RS
 done
 # A segunda árvore é mais velha que os artefatos da primeira, reproduzindo o falso frescor.
 find "$sandbox/second/crates" -type f -exec touch -t 200001010000 {} +
 build_tree() {
-    (cd "$sandbox/$1" && CARGO_TARGET_DIR="$sandbox/shared-target" bash scripts/cargo-pinned build --offline -p cargo-freshness-app) > "$sandbox/build.log" 2>&1
-    [[ $("$sandbox/$1/crates/target/debug/cargo-freshness-app") == "$1" ]]
+    local name=$1; shift
+    (cd "$sandbox/$name" && env "$@" bash scripts/cargo-pinned build --offline \
+        -p cargo-freshness-app -p cargo-freshness-library) \
+        > "$sandbox/build.log" 2>&1 || { cat "$sandbox/build.log" >&2; return 1; }
+    [[ $("$sandbox/$name/crates/target/debug/cargo-freshness-app") == "$name" ]]
 }
-build_tree first
+assert_reused() {
+    if grep -Eq 'Compiling cargo-freshness-(app|library)' "$sandbox/build.log"; then
+        cat "$sandbox/build.log" >&2
+        return 1
+    fi
+}
+shared_target="CARGO_TARGET_DIR=$sandbox/shared-target"
+build_tree first "$shared_target"
 cp "$sandbox/first/crates/target/debug/cargo-freshness-app" "$sandbox/first.before"
-build_tree second
+build_tree second "$shared_target"
 cmp "$sandbox/first.before" "$sandbox/first/crates/target/debug/cargo-freshness-app"
-build_tree second
-if grep -q 'Compiling cargo-freshness-library' "$sandbox/build.log"; then
-    cat "$sandbox/build.log" >&2
-    exit 1
-fi
+build_tree second "$shared_target"
+assert_reused
 printf 'Duas árvores reais e cache da mesma árvore: OK\n'
+[[ "$OSTYPE" == linux* || "$OSTYPE" == darwin* ]] || exit 0
+build_tree first "$shared_target"
+assert_reused
+printf 'Cache compartilhado preservado na volta: OK\n'
+
+# Sem configuração de target, as worktrees do mesmo repositório devem usar o cache comum.
+git -C "$sandbox/first" add scripts crates/Cargo.toml crates/Cargo.lock crates/rust-toolchain.toml crates/app crates/library
+git -C "$sandbox/first" -c user.name=Teste -c user.email=teste@example.invalid -c core.hooksPath=/dev/null commit -qm teste
+git -C "$sandbox/first" -c core.hooksPath=/dev/null worktree add --detach --quiet "$sandbox/linked"
+printf "pub fn value()->&'static str{\"linked\"}\n" > "$sandbox/linked/crates/library/src/lib.rs"
+build_tree first
+build_tree linked
+build_tree first
+[[ -d "$sandbox/first/crates/target/.cargo-pinned-shared/debug" ]]
+[[ ! -e "$sandbox/first/crates/target/.cargo-pinned-shared/debug/cargo-freshness-helper" ]]
+assert_reused
+printf 'Cache padrão compartilhado entre worktrees do mesmo repositório: OK\n'
+
+for name in first linked; do
+    (cd "$sandbox/$name" && WORKTREE_CACHE_EXPECTED="$name" bash scripts/cargo-pinned \
+        test --offline -p cargo-freshness-app --test auxiliary) > "$sandbox/build.log" 2>&1 || {
+        cat "$sandbox/build.log" >&2
+        exit 1
+    }
+    grep -Fxq 'test reads_the_helper_from_the_same_target ... ok' "$sandbox/build.log"
+done
+printf 'Teste de integração usou o executável auxiliar da própria worktree: OK\n'
+
+cache="$sandbox/first/crates/target/.cargo-pinned-shared"
+mkdir -p "$cache/debug/build/external/0123456789abcdef/out"
+assert_cache_owners() {
+    python3 - "$cache" "$sandbox" "$1" <<'PY'
+from pathlib import Path
+import json
+import os
+import sys
+
+cache, sandbox = (Path(value) for value in sys.argv[1:3])
+owners = [(marker.parent, marker.read_bytes()) for marker in cache.glob("*/build/*/*/.hangar-worktree")]
+first = [unit for unit, owner in owners if owner == os.fsencode(sandbox / "first")]
+linked = [unit for unit, owner in owners if owner == os.fsencode(sandbox / "linked")]
+snapshot = sandbox / "cache-owners.json"
+if sys.argv[3] == "linked":
+    incremental = [unit / "incremental" for unit in first if (unit / "incremental").is_dir()]
+    assert incremental and linked
+    snapshot.write_text(json.dumps({"keep": list(map(str, first + incremental)), "remove": list(map(str, linked))}))
+else:
+    expected = json.loads(snapshot.read_text())
+    assert all(Path(unit).is_dir() for unit in expected["keep"])
+    assert all(not Path(unit).exists() for unit in expected["remove"])
+assert (cache / "debug/build/external/0123456789abcdef/out").is_dir()
+PY
+}
+assert_cache_owners linked
+git -C "$sandbox/first" worktree remove --force "$sandbox/linked"
+touch -t 200001010000 "$cache/.hangar-pruned"
+build_tree first
+assert_reused
+assert_cache_owners removed
+printf 'Poda removeu as unidades da worktree encerrada e preservou o cache em uso: OK\n'
+
+# Com target configurado, as unidades da worktree encerrada também saem e as da ativa ficam.
+configured_target="$sandbox/configured target"
+mkdir -p "$CARGO_HOME"
+printf '[build]\ntarget-dir = "%s"\n' "$configured_target" > "$CARGO_HOME/config.toml"
+git -C "$sandbox/first" -c core.hooksPath=/dev/null worktree add --detach --quiet "$sandbox/configured"
+printf "pub fn value()->&'static str{\"configured\"}\n" > "$sandbox/configured/crates/library/src/lib.rs"
+owned_units() {
+    python3 - "$configured_target" "$1" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+owner = os.fsencode(sys.argv[2])
+print(sum(marker.read_bytes() == owner for marker in Path(sys.argv[1]).glob("*/build/*/*/.hangar-worktree")))
+PY
+}
+build_tree configured
+build_tree first
+(( $(owned_units "$sandbox/configured") > 0 && $(owned_units "$sandbox/first") > 0 ))
+git -C "$sandbox/first" worktree remove --force "$sandbox/configured"
+touch -t 200001010000 "$configured_target/.hangar-pruned"
+build_tree first
+assert_reused
+(( $(owned_units "$sandbox/configured") == 0 && $(owned_units "$sandbox/first") > 0 ))
+printf 'Target configurado: poda da worktree encerrada e cache em uso preservado: OK\n'
+
+printf '[build]\nrustc-workspace-wrapper = "configured-rustc"\n' > "$CARGO_HOME/config.toml"
+cat > "$CARGO_HOME/configured-rustc" <<'SH'
+#!/usr/bin/env sh
+touch "$CARGO_CACHE_TEST_MARK"
+exec "$@"
+SH
+chmod +x "$CARGO_HOME/configured-rustc"
+build_tree first "PATH=$CARGO_HOME:$PATH" "CARGO_CACHE_TEST_MARK=$sandbox/custom-wrapper-used"
+[[ -f "$sandbox/custom-wrapper-used" ]]
+printf 'Wrapper configurado pelo usuário preservado: OK\n'
