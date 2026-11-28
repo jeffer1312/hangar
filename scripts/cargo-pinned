@@ -69,13 +69,20 @@ workspace_cache() {
 }
 
 cache_mode="$(workspace_cache "$@")" || cache_mode=
+unset HANGAR_CARGO_CACHE_WORKTREE
 if [[ "$cache_mode" == default && "$alvo" == "$proprio" && "$target_arg" == -1 &&
       -z ${CARGO_TARGET_DIR+x} && -z ${CARGO_BUILD_TARGET_DIR+x} && -z ${CARGO_BUILD_BUILD_DIR+x} ]]; then
     common_git="$(git rev-parse --path-format=absolute --git-common-dir)"
     common_checkout="${common_git%/*}"
-    if [[ "${common_git##*/}" == .git && -d "$common_checkout/crates" ]]; then
-        intermediarios="$(realpath -m "$common_checkout/crates/target/.cargo-pinned-shared")"
+    shared_build_dir="$common_checkout/crates/target/.cargo-pinned-shared"
+    if [[ "${common_git##*/}" == .git && -d "$common_checkout/crates" &&
+          ! -L "$common_checkout/crates/target" && ! -L "$shared_build_dir" ]]; then
+        intermediarios="$(realpath -m "$shared_build_dir")"
         export CARGO_BUILD_BUILD_DIR="$intermediarios"
+        export HANGAR_CARGO_CACHE_WORKTREE="$raiz"
+        if ! python3 "$raiz/scripts/cargo-worktree-cache.py" --prune "$intermediarios"; then
+            echo "cargo-pinned: não foi possível podar o cache compartilhado" >&2
+        fi
     fi
 fi
 

@@ -130,6 +130,39 @@ for name in first linked; do
 done
 printf 'Teste de integração usou o executável auxiliar da própria worktree: OK\n'
 
+cache="$sandbox/first/crates/target/.cargo-pinned-shared"
+mkdir -p "$cache/debug/build/external/0123456789abcdef/out"
+assert_cache_owners() {
+    python3 - "$cache" "$sandbox" "$1" <<'PY'
+from pathlib import Path
+import json
+import os
+import sys
+
+cache, sandbox = (Path(value) for value in sys.argv[1:3])
+owners = [(marker.parent, marker.read_bytes()) for marker in cache.glob("*/build/*/*/.hangar-worktree")]
+first = [unit for unit, owner in owners if owner == os.fsencode(sandbox / "first")]
+linked = [unit for unit, owner in owners if owner == os.fsencode(sandbox / "linked")]
+snapshot = sandbox / "cache-owners.json"
+if sys.argv[3] == "linked":
+    incremental = [unit / "incremental" for unit in first if (unit / "incremental").is_dir()]
+    assert incremental and linked
+    snapshot.write_text(json.dumps({"keep": list(map(str, first + incremental)), "remove": list(map(str, linked))}))
+else:
+    expected = json.loads(snapshot.read_text())
+    assert all(Path(unit).is_dir() for unit in expected["keep"])
+    assert all(not Path(unit).exists() for unit in expected["remove"])
+assert (cache / "debug/build/external/0123456789abcdef/out").is_dir()
+PY
+}
+assert_cache_owners linked
+git -C "$sandbox/first" worktree remove --force "$sandbox/linked"
+touch -t 200001010000 "$cache/.hangar-pruned"
+build_tree first
+assert_reused
+assert_cache_owners removed
+printf 'Poda removeu as unidades da worktree encerrada e preservou o cache em uso: OK\n'
+
 mkdir -p "$CARGO_HOME"
 printf '[build]\nrustc-workspace-wrapper = "configured-rustc"\n' > "$CARGO_HOME/config.toml"
 cat > "$CARGO_HOME/configured-rustc" <<'SH'

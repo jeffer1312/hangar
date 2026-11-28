@@ -1,3 +1,25 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 # O Cargo usa o caminho absoluto deste wrapper na identidade dos crates do checkout.
+if [[ -n ${HANGAR_CARGO_CACHE_WORKTREE:-} && -n ${CARGO_BUILD_BUILD_DIR:-} ]]; then
+    args=("$@")
+    out=
+    incremental=-1
+    for ((i=1; i<${#args[@]}; i++)); do
+        case "${args[i-1]}" in
+            --out-dir) out="${args[i]}" ;;
+            -C)
+                if [[ "${args[i]}" == incremental="$CARGO_BUILD_BUILD_DIR/"* ]]; then
+                    incremental="$i"
+                fi
+                ;;
+        esac
+    done
+    if [[ "$out" == "$CARGO_BUILD_BUILD_DIR/"*/build/*/*/out ]]; then
+        unit="${out%/out}"
+        # O estado incremental segue a unidade que o usa na limpeza da worktree.
+        if (( incremental >= 0 )); then args[incremental]="incremental=$unit/incremental"; fi
+        printf '%s' "$HANGAR_CARGO_CACHE_WORKTREE" > "$unit/.hangar-worktree"
+    fi
+    exec "${args[@]}"
+fi
 exec "$@"

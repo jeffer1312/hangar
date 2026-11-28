@@ -262,6 +262,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   intermediários em `crates/target/.cargo-pinned-shared` do checkout principal e deixa os
   executáveis finais na worktree. O Cargo identifica os artefatos dos
   membros pelo caminho do wrapper na worktree e reaproveita as dependências externas entre elas.
+  A cada 24 horas, durante um build, o script poda os intermediários marcados de worktrees que
+  saíram do registro do Git, sob a trava de build. Cache configurado pelo usuário e dependências
+  externas ficam fora dessa poda.
   Com wrapper do usuário, fontes substituídas, dependência local fora do workspace ou Cargo anterior
   à 1.100, continua valendo a invalidação de fingerprints na troca de árvore. O script pega a
   trava `/tmp/hangar-build.lock` e copia os executáveis para o `crates/target` do checkout na mesma
@@ -1171,7 +1174,8 @@ depois do sucesso, sob a mesma trava.
 
 Os cenários do `scripts/test-cargo-freshness.sh --with-cargo` usam duas árvores com executáveis
 distintos. Na sequência A → B → A, o teste verifica o executável de cada árvore, o cache na volta,
-o executável auxiliar de integração e a configuração de wrapper do usuário.
+o executável auxiliar de integração e a configuração de wrapper do usuário. A prova também remove
+uma worktree do Git, executa a poda e verifica que a outra continua voltando sem recompilar.
 
 **Medição no Linux, Cargo 1.100, perfil `dev`, dois jobs.** As duas worktrees tinham o mesmo
 código da `main` (`b9b65ccc0`). A sequência usou `cargo-pinned build --locked --timings -p hangar-server`
