@@ -1637,6 +1637,18 @@ fn the_jev_auxiliary_model_falls_back_to_the_browser_one() {
     assert_eq!(claude::jev_pairs(false, &runtime), [("HANGAR_JEV".to_owned(), "off".to_owned())]);
 }
 
+/// Ajuda pela sessão: o auxiliar gravado não chega ao pane, e o marcador diz ao hangar-preview que a dúvida volta.
+#[test]
+fn the_session_itself_helps_instead_of_the_auxiliary_model() {
+    let runtime = json!({"jev_api_key": "sk-or-x", "jev_aux_mode": "session", "jev_aux_base_url": "https://api.anthropic.com/v1",
+        "jev_aux_api_key": "sk-ant-x", "jev_aux_modelo": "claude-sonnet-5-5"});
+    let keys: Vec<String> = claude::jev_pairs(true, &runtime).into_iter().map(|(k, _)| k).collect();
+    assert_eq!(keys, ["HANGAR_JEV", "TYPESAFE_API_KEY", "JEV_ENDPOINT", "JEV_MODEL", "JEV_AUX_MODE"]);
+    let api = json!({"jev_api_key": "sk-or-x", "jev_aux_mode": "api", "jev_aux_base_url": "https://h/v1", "jev_aux_api_key": "k", "jev_aux_modelo": "m"});
+    let keys: Vec<String> = claude::jev_pairs(true, &api).into_iter().map(|(k, _)| k).collect();
+    assert!(keys.iter().any(|k| k == "JEV_AUX_API_KEY") && !keys.iter().any(|k| k == "JEV_AUX_MODE"), "{keys:?}");
+}
+
 /// O prompt inicial do Claude com terminal é entregue (o Python o perdia calado): vai como o
 /// prompt posicional do `claude`, depois das opções, e com `--` quando começa com `-`.
 #[test]

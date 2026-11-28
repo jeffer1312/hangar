@@ -51,7 +51,9 @@ impl RuntimeConfig {
                 json!(model.unwrap_or_else(|| "jev-latest".into())),
             );
         }
-        for (key, target) in [AUX[0], AUX[2], AUX[3], AUX[1]].into_iter().zip(LLM) {
+        // Ajuda pela sessão: sem `LLM_*`, o Computer Use não manda a tela a nenhum modelo e devolve a dúvida.
+        let aux = if crate::jev_aux::session_helps(&self.get("jev_aux_mode")) { [].as_slice() } else { [AUX[0], AUX[2], AUX[3], AUX[1]].as_slice() };
+        for (key, target) in aux.iter().copied().zip(LLM) {
             let value = self.get(key).as_str().unwrap_or("").trim().to_owned();
             if value.is_empty() {
                 continue;

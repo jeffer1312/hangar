@@ -58,6 +58,7 @@ pub const TEXT: &[&str] = &[
     "jev_aux_api_key",
     "jev_aux_modelo",
     "jev_aux_esforco",
+    "jev_aux_mode",
     "scan_roots",
     "shortcuts",
 ];
@@ -249,6 +250,9 @@ pub fn coerce(key: &str, value: &Value) -> Result<Value, String> {
     }
     if key == "jev_aux_esforco" && !["", "low", "medium", "high"].contains(&text.as_str()) {
         return Err("jev_aux_esforco: use vazio, low, medium ou high".into());
+    }
+    if key == "jev_aux_mode" && !["", "session", "api"].contains(&text.as_str()) {
+        return Err("jev_aux_mode: use vazio, session ou api".into());
     }
     if [
         "transcription_base_url",

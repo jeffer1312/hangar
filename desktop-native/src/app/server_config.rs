@@ -90,6 +90,8 @@ const TUNES: [Tune; 4] = [
 struct Field { key: &'static str, label: &'static str, help: &'static str, icon: IconName, kind: Kind, page: Page }
 
 const AUX_MODEL: &str = "jev_aux_modelo";
+/// Quem desempata quando o Jev fica em dúvida: `session` (a sessão que o chamou) ou `api` (o auxiliar abaixo).
+const AUX_MODE: &str = "jev_aux_mode";
 
 /// Na ordem do `CAMPOS` do web, filtrada por página.
 const FIELDS: [Field; 36] = [
@@ -544,6 +546,15 @@ impl ServerConfig {
     fn removing(&self, key: &str) -> bool { self.draft.get(key) == Some(&Value::Null) }
 
     fn filled(&self, key: &str) -> bool { !text_of(&self.current(key)).trim().is_empty() }
+
+    /// Ajuda pela sessão: a escolha gravada; sem escolha, a falta de um endereço de auxiliar, como o servidor faz.
+    fn aux_by_session(&self) -> bool {
+        match text_of(&self.current(AUX_MODE)).trim() {
+            "session" => true,
+            "api" => false,
+            _ => !self.filled("jev_aux_base_url"),
+        }
+    }
 
     /// Chave guardada no servidor e que não sai no próximo Salvar.
     fn key_set(&self, key: &str) -> bool { self.secret_mask(key).is_some() && !self.removing(key) }
@@ -1574,15 +1585,31 @@ impl Hangar {
             // Servidor sem a rota (mais antigo) ou sem resposta: o atalho só não aparece.
             Some(Err(_)) | None => None,
         };
-        let model = self.render_model_box(cx);
-        settings_box()
+        let by_session = s.aux_by_session();
+        // Servidor que não publica a escolha (mais antigo) fica só com o auxiliar por API, como antes.
+        let mode_row = s.fields.contains_key(AUX_MODE).then(|| {
+            let names = [tr("server_jev_aux_mode_session"), tr("server_jev_aux_mode_api")];
+            line().child(div().text_sm().font_weight(FontWeight::MEDIUM).child(tr("server_jev_aux_mode")))
+                .child(div().flex().child(segments_with_hints("jev-aux-mode", &names, &[], usize::from(!by_session), 2, false, String::new(),
+                    |this, n, _, cx| { this.server_config.stage(AUX_MODE, Value::String((if n == 0 { "session" } else { "api" }).into())); cx.notify(); }, cx)))
+                .when(by_session, |el| el.child(muted(tr("server_jev_aux_mode_session_help"))))
+        });
+        // A busca que achou um campo do auxiliar mostra o campo, mesmo com a ajuda pela sessão.
+        let searched = ["server_jev_aux_endpoint", "server_jev_aux_key", "server_jev_aux_model", "server_jev_aux_effort"].iter().any(|k| self.search_hit(k));
+        let api = !s.fields.contains_key(AUX_MODE) || !by_session || searched;
+        let model = if api { self.render_model_box(cx) } else { None };
+        let mut card = settings_box()
             .child(div().px_4().pt(px(14.)).pb(px(4.)).text_base().font_weight(FontWeight::SEMIBOLD).child(tr("server_jev_aux_title")))
             .child(div().px_4().pb(px(10.)).child(muted(tr("server_jev_aux_help"))))
-            .children(proxy)
-            .child(self.config_row(field("jev_aux_base_url"), cx))
-            .child(self.config_row(field("jev_aux_api_key"), cx))
-            .child(self.config_row_with(field(AUX_MODEL), model, cx))
-            .child(self.config_row(field("jev_aux_esforco"), cx))
+            .children(mode_row.map(|row| self.mark(row, "server_jev_aux_mode")));
+        if api {
+            card = card.children(proxy)
+                .child(self.config_row(field("jev_aux_base_url"), cx))
+                .child(self.config_row(field("jev_aux_api_key"), cx))
+                .child(self.config_row_with(field(AUX_MODEL), model, cx))
+                .child(self.config_row(field("jev_aux_esforco"), cx));
+        }
+        card
     }
 
     /// O campo Modelo: o valor atual no gatilho; aberto, a lista do provedor com busca, e os estados dela dentro.

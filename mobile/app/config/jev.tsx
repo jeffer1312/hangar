@@ -6,6 +6,7 @@ import { BlockHead, Box, ConfigRow, Disclosure, Muted, RowShell, ScopeChips, Ser
 import { AnchoredPanel } from '../../src/ui/AnchoredPanel';
 import { Icon } from '../../src/ui/Icon';
 import { Pill } from '../../src/features/config/PageHeader';
+import { Segmented } from '../../src/features/config/Segmented';
 import { useSettingsColors } from '../../src/features/config/colors';
 import { FIELDS, textOf, useServerConfig, type ServerConfig } from '../../src/features/config/serverConfig';
 import * as m from '../../src/paraglide/messages';
@@ -57,6 +58,11 @@ export default function Jev() {
 
   const auxSupported = 'jev_aux_base_url' in cfg.fields;
   const url = textOf(cfg.current('jev_aux_base_url')).trim();
+  // Servidor que não publica a escolha (mais antigo) fica só com o auxiliar por API, como antes.
+  const modeSupported = 'jev_aux_mode' in cfg.fields;
+  const savedMode = textOf(cfg.current('jev_aux_mode')).trim();
+  // Sem escolha gravada vale o que o servidor faz: sem endereço, a dúvida já volta para a sessão.
+  const bySession = modeSupported && (savedMode === 'session' || (savedMode !== 'api' && !url));
   const model = textOf(cfg.current('jev_aux_modelo')).trim();
   const fetchKey = `${url}\n${textOf(cfg.draft.jev_aux_api_key).trim()}`;
   const fetchValid = fetchedFor === fetchKey;
@@ -122,7 +128,16 @@ export default function Jev() {
       ) : null}
 
       <BlockHead title={m.browser_jev_aux_title()} help={m.browser_jev_aux_help()} />
-      {!auxSupported ? <Muted>{m.browser_jev_aux_unsupported()}</Muted> : (
+      {modeSupported ? (
+        <Box>
+          <RowShell icon="Bot" title={m.browser_jev_aux_mode()} help={bySession ? m.browser_jev_aux_mode_session_help() : ''}>
+            <Segmented label={m.browser_jev_aux_mode()} value={bySession ? 'session' : 'api'}
+              options={[{ v: 'session', label: m.browser_jev_aux_mode_session() }, { v: 'api', label: m.browser_jev_aux_mode_api() }]}
+              onChange={(v) => cfg.stage('jev_aux_mode', v)} />
+          </RowShell>
+        </Box>
+      ) : null}
+      {!auxSupported ? <Muted>{m.browser_jev_aux_unsupported()}</Muted> : bySession ? null : (
         <>
           {cliproxy ? (
             <View style={styles.block}>

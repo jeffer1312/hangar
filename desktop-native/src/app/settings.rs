@@ -169,6 +169,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("server_roots", Some("server_roots_help")), ("server_machine_only", Some("server_machine_only_help")), ("server_env", Some("server_env_help"))]),
     (Page::Jev, &[("server_jev_key", Some("server_jev_key_help")), ("server_jev_default", Some("server_jev_default_help")),
         ("server_jev_endpoint", Some("server_jev_endpoint_help")), ("server_jev_model", Some("server_jev_model_help")),
+        ("server_jev_aux_mode", Some("server_jev_aux_mode_session_help")),
         ("server_jev_aux_endpoint", Some("server_jev_aux_endpoint_help")), ("server_jev_aux_key", Some("server_jev_aux_key_help")),
         ("server_jev_aux_model", Some("server_jev_aux_model_help")), ("server_jev_aux_effort", Some("server_jev_aux_effort_help")),
         ("server_jev_provider", Some("server_jev_provider_help"))]),

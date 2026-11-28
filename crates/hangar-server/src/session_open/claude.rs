@@ -101,7 +101,11 @@ pub fn jev_pairs(on: bool, runtime: &Value) -> Vec<(String, String)> {
     }
     let aux = ["jev_aux_base_url", "jev_aux_api_key", "jev_aux_modelo", "jev_aux_esforco"];
     let vars = ["JEV_AUX_BASE_URL", "JEV_AUX_API_KEY", "JEV_AUX_MODELO", "JEV_AUX_ESFORCO"];
-    let values: Vec<Option<String>> = if aux.iter().any(|field| runtime.get(field).is_some()) {
+    let by_session = crate::jev_aux::session_helps(&runtime["jev_aux_mode"]);
+    if by_session { out.push(("JEV_AUX_MODE".into(), "session".into())); }
+    let values: Vec<Option<String>> = if by_session {
+        vec![None; 4]
+    } else if aux.iter().any(|field| runtime.get(field).is_some()) {
         aux.iter().map(|field| text(field)).collect()
     } else if let Some(base) = text("jev_texto_base_url") {
         // ponytail: o auxiliar de antes da configuração única vem só do navegador; o do Computer

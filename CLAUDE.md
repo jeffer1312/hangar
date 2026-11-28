@@ -764,7 +764,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `desktop-native/src/app/server_config.rs`, `destinoDoJev` em `shell/jev_objetivo.cjs` (só o CLI
   fora de sessão) e `jev_destination` de `runtime/codex_launch.rs` (ambiente do Codex que o Rust
   lança). Precedência única: runtime-config acima do ambiente. O modelo auxiliar (texto e
-  imagem) também é um só, `jev_aux_*`, lido pelo navegador e pelo Computer Use. O hangar-preview
+  imagem) também é um só, `jev_aux_*`, lido pelo navegador e pelo Computer Use; com
+  `jev_aux_mode=session` nenhum dos dois o chama e a dúvida volta à sessão que chamou o Jev. O hangar-preview
   manda o print ao Jev só quando a decisão sem ele sai fraca (o `confere`, só na faixa de dúvida); o
   Computer Use manda em todo passo; o print vai ao provedor do Jev sem exceção. Pelo OpenRouter a
   imagem só vale como parte `image_url` no `state` (o `assets` da Typesafe é ignorado calado); o
