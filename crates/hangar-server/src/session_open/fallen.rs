@@ -235,6 +235,8 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
         }),
         Ok(Err(code)) if code == "erro_nome_em_uso" =>
             answer(&headers, StatusCode::CONFLICT, detail_body(&code, "já existe uma sessão com esse nome", json!({}))),
+        Ok(Err(code)) if code == super::restore::ALREADY_OPEN =>
+            answer(&headers, StatusCode::CONFLICT, detail_body(&code, "a conversa já está aberta noutra sessão", json!({}))),
         Ok(Err(code)) if code.starts_with("psmux_orphan_") =>
             answer(&headers, StatusCode::CONFLICT, detail_body(&code, "a sessão antiga não fechou", json!({}))),
         Ok(Err(code)) => answer(&headers, StatusCode::UNPROCESSABLE_ENTITY, detail_body(&code, "a sessão não reabriu", json!({}))),

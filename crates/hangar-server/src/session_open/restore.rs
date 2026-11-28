@@ -125,8 +125,10 @@ pub fn observe(prev: &Snapshot, alive: &BTreeMap<String, Entry>, now: f64, mux_s
 /// Outro servidor já atende e o da fotografia segue vivo: o de agora passa a ser o da fotografia, para as
 /// sessões novas seguirem guardadas, e as do antigo ficam à parte até ele acabar.
 fn strand(snap: &mut Snapshot, previous_pid: Option<u32>, at: u64, now_pid: Option<u32>) {
-    if let Some(started) = snap.mux_started && !snap.sessions.is_empty() {
-        snap.stranded.push(Stranded { mux_started: started, mux_pid: previous_pid, sessions: std::mem::take(&mut snap.sessions) });
+    // As já ausentes estavam de saída: não voltam quando ele acabar.
+    let sessions: BTreeMap<String, Entry> = std::mem::take(&mut snap.sessions).into_iter().filter(|(_, e)| e.missing_since.is_none()).collect();
+    if let Some(started) = snap.mux_started && !sessions.is_empty() {
+        snap.stranded.push(Stranded { mux_started: started, mux_pid: previous_pid, sessions });
     }
     (snap.mux_started, snap.mux_pid) = (Some(at), now_pid);
 }
@@ -196,12 +198,15 @@ fn previous_server(started: u64, recorded: Option<u32>, current: Option<u32>) ->
     classify_previous(started, recorded, current, &servers)
 }
 
-/// Só conta o nascido perto do `#{start_time}` (o do tmux e o do processo diferem por arredondamento): o pid
-/// gravado reaproveitado depois de um reboot, ou um cliente tmux no macOS (o nome não os separa), não é ele. Com
-/// o pid gravado, só ele; fotografia antiga, sem pid, pelo nascimento. O servidor de agora nunca conta.
+/// Com o pid gravado, só ele, e não o reaproveitado depois de um reboot; fotografia antiga, sem pid, pelo
+/// nascimento perto do `#{start_time}` (o do tmux e o do processo diferem por arredondamento). O servidor de
+/// agora nunca conta.
 fn classify_previous(started: u64, recorded: Option<u32>, current: Option<u32>, servers: &[(u32, u64)]) -> Previous {
+    // Com o pid gravado basta não ter nascido depois do servidor da fotografia: o relógio ajustado pelo NTP
+    // desloca o nascimento lido, e o pid reaproveitado nasceu depois.
+    let born_then = |born: u64| match recorded { Some(_) => born <= started.saturating_add(BOOT_SLACK_S), None => born.abs_diff(started) <= 2 };
     let found: Vec<u32> = servers.iter()
-        .filter(|(pid, born)| Some(*pid) != current && born.abs_diff(started) <= 2 && recorded.is_none_or(|r| r == *pid))
+        .filter(|(pid, born)| Some(*pid) != current && born_then(*born) && recorded.is_none_or(|r| r == *pid))
         .map(|(pid, _)| *pid).collect();
     match found.as_slice() {
         [] => Previous::Gone,
@@ -946,26 +951,27 @@ fn descendants(children: &crate::list::procs::ChildrenMap, root: i64) -> HashSet
 const ORPHAN_EXIT: Duration = Duration::from_secs(5);
 const ORPHAN_KILL: Duration = Duration::from_secs(2);
 
-/// Encerra os agentes órfãos da conversa e espera saírem; `false` se algum seguiu vivo.
+/// Encerra os processos (pid, nascimento) e espera saírem; `false` se algum seguiu vivo. Só recebe sinal quem
+/// ainda tem o nascimento lido antes: o pid que saiu no meio e foi reaproveitado não é dele.
 #[cfg(unix)]
-async fn end_orphans(pids: &[i64]) -> bool {
-    let alive = |pid: i64| i32::try_from(pid).is_ok_and(|pid| unsafe { libc::kill(pid, 0) } == 0);
-    let send = |signal: i32| for &pid in pids {
-        if let Ok(pid) = i32::try_from(pid) { unsafe { libc::kill(pid, signal); } }
+async fn end_orphans(targets: &[(i64, f64)], born: impl Fn(i64) -> Option<f64>) -> bool {
+    let alive = |(pid, at): (i64, f64)| born(pid).is_some_and(|now| (now - at).abs() < 1.0);
+    let send = |signal: i32| for &target in targets {
+        if alive(target) && let Ok(pid) = i32::try_from(target.0) { unsafe { libc::kill(pid, signal); } }
     };
     for (signal, wait) in [(libc::SIGTERM, ORPHAN_EXIT), (libc::SIGKILL, ORPHAN_KILL)] {
         send(signal);
         let deadline = tokio::time::Instant::now() + wait;
-        while pids.iter().any(|&pid| alive(pid)) && tokio::time::Instant::now() < deadline {
+        while targets.iter().any(|&t| alive(t)) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        if !pids.iter().any(|&pid| alive(pid)) { return true; }
+        if !targets.iter().any(|&t| alive(t)) { return true; }
     }
     false
 }
 
 #[cfg(not(unix))]
-async fn end_orphans(_pids: &[i64]) -> bool { false }
+async fn end_orphans(_targets: &[(i64, f64)], _born: impl Fn(i64) -> Option<f64>) -> bool { false }
 
 /// Antes do `--resume`: a conversa presa num agente vivo não ganha um segundo processo. Só o agente cujo
 /// servidor tmux já acabou sai; dentro do servidor de agora, ou fora do tmux, a restauração recua.
@@ -993,21 +999,24 @@ async fn release_conversation(st: &crate::routes::AppState, program: &std::ffi::
                 let reaped = parent(pid).is_some_and(|p| is_reaper(p, procs.argv(p).first().map(String::as_str)));
                 if dead && reaped { Seat::DeadServer } else { Seat::Elsewhere }
             };
-            (pid, seat, descendants(&children, pid))
+            let below: Vec<(i64, f64)> = descendants(&children, pid).into_iter().filter_map(|p| Some((p, procs.start_time(p)?))).collect();
+            (pid, seat, procs.start_time(pid), below)
         }).collect::<Vec<_>>();
         Ok::<_, String>((dirs, holders))
     }).await.map_err(|_| "restore_spec_job".to_owned())?;
     let (dirs, holders) = looked?;
-    let seats: Vec<(i64, Seat)> = holders.iter().map(|(pid, seat, _)| (*pid, *seat)).collect();
+    let seats: Vec<(i64, Seat)> = holders.iter().map(|(pid, seat, _, _)| (*pid, *seat)).collect();
     match verdict(&seats) {
         Holders::Free => Ok(()),
         Holders::AlreadyOpen => Err(ALREADY_OPEN.into()),
         Holders::Open => Err("restore_conversation_open".into()),
         Holders::Orphans(pids) => {
             // As ferramentas e os servidores MCP do órfão saem junto: seguiriam mexendo na pasta da sessão retomada.
-            let below: HashSet<i64> = holders.into_iter().flat_map(|(_, _, below)| below).filter(|pid| !pids.contains(pid)).collect();
-            let all: Vec<i64> = pids.iter().copied().chain(below.iter().copied()).collect();
-            let ended = end_orphans(&all).await;
+            let mut targets: Vec<(i64, f64)> = holders.iter().filter_map(|(pid, _, born, _)| Some((*pid, (*born)?))).collect();
+            let below: Vec<(i64, f64)> = holders.into_iter().flat_map(|(_, _, _, below)| below).filter(|(pid, _)| !pids.contains(pid)).collect();
+            targets.extend(below.iter().copied());
+            let procs = st.list.env().procs.clone();
+            let ended = end_orphans(&targets, |pid| procs.start_time(pid)).await;
             if ended {
                 // O `SIGKILL` não deixa o agente apagar o registro nativo dele, e o pid reaproveitado o faria contar como vivo.
                 let (dirs, sid, agents) = (dirs, sid, pids.clone());
@@ -1022,7 +1031,7 @@ async fn release_conversation(st: &crate::routes::AppState, program: &std::ffi::
 }
 
 /// A conversa já está aberta no servidor de agora: a restauração é pulada, sem erro.
-const ALREADY_OPEN: &str = "restore_already_open";
+pub(crate) const ALREADY_OPEN: &str = "restore_already_open";
 
 /// O agente que demora fica para a reconferência; a continuação do turno cortado é de quem chama (`continue_later`).
 pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry,
@@ -1315,12 +1324,14 @@ mod tests {
     /// O servidor de agora nunca conta.
     #[test]
     fn the_previous_server_is_the_recorded_pid_born_at_the_snapshot_time() {
-        let servers = [(1501, 1000), (1502, 5000), (1503, 1001)];
+        let servers = [(1501, 1000), (1502, 5000), (1503, 1001), (1504, 1030)];
         assert_eq!(classify_previous(1000, Some(1501), Some(1502), &servers), Previous::Alive(1501));
+        assert_eq!(classify_previous(1000, Some(1504), None, &servers), Previous::Alive(1504), "o relógio andou depois que ele subiu");
         assert_eq!(classify_previous(1000, Some(1502), None, &servers), Previous::Gone, "pid reaproveitado depois do reboot");
         assert_eq!(classify_previous(1000, Some(1501), Some(1501), &servers), Previous::Gone, "o de agora");
         assert_eq!(classify_previous(1000, Some(9), None, &servers), Previous::Gone);
         assert_eq!(classify_previous(1000, None, None, &servers), Previous::Unsure);
+        assert_eq!(classify_previous(1030, None, None, &servers), Previous::Alive(1504));
         assert_eq!(classify_previous(1000, None, Some(1503), &servers), Previous::Alive(1501));
         assert_eq!(classify_previous(3000, None, None, &servers), Previous::Gone);
     }
@@ -1331,7 +1342,8 @@ mod tests {
     fn the_sessions_of_a_live_previous_server_wait_for_it_to_end() {
         let dir = tempfile::tempdir().unwrap();
         let mut snap = Snapshot { mux_started: Some(1000), mux_pid: Some(77), stranded: Vec::new(),
-            sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", Some("c2")))].into() };
+            sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", Some("c2"))),
+                ("k0".into(), Entry { missing_since: Some(5.0), ..entry("z", Some("c0")) })].into() };
         strand(&mut snap, Some(77), 2000, Some(88));
         assert_eq!((snap.mux_started, snap.mux_pid), (Some(2000), Some(88)));
         assert!(snap.sessions.is_empty());

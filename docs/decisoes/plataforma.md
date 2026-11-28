@@ -6009,8 +6009,9 @@ antigo, preso num servidor tmux que ninguém mais alcançava.
   outro no socket, ou dúvida sobre qual é: nada reaberto por cima, e o servidor de agora passa a ser o
   da fotografia, para as sessões novas seguirem guardadas; as do antigo ficam à parte (`stranded`),
   seguras para a varredura de grupos e fora da contagem de ausência, e voltam a ser restauradas quando
-  ele acabar. Com o pid gravado, o antigo só conta se nasceu perto do `#{start_time}` (pid
-  reaproveitado depois do reboot, ou cliente tmux no macOS, não é ele). Antes de cada `--resume`, só sai o agente
+  ele acabar. Com o pid gravado, o antigo só conta se não nasceu depois do servidor da fotografia
+  (o pid reaproveitado depois do reboot nasceu depois; o relógio ajustado pelo NTP desloca o
+  nascimento lido, por isso não se exige o mesmo segundo). Antes de cada `--resume`, só sai o agente
   `claude` da conversa cujo servidor tmux (a variável `TMUX` dele) já acabou e cujo pai é o init
   ou o `systemd` do usuário (a `TMUX` é herdada por um terminal aberto de dentro do pane), junto
   com os processos abaixo dele, com `SIGTERM` e, passado o prazo, `SIGKILL`; o registro nativo que
