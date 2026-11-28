@@ -252,7 +252,7 @@ mod tests {
         let transcript = super::super::claude::transcript(&spec, conversation, &projects);
         std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
         std::fs::write(&transcript, "{}\n").unwrap();
-        let snapshot = super::super::restore::Snapshot { mux_started: None, sessions: [(key.into(), super::super::restore::Entry {
+        let snapshot = super::super::restore::Snapshot { mux_started: None, mux_pid: None, stranded: Vec::new(), sessions: [(key.into(), super::super::restore::Entry {
             name: "hangar".into(), provider: AgentProvider::Claude, conversation: Some(conversation.into()),
             transcript: Some(transcript.to_string_lossy().into_owned()), permission_mode: Some("acceptEdits".into()), missing_since: None, unit: None,
             turn_open: false, last_line: None,
