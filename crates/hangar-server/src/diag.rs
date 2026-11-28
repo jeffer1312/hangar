@@ -97,7 +97,7 @@ async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Op
     };
     let written = tokio::task::spawn_blocking(move || {
         let written = match base {
-            Some(base) => hangar_usage_diary::record_screen_with_owner(&base, &body, now, telemetry.as_ref().map(|(_, period, _)| period.id.as_str())),
+            Some(base) => hangar_usage_diary::record_screen_with_owner(&base, &body, now, telemetry.as_ref().map(|(_, period, _)| (period.id.as_str(), &[][..]))),
             None => Ok(0),
         };
         // Só o que o diário confirmou: o cliente reenvia o lote recusado.
@@ -549,7 +549,8 @@ mod telemetry_tests {
         assert_eq!(rows[0]["evento"], "guest_fixture");
         assert!(rows[0].get("telemetry_origin").is_none());
         assert_eq!(rows[1]["telemetry_origin"], "owner_screen");
-        let projection = crate::telemetry_routes::diary_detail(diary.path(), "2026-11-27", &collection, now.to_utc()).unwrap();
+        let build = rows[1]["telemetry_build"].as_str().unwrap_or_default();
+        let projection = crate::telemetry_routes::diary_detail(diary.path(), "2026-11-27", build, &collection, now.to_utc()).unwrap();
         assert_eq!(projection.records.len(), 1);
         assert_eq!((projection.trail[0].t.as_str(), projection.records[0].event.as_str()), ("00:00:30", "sse.caiu"));
         let wire = serde_json::to_string(&projection).unwrap();

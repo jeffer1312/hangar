@@ -55,6 +55,7 @@ pub fn open(home: &Path, diag: &crate::diag::DiagClient) -> Option<Arc<Telemetry
         // Fora de pacote o servidor saiu de um checkout: o fio leva `dev`.
         release_commit: package.map(|p| p.commit.clone()),
         channel: crate::update::channel(&crate::update::Layout::new(home)),
+        install: if package.is_some() { "package" } else { "checkout" }.to_owned(),
     };
     match Telemetry::new(config) {
         Ok(telemetry) => {
@@ -77,7 +78,7 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
     let Some(telemetry) = st.telemetry.clone() else { return Vec::new() };
     let diag = st.diag.clone();
     if let Some(base) = crate::diag::diary_base(st) {
-        telemetry.set_detail(Arc::new(move |day, period, now| diary_detail(&base, day, period, now)));
+        telemetry.set_detail(Arc::new(move |day, build, period, now| diary_detail(&base, day, build, period, now)));
     }
     let mut tasks = Vec::new();
     match telemetry.http_post() {
@@ -125,7 +126,7 @@ fn snapshot_due(done: Option<&(String, u64)>, today: &str, epoch: u64) -> bool {
     done.is_none_or(|(day, at)| day != today || *at != epoch)
 }
 
-pub(crate) fn diary_detail(base: &Path, day: &str, period: &Collection, now: DateTime<Utc>) -> io::Result<DayDetail> {
+pub(crate) fn diary_detail(base: &Path, day: &str, build: &str, period: &Collection, now: DateTime<Utc>) -> io::Result<DayDetail> {
     match std::fs::symlink_metadata(base) {
         Ok(meta) if meta.file_type().is_dir() => {}
         Ok(_) => return Err(io::Error::other("pasta do diário inválida")),
@@ -143,7 +144,7 @@ pub(crate) fn diary_detail(base: &Path, day: &str, period: &Collection, now: Dat
         for line in BufReader::new(file).lines() {
             let line = line?;
             let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
-            if let Some(entry) = diary::project(&value, day, period, now, crate::mcp::tool_names()) { entries.push(entry); }
+            if let Some(entry) = diary::project(&value, day, build, period, now, crate::mcp::tool_names()) { entries.push(entry); }
         }
     }
     Ok(diary::build(entries))
@@ -446,6 +447,8 @@ pub(crate) fn report(diag: &crate::diag::DiagClient, failure: Failure) {
         }
         Failure::Pruned(days) => diag.report_with("telemetry.pruned", "", "telemetry_pruned",
             "fila da telemetria acima do teto: dias mais antigos apagados sem envio", json!({"days": days})),
+        Failure::Legacy(days) => diag.report_with("telemetry.legacy", "", "telemetry_legacy_dropped",
+            "dias da fila de antes da divisão por versão apagados sem novo envio", json!({"days": days})),
         Failure::Disk(e) => {
             tracing::warn!(code = "telemetry_disk_failed", kind = ?e.kind(), "telemetria: fila não lida ou não gravada");
             diag.report("telemetry.disk", "", "telemetry_disk_failed", "fila da telemetria não lida ou não gravada");

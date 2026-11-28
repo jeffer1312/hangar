@@ -17,6 +17,8 @@ use crate::push::watch::TurnEvent;
 use crate::routes::AppState;
 
 static INSTALLED: OnceLock<Arc<Telemetry>> = OnceLock::new();
+/// O servidor desta vida, para quem registra falha de saúde sem ter o estado à mão.
+static APP: OnceLock<std::sync::Weak<AppState>> = OnceLock::new();
 
 tokio::task_local! { pub(crate) static NO_TELEMETRY: (); }
 
@@ -37,6 +39,8 @@ pub fn spawn(st: &Arc<AppState>) -> Option<tokio::task::JoinHandle<()>> {
     LazyLock::force(&ANCHOR);
     let telemetry = st.telemetry.clone()?;
     let _ = INSTALLED.set(telemetry.clone());
+    let _ = APP.set(Arc::downgrade(st));
+    hangar_usage_diary::set_build(telemetry.build());
     crate::update::stop_intent::count_previous_exits(&telemetry);
     Some(tokio::spawn(turns(st.list.clone(), telemetry)))
 }
@@ -220,10 +224,39 @@ pub(crate) async fn record_action(st: &AppState, period: Collection, origin: Own
     let (action, code) = (action.to_owned(), code.map(str::to_owned));
     let ms = took.as_millis().min(3_600_000) as u64;
     match tokio::task::spawn_blocking(move || hangar_usage_diary::record_owner_action(
-        &base, origin, &period.id, now, &action, stage, code.as_deref(), ms)).await {
+        &base, origin, &period.id, now, &action, stage, code.as_deref(), ms, None, &[])).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::warn!(code = "telemetry_diary_write_failed", ?error, "falha ao gravar ação no diário da telemetria"),
         Err(_) => crate::telemetry_routes::task_failed(&st.diag),
+    }
+}
+
+/// Registra uma falha que o servidor percebeu sozinho (`events::HEALTH`), com a causa fechada e o
+/// retrato da máquina (e da sessão `session`, quando é de uma). `extra` leva chaves de `events::CONTEXT`
+/// próprias da falha; `at` é quando ela aconteceu, se não foi agora. Sem coleta ligada não grava nada.
+/// Quem chama já limita a repetição (uma vez por minuto por sessão e código, como o log).
+pub(crate) fn report_health(code: &'static str, cause: &str, severity: hangar_usage_diary::Severity, session: Option<&str>,
+                            extra: Vec<(&'static str, String)>, at: Option<chrono::DateTime<chrono::FixedOffset>>) {
+    let Some(health) = hangar_telemetry::events::HEALTH.iter().find(|h| h.code == code) else {
+        debug_assert!(false, "código de saúde fora de events::HEALTH: {code}");
+        return;
+    };
+    let Some(period) = installed().and_then(Telemetry::collection) else { return };
+    let Some(st) = APP.get().and_then(std::sync::Weak::upgrade) else { return };
+    let Some(base) = crate::diag::diary_base(&st) else { return };
+    let mut ctx = crate::telemetry_ctx::machine(&st);
+    if let Some(name) = session { ctx.extend(crate::telemetry_ctx::session(&st, name)); }
+    ctx.extend(extra);
+    let (event, cause) = (health.event, cause.to_owned());
+    let now = chrono::Local::now().fixed_offset();
+    let write = move || {
+        if let Err(error) = hangar_usage_diary::record_health(&base, &period.id, now, at, event, code, &cause, severity, &ctx) {
+            tracing::warn!(code = "telemetry_diary_write_failed", ?error, "falha ao gravar saúde no diário da telemetria");
+        }
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => { handle.spawn_blocking(write); }
+        Err(_) => write(),
     }
 }
 

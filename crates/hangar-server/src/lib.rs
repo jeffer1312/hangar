@@ -89,6 +89,7 @@ pub mod stats;
 pub mod status;
 pub mod telemetry_routes;
 pub mod telemetry_hooks;
+mod telemetry_ctx;
 pub mod usage_cli;
 pub mod send_cli;
 pub mod subagents;

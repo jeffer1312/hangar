@@ -32,12 +32,18 @@ pub struct Config {
     /// Commit do pacote, só quando ele é de release.
     pub release_commit: Option<String>,
     pub channel: String,
+    /// `package` (pacote de release) ou `checkout` (desenvolvimento).
+    pub install: String,
 }
 
 pub struct Telemetry {
     pub(crate) home: PathBuf,
     backend: Option<PathBuf>,
     pub(crate) batch_env: Env,
+    /// `versão-commit` deste binário: carimba as linhas do diário e nomeia o arquivo do dia.
+    pub(crate) build: String,
+    /// Ambiente da máquina em valores fechados, renovado pelo servidor.
+    machine: Mutex<BTreeMap<String, String>>,
     pub(crate) lookup: EnvLookup,
     pub(crate) clock: Clock,
     enabled: AtomicBool,
@@ -95,7 +101,7 @@ impl Day {
 
     fn to_counters(&self) -> Vec<Counter> {
         self.counters.iter()
-            .map(|((event, dims, bucket), count)| Counter { event: event.clone(), dims: dims.clone(), bucket: bucket.clone(), count: *count })
+            .map(|((event, dims, bucket), count)| Counter { event: event.clone(), dims: dims.clone(), bucket: bucket.clone(), count: *count, capped: *count >= MAX_COUNT })
             .collect()
     }
 
@@ -166,8 +172,11 @@ impl Telemetry {
     pub fn with(config: Config, clock: Clock, lookup: EnvLookup) -> io::Result<Telemetry> {
         let now = clock();
         let (state, recovered) = state::load(&config.home, now)?;
+        let batch_env = Env::new(&config.version, config.release_commit.as_deref(), &config.channel, &config.install);
         let telemetry = Telemetry {
-            batch_env: Env::new(&config.version, config.release_commit.as_deref(), &config.channel),
+            build: format!("{}-{}", batch_env.version, batch_env.commit),
+            machine: Mutex::new(BTreeMap::new()),
+            batch_env,
             home: config.home,
             backend: config.backend,
             lookup,
@@ -196,6 +205,7 @@ impl Telemetry {
             version: "0.42.0".into(),
             release_commit: None,
             channel: "latest".into(),
+            install: "package".into(),
         };
         Telemetry::with(config, clock, Arc::new(|_: &str| -> Option<String> { None })).expect("telemetria de teste")
     }
@@ -336,6 +346,18 @@ impl Telemetry {
         self.enabled().then_some(())?;
         settings.state.collection.clone()
     }
+
+    /// `versão-commit` deste binário, o carimbo que o diário põe nas linhas da coleta.
+    pub fn build(&self) -> &str { &self.build }
+
+    /// Troca o ambiente da máquina que sai nos próximos pacotes; chave ou valor fora de `events::MACHINE` fica fora.
+    pub fn set_machine(&self, facts: impl IntoIterator<Item = (&'static str, String)>) {
+        let facts = facts.into_iter().filter_map(|(key, value)| Some((key.to_owned(), crate::events::closed(crate::events::MACHINE, key, &value)?)))
+            .collect();
+        if let Ok(mut machine) = self.machine.lock() { *machine = facts; }
+    }
+
+    pub(crate) fn machine(&self) -> BTreeMap<String, String> { self.machine.lock().map(|m| m.clone()).unwrap_or_default() }
 
     /// Liga a projeção de falhas e trilha do diário no pacote; só a primeira vale.
     pub fn set_detail(&self, source: DetailSource) { let _ = self.detail.set(source); }
@@ -481,6 +503,8 @@ impl Telemetry {
                 day: latest.day.clone(), collection: period.id.clone(), ..DayFile::default()
             });
             if !file.sealed {
+                file.build.clone_from(&self.build);
+                file.env = Some(self.batch_env.clone());
                 file.counters.clone_from(&latest.counters);
                 file.snapshot_keys.clone_from(&latest.snapshot_keys);
                 if !file.counters.is_empty() || !file.detail.is_empty() || !file.snapshot_keys.is_empty() {
@@ -569,6 +593,11 @@ impl Telemetry {
         }
         if !self.enabled() {
             let period = settings.state.collection.as_ref().expect("coleta ativa tem período");
+            match queue::rotate(&self.home, &self.build) {
+                Ok(0) => {}
+                Ok(removed) => self.note(Failure::Legacy(removed)),
+                Err(e) => self.note(Failure::Disk(e)),
+            }
             let file = match queue::read_day(&self.home, &today) {
                 Ok(file) => file.filter(|file| file.collection == period.id && file.day == today && !file.sealed),
                 Err(e) if e.kind() == io::ErrorKind::InvalidData => {
@@ -633,13 +662,17 @@ pub(crate) mod tests {
         pub(crate) fn start_as_is(&self) -> Telemetry { self.start_with(Arc::new(|_: &str| -> Option<String> { None })) }
 
         /// Como `start_as_is`, com o ambiente do processo de `lookup`.
-        pub(crate) fn start_with(&self, lookup: EnvLookup) -> Telemetry {
+        pub(crate) fn start_with(&self, lookup: EnvLookup) -> Telemetry { self.start_version("0.42.0", lookup) }
+
+        /// Como `start_with`, num binário de outra versão.
+        pub(crate) fn start_version(&self, version: &str, lookup: EnvLookup) -> Telemetry {
             let config = Config {
                 home: self.home.path().to_owned(),
                 backend: None,
-                version: "0.42.0".into(),
+                version: version.into(),
                 release_commit: None,
                 channel: "latest".into(),
+                install: "package".into(),
             };
             Telemetry::with(config, self.clock(), lookup).unwrap()
         }
