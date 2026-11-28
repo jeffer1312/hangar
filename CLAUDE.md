@@ -312,6 +312,11 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   e em `/api/tour-progress` de cada servidor (junção que nunca desfaz). O primeiro acesso de um
   celular chega pelo parâmetro `device` da lista ao vivo do dono, lido só no ramo do dono; o aparelho
   que entra pelo Connect com credencial própria também é registrado. Evidência em [frontend.md](docs/decisoes/frontend.md#tour-de-primeiro-uso-do-nativo-30102026).
+- **Mudança visível ou commit `feat` sem novidade barra o portão, e peça nova do nativo ganha dica.**
+  `scripts/check-novidade.sh` falha sem arquivo novo em `docs/novidades/` (escape:
+  `HANGAR_SEM_NOVIDADE` no próprio commit, só para o que a pessoa não percebe); toda âncora de `tour/anchors.rs` tem passo
+  ou dica em `tour/steps.rs` (`every_anchor_has_a_tour_step_or_a_tip`). Quem escreve é a skill
+  `hangar-novidade`. [Motivo](docs/decisoes/frontend.md#novidade-barra-o-portão-e-peça-nova-ganha-dica-28112026).
 - **Mensagem esperando na fila do Hangar aparece no painel "Na fila", não como bolha.** A lista e a
   ordem vêm do evento `queue`; o modelo é `packages/core/src/queuePanel.ts` (o nativo repete em
   `desktop-native/src/queue_panel.rs`). Exceção: linha mandada "Na conversa" (`queued_conversation`)
