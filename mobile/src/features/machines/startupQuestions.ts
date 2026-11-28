@@ -1,5 +1,6 @@
 import { Alert, Linking } from 'react-native';
-import { TELEMETRY_CONSENT_SCOPE, putAutoReportEm, putTelemetry, registrarDiag, type PendingTelemetry, type Server } from '@hangar/core';
+import { SETTINGS_CONSENT_SCOPE, TELEMETRY_CONSENT_SCOPE, putAutoReportEm, putTelemetry, registrarDiag, type PendingTelemetry, type Server } from '@hangar/core';
+import { onTelemetrySaved } from '../../net/diag';
 import { toast } from '../../ui/Toast';
 import * as m from '../../paraglide/messages';
 
@@ -8,7 +9,7 @@ import * as m from '../../paraglide/messages';
 export const TELEMETRY_DOC_URL = 'https://github.com/jeffer1312/hangar/blob/main/docs/telemetria.md';
 export const LEGACY_TELEMETRY_DOC_URL = `${TELEMETRY_DOC_URL}#servidores-legados`;
 
-/** `scope` é o `consent_scope` lido da máquina: sem ele, a máquina é anterior à opção B. */
+/** `scope` é o `consent_scope` lido da máquina: fora do 3, a máquina é anterior à opção B. */
 export function openTelemetryDoc(scope?: number): void {
   Linking.openURL(scope === TELEMETRY_CONSENT_SCOPE ? TELEMETRY_DOC_URL : LEGACY_TELEMETRY_DOC_URL).catch(() => {
     registrarDiag({ evento: 'telemetry.doc_open_failed', nivel: 'erro', codigo: 'telemetry_doc_open_failed' });
@@ -35,17 +36,24 @@ export function askAutoReport(pending: readonly Server[]): Promise<void> {
   });
 }
 
+/** Grava a escolha e, aceita na máquina ativa, já manda o retrato das preferências do aparelho. */
+export async function saveTelemetryChoice(server: Server, value: boolean, scope: number | undefined) {
+  const saved = await putTelemetry(server, value, scope);
+  onTelemetrySaved(server, saved);
+  return saved;
+}
+
 /** O aviso da abertura: só "Pode enviar" e "Não enviar" gravam, em todas as máquinas de `pending`.
  *  Fechar sem escolher deixa sem resposta, e a pergunta volta na próxima abertura. */
 export async function askTelemetry(pending: readonly PendingTelemetry[]): Promise<void> {
   // Um aviso por texto: as máquinas da opção B primeiro, depois as anteriores a ela.
-  for (const scope of [TELEMETRY_CONSENT_SCOPE, undefined]) {
+  for (const scope of [TELEMETRY_CONSENT_SCOPE, SETTINGS_CONSENT_SCOPE, undefined]) {
     const group = pending.filter(({ shown }) => shown.consent_scope === scope && !shown.disabled_by);
     if (!group.length) continue;
     const labels = group.map(({ server }) => group.filter((item) => item.server.label === server.label).length > 1
       ? `${server.label} (${new URL(server.baseUrl).host})` : server.label);
     await confirmTelemetry(labels.join(', '), scope, (value) => {
-      void Promise.allSettled(group.map(({ server, shown }) => putTelemetry(server, value, shown))).then((results) => {
+      void Promise.allSettled(group.map(({ server, shown }) => saveTelemetryChoice(server, value, shown.consent_scope))).then((results) => {
         const failed = labels.filter((_, i) => results[i].status === 'rejected');
         if (failed.length) toast.erro(m.auto_report_save_failed({ machines: failed.join(', ') }));
       });
@@ -55,7 +63,8 @@ export async function askTelemetry(pending: readonly PendingTelemetry[]): Promis
 
 /** Mesma explicação na abertura e no ajuste; fechar sem escolher não grava. */
 export function confirmTelemetry(machines: string, scope: number | undefined, answer: (value: boolean) => void): Promise<void> {
-  const body = scope === TELEMETRY_CONSENT_SCOPE ? m.telemetry_b_question_body({ machines }) : m.telemetry_question_body({ machines });
+  const body = scope === TELEMETRY_CONSENT_SCOPE ? m.telemetry_b_question_body({ machines })
+    : scope === SETTINGS_CONSENT_SCOPE ? m.telemetry_question_body({ machines }) : m.telemetry_legacy_question_body({ machines });
   return new Promise((done) => {
     const show = () => Alert.alert(m.telemetry_question_title(), body, [
       { text: m.telemetry_what_is_sent(), onPress: () => { openTelemetryDoc(scope); show(); } },

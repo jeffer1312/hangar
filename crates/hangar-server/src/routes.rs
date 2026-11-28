@@ -1179,7 +1179,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Consentimento do relatório automático da atualização: só o dono, nunca repassado.
         .route("/api/auto-report", get(crate::diag_report::auto::setting).put(crate::diag_report::auto::setting))
         // Telemetria anônima: a escolha e o dono comum entre as máquinas; só o dono, nunca repassado.
-        .route("/api/telemetry", get(crate::telemetry_routes::setting).put(crate::telemetry_routes::setting))
+        .route("/api/telemetry", get(crate::telemetry_routes::setting).put(crate::telemetry_routes::setting).post(crate::telemetry_routes::snapshot))
         .route("/api/telemetry/owner", get(crate::telemetry_routes::owner))
         // Atualização do pacote e do checkout, com a mesma decisão do dono.
         .route("/api/atualizacao", get(crate::update::http::status).fallback(pass_registered))

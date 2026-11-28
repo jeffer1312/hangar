@@ -5880,7 +5880,7 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   identificador. Limite aceito: registrar a máquina de outra pessoa no `peers.json` junta os dois
   donos.
 - **Dia em UTC, um envio por dia.** Hora a hora entregaria rotina e fuso. Fila de até 14 dias em
-  `~/.hangar/telemetry/queue/`, espera aleatória de até 1 h depois que o dia fecha.
+  `~/.hangar/telemetry-scope-2/queue/`, espera aleatória de até 1 h depois que o dia fecha.
 - **Revisão da spec.** `problem_shown` conta uma vez por problema, na passagem de esperando para
   mostrado no portão da lista: o `admit` devolve `Show` a cada tique, e contar ali repetiria o
   mesmo aviso a cada 1,5 s. `feature_used` sai de uma camada depois do handler, pelo modelo de rota
@@ -5903,12 +5903,13 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   passou a aceitar 256 KB por pacote: as 100 linhas junto dos contadores passariam dos 64 KB, e o 413
   apagaria o dia inteiro na máquina.
 - **Retrato diário das preferências (27/11/2026).** Pedido do dono: saber como cada pessoa configurou
-  o Hangar para decidir onde melhorar. O app do PC e o do celular mandam `settings.snapshot` ao
-  `/api/diag` do servidor ativo uma vez por dia, já nos nomes de `events::SETTINGS`; o servidor manda
+  o Hangar para decidir onde melhorar. O app do PC e o do celular mandam o retrato ao
+  `POST /api/telemetry` do servidor ativo uma vez por dia, já nos nomes de `events::SETTINGS`; o servidor manda
   as dele no mesmo laço do `peers`. Lista fechada por preferência: fonte instalada vira `custom`, cor e
   número ficam de fora (o tamanho do texto vira menor/igual/maior que o de fábrica), e valor fora da
   lista sai `other`. O servidor conta um retrato por dia por app e aparelho, pelo id das novidades
-  da atualização, que fica só no `once.json`. O painel mostra máquinas, não vezes. O canal de
+  da atualização, guardado só como marca `settings:<cliente>:<aparelho>` em `snapshot_keys` do arquivo do
+  dia, que nunca vai no pacote. O painel mostra máquinas, não vezes. O canal de
   atualização não entrou: já vai no `env` do pacote.
 - **Opção B, escopo 3 (27/11/2026).** O escopo 2 fica reservado ao retrato de preferências. O
   `GET /api/telemetry` anuncia o escopo; o sim precisa citar exatamente o do aviso, e o não antigo

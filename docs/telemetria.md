@@ -77,13 +77,22 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 
 ### Preferências
 
-Uma vez por dia (UTC), o servidor conta as preferências dele. Cada par vira um contador `settings`
-com `client` `server`, `setting` e `value`. Preferência fora da tabela é descartada; valor fora da
-lista sai `other`. Nome de fonte, cor escolhida, modelo e qualquer número não saem.
+Uma vez por dia (UTC), com o aceite do escopo 3, o servidor conta as preferências dele, e o app do PC
+e o do celular mandam ao servidor ativo (nunca a um convite) o retrato das preferências daquele
+aparelho. O mesmo aceite da opção B cobre esse retrato: não há segundo aviso. O servidor confirma o
+retrato do app em `POST /api/telemetry`, fora do diário. Só aceita o período de coleta ativo e uma
+captura do dia UTC da chegada, com até um minuto de diferença para o futuro. Envio atrasado não ocupa
+a vaga do dia nem reabre pacote fechado. Cada par vira um contador `settings` com `client`
+(`native`, `ios`, `android` ou `server`), `setting` e `value`. O servidor conta no máximo um
+retrato por dia de cada app e aparelho: o app manda junto o id aleatório que já guarda para as
+novidades da atualização. A marca do aparelho e os contadores são gravados juntos no arquivo local do
+dia antes da confirmação; o id não entra no pacote. Preferência fora da tabela é descartada; valor
+fora da lista sai `other`. Nome de fonte, cor escolhida, modelo e qualquer número não saem.
 
-Na opção B os apps do PC e do celular não mandam o retrato das preferências deles: esse retrato
-depende do aviso próprio das preferências (escopo 2), e as linhas "PC", "celular" e "só tablet" da
-tabela ficam fora do pacote até lá.
+As contagens de preferências são por máquina servidora, não por pessoa nem por aparelho único: cada
+servidor manda no próprio pacote os retratos que contou. Tanto o celular quanto o desktop podem
+mandar uma vez por dia a cada máquina que ficou ativa naquele aparelho, desde que ela tenha aceitado
+o aviso. Se um celular ou PC alternar entre três máquinas no mesmo dia, pode aparecer nas três.
 
 | `setting` | Valores | De onde |
 |---|---|---|
@@ -158,24 +167,34 @@ versões anteriores, que podiam trazer `logs`.
 
 ## Ver o que está guardado
 
-- `~/.hangar/telemetry-v3/queue/<dia>.json`: contadores, projeção e ID de cada dia do escopo 3.
+- `~/.hangar/telemetry-v3/queue/<dia>.json`: contadores, projeção e ID de cada dia do escopo 3, e as
+  marcas privadas dos retratos do dia (máquinas e preferências do servidor e de cada app), gravadas
+  junto com as contagens deles. As marcas não saem no pacote.
 - `~/.hangar/telemetry.json`: escolha de B em `option_b`, período de coleta e dois números aleatórios.
   O booleano legado `consent` permanece `false` ao aceitar B: uma reversão não autoriza logs antigos.
-- `~/.hangar/telemetry-v3/once.json`: marcas do que só conta uma vez na coleta atual.
-  O emissor de B nunca importa a fila nem as marcas de versões anteriores.
+  Um "sim" sem escopo ou do escopo 2 sai do arquivo na subida, e a máquina fica sem resposta.
+- `~/.hangar/telemetry-v3/once.json`: marcas do que só conta uma vez na coleta atual, como cada
+  atualização. O emissor de B nunca importa a fila nem as marcas de versões anteriores.
 
 No Windows, `~` é a pasta do seu usuário.
 
 ## Responder e mudar
 
 - Na abertura do desktop nativo e do Expo, máquinas que conhecem o mesmo aviso respondem juntas.
-  Fechar sem escolher não grava nada. O ajuste fica em "Contagens anônimas de uso" nas Configurações.
-- `GET /api/telemetry` anuncia `consent_scope: 3`. Para ligar B: `PUT {"consent":true,"consent_scope":3}`.
-  Escopo 2 é do retrato de preferências e não liga B. Um sim antigo não liga B; o não antigo vale.
-  O app usa o aviso e o formato legados apenas se o GET não anunciar escopo. Não há segunda
-  tentativa sem escopo depois de uma recusa. A PWA não oferece o ajuste.
-- `PUT {"consent":false}` revoga, mesmo de um cliente antigo, e apaga a fila de B. O que o receptor
-  já recebeu não é apagado pela revogação.
+  Fechar sem escolher não grava nada. O ajuste fica em "Contagens anônimas de uso" nas Configurações;
+  o "Não enviar" do aviso aberto ali também grava a recusa da máquina ainda sem resposta.
+- `GET /api/telemetry` anuncia `consent_scope: 3` e, ligada, o `snapshot_period` que os apps
+  devolvem com o retrato. Para ligar: `PUT {"consent":true,"consent_scope":3}`, que vale para a
+  opção B e para o retrato de preferências. Um sim antigo (sem escopo ou do escopo 2) não liga nada;
+  o não antigo vale. Com servidor que anuncia só o escopo 2 ou nenhum escopo, o app mostra o aviso
+  daquela versão (veja "Servidores legados"). Não há segunda tentativa sem escopo depois de uma
+  recusa. A PWA não oferece o ajuste.
+- `PUT {"consent":false}` revoga, mesmo de um cliente antigo, e apaga a fila de B e as das versões
+  anteriores (`~/.hangar/telemetry/` e `~/.hangar/telemetry-scope-2/`). O que o receptor já recebeu
+  não é apagado pela revogação.
+
+Sem resposta, nenhum contador é contado nem gravado: só existe o `telemetry.json`, com `consent: null` e
+os dois números aleatórios.
 
 ## Desligar pela máquina
 
@@ -212,4 +231,6 @@ página `/panel` do mesmo receptor, com conta e senha.
 Servidores que não anunciam `consent_scope` usam o aviso antigo: mandavam um pacote por dia com
 contagens e linhas de aviso e erro do servidor. A limpeza antiga tirava caminhos, nomes de sessão,
 contas, máquinas, e-mails, endereços, trechos entre aspas e identificadores; mesmo assim, parte do
-texto do erro podia passar. Isso não é o comportamento da opção B descrita acima.
+texto do erro podia passar. Servidores que anunciam só `consent_scope: 2` usam o aviso de preferências
+daquela versão: o mesmo pacote diário com as linhas limpas do log, mais o retrato de preferências do
+servidor e dos apps. Nenhum dos dois é o comportamento da opção B descrito acima.

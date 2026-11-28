@@ -1,4 +1,5 @@
 //! Fila e marcas em disco exclusivas do escopo 3: um binário antigo não pode enviar lotes de B.
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -21,6 +22,9 @@ pub(crate) struct DayFile {
     pub(crate) counters: Vec<Counter>,
     pub(crate) detail: DayDetail,
     pub(crate) sealed: bool,
+    /// Marcas dos retratos do dia (servidor e apps), gravadas com os contadores e nunca copiadas ao pacote.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) snapshot_keys: BTreeSet<String>,
 }
 
 fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry-v3") }
@@ -81,9 +85,18 @@ pub(crate) fn cap(home: &Path) -> io::Result<usize> {
     Ok(excess.len())
 }
 
-pub(crate) fn wipe(home: &Path) -> io::Result<()> {
-    match std::fs::remove_dir_all(queue_dir(home)) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+/// A fila e as marcas do escopo 3.
+pub(crate) fn wipe(home: &Path) -> io::Result<()> { remove_tree(&root(home)) }
+
+/// As filas das versões sem escopo (`~/.hangar/telemetry/`) e do escopo 2 (`telemetry-scope-2/`): só a
+/// recusa as apaga; o aceite as deixa para o binário revertido, que não envia sem o próprio aceite.
+pub(crate) fn wipe_legacy(home: &Path) -> io::Result<()> {
+    ["telemetry", "telemetry-scope-2"].iter().try_for_each(|name| remove_tree(&home.join(".hangar").join(name)))
+}
+
+fn remove_tree(root: &Path) -> io::Result<()> {
+    match std::fs::remove_dir_all(root) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound && !root.try_exists()? => Ok(()),
         outcome => outcome,
     }
 }

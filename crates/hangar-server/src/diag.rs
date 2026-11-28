@@ -556,6 +556,48 @@ mod telemetry_tests {
         assert!(!wire.contains("private_") && !wire.contains("guest_fixture") && !wire.contains("before_fixture"));
     }
 
+    #[tokio::test]
+    async fn screen_snapshot_in_generic_post_is_acknowledged_but_never_written_or_counted() {
+        let (home, diary) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-27T09:00:00-03:00").unwrap();
+        let utc = now.to_utc();
+        let telemetry = Arc::new(Telemetry::for_test(home.path(), Arc::new(move || utc)));
+        let mut st = crate::telemetry_hooks::test_state(home.path(), false);
+        Arc::get_mut(&mut st).unwrap().telemetry = Some(telemetry.clone());
+        let marks = home.path().join(".hangar/telemetry-v3/once.json");
+        let send = |guest: bool, theme: &str| {
+            let body = json!({"eventos": [
+                {"evento": "settings.snapshot", "cliente": "ios", "ts": now, "aparelho": "hidden-device",
+                    "valores": {"theme": theme}, "detalhe": "hidden-detail"},
+                {"evento": "app.visible_time", "ms": 60000, "cliente": "ios", "ts": now, "started_at": now},
+            ]});
+            let mut req = axum::http::Request::post("/api/diag").header("authorization", "Bearer owner")
+                .header("content-type", "application/json").body(Body::from(body.to_string())).unwrap();
+            if guest {
+                req.extensions_mut().insert(crate::share::caller::Caller::Guest(Arc::new(crate::share::caller::GuestGrant {
+                    token: "t".into(), token_hash: "h".into(), sessions: Default::default(), pair_roots: Vec::new(), invite: true })));
+            }
+            reply(&st, "127.0.0.1:5000".parse().unwrap(), req, Some(diary.path().to_owned()), now)
+        };
+        let ack = |response: Response| async move {
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), json!({"gravadas": 2}));
+        };
+        ack(send(false, "light").await).await;
+        assert!(telemetry.counters().is_empty(), "antes do aceite nada conta");
+        telemetry.set_consent(true).unwrap();
+        ack(send(true, "light").await).await;
+        ack(send(false, "dark").await).await;
+        assert!(!marks.exists());
+        let ios = Dims::new().with("client", hangar_telemetry::events::ClientKind::Ios);
+        assert_eq!(telemetry.counters(), vec![Counter::new(Event::AppVisibleMinutes, ios, None, 1)], "o retrato só conta pela rota própria");
+        let rows = test_support::rows(diary.path());
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|row| row["evento"] == "app.visible_time"));
+        assert!(!json!(rows).to_string().contains("hidden-"));
+    }
+
     #[test]
     fn startup_telemetry_counts_from_the_process_birth() {
         let home = tempfile::tempdir().unwrap();

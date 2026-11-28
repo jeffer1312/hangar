@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { TELEMETRY_CONSENT_SCOPE, getTelemetry, knowsTelemetryScope, putTelemetry, type Server, type TelemetrySetting as Telemetry } from '@hangar/core';
+import { SETTINGS_CONSENT_SCOPE, TELEMETRY_CONSENT_SCOPE, getTelemetry, knowsTelemetryScope, type Server, type TelemetrySetting as Telemetry } from '@hangar/core';
 import { Notice, useMachineAction } from './parts';
 import { MachineGroup, MachineRow } from './MachineRows';
-import { confirmTelemetry, openTelemetryDoc } from './startupQuestions';
+import { confirmTelemetry, openTelemetryDoc, saveTelemetryChoice } from './startupQuestions';
 import * as m from '../../paraglide/messages';
 
 // Contagens anônimas desta máquina. Servidor sem telemetria (404/503) não mostra a linha.
@@ -21,16 +21,22 @@ export function TelemetrySetting({ server }: { server: Server }) {
   const consent = state?.consent;
   const scope = state?.consent_scope;
   const known = state !== undefined && knowsTelemetryScope(scope);
+  // Aceite gravado que o servidor não está usando: só a revogação muda.
+  const inactive = consent === true && scope !== undefined && state?.enabled !== true;
   const canChange = state && (consent === true || (!off && known));
   const value = save.busy ? m.native_server_saving() : !state ? read.error ? undefined : m.native_server_loading()
     : consent === false ? m.auto_report_off() : consent === null ? m.auto_report_value_unanswered() : m.auto_report_on();
   const hint = !state ? undefined : off ? m.telemetry_disabled_env() : !known ? m.telemetry_scope_unknown()
-    : scope === TELEMETRY_CONSENT_SCOPE ? m.telemetry_b_setting_hint() : m.telemetry_setting_hint();
+    : inactive ? m.telemetry_not_active() : scope === TELEMETRY_CONSENT_SCOPE ? m.telemetry_b_setting_hint()
+      : scope === SETTINGS_CONSENT_SCOPE ? m.telemetry_setting_hint() : m.telemetry_legacy_setting_hint();
   const change = () => {
     if (!state || !canChange) return;
-    if (state.consent === true) { void save.run(() => putTelemetry(server, false, state), apply); return; }
+    if (state.consent === true) { void save.run(() => saveTelemetryChoice(server, false, scope), apply); return; }
     const label = `${server.label} (${new URL(server.baseUrl).host})`;
-    void confirmTelemetry(label, scope, (yes) => { if (yes) void save.run(() => putTelemetry(server, true, state), apply); });
+    // "Não enviar" grava só a máquina ainda sem resposta; quem já recusou fica como está.
+    void confirmTelemetry(label, scope, (yes) => {
+      if (yes || consent === null) void save.run(() => saveTelemetryChoice(server, yes, scope), apply);
+    });
   };
   return <>
     <MachineGroup>

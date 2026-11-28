@@ -1,6 +1,6 @@
 //! O motor: contadores do dia (UTC) em memória, na forma de fio, gravados na fila pela tarefa de
 //! fundo. `count` só segura uma trava curta em memória; disco e rede ficam com a tarefa.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -72,10 +72,11 @@ type Key = (String, BTreeMap<String, String>, Option<String>);
 struct Day {
     day: String,
     counters: BTreeMap<Key, u64>,
+    snapshot_keys: BTreeSet<String>,
 }
 
 impl Day {
-    fn new(day: String) -> Day { Day { day, counters: BTreeMap::new() } }
+    fn new(day: String) -> Day { Day { day, counters: BTreeMap::new(), snapshot_keys: BTreeSet::new() } }
 
     fn add(&mut self, counter: Counter) {
         let slot = self.counters.entry((counter.event, counter.dims, counter.bucket)).or_default();
@@ -86,6 +87,7 @@ impl Day {
     fn from_file(file: DayFile) -> Day {
         let mut day = Day::new(file.day);
         for counter in file.counters { day.add(counter); }
+        day.snapshot_keys = file.snapshot_keys;
         day
     }
 
@@ -100,7 +102,7 @@ impl Day {
         let counters = self.to_counters().into_iter().filter(|counter| !matches!(counter.event.as_str(),
             "turn_finished" | "limit_switch" | "problem_hidden" | "problem_shown" | "session_fallen" | "server_exit"))
             .collect();
-        DayFile { day: self.day.clone(), counters, ..DayFile::default() }
+        DayFile { day: self.day.clone(), counters, snapshot_keys: self.snapshot_keys.clone(), ..DayFile::default() }
     }
 }
 
@@ -112,10 +114,12 @@ struct Live {
     on_disk: bool,
     /// Dias que viraram com mudança e ainda não foram gravados.
     closed: Vec<Day>,
+    /// O que os apps devolvem com o retrato; nasce a cada ligação e nunca vai ao receptor.
+    snapshot_period: Option<String>,
 }
 
 impl Live {
-    fn new(current: Day, on_disk: bool) -> Live { Live { current, dirty: false, on_disk, closed: Vec::new() } }
+    fn new(current: Day, on_disk: bool) -> Live { Live { current, dirty: false, on_disk, closed: Vec::new(), snapshot_period: None } }
 
     /// Só para a frente: relógio que volta não abre de novo um dia que pode já estar na fila.
     fn roll(&mut self, today: String) {
@@ -199,6 +203,57 @@ impl Telemetry {
         }
     }
 
+    /// `true` quando o dia UTC `day` já tem a marca `key`, gravada junto com os contadores dela.
+    pub fn recorded(&self, day: &str, key: &str) -> bool {
+        self.live.lock().is_ok_and(|live| live.current.day == day && live.current.snapshot_keys.contains(key))
+    }
+
+    /// O retrato do servidor: marca e contadores só no dia e no aceite em que ele começou.
+    ///
+    /// # Errors
+    /// Falha de trava ou de gravação do arquivo do dia.
+    pub fn record_day(&self, day: &str, epoch: u64, key: &str, counters: Vec<Counter>) -> io::Result<bool> {
+        self.record_once(key, counters, |_, now| self.consent_epoch() == epoch && day_of(now) == day)
+    }
+
+    /// Identifica a ligação em vigor para o retrato dos apps sem enviar o identificador ao receptor.
+    pub fn snapshot_period(&self) -> Option<String> {
+        let live = self.live.lock().ok()?;
+        if self.enabled() { live.snapshot_period.clone() } else { None }
+    }
+
+    /// Confirma o retrato inteiro ou nada. Entrega repetida no mesmo período também é confirmada.
+    ///
+    /// # Errors
+    /// Falha de trava ou de gravação do arquivo do dia.
+    pub fn record_snapshot(&self, period: &str, captured: DateTime<Utc>, key: &str, counters: Vec<Counter>) -> io::Result<bool> {
+        // Um minuto admite pequena diferença de relógio sem admitir capturas de outro dia.
+        self.record_once(key, counters, |live, now| live.snapshot_period.as_deref() == Some(period)
+            && captured.date_naive() == now.date_naive() && captured - now <= chrono::TimeDelta::minutes(1))
+    }
+
+    /// Marca e contadores entram juntos no arquivo do dia corrente, ou nada; dia fechado nunca reabre.
+    fn record_once(&self, key: &str, counters: Vec<Counter>, accept: impl FnOnce(&Live, DateTime<Utc>) -> bool) -> io::Result<bool> {
+        let _io = lock(&self.io)?;
+        let Some(period) = self.collection() else { return Ok(false) };
+        {
+            let mut live = lock(&self.live)?;
+            let now = (self.clock)();
+            let day = day_of(now);
+            if !self.enabled() || live.current.day > day || !accept(&live, now) {
+                return Ok(false);
+            }
+            live.roll(day);
+            if live.current.snapshot_keys.insert(key.to_owned()) {
+                for counter in counters { live.current.add(counter); }
+                live.dirty = true;
+            }
+        }
+        // A repetição não soma, mas ainda precisa completar a gravação que pode ter falhado.
+        self.save_held(&period, self.today())?;
+        Ok(true)
+    }
+
     pub fn duration(&self, event: Event, dims: Dims, took: Duration) {
         if self.enabled() { self.duration_in_epoch(self.consent_epoch(), event, dims, took); }
     }
@@ -230,7 +285,8 @@ impl Telemetry {
     pub fn once(&self, key: &str) -> io::Result<bool> { self.once_in_epoch(self.consent_epoch(), key) }
 
     pub fn once_in_epoch(&self, epoch: u64, key: &str) -> io::Result<bool> {
-        const KEEP: usize = 64;
+        // ponytail: a poda é pelo dia no fim da chave; o teto só segura chave sem dia que cresça sem fim.
+        const CAP: usize = 4096;
         if !self.enabled() { return Ok(false); }
         let _io = lock(&self.io)?;
         let Some(period) = self.collection().filter(|_| self.consent_epoch() == epoch) else { return Ok(false) };
@@ -244,8 +300,14 @@ impl Telemetry {
             Err(e) => return Err(e),
         };
         if keys.contains(&key) { return Ok(false); }
+        // Ontem fica: o dia é UTC, e a marca de quem mandou perto da meia-noite ainda vale.
+        let yesterday = (self.clock)().date_naive().pred_opt();
+        keys.retain(|known| {
+            let day = known.get(known.len().saturating_sub(10)..).and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+            day.zip(yesterday).is_none_or(|(day, yesterday)| day >= yesterday)
+        });
         keys.push(key);
-        let excess = keys.len().saturating_sub(KEEP);
+        let excess = keys.len().saturating_sub(CAP);
         keys.drain(..excess);
         queue::write_once(&self.home, &keys)?;
         Ok(true)
@@ -372,6 +434,7 @@ impl Telemetry {
                 });
             if !file.sealed {
                 file.counters.clone_from(&latest.counters);
+                file.snapshot_keys.clone_from(&latest.snapshot_keys);
                 if !file.counters.is_empty() || !file.detail.is_empty() { queue::write_day(&self.home, &file)?; }
             }
             Ok(())
@@ -448,7 +511,10 @@ impl Telemetry {
         }
         settings.invalidate_period = false;
         if !on {
-            if disabled.is_some() || settings.state.consent() == Some(false) { queue::wipe(&self.home)?; }
+            if disabled.is_some() || settings.state.consent() == Some(false) {
+                queue::wipe(&self.home)?;
+                queue::wipe_legacy(&self.home)?;
+            }
             return Ok(());
         }
         if !self.enabled() {
@@ -462,10 +528,12 @@ impl Telemetry {
                 }
                 Err(e) => return Err(e),
             };
-            *lock(&self.live)? = match file {
+            let mut live = match file {
                 Some(file) => Live::new(Day::from_file(file), true),
                 None => Live::new(Day::new(today), false),
             };
+            live.snapshot_period = Some(hangar_core::ids::random_hex(16));
+            *lock(&self.live)? = live;
             let mut gate = lock(&self.post_gate)?;
             *gate = Some(period.id.clone());
             self.consent_epoch.fetch_add(1, Ordering::SeqCst);
@@ -531,6 +599,109 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn message() -> Dims { Dims::new().with("provider", Provider::Claude).with("surface", Surface::Terminal) }
+
+    #[test]
+    fn legacy_and_scope_2_yes_do_not_enable_and_a_no_wipes_the_old_queues() {
+        use serde_json::{Value, json};
+        let fx = Fixture::new();
+        let path = fx.home.path().join(".hangar/telemetry.json");
+        let with = |extra: Value| {
+            let mut stored = json!({"machine_id": "1".repeat(32), "owner_id": "2".repeat(32), "owner_created": 123});
+            stored.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            stored.to_string()
+        };
+        let read = || serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap();
+        let old_queues = [fx.home.path().join(".hangar/telemetry/queue/2026-11-26.json"),
+            fx.home.path().join(".hangar/telemetry-scope-2/queue/2026-11-26.json")];
+        for old in &old_queues {
+            std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+            std::fs::write(old, r#"{"day": "2026-11-26", "counters": []}"#).unwrap();
+        }
+        for old_yes in [json!({"consent": true}), json!({"consent_scope": 2})] {
+            std::fs::write(&path, with(old_yes)).unwrap();
+            let telemetry = fx.start_as_is();
+            assert_eq!(telemetry.consent(), None);
+            assert!(!telemetry.enabled());
+            assert_eq!(telemetry.owner().unwrap(), ("2".repeat(32), 123));
+            let stored = read();
+            assert!(stored.get("consent_scope").is_none() && stored["consent"] != json!(true), "{stored}");
+        }
+        let telemetry = fx.start_as_is();
+        telemetry.set_consent(true).unwrap();
+        assert!(old_queues.iter().all(|old| old.is_file()), "o aceite não mexe nas filas das versões anteriores");
+        assert_eq!(read()["consent"], false, "servidor revertido não enxerga um sim");
+        assert_eq!(read()["option_b"]["scope"], 3);
+        drop(telemetry);
+        assert!(fx.start_as_is().enabled());
+
+        std::fs::write(&path, with(json!({"consent": false}))).unwrap();
+        let telemetry = fx.start_as_is();
+        assert_eq!(telemetry.consent(), Some(false));
+        assert!(!telemetry.enabled());
+        assert!(old_queues.iter().all(|old| !old.parent().unwrap().parent().unwrap().exists()), "o \"Não enviar\" apaga também as filas antigas");
+    }
+
+    #[test]
+    fn a_whole_snapshot_survives_midnight_during_the_flush() {
+        use std::sync::atomic::AtomicUsize;
+        let fx = Fixture::new();
+        let before = Utc.with_ymd_and_hms(2026, 11, 27, 23, 59, 59).unwrap();
+        let after = before + chrono::TimeDelta::seconds(1);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let inspecting = Arc::new(AtomicBool::new(false));
+        let clock = {
+            let (reads, inspecting) = (reads.clone(), inspecting.clone());
+            Arc::new(move || if inspecting.load(Ordering::SeqCst) && reads.fetch_add(1, Ordering::SeqCst) > 0 { after } else { before })
+        };
+        let telemetry = Telemetry::for_test(fx.home.path(), clock);
+        telemetry.set_consent(true).unwrap();
+        let period = telemetry.snapshot_period().unwrap();
+        inspecting.store(true, Ordering::SeqCst);
+        let counters = vec![Counter::new(Event::Peers, Dims::new(), None, 3), Counter::new(Event::MessageSent, message(), None, 4)];
+        assert!(telemetry.record_snapshot(&period, before, "fixture", counters).unwrap());
+        assert!(telemetry.counters().is_empty(), "o dia novo não recebe parte do retrato");
+        let file = queue::read_day(fx.home.path(), "2026-11-27").unwrap().unwrap();
+        assert_eq!(file.counters.len(), 2);
+        assert_eq!(file.snapshot_keys, BTreeSet::from(["fixture".to_owned()]));
+        assert!(queue::read_once(fx.home.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn once_prunes_marks_by_day_not_by_count() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        assert!(telemetry.once("peers:2026-11-26").unwrap());
+        for n in 0..100 {
+            assert!(telemetry.once(&format!("settings:native:d{n}:2026-11-26")).unwrap());
+        }
+        assert!(!telemetry.once("peers:2026-11-26").unwrap(), "muitas marcas não apagam a de hoje");
+        assert!(telemetry.once("update:a->b:2026-11-20T10:00:00+00:00").unwrap());
+        fx.next_day();
+        assert!(!telemetry.once("peers:2026-11-26").unwrap(), "a de ontem ainda vale");
+        fx.next_day();
+        assert!(telemetry.once("peers:2026-11-28").unwrap());
+        let keys = queue::read_once(fx.home.path()).unwrap();
+        assert!(!keys.iter().any(|k| k.ends_with("2026-11-26")), "{keys:?}");
+        assert!(keys.iter().any(|k| k.contains(":update:")), "marca sem dia no fim fica");
+    }
+
+    #[test]
+    fn repeated_yes_keeps_the_period_the_queue_and_the_marks() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        let active = telemetry.snapshot_period().unwrap();
+        telemetry.count(Event::MessageSent, message(), 2);
+        telemetry.save().unwrap();
+        assert!(telemetry.once("fixture").unwrap());
+        telemetry.set_consent(true).unwrap();
+        assert_eq!(telemetry.snapshot_period().as_deref(), Some(active.as_str()));
+        assert_eq!(queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap().counters[0].count, 2);
+        assert!(!telemetry.once("fixture").unwrap());
+        telemetry.set_consent(false).unwrap();
+        assert!(telemetry.snapshot_period().is_none());
+        telemetry.set_consent(true).unwrap();
+        assert_ne!(telemetry.snapshot_period().unwrap(), active, "aceite novo, período novo");
+    }
 
     #[test]
     fn consent_epoch_rises_each_time_counting_turns_on() {

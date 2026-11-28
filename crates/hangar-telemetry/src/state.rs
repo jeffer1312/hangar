@@ -9,7 +9,8 @@ use hangar_core::ids::random_hex;
 
 use crate::wire::{is_day, is_id};
 
-/// Escopo 2 é o aviso do retrato de preferências, não o da opção B.
+/// O aviso que cobre a opção B e o retrato de preferências do servidor e dos apps. O 2 (só preferências)
+/// não liga nada aqui: quem respondeu a ele vê o aviso de novo.
 pub const CONSENT_SCOPE: u32 = 3;
 
 /// Período contínuo de coleta, vinculado ao diário e à fila sem ir ao receptor.
@@ -50,6 +51,7 @@ impl State {
 #[derive(Default, Deserialize)]
 struct Stored {
     consent: Option<bool>,
+    consent_scope: Option<serde_json::Value>,
     machine_id: Option<String>,
     owner_id: Option<String>,
     owner_created: Option<i64>,
@@ -79,10 +81,13 @@ pub(crate) fn load(home: &Path, now: DateTime<Utc>) -> io::Result<(State, Option
         option_b.as_ref().is_some_and(|choice| choice.at <= period.since) && period.since <= now && is_id(&period.id)
             && period.sealed_through.as_deref().is_none_or(is_day)
     });
+    // Um "sim" sem escopo ou o do escopo 2 sai do arquivo: um servidor revertido o leria como aceite de outro aviso.
+    let unrecognized = stored.consent == Some(true) || stored.consent_scope.is_some();
     let state = State {
-        legacy: stored.consent, machine_id: machine_id.unwrap_or_else(|| random_hex(16)), owner_id, owner_created, option_b, collection,
+        legacy: stored.consent.filter(|consent| !consent), machine_id: machine_id.unwrap_or_else(|| random_hex(16)), owner_id, owner_created,
+        option_b, collection,
     };
-    if !complete { store(home, &state)?; }
+    if !complete || unrecognized { store(home, &state)?; }
     Ok((state, recovered))
 }
 

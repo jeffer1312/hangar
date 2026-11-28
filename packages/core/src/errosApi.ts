@@ -55,6 +55,8 @@ export function formataErro(e: unknown): string | undefined {
 }
 
 const ERROS: Record<string, (params: Parametros) => string> = {
+  telemetry_consent_scope_mismatch: () => m.telemetry_consent_scope_mismatch(),
+  telemetry_consent_scope_required: () => m.telemetry_consent_scope_mismatch(),
   claude_context_invalid: () => m.claude_context_invalid(),
   claude_context_unreadable: () => m.claude_context_unreadable(),
   claude_customizations_busy: () => m.claude_customizations_busy(),

@@ -706,13 +706,16 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   sai); o resultado mora em `.hangar-update/relatorio.json`, fora do `estado.json`. Contrato em
   [plataforma.md](docs/decisoes/plataforma.md#relatório-automático-quando-a-atualização-falha-30102026).
 - **Telemetria anônima é do Rust: crate `hangar-telemetry`, ligado pelo servidor em
-  `telemetry_routes.rs` e `telemetry_hooks.rs`.** A opção B exige aceite explícito do escopo 3 no
-  `PUT /api/telemetry`; um aceite anterior não liga B, e `consent: false` sem escopo revoga. Fila e
-  marcas de B são próprias (`telemetry-v3`); o booleano legado permanece desligado no aceite de B.
-  Só sai ação comprovada do dono e situação de saúde da máquina, com campos de listas fechadas e
-  descrições fixas, nunca logs genéricos ou diário bruto. A época de coleta é conferida a cada POST;
-  `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1` e CI vencem. Retratos de hora em hora e final do dia UTC
-  usam o mesmo `batch_id`; teto de 2 MiB no JSON, 413 não remove o lote. Evento ou valor novo entra em `events.rs` e em
+  `telemetry_routes.rs` e `telemetry_hooks.rs`.** Um aceite só, o do escopo 3 no
+  `PUT /api/telemetry`, cobre a opção B e o retrato diário de preferências do servidor e dos apps
+  (`POST /api/telemetry`, lista fechada de `events::SETTINGS`); servidor que anuncia só o escopo 2
+  segue com o aviso de preferências. Um aceite anterior não liga B, e `consent: false` em qualquer
+  versão revoga e apaga também as filas das versões anteriores. Fila e marcas de B são próprias
+  (`telemetry-v3`); o booleano legado permanece desligado no aceite de B. Só sai ação comprovada do
+  dono e situação de saúde da máquina, com campos de listas fechadas e descrições fixas, nunca logs
+  genéricos ou diário bruto. A época de coleta é conferida a cada POST; `HANGAR_TELEMETRY=0`,
+  `DO_NOT_TRACK=1` e CI vencem. Retratos de hora em hora e final do dia UTC usam o mesmo
+  `batch_id`; teto de 2 MiB no JSON, 413 não remove o lote. Evento ou valor novo entra em `events.rs` e em
   [`docs/telemetria.md`](docs/telemetria.md) no mesmo commit. Motivo em
   [plataforma.md](docs/decisoes/plataforma.md#telemetria-anônima-só-o-dono-lista-fechada-envio-diário-26112026).
 - **Aviso na tela só para ação que falhou ou bloqueio real.** Falha de acompanhamento, dado velho
