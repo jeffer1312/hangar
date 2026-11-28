@@ -980,11 +980,13 @@ mod tests {
             "state": "idle"})).unwrap();
         let retrato = BTreeMap::from([("f".to_owned(), serde_json::json!({"error": null, "view": {"alive": true, "public_state": {
             "state": "awaiting_input", "question": "Qual cor?", "interaction_id": null,
-            "codex_question": {"request_id": 1, "interaction_id": "form-1",
-                "questions": [{"question": "Qual cor?", "options": [{"label": "Azul"}, {"label": "Verde"}]}]}}}}))]);
+            "codex_question": {"provider": "claude", "request_id": 1, "interaction_id": "form-1", "questions": [{"header": "Cor",
+                "question": "Qual cor?", "multiSelect": false, "options": [{"label": "Azul", "description": ""}, {"label": "Verde", "description": ""}]}]}}}}))]);
         headless_state(&mut row, Some(&retrato), None);
         assert_eq!((row.state.as_str(), row.question.as_deref()), ("awaiting_input", Some("Qual cor?")));
-        assert_eq!(row.ask_form.as_ref().and_then(|form| form["interaction_id"].as_str()), Some("form-1"));
+        let form: hangar_api::ask::AskQuestion = serde_json::from_value(row.ask_form.clone().unwrap()).unwrap();
+        assert_eq!((form.interaction_id.as_deref(), form.questions[0].options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>()),
+                   (Some("form-1"), vec!["Azul", "Verde"]));
         // É o ID que o aviso ao pai cita e o `child_answer` devolve.
         assert_eq!(crate::groups::link_return::open_interaction(&row).as_deref(), Some("form-1"));
     }
