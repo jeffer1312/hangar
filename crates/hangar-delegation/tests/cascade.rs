@@ -1,4 +1,4 @@
-//! A árvore que o Parar do pai alcança: filhas ligadas em largura, até três níveis, sem laço.
+//! A árvore que o fechamento do pai interrompe: filhas ligadas em largura, até três níveis, sem laço.
 use std::collections::BTreeMap;
 
 use hangar_delegation::cascade::{CascadeTarget, MAX_DEPTH, plan};

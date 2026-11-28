@@ -247,30 +247,6 @@ fn session_life_key(code: &str) -> Option<(&str, Option<&'static str>)> {
     }
 }
 
-/// O que o Parar fez. `parent`: o pai foi interrompido (`interrupted: false` = ele não tinha turno, e só as filhas
-/// receberam o Parar; servidor antigo, sem o campo, conta como interrompido). `failed`: filhas que não pararam.
-/// `unchecked`: o servidor não conseguiu ler quais são as filhas.
-#[derive(Debug, Default, PartialEq)]
-pub struct Interrupted {
-    pub parent: bool,
-    pub failed: Vec<String>,
-    pub unchecked: bool,
-}
-
-impl Interrupted {
-    fn of(body: &Value) -> Self {
-        Self { parent: body.get("interrupted").and_then(Value::as_bool).unwrap_or(true), failed: cascade_failed(body),
-            unchecked: body.pointer("/cascade/unavailable").is_some_and(|v| !v.is_null()) }
-    }
-}
-
-/// Nomes de `cascade.failed` da resposta do `/interrupt`.
-fn cascade_failed(body: &Value) -> Vec<String> {
-    body.pointer("/cascade/failed").and_then(Value::as_array).map(|failed| failed.iter()
-        .filter_map(|f| f.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_owned)).collect())
-        .unwrap_or_default()
-}
-
 /// Caminho e bilhete de `open_url` (só página de sessão) sobre `route`, com o prefixo de caminho dela.
 fn rebase_page_url(route: &Url, open_url: &str) -> Option<Url> {
     let page = Url::parse(open_url).ok()?;
@@ -870,23 +846,12 @@ impl Api {
         mermaid_failure(status.as_u16(), message)
     }
 
-    /// `cascade` só no Parar: cancelar o cartão de pergunta usa a mesma rota e não pode parar as filhas.
-    pub async fn interrupt(&self, name: &str, clear: bool, cascade: bool) -> Result<Interrupted, Failure> {
+    pub async fn interrupt(&self, name: &str, clear: bool) -> Result<(), Failure> {
         let mut url = self.endpoint(Some(name), Some("interrupt"));
-        {
-            let mut query = url.query_pairs_mut();
-            query.append_pair("clear", if clear { "true" } else { "false" });
-            if cascade { query.append_pair("cascade", "1"); }
-        }
+        url.query_pairs_mut().append_pair("clear", if clear { "true" } else { "false" });
         let r = self.client.post(url).timeout(Duration::from_secs(15)).send().await.map_err(|_| Failure::transport(true))?;
-        let r = self.checked(r, true).await?;
-        match r.json::<Value>().await {
-            Ok(body) => Ok(Interrupted::of(&body)),
-            // Com a cascata, o corpo diz se o pai tinha turno e quais filhas pararam: ilegível é resultado incerto,
-            // nunca "todas pararam". Sem ela, o 200 já é a resposta.
-            Err(_) if cascade => Err(Failure::transport(true)),
-            Err(_) => Ok(Interrupted { parent: true, ..Interrupted::default() }),
-        }
+        self.checked(r, true).await?;
+        Ok(())
     }
 
     // Mutação sem retry: timeout ou queda depois de enviar vira incerteza, nunca repetição.
@@ -2041,46 +2006,6 @@ mod tests {
             ("POST /api/sessions/a%20b/queue/e%201/steer".to_owned(), None),
             ("POST /api/sessions/a%20b/queue/reorder".to_owned(), Some(json!({"id": "e 1", "before_id": null}))),
         ]);
-    }
-
-    #[tokio::test]
-    async fn interrupt_sends_cascade_only_when_asked() {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let mut seen = Vec::new();
-            for reply in [r#"{"ok":true}"#, r#"{"ok":true,"cascade":{"interrupted":["kid-a"],"failed":[{"name":"kid-b","code":"cascade_timeout"}]}}"#,
-                r#"{"ok":true,"interrupted":false,"cascade":{"interrupted":[],"failed":[],"unavailable":"groups_unavailable"}}"#, r#"{"ok":tr"#] {
-                let (stream, _) = listener.accept().await.unwrap();
-                let mut stream = BufReader::new(stream);
-                let mut head = String::new();
-                loop {
-                    let mut line = String::new();
-                    assert!(stream.read_line(&mut line).await.unwrap() > 0);
-                    head.push_str(&line);
-                    if line == "\r\n" { break; }
-                }
-                seen.push(head.lines().next().unwrap().split_whitespace().take(2).collect::<Vec<_>>().join(" "));
-                stream.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).as_bytes()).await.unwrap();
-            }
-            seen
-        });
-        let api = Api::new(&format!("http://{address}"), "fixture-token").unwrap();
-        assert_eq!(api.interrupt("a b", false, false).await.unwrap(), Interrupted { parent: true, ..Interrupted::default() });
-        assert_eq!(api.interrupt("a b", true, true).await.unwrap(), Interrupted { parent: true, failed: vec!["kid-b".to_owned()], unchecked: false });
-        // Pai sem turno e filhas não lidas: nada disso é "parou".
-        assert_eq!(api.interrupt("a b", false, true).await.unwrap(), Interrupted { parent: false, failed: Vec::new(), unchecked: true });
-        // Corpo cortado depois do 200: resultado incerto, não "nenhuma filha falhou".
-        assert!(api.interrupt("a b", false, true).await.unwrap_err().uncertain);
-        assert_eq!(server.await.unwrap(), vec![
-            "POST /api/sessions/a%20b/interrupt?clear=false".to_owned(),
-            "POST /api/sessions/a%20b/interrupt?clear=true&cascade=1".to_owned(),
-            "POST /api/sessions/a%20b/interrupt?clear=false&cascade=1".to_owned(),
-            "POST /api/sessions/a%20b/interrupt?clear=false&cascade=1".to_owned(),
-        ]);
-        assert_eq!(cascade_failed(&json!({"cascade": {"failed": [{"name": "kid-c", "code": "interrupt_unconfirmed"}]}})), vec!["kid-c".to_owned()]);
-        assert!(cascade_failed(&Value::Null).is_empty());
     }
 
     /// A recusa de conta em uso com a lista vira o que perguntar; sem lista (servidor antigo) ou vazia, erro comum.

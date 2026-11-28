@@ -149,12 +149,18 @@ async fn env_with(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str) -> 
 
 /// `env_with` com o estado ajustado antes de o servidor subir.
 pub(crate) async fn env_full(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str, state_adjust: impl FnOnce(&mut AppState)) -> Env {
+    env_built(|registry, _| registry, adjust, display, state_adjust).await
+}
+
+/// `env_full` com o registro montado por `build`, que recebe a home da prova, antes de ligar aos hubs.
+pub(crate) async fn env_built(build: impl FnOnce(RuntimeRegistry, &Path) -> RuntimeRegistry, adjust: impl FnOnce(&Arc<RuntimeRegistry>),
+                              display: &str, state_adjust: impl FnOnce(&mut AppState)) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_owned();
     let home = root.join("home");
     let queue = home.join(".claude").join(".hangar-queue");
     let tmux = fake_tmux(&root, display);
-    let registry = crate::runtime_open::registry().await;
+    let registry = crate::runtime_open::registry_with(|registry| build(registry, &home)).await;
     registry.bind_watcher(Arc::new(Watcher::new(WatchConfig { home: home.clone(), queue_dir: queue.clone(),
         mux: Mux::with_program(&tmux, Duration::from_secs(5)), mux_program: tmux.clone().into_os_string() })));
     adjust(&registry);

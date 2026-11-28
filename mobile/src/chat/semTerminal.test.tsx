@@ -2,7 +2,7 @@
 import { act, createElement, forwardRef, useContext, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { configureApi, estilosDitado, fetchSessionsForServer, implementCodexPlan, interrupt, loadLiveVoiceSettings, recarregarSessao, setPermissionMode, _limparEsfriamentoParaTestes, _resetRotasForTests, type FirstConversationAttempt, type InterruptResult, type MotivoFim, type QueuePanel, type SessionInfo } from '@hangar/core';
+import { configureApi, estilosDitado, fetchSessionsForServer, implementCodexPlan, interrupt, loadLiveVoiceSettings, recarregarSessao, setPermissionMode, _limparEsfriamentoParaTestes, _resetRotasForTests, type FirstConversationAttempt, type MotivoFim, type QueuePanel, type SessionInfo } from '@hangar/core';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -452,7 +452,7 @@ describe('ações e atualização da conversa na rota', () => {
     appLifecycle.currentState = 'active';
     chatRow.extra = {};
     vi.mocked(fetchSessionsForServer).mockClear();
-    vi.mocked(interrupt).mockReset().mockResolvedValue({ ok: true });
+    vi.mocked(interrupt).mockReset().mockResolvedValue(undefined);
     vi.mocked(recarregarSessao).mockClear();
     vi.mocked(implementCodexPlan).mockClear();
     vi.mocked(setPermissionMode).mockClear();
@@ -832,8 +832,8 @@ describe('ações e atualização da conversa na rota', () => {
 
   it.each([true, false])('cancelar opções só devolve pendente depois de interrupt aceito: %s', async (accepted) => {
     let finish!: () => void;
-    vi.mocked(interrupt).mockImplementationOnce(() => new Promise<InterruptResult>((resolve, reject) => {
-      finish = () => accepted ? resolve({ ok: true }) : reject(Object.assign(new Error('409: recusado'), { status: 409 }));
+    vi.mocked(interrupt).mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+      finish = () => accepted ? resolve() : reject(Object.assign(new Error('409: recusado'), { status: 409 }));
     }));
     const { container, root } = await render(createElement(ChatScreen));
     const chat = chatStore('s1', 'sess');
@@ -859,7 +859,7 @@ describe('ações e atualização da conversa na rota', () => {
 
   it.each(['cancelar', 'Parar'])('%s não devolve ao campo pendente entregue antes do ACK da interrupção', async (action) => {
     let finish!: () => void;
-    vi.mocked(interrupt).mockImplementationOnce(() => new Promise<InterruptResult>((resolve) => { finish = () => resolve({ ok: true }); }));
+    vi.mocked(interrupt).mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
     const alert = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
     const { container, root } = await render(createElement(ChatScreen));
     try {
@@ -875,9 +875,7 @@ describe('ações e atualização da conversa na rota', () => {
         const choices = alert.mock.calls[0][2] as { style?: string; onPress?: () => void }[];
         act(() => choices.find((choice) => choice.style === 'destructive')!.onPress!());
       }
-      // Só o Parar leva a cascata às filhas ligadas; o Cancelar do cartão, nunca.
-      if (action === 'cancelar') expect(interrupt).toHaveBeenCalledExactlyOnceWith('sess', true, useServers.getState().servers[0]);
-      else expect(interrupt).toHaveBeenCalledExactlyOnceWith('sess', true, useServers.getState().servers[0], { cascade: true });
+      expect(interrupt).toHaveBeenCalledExactlyOnceWith('sess', true, useServers.getState().servers[0]);
       // Parar exige campo vazio; a edição ocorre enquanto a interrupção aguarda resposta.
       const field = container.querySelector('textarea')!;
       act(() => {
@@ -892,27 +890,6 @@ describe('ações e atualização da conversa na rota', () => {
       await act(async () => finish());
       expect(field.value).toBe('digitado');
       expect(chat.use.getState().pending).toEqual([pending[0]]);
-    } finally {
-      act(() => root.unmount());
-      alert.mockRestore();
-    }
-  });
-
-  it('Parar com o pai sem turno e filhas paradas mantém o pendente onde estava', async () => {
-    vi.mocked(interrupt).mockResolvedValueOnce({ ok: true, interrupted: false, cascade: { interrupted: ['filha'], failed: [] } });
-    const alert = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
-    const { container, root } = await render(createElement(ChatScreen));
-    try {
-      const chat = chatStore('s1', 'sess');
-      const pending = [{ id: 'pending-a', text: 'esperando' }];
-      act(() => chat.use.setState({ pending, stateEvent: { session: 'sess', state: 'working' } }));
-      act(() => button(container, 'composer_parar')!.click());
-      const choices = alert.mock.calls[0][2] as { style?: string; onPress?: () => void }[];
-      await act(async () => choices.find((choice) => choice.style === 'destructive')!.onPress!());
-      expect(interrupt).toHaveBeenCalledExactlyOnceWith('sess', true, useServers.getState().servers[0], { cascade: true });
-      // Nenhum Esc saiu: a mensagem não volta ao campo nem some da fila.
-      expect(chat.use.getState().pending).toEqual(pending);
-      expect(container.querySelector('textarea')!.value).toBe('');
     } finally {
       act(() => root.unmount());
       alert.mockRestore();

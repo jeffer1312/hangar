@@ -1119,13 +1119,13 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   filha ligada a quem chama. A resposta final de turno pedido pelo pai volta sozinha como
   `[de: <filha>]` (só Claude e Codex), por uma assinatura interna da lista que não conta como app
   aberto; sem esperar bloqueante. A pergunta (`AskUserQuestion`) da filha chega ao pai uma vez por
-  `interaction_id` e é respondida por `child_answer`; menu e permissão só avisam. Parar com
-  `cascade=1` (botão Parar e tool `interrupt`) para as descendentes até 3 níveis; cancelar cartão
-  de pergunta não cascateia. Fechar o pai pelo dono, com a morte confirmada, interrompe as filhas
-  (pelo convidado, não) e as mantém abertas; toda saída do grupo grava `orphaned_from` nelas. Os clientes calculam a linha
+  `interaction_id` e é respondida por `child_answer`; menu e permissão só avisam. Parar (botão e
+  tool `interrupt`) para só a sessão, nunca as filhas. Fechar o pai com filhas abertas pergunta
+  antes se fecha também as filhas; fechar só o pai, pelo dono e com a morte confirmada, interrompe
+  as filhas (pelo convidado, não) e as mantém abertas; toda saída do grupo grava `orphaned_from` nelas. Os clientes calculam a linha
   "N subagentes" da lista. Motivo em
   [plataforma.md](docs/decisoes/plataforma.md#sessão-filha-ligada-a-quem-a-abriu) e
-  [plataforma.md](docs/decisoes/plataforma.md#filhas-ligadas-pergunta-ao-pai-parar-em-cascata-e-pai-que-fecha-27112026).
+  [plataforma.md](docs/decisoes/plataforma.md#filhas-ligadas-pergunta-ao-pai-parar-só-na-sessão-e-pai-que-fecha-27112026).
 - **A porta privada de loopback do Rust mora no mesmo processo**, anunciada na saúde somente como
   endereço; o segredo é gerado na subida e nunca sai dele. Uma captura canônica
   por rodada, sem grade auxiliar: quem captura o pane de Claude com terminal para o

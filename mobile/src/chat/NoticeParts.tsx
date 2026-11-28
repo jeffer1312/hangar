@@ -7,10 +7,10 @@ import * as m from '../paraglide/messages';
 
 /**
  * A linha fechada; `open` é `null` quando não há o que abrir. Com `action` (o botão ou o andamento), o título corta
- * em uma linha para os dois caberem.
+ * em uma linha para os dois caberem, salvo com `wrap`: sem detalhe para abrir, o texto cortado se perderia.
  */
-export function NoticeLineView({ title, count, open, onPress, action, icon }: {
-  title: string; count: string | null; open: boolean | null; onPress?: () => void; action?: ReactNode; icon?: ReactNode;
+export function NoticeLineView({ title, count, open, onPress, action, icon, wrap }: {
+  title: string; count: string | null; open: boolean | null; onPress?: () => void; action?: ReactNode; icon?: ReactNode; wrap?: boolean;
 }) {
   const { theme } = useUnistyles();
   return (
@@ -25,7 +25,7 @@ export function NoticeLineView({ title, count, open, onPress, action, icon }: {
         accessibilityState={open == null ? undefined : { expanded: open }}
       >
         {icon ?? <Icon name="TriangleAlert" size={12} color={theme.tokens.text.muted} />}
-        <Text style={styles.title} numberOfLines={action ? 1 : undefined}>{title}{count ? ` · ${count}` : ''}</Text>
+        <Text style={styles.title} numberOfLines={action && !wrap ? 1 : undefined}>{title}{count ? ` · ${count}` : ''}</Text>
       </Pressable>
       {action}
       {open == null ? null : (

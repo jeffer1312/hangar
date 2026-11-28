@@ -36,7 +36,7 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         return response;
     };
     // Lidas antes do fechamento: o do Pi/omp/Kimi sai do grupo por dentro, e a saída apaga o `linked_by` delas.
-    let children = children_to_stop(&st, &name, owner).await;
+    let (children, unchecked) = children_to_stop(&st, &name, owner).await;
     // A chave antes do kill (depois dele o pane não a diz mais); os arquivos do cofre saem só no sucesso.
     let vault_files = crate::vault::files::before_close(&st, &name).await;
     if let Some(closed) = runtime.close_other(&name).await {
@@ -44,7 +44,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             Ok(body) => {
                 if let Some(files) = vault_files { files.done(); }
                 closed_line(&st, &name, owner, req.headers(), peer);
-                let stopped = stop_children(&st, children).await;
+                let mut stopped = unchecked;
+                stopped.extend(stop_children(&st, children).await);
                 let mut response = super::json_response(StatusCode::OK, body);
                 crate::routes::cors(req.headers(), response.headers_mut());
                 // No `warning`, que os clientes leem, como no fechamento pelo Rust.
@@ -99,7 +100,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         cleanup.push(cleanup_failed(&st, &name, "close_chain_failed", "o vínculo then da sessão encerrada não saiu"));
     }
     record_closed_name(&st, &name, closed["transcript"].as_str()).await;
-    let leave = match st.groups.clone() { Some(groups) => leave_stopping_children(&st, &groups, &name, "session_closed", children).await, None => Vec::new() };
+    let mut leave = match st.groups.clone() { Some(groups) => leave_stopping_children(&st, &groups, &name, "session_closed", children).await, None => Vec::new() };
+    leave.extend(unchecked);
     crate::groups::link_orphans::closed(&st, &name).await;
     cleanup.extend(after_close(&st, &name).await);
     let mut response = super::json_response(StatusCode::OK, json!({"ok": true, "warning": null}));
@@ -117,6 +119,12 @@ fn cleanup_failed(st: &AppState, name: &str, code: &str, reason: &'static str) -
 fn cleanup_warning(code: &str) -> Value {
     json!({"code": "erro_limpeza_fechamento_falhou", "params": {"codigo": code},
         "msg": format!("a sessão fechou, mas a limpeza não terminou ({code})")})
+}
+
+/// As filhas ligadas não foram conferidas (arquivos de grupo ilegíveis): podem seguir trabalhando.
+fn children_unchecked(code: &str) -> Value {
+    json!({"code": "linked_children_unchecked", "params": {"codigo": code},
+        "msg": format!("as filhas ligadas não foram conferidas e podem seguir trabalhando ({code})")})
 }
 
 /// A filha ligada que não parou junto com o pai: ela segue aberta, não fechou.
@@ -152,17 +160,22 @@ async fn listed_transcript(st: &AppState, name: &str) -> Option<std::path::PathB
 }
 
 /// As descendentes ligadas que o fechamento para: só no fechamento do dono, porque o convidado alcança a
-/// sessão, não a árvore dela. Arquivos de grupo ilegíveis ficam no diário: o fechamento não falhou por isso.
-async fn children_to_stop(st: &AppState, name: &str, owner: bool) -> Vec<hangar_delegation::cascade::CascadeTarget> {
-    if !owner || st.groups.is_none() { return Vec::new(); }
-    crate::session_write::control::cascade_targets(st, name).await.unwrap_or_default()
+/// sessão, não a árvore dela. Arquivos de grupo ilegíveis não seguram o fechamento: viram o aviso `{sessao, erro}`,
+/// que só sai com o pai fechado, porque as filhas podem seguir trabalhando sem ninguém saber.
+async fn children_to_stop(st: &AppState, name: &str, owner: bool) -> (Vec<hangar_delegation::cascade::CascadeTarget>, Vec<Value>) {
+    if !owner || st.groups.is_none() { return (Vec::new(), Vec::new()); }
+    match crate::session_write::control::cascade_targets(st, name).await {
+        Ok(targets) => (targets, Vec::new()),
+        Err(()) => (Vec::new(), vec![json!({"sessao": name,
+            "erro": children_unchecked(crate::session_write::control::CASCADE_GROUPS_UNAVAILABLE)})]),
+    }
 }
 
 /// Interrompe as descendentes lidas antes do fechamento; elas seguem abertas, as filhas marcadas sem pai
 /// pela saída do grupo. A que não parou vai no aviso `{sessao, erro}` (o diário já tem o `rust.link_cascade_failed`).
 async fn stop_children(st: &Arc<AppState>, targets: Vec<hangar_delegation::cascade::CascadeTarget>) -> Vec<Value> {
     if targets.is_empty() { return Vec::new(); }
-    let (_, failed) = crate::session_write::control::interrupt_descendants(st, targets).await;
+    let failed = crate::session_write::control::interrupt_descendants(st, targets).await;
     failed.into_iter().map(|(child, code)| json!({"sessao": child, "erro": child_not_stopped(&code)})).collect()
 }
 

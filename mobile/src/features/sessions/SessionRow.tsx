@@ -285,7 +285,6 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
           {orq ? <Chip>{m.orq_row_badge()}</Chip> : null}
           {hiddenBadge && s.hidden_from_list ? <Chip icon="EyeOff">{m.session_hidden_badge()}</Chip> : null}
           {s.asleep ? <Chip icon="Moon">{m.session_asleep_badge()}</Chip> : null}
-          {s.orphaned_from ? <Chip>{m.session_orphaned_from({ name: s.orphaned_from })}</Chip> : null}
           {untracked ? <Chip tone="warning">{m.sessao_sem_id()}</Chip> : null}
           {fora ? <Chip tone="accent" icon={s.guest_kind === 'share' ? 'Link' : 'Eye'}>{m.pair_from_owner({ dono: fora.owner })}</Chip> : null}
           {reviewBadge ? <WorkReviewChip badge={reviewBadge} onPress={canReview ? () => onWorkReview?.(s) : undefined} /> : null}
@@ -366,8 +365,10 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
             )) : null}
           </View>
         ) : null}
-        {s.limited || loop ? (
+        {/* A marca de sem pai leva o nome do pai: não cabe na linha do nome. */}
+        {s.limited || loop || s.orphaned_from ? (
           <View style={styles.chips}>
+            {s.orphaned_from ? <Chip>{m.session_orphaned_from({ name: s.orphaned_from })}</Chip> : null}
             {s.limited ? <Chip tone="warning" icon="Hourglass">{s.limit_reset ?? ''}</Chip> : null}
             {loop ? <Chip tone={TOM_DO_LOOP[loop.tone]}>{loop.label}</Chip> : null}
           </View>

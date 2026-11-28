@@ -201,7 +201,7 @@ function AutoContinueLine({ event, serverId, sessionName }: { event: ChatEvent; 
   return (
     <View>
       {/* Nota neutra: sem o triângulo de aviso. */}
-      <NoticeLineView icon={false} title={autoContinueText(event)} count={null} open={null} action={action} />
+      <NoticeLineView icon={false} title={autoContinueText(event)} count={null} open={null} action={action} wrap />
       {typeof cancel === 'object' ? <Text style={styles.failed}>{m.auto_continue_cancel_failed({ why: cancel.failed })}</Text> : null}
     </View>
   );

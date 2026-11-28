@@ -95,7 +95,7 @@ pub(crate) use quotes::ref_chip;
 pub(crate) use desktop_look::{call_button as desktop_call_button, desktop_summary, group_block as desktop_group_block, summary_button as desktop_summary_button};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
-pub(crate) use notice_line::{api_error_box, fix_open_button, fix_result_row, ignore_button, ignored_text, notice_action_button, notice_body,
+pub(crate) use notice_line::{api_error_box, auto_continue_row, fix_open_button, fix_result_row, ignore_button, ignored_text, notice_action_button, notice_body,
     notice_fixed, notice_fixing, notice_head, notice_head_marked, notice_reinstalled, notice_rule_line, notice_spin, undo_button};
 pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, equalizer as voice_equalizer, mute_button, speech_pause_button, stop_button};
 pub(crate) use rename_suggest::{Strip as RenameStrip, beta_rename_strip, rename_strip};
@@ -134,7 +134,8 @@ pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_ag
     search_scope_summary, search_status_line, search_who};
 pub(crate) use connect::{COMPUTER_MENU_WIDTH, ComputerLook, computer_add_button, computer_block, computer_columns,
     computer_menu_button, computer_remove_item, computers_grid, computers_head, this_computer_off_button};
-pub(crate) use sidebar::{Sub as RowSub, group_header_look, menu_item_height, menu_item_look, menu_label, menu_list_look, menu_surface_look};
+pub(crate) use sidebar::{Sub as RowSub, close_children_buttons, close_children_footer, close_children_text, group_header_look, menu_item_height,
+    menu_item_look, menu_label, menu_list_look, menu_surface_look};
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;
@@ -471,9 +472,8 @@ enum Payload {
     History(u64, usize, Result<api::History, Failure>),
     // Mensagem entregue e o texto do campo que a originou (com anexo os dois diferem).
     Sent(SessionKey, String, String, Result<Delivery, Failure>),
-    /// As descendentes ligadas que não pararam junto com o Parar.
     /// `bool`: o pedido levou `clear` (havia texto a devolver ao campo).
-    Interrupted(SessionKey, bool, Result<api::Interrupted, Failure>),
+    Interrupted(SessionKey, bool, Result<(), Failure>),
     Acted(SessionKey, Action, String, Result<serde_json::Value, Failure>),
     Files(SessionKey, Option<SessionOwner>, u64, Vec<Result<Picked, String>>),
     // `None` marca o início do envio daquele anexo.
@@ -2837,19 +2837,19 @@ impl Hangar {
         }
     }
 
-    fn receive_interrupted(&mut self, key: SessionKey, clear: bool, result: Result<api::Interrupted, Failure>, window: &mut Window, cx: &mut Context<Self>) {
+    fn receive_interrupted(&mut self, key: SessionKey, clear: bool, result: Result<(), Failure>, window: &mut Window, cx: &mut Context<Self>) {
         self.stopping.remove(&key);
         let note = match result {
-            Ok(done) => {
-                // Só com o Esc confirmado a mensagem sai do registro e volta ao campo: pai sem turno ou falha a deixam
-                // onde estava, e no campo ela iria em dobro.
-                if done.parent && clear && let Some(text) = self.delivery.take_unconfirmed(&key) {
+            Ok(()) => {
+                // Só com o Esc confirmado a mensagem sai do registro e volta ao campo: com falha ela fica onde estava,
+                // e no campo iria em dobro.
+                if clear && let Some(text) = self.delivery.take_unconfirmed(&key) {
                     let current = self.selected_key().as_ref() == Some(&key);
                     self.return_to_field(&key, vec![text], current, window, cx);
                     if current { self.composer.update(cx, |input, cx| input.focus(window, cx)); }
                     self.action_feedback.insert(key.clone(), (tr("stop_returned"), false));
                 }
-                interrupted_note(&done)
+                (tr("stop_requested"), false)
             }
             Err(error) => (Self::failure(&error), true),
         };
@@ -4209,7 +4209,7 @@ impl Hangar {
         let (connection, selection) = (self.connection, self.selection);
         let tx = self.tx.clone();
         self.runtime.spawn(async move {
-            let result = api.interrupt(&name, clear, true).await;
+            let result = api.interrupt(&name, clear).await;
             let _ = tx.send(Envelope { connection, selection: Some(selection), payload: Payload::Interrupted(key, clear, result) }).await;
         });
         cx.notify();
@@ -4407,8 +4407,7 @@ impl Hangar {
         let (connection, selection, tx) = (self.connection, self.selection, self.tx.clone());
         self.runtime.spawn(async move {
             let result = match &action {
-                // Cancelar o cartão de pergunta não para as filhas: só o Parar cascateia.
-                Action::Cancel => api.interrupt(&session.name, false, false).await.map(|_| Value::Null),
+                Action::Cancel => api.interrupt(&session.name, false).await.map(|_| Value::Null),
                 _ => api.request(&session.name, action.method(), &action.path(), action.query(), body, action.seconds()).await,
             };
             let _ = tx.send(Envelope { connection, selection: Some(selection), payload: Payload::Acted(key, action, snapshot, result) }).await;
@@ -7481,7 +7480,9 @@ impl Hangar {
         // Como a branch, o chip e o aviso de worktree apagada ficam fora do modo compacto.
         let worktree = worktree_label(&session).filter(|_| !compact && !session.worktree_gone);
         let worktree_gone = !compact && session.worktree_gone;
-        let second_line = server.is_some() || branch.is_some() || worktree.is_some() || worktree_gone;
+        // A marca de sem pai leva o nome do pai: não cabe na linha do nome.
+        let orphan = session.orphaned_from.as_deref().map(orphan_label);
+        let second_line = server.is_some() || branch.is_some() || worktree.is_some() || worktree_gone || orphan.is_some();
         let worktree_target = session.worktree_path.clone().or_else(|| session.cwd.clone()).unwrap_or_default();
         let worktree_server = target.server.clone();
         let merged = self.worktrees.status(&target.server, &worktree_target).is_some_and(|s| s.merged);
@@ -7516,7 +7517,6 @@ impl Hangar {
                 .child(format!("? {}", session.pending_questions))))
             .when(session.tracked == Some(false), |el| el.child(badge(tr("untracked_badge"), theme::muted())))
             .when(session.asleep, |el| el.child(badge(tr_shared("session_asleep_badge", &[]), theme::muted())))
-            .when_some(session.orphaned_from.as_deref(), |el, parent| el.child(badge(orphan_label(parent), theme::muted())))
             .when(session.orq(), |el| el.child(badge(tr_shared("orq_row_badge", &[]), theme::muted())))
             .when_some(session.owner.clone(), |el, owner| el.child(badge(format!("👤 {owner}"), theme::muted())))
             .children(pair_badges(&session))
@@ -7548,6 +7548,7 @@ impl Hangar {
                     .child(div().flex_shrink_0().max_w(px(112.)).flex().items_center().gap(px(4.))
                         .child(chrome::small_icon(IconName::Monitor, 12., theme::muted()))
                         .child(div().min_w_0().truncate().child(server))))
+                .when_some(orphan, |el, text| el.child(div().min_w_0().truncate().child(text)))
                 .when_some(branch, |el, branch| el
                     .child(chrome::small_icon(IconName::GitBranch, 12., theme::muted()))
                     .child(div().flex_1().min_w_0().truncate().child(branch)))
@@ -7623,6 +7624,8 @@ impl Hangar {
         // Como o web: a pasta só com a lista por servidor (por projeto o cabeçalho já a diz), e sempre na worktree.
         let folder = folder_name(&session).filter(|_| session.worktree == Some(true) || (self.multi_server() && !Self::by_project()));
         let branch = shown_branch(&session);
+        // A marca de sem pai leva o nome do pai: não cabe na linha do nome.
+        let orphan = session.orphaned_from.as_deref().map(orphan_label);
         let (added, removed) = (session.git_added.filter(|n| *n > 0), session.git_removed.filter(|n| *n > 0));
         let (ahead, behind) = (session.git_ahead.filter(|n| *n > 0), session.git_behind.filter(|n| *n > 0));
         let sync_title = tr("git_sync_title").replace("{ahead}", &ahead.unwrap_or(0).to_string()).replace("{behind}", &behind.unwrap_or(0).to_string());
@@ -7656,7 +7659,6 @@ impl Hangar {
                     .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("create_mode_headless")).build(window, cx))
                     .child(chrome::no_terminal_mark(12., theme::muted()))))
                 .when(session.asleep, |el| el.child(badge(tr_shared("session_asleep_badge", &[]), theme::muted())))
-                .when_some(session.orphaned_from.as_deref(), |el, parent| el.child(badge(orphan_label(parent), theme::muted())))
                 .when(session.orq(), |el| el.child(badge(tr_shared("orq_row_badge", &[]), theme::muted())))
                 .when(session.shared, |el| el.child(div().id(SharedString::from(format!("row-shared-{row_key}"))).flex_shrink_0().flex()
                     .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr_shared("sessao_compartilhada", &[])).build(window, cx))
@@ -7707,9 +7709,10 @@ impl Hangar {
                     .child(div().min_w_0().truncate().child(label))))
                 .when_some(when, |el, w| el.child(div().flex_shrink_0().text_size(px(10.)).text_color(theme::faint()).child(w))))
             .when_some(sub, |el, (text, kind)| el.child(session_row_sub(text, kind, sub_color, kind == sidebar::Sub::Working && working)))
-            .when(server.is_some() || engine_label.is_some() || folder.is_some() || branch.is_some() || added.is_some() || removed.is_some() || ahead.is_some() || behind.is_some(), |el| el.child(div().flex().items_center().gap(px(8.))
+            .when(orphan.is_some() || server.is_some() || engine_label.is_some() || folder.is_some() || branch.is_some() || added.is_some() || removed.is_some() || ahead.is_some() || behind.is_some(), |el| el.child(div().flex().items_center().gap(px(8.))
                 .text_size(px(11.5)).text_color(theme::faint())
                 .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.))
+                    .when_some(orphan, |el, text| el.child(badge(text, theme::muted()).flex_shrink_1().min_w_0().truncate()))
                     .when_some(engine_label, |el, label| el.child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme::accent()).child(label)))
                     .when_some(server, |el, server| el.child(div().flex_shrink_0().max_w(px(112.)).flex().items_center().gap(px(4.))
@@ -8212,19 +8215,6 @@ pub(crate) fn message_label(label: String, error: bool) -> Div {
 
 /// A marca da filha cujo pai fechou ou morreu: ela segue aberta, sem pai.
 fn orphan_label(parent: &str) -> String { tr_shared("session_orphaned_from", &[("name", parent)]) }
-
-/// Um aviso só para as filhas que o Parar não alcançou.
-fn cascade_failed_note(failed: &[String]) -> String {
-    tr_shared("interrupt_cascade_failed", &[("names", &failed.join(", "))])
-}
-
-/// A linha do Parar: falha das filhas antes de tudo; pai sem turno não é "interrupção solicitada".
-fn interrupted_note(done: &api::Interrupted) -> (String, bool) {
-    if !done.failed.is_empty() { return (cascade_failed_note(&done.failed), true); }
-    if done.unchecked { return (tr_shared("interrupt_cascade_unchecked", &[]), true); }
-    if !done.parent { return (tr("stop_no_turn"), false); }
-    (tr("stop_requested"), false)
-}
 
 /// O verbo do spinner do terminal ("Sketching… (6s · esc to interrupt)" → "Sketching…"); rótulo sem ele, "Trabalhando…".
 /// Os segundos são contados por nós, então os do terminal saem junto com o resto dos parênteses.
@@ -9785,19 +9775,6 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
-    /// Pai sem turno não aparece como "interrupção solicitada", e filha que falhou ou não foi conferida é aviso.
-    #[test]
-    fn the_stop_note_says_what_the_stop_did() {
-        use crate::api::Interrupted;
-        use crate::i18n::{tr, tr_shared};
-        let note = |parent, failed: &[&str], unchecked| super::interrupted_note(&Interrupted { parent, failed: failed.iter().map(|n| (*n).to_owned()).collect(), unchecked });
-        assert_eq!(note(true, &[], false), (tr("stop_requested"), false));
-        assert_eq!(note(false, &[], false), (tr("stop_no_turn"), false));
-        assert_eq!(note(false, &["kid"], false), (tr_shared("interrupt_cascade_failed", &[("names", "kid")]), true));
-        assert_eq!(note(true, &[], true), (tr_shared("interrupt_cascade_unchecked", &[]), true));
-        assert_ne!(tr("stop_no_turn"), "stop_no_turn", "a frase existe no messages");
-    }
-
     #[test]
     fn cancelled_download_brings_back_the_card_it_replaced() {
         use super::FileCard;

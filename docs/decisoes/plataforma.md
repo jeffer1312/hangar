@@ -4248,7 +4248,7 @@ provedor, grupos e recados. Faltavam quatro coisas, que entraram assim.
   (`AbovePrompt` do plugin); o pai pode ser Codex, Pi ou Kimi. A lista já traz estado, provedor,
   modelo e `last_reply` de cada filha (`SessionRow.linked_by`).
 
-## Filhas ligadas: pergunta ao pai, Parar em cascata e pai que fecha (27/11/2026)
+## Filhas ligadas: pergunta ao pai, Parar só na sessão e pai que fecha (27/11/2026)
 
 Origem: a comparação com o orchestration-v2 do T3 Code (`~/Projetos/t3code/apps/server/src/orchestration-v2/`):
 `DelegatedTaskQuestionReactor.ts` leva a pergunta da tarefa delegada à conversa do pai, e
@@ -4294,24 +4294,21 @@ ninguém.
   `[painel: …]`: o painel diz "não responda".
 - **`child_answer` passa pela `/answer` com o `interaction_id` do aviso.** Codex com terminal não
   informa quem resolveu: a resposta sai "enviada, sem confirmação" e não se tenta de novo.
-- **Parar só cascateia com `?cascade=1`.** Cancelar um cartão de pergunta também chama
-  `/interrupt`, e não pode parar as filhas. Mandam o parâmetro o botão Parar do nativo e do Expo e a
-  tool `interrupt`. A árvore sai de `cascade::plan`, em largura, até `MAX_DEPTH = 3` níveis e sem
-  voltar a quem já apareceu (vínculo em ciclo termina). Só conta como parada a resposta que confirma
-  que não há turno; a que não parou vai no `cascade.failed` da resposta, num aviso só, e no diário
-  (`rust.link_cascade_failed`). Arquivos de grupo ilegíveis: a resposta do pai fica como veio e leva
-  `cascade.unavailable` (sem nomes), e a tela diz que as filhas não foram conferidas, porque a pessoa
-  pediu para parar a árvore e elas podem seguir trabalhando. Sem serviço de grupos não há filha ligada
-  e nada vem. O nativo e o Expo só devolvem ao campo a mensagem ainda não mostrada depois do Esc
-  confirmado: com `interrupted: false` ou falha ela segue onde estava.
-  O pai sem turno é o caso normal depois de delegar: adormecido ou estacionado responde sem turno sem
-  acordar, e a recusa da admissão (sem turno, abrindo) não segura a cascata. Com descendente
-  conhecida, pai sem turno ou abrindo vira 200 `{"interrupted": false, "cascade": …}`; senão a tela
-  mostraria erro e jogaria fora o resultado das filhas.
+- **Parar para só a sessão.** O `/interrupt` não alcança filha ligada, e o `cascade=1` de cliente
+  antigo é ignorado; a tool `interrupt` para só a filha nomeada, sem as netas. O dono não pediu o
+  Parar em cascata e o tirou (27/11): a filha segue o trabalho dela quando o pai para; quem alcança as
+  filhas é o fechamento do pai, que pergunta antes. Sessão adormecida ou estacionada
+  responde sem turno sem acordar. O nativo e o Expo só devolvem ao campo a mensagem ainda não mostrada
+  depois do Esc confirmado: com falha ela segue onde estava.
 - **Fechar o pai interrompe as filhas e as mantém abertas (4B).** Só no fechamento do dono: o
-  convidado alcança a sessão, não a árvore dela, como no `/interrupt`. Só depois de a morte do pai ser
+  convidado alcança a sessão, não a árvore dela. Só depois de a morte do pai ser
   confirmada: com o kill falho, nada muda nelas. As descendentes são lidas antes do fechamento (o de
-  Pi/omp/Kimi sai do grupo por dentro, e a saída apaga o `linked_by`) e interrompidas depois dele; o
+  Pi/omp/Kimi sai do grupo por dentro, e a saída apaga o `linked_by`) e interrompidas depois dele. A
+  árvore sai de `cascade::plan`, em largura, até `MAX_DEPTH = 3` níveis e sem voltar a quem já apareceu
+  (vínculo em ciclo termina); sem turno conta como parada, e adormecida ou estacionada não acorda.
+  Arquivos de grupo ilegíveis não seguram o fechamento: vão ao diário (`rust.link_cascade_failed`) e ao
+  `warning` do fechamento (`linked_children_unchecked`, código `groups_unavailable`), porque as filhas
+  podem seguir trabalhando e a tela precisa dizer que não foram conferidas; o
   Pi/omp/Kimi que some sozinho só marca, como a varredura. A filha que não parou volta no `warning` do
   fechamento (`linked_child_not_stopped`), em todo agente do pai: é o campo que os clientes leem. Toda saída do grupo grava a marca em
   `~/.hangar/link-orphans.json` (`hangar_delegation::orphans`): o DELETE (dono ou convidado), a
