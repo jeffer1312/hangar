@@ -426,7 +426,7 @@ pub(crate) fn count_screen(telemetry: &Telemetry, epoch: u64, body: &[u8], accep
     let items = match &batch { Value::Object(fields) => fields.get("eventos"), other => Some(other) };
     let Some(Value::Array(items)) = items else { return };
     for item in items.iter().take(accepted) {
-        screen_event(telemetry, item);
+        screen_event(telemetry, epoch, item);
     }
 }
 
@@ -434,7 +434,7 @@ fn screen_client(item: &Value) -> ClientKind {
     item["cliente"].as_str().and_then(ClientKind::parse).filter(|c| *c != ClientKind::Server).unwrap_or(ClientKind::Other)
 }
 
-fn screen_event(telemetry: &Telemetry, item: &Value) {
+fn screen_event(telemetry: &Telemetry, epoch: u64, item: &Value) {
     let text = |key: &str| item[key].as_str().unwrap_or_default();
     let client = screen_client(item);
     let took = item["ms"].as_u64();
@@ -442,23 +442,23 @@ fn screen_event(telemetry: &Telemetry, item: &Value) {
     match text("evento") {
         "app.visible_time" => {
             let minutes = took.map_or(0, |ms| (ms.min(VISIBLE_CAP_MS) + 30_000) / 60_000);
-            if minutes > 0 { telemetry.count(Event::AppVisibleMinutes, dims, minutes); }
+            if minutes > 0 { telemetry.count_in(epoch, Event::AppVisibleMinutes, dims, minutes); }
         }
         "rota.escolhida" => {
             let dims = dims.with("failed", false).with("route", Code::known(text("detalhe"), ROUTES));
             match took {
-                Some(ms) => telemetry.duration(Event::ClientRoute, dims, Duration::from_millis(ms)),
-                None => telemetry.count(Event::ClientRoute, dims, 1),
+                Some(ms) => telemetry.duration_in(epoch, Event::ClientRoute, dims, Duration::from_millis(ms)),
+                None => telemetry.count_in(epoch, Event::ClientRoute, dims, 1),
             }
         }
         "rota.falhou" => {
             let code = Code::known(&text("codigo").to_ascii_lowercase(), ROUTE_FAILURES);
-            telemetry.count(Event::ClientRoute, dims.with("failed", true).with("code", code), 1);
+            telemetry.count_in(epoch, Event::ClientRoute, dims.with("failed", true).with("code", code), 1);
         }
-        "chat.opened" => if let Some(ms) = took { telemetry.duration(Event::ChatOpen, dims, Duration::from_millis(ms)); },
+        "chat.opened" => if let Some(ms) = took { telemetry.duration_in(epoch, Event::ChatOpen, dims, Duration::from_millis(ms)); },
         "app.crash" => {
             let code = Code::known(&text("codigo").to_ascii_lowercase(), FATAL_CODES);
-            telemetry.count(Event::ClientFatal, dims.with("code", code), 1);
+            telemetry.count_in(epoch, Event::ClientFatal, dims.with("code", code), 1);
         }
         _ => {}
     }

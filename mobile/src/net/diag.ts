@@ -174,8 +174,10 @@ export function iniciarDiag(settings?: () => Pick<EventoDiag, 'values' | 'device
     }
   };
   setTelemetrySavedListener((server, state) => {
-    if (!sameServer(server, ownActive())) return;
+    // Aceite novo em qualquer máquina vale a releitura dela; o envio imediato fica só para a ativa.
+    settingsDay.delete(destination(server));
     inFlight.delete(destination(server));
+    if (!sameServer(server, ownActive())) return;
     if (state.snapshot_period) void settingsSnapshot(state);
   });
   let lastRoute = '';

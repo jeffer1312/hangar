@@ -270,6 +270,16 @@ impl Telemetry {
         }
     }
 
+    /// Como `count`, mas só se o aceite ainda for o de `epoch`, conferido junto com a soma: o que foi
+    /// capturado antes de uma revogação não entra no período do aceite seguinte.
+    pub fn count_in(&self, epoch: u64, event: Event, dims: Dims, n: u64) {
+        self.add_at(Some(epoch), Counter::new(event, dims, None, n));
+    }
+
+    pub fn duration_in(&self, epoch: u64, event: Event, dims: Dims, took: Duration) {
+        self.add_at(Some(epoch), Counter::new(event, dims, Some(Bucket::of(took)), 1));
+    }
+
     /// Uma linha de aviso ou erro do log, já limpa por quem chama; o mesmo portão do `count`. Alvo fora
     /// do formato sai `other`; caractere de controle vira espaço e a mensagem é cortada em `MAX_LOG_CHARS`.
     pub fn log(&self, level: LogLevel, target: &str, message: &str) {
@@ -296,10 +306,13 @@ impl Telemetry {
         live.dirty = true;
     }
 
-    fn add(&self, counter: Counter) {
+    fn add(&self, counter: Counter) { self.add_at(None, counter); }
+
+    fn add_at(&self, epoch: Option<u64>, counter: Counter) {
         let today = day_of((self.clock)());
         let Ok(mut live) = self.live.lock() else { return };
-        if !self.enabled() {
+        // A época sobe sob a mesma trava (`set_consent`): conferida aqui, não há janela entre ver e somar.
+        if !self.enabled() || epoch.is_some_and(|e| e != self.consent_epoch()) {
             return;
         }
         live.roll(today);
@@ -516,7 +529,8 @@ impl Telemetry {
             }
             // A época sobe antes de ligar: quem vê ligada já vê a época nova.
             if !self.enabled() {
-                lock(&self.live)?.snapshot_period = Some(hangar_core::ids::random_hex(16));
+                let mut live = lock(&self.live)?;
+                live.snapshot_period = Some(hangar_core::ids::random_hex(16));
                 self.consent_epoch.fetch_add(1, Ordering::SeqCst);
             }
             self.enabled.store(true, Ordering::SeqCst);
@@ -764,6 +778,20 @@ pub(crate) mod tests {
         assert_eq!(stored["consent"], serde_json::Value::Null);
         assert!(is_id(stored["machine_id"].as_str().unwrap()));
         assert!(is_id(stored["owner_id"].as_str().unwrap()));
+    }
+
+    #[test]
+    fn a_count_from_before_a_new_consent_is_not_added_to_it() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        let before = telemetry.consent_epoch();
+        telemetry.set_consent(false).unwrap();
+        telemetry.set_consent(true).unwrap();
+        telemetry.count_in(before, Event::MessageSent, message(), 5);
+        telemetry.duration_in(before, Event::MessageSent, message(), Duration::from_millis(10));
+        assert!(telemetry.counters().is_empty(), "captura da época anterior não soma no aceite novo");
+        telemetry.count_in(telemetry.consent_epoch(), Event::MessageSent, message(), 1);
+        assert_eq!(telemetry.counters().len(), 1);
     }
 
     #[test]
