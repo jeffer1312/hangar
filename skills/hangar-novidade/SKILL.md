@@ -1,6 +1,6 @@
 ---
 name: hangar-novidade
-description: Escreve a novidade de uma mudança visível do Hangar (arquivo em docs/novidades/ que a tela de atualização mostra) e, se for recurso novo, obrigatoriamente a animação feita com os componentes reais do app nativo e do Expo e o print dela. Use quando o hook do `gh pr create` ou o CI avisar "Mudança visível no app sem novidade", quando pedirem "escreve a novidade", "anuncia isso na atualização", e antes de abrir PR que muda tela em desktop-native/, mobile/ ou messages/. Não serve para passo de atualização da máquina (docs/atualizacoes/).
+description: Escreve a novidade de uma mudança visível do Hangar (arquivo em docs/novidades/ que a tela de atualização mostra) e, se for recurso novo, obrigatoriamente a animação feita com os componentes reais do app nativo e do Expo, o print dela e a dica do tour presa à peça nova. Use quando o hook do `gh pr create` ou o portão do CI acusar "sem novidade", quando pedirem "escreve a novidade", "anuncia isso na atualização", "faz a dica/tour disso", e antes de abrir PR que muda tela em desktop-native/, mobile/ ou messages/ ou que traz commit feat em qualquer pasta. Não serve para passo de atualização da máquina (docs/atualizacoes/).
 ---
 
 # Novidade da atualização
@@ -8,9 +8,9 @@ description: Escreve a novidade de uma mudança visível do Hangar (arquivo em d
 A novidade é o cartão que a pessoa vê no "Atualizar?" e no "O que chegou para você". Quem lê não é
 programador: escreva o que ela ganha, não o que o código fez.
 
-**Recurso novo (`tipo: novo`) tem três entregas obrigatórias, nenhuma opcional: o arquivo de texto,
-a animação com os componentes reais em cada app de `onde` (passo 4) e o print de cada animação
-mostrado ao autor (passo 5). Faltou uma, a novidade não está pronta e o PR não abre.** Novidade
+**Recurso novo (`tipo: novo`) tem quatro entregas obrigatórias, nenhuma opcional: o arquivo de texto,
+a animação com os componentes reais em cada app de `onde` (passo 4), a dica do tour na peça nova
+(passo 5) e o print de cada animação mostrado ao autor com o texto da dica (passo 6). Faltou uma, a novidade não está pronta e o PR não abre.** Novidade
 antiga sem animação não é precedente. Build, fila de build ou tempo não dispensam: peça a vez e faça.
 Impedimento real (o app não abre, componente inexistente) é dito ao autor antes do PR, nunca omitido.
 
@@ -20,7 +20,12 @@ Impedimento real (o app não abre, componente inexistente) é dito ao autor ante
 git fetch -q origin main
 git log --no-merges --format='%h %s' origin/main..HEAD
 git diff --stat origin/main...HEAD -- desktop-native/src mobile/src mobile/app messages
+git log --no-merges --format='%h %s' origin/main..HEAD | grep -E ' feat(\(|!|:)'
 ```
+
+O portão do PR (`scripts/check-novidade.sh`) falha quando há mudança em `desktop-native/src`, `mobile/src`, `mobile/app` ou `messages/*.json` (fora arquivos de teste) ou
+commit `feat` em qualquer pasta (servidor incluído) sem arquivo novo em `docs/novidades/`. Recurso do servidor que a
+pessoa percebe na conversa ou na lista também é novidade.
 
 Leia o diff das telas até entender o que a pessoa passa a ver ou fazer. A lista de commits não é a
 novidade: nunca a copie.
@@ -35,7 +40,8 @@ novidade: nunca a copie.
 | Refatoração, teste, texto interno, nada visível | — | nada |
 
 Ajuste interno não ganha arquivo. Diga ao autor para pôr `HANGAR_SEM_NOVIDADE: <motivo>` na
-mensagem de um commit (é o que cala o aviso do CI) e pare aqui.
+mensagem de cada commit que mexe na tela sem mudar o que a pessoa vê (o escape vale só para o commit
+que o tem; sem ele o portão do CI falha) e pare aqui.
 
 `onde`: `desktop` (só `desktop-native/`), `celular` (só `mobile/`) ou `todos` (os dois apps têm a
 mudança). Outro valor faz a rota descartar o arquivo sem aviso.
@@ -101,20 +107,44 @@ componentes REAIS do app, nunca um desenho imitando a tela. Mesmo nome nos dois 
 Texto que aparece dentro da animação vem de `m.<chave>()` (nativo e Expo leem `messages/*.json`):
 chave nova em `messages/pt.json` e `messages/en.json` no mesmo commit.
 
-## 5. Conferir com o autor (obrigatório em `novo`)
+## 5. Dica do tour (obrigatória em `novo` com peça nova no nativo)
+
+Recurso novo que aparece numa peça da tela (botão, aba, ícone, item de menu, faixa) ganha uma dica que
+aponta a peça uma vez, também para quem já viu o tour. Sem peça própria (só comportamento), pule.
+
+1. Âncora: id em `desktop-native/src/tour/anchors.rs` (constante + `ALL`) e a peça embrulhada com
+   `popup::anchor(el, crate::tour::anchors::<ID>)` no render real. Use o mesmo id no `ancora:` da
+   novidade.
+2. Dica: uma linha em `TIPS` de `desktop-native/src/tour/steps.rs` (e o tamanho do array).
+   `sighted` = aparece quando a peça surge na tela (o comum); `called` = só quando o código chama
+   (peça que sempre está à vista e só faz sentido depois de uma ação).
+3. Texto: `native_tour_tip_<id>_title` e `native_tour_tip_<id>_body` em `messages/pt.json` e
+   `messages/en.json`. Título curto com o que a pessoa ganha; corpo de uma frase dizendo o que a peça
+   faz ou o atalho. Sem nome técnico.
+4. Passo do tour (`TOUR`) só para o que todo mundo precisa no primeiro uso; isso pede `TourEvent`,
+   condição (`Need`) e o autor concordando. Na dúvida, dica.
+
+O teste `every_anchor_has_a_tour_step_or_a_tip` falha se uma âncora ficar sem passo nem dica. Não
+abra o app ligado ao servidor do dono só para ver a dica: o visto vai ao servidor
+(`/api/tour-progress`, que nunca desfaz) e a dica some para ele antes do lançamento.
+Expo: sem tour por enquanto; quando existir, a dica entra nele pelo mesmo id.
+
+## 6. Conferir com o autor (obrigatório em `novo`)
 
 1. Nativo: build de debug (`scripts/cargo-pinned build --manifest-path desktop-native/Cargo.toml`), abra o app com
    `HANGAR_NATIVE_PREVIEW=<nome da animação>` (ou `update-confirm` / `whats-new` para os modais
    inteiros) e tire um print. A pré-visualização não existe no build de release. Cite o caminho
    absoluto do PNG na resposta.
 2. Expo: abra a folha de atualização no emulador e tire um print do cartão.
-3. Mostre ao autor o texto do cartão e os prints, e ajuste o que ele pedir.
+3. Mostre ao autor o texto do cartão, o da dica e os prints, e ajuste o que ele pedir.
 
 ## Regras
 
 - Pronto, para cada `novo`: arquivo com `animacao:`, animação registrada no nativo e no Expo (os de
-  `onde`), print de cada uma com o caminho absoluto na resposta. Sem os três, não diga que a
-  novidade está feita e não abra o PR.
+  `onde`), dica do tour na peça nova (com `ancora:` no arquivo) e print de cada animação com o
+  caminho absoluto na resposta. Sem os quatro, não diga que a novidade está feita e não abra o PR.
+- `HANGAR_SEM_NOVIDADE` só para o que a pessoa não percebe. Conserto que ela nota (algo que travava,
+  sumia ou dava erro) é `correcao`, nunca escape; vários do mesmo PR cabem num arquivo.
 - Uma novidade por mudança que a pessoa percebe; várias correções pequenas podem ser um arquivo
   `correcao` só.
 - Nunca liste commits, nomes de arquivo ou de função no texto.

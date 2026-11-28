@@ -391,7 +391,7 @@ async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller
         };
         // A filha de sessão de convidado segue as regras dele, mesmo aberta com o token do dono.
         let caller = claim.as_ref().map_or(caller, |g| OpenCaller::Guest { root: g.root.clone() });
-        let link = match request.link_plan(&caller) {
+        let link = match super::link_plan(&request, &caller) {
             Ok(link) => link,
             Err(error) => return Decision::Refused(error),
         };
@@ -495,7 +495,7 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
     // O spec desta resolução contra o guardado na reserva: nada resolvido nem montado de novo para ela.
     if let Some(adopting) = adopting.as_deref_mut() { adopting.compare(&resolved).await; }
     if !super::open::opens_here(&resolved.spec) { return Decision::NotOurs; }
-    if let Some(parent) = child_of { resolved.prefix_child_line(parent); }
+    if let Some(parent) = child_of { super::prefix_child_line(&mut resolved, parent); }
     if let super::Account::Codex { account_id } = &resolved.spec.account {
         match codex_preparation(st,account_id).await {
             Ok(warning) => resolved.warnings.extend(warning),
@@ -630,7 +630,7 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     use crate::placement::suggest::Step;
     // Ligação recusada não chega a escolher máquina nem a clonar; a abertura aqui confere de novo.
-    let link = match request.link_plan(&caller) {
+    let link = match super::link_plan(&request, &caller) {
         Ok(link) => link,
         Err(error) => return done(reply(&error)),
     };

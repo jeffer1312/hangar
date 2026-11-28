@@ -1478,3 +1478,19 @@ Fora do conserto, notado: sem terminal, `Disposition::Unknown` ou `runtime_reply
 `session_write/input.rs` volta 400 `erro_envio_falhou`, que os clientes tratam como recusa (0 casos
 nos 7 dias); e o `SEND_TIMEOUT_S = 30` do `skills/orquestrar/scripts/orq.py` mata o `hangar-send`
 antes da conferência.
+
+## Novidade barra o portão e peça nova ganha dica (28/11/2026)
+
+O aviso de novidade só avisava (`continue-on-error`) e olhava só as pastas dos apps. Em 27–28/11 entraram
+recursos e consertos que a pessoa percebe sem nenhuma novidade nova: o #555 mexeu em 4 arquivos de tela
+e passou só com o aviso; o #579 e o #571 (pergunta da filha ligada) eram só de servidor e nem foram
+cobrados; #566, #568, #559 e #576 saíram com `HANGAR_SEM_NOVIDADE` escolhido pela sessão. A tela de
+Atualizações parou em 27/11 com quatro atualizações chegando depois.
+
+O tour e as dicas do nativo ficaram iguais desde 31/10. Tarefas agendadas, Revisões, aba Revisão, aba
+Mídia e o seletor de modelos ganharam âncora para o "Mostrar no app" da novidade, nenhuma ganhou dica:
+quem já tinha visto o tour nunca soube delas pela tela.
+
+Escolha do dono: o portão falha (mudança nas pastas dos apps ou commit `feat` em qualquer pasta, sem
+arquivo novo), e a dica vira etapa da `hangar-novidade`, travada pelo teste
+`every_anchor_has_a_tour_step_or_a_tip`. As cinco dicas que faltavam entraram no mesmo PR.

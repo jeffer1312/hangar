@@ -24,7 +24,7 @@ use crate::session_open::{Account,ChangeReason,SessionChange,SessionSpec};
 
 /// A partir daqui a tela avisa e pede confirmação; a partir de `FULL` não aceita.
 pub const LOW_PCT:f64 = 95.0;
-pub const FULL_PCT:f64 = 99.0;
+pub use hangar_session_open_policy::FULL_PCT;
 
 /// `_account_targets`: as contas Claude, sem a atual, a de mais folga primeiro, sem leitura depois e as
 /// cheias e sem login no fim. `pct` é a janela mais cheia (`None` sem leitura).

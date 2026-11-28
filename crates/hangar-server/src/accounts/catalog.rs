@@ -9,7 +9,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use hangar_core::account_env::Account;
+pub use hangar_core::account_env::{Account, resolve_account_path as resolved};
+pub(crate) use hangar_core::account_env::display_account_path as displayed;
 
 #[derive(Debug)]
 pub struct AccountError {
@@ -75,21 +76,6 @@ fn canonical(provider: Provider, path: &Path) -> Result<PathBuf, AccountError> {
         .map(|key| key.canonical_home)
         .map_err(|_| AccountError::io())
 }
-pub(crate) fn displayed(path: &Path) -> String {
-    // O prefixo estendido do Windows é detalhe do canonicalize, ausente nos DTOs Python.
-    let value = path.to_string_lossy();
-    value
-        .strip_prefix(r"\\?\UNC\")
-        .map(|rest| format!(r"\\{rest}"))
-        .or_else(|| value.strip_prefix(r"\\?\").map(str::to_owned))
-        .unwrap_or_else(|| value.into_owned())
-}
-pub fn resolved(path: &Path) -> PathBuf {
-    path.canonicalize()
-        .map(|p| PathBuf::from(displayed(&p)))
-        .unwrap_or_else(|_| path.to_owned())
-}
-
 #[derive(Clone)]
 pub struct AccountService {
     pub quotas: super::quotas::Quotas,
