@@ -151,7 +151,7 @@ pub fn environment(base:&AccountEnvironment,meta:&Value,config:&Value) -> Result
     env.extend(jev_env(meta["jev"].as_bool() == Some(true),config));
     // O ambiente do servidor também traria o auxiliar antigo, que a ajuda pela sessão dispensa.
     if crate::jev_aux::session_helps(&config["jev_aux_mode"]) {
-        for var in ["JEV_TEXTO_BASE_URL","JEV_TEXTO_API_KEY","JEV_TEXTO_MODELO"] { env.remove(var); }
+        for var in ["JEV_TEXTO_BASE_URL","JEV_TEXTO_API_KEY","JEV_TEXTO_MODELO","JEV_AUX_BASE_URL","JEV_AUX_API_KEY","JEV_AUX_MODELO","JEV_AUX_ESFORCO"] { env.remove(var); }
     }
     Ok(env)
 }
@@ -355,12 +355,12 @@ mod tests {
         assert_eq!(env["OPENAI_API_KEY"],"sk-main","a padrão herda a identidade do servidor");
         assert!(!env.contains_key("TMUX") && !env.contains_key("TMUX_PANE"),"o pane do operador não vai junto");
         assert!(!env.contains_key("HANGAR_INTERNAL_SECRET"));
-        let mut map:BTreeMap<String,String> = [("HOME",home.path().to_string_lossy().into_owned()),("JEV_TEXTO_API_KEY","herdada".into()),
+        let mut map:BTreeMap<String,String> = [("HOME",home.path().to_string_lossy().into_owned()),("JEV_TEXTO_API_KEY","herdada".into()),("JEV_AUX_API_KEY","herdada".into()),
             ("JEV_TEXTO_CMD","c".into())].into_iter().map(|(k,v)|(k.into(),v)).collect();
         map.insert("PATH".into(),"/bin".into());
         let inherited = AccountEnvironment::from_map(map);
         let env = environment(&inherited,&meta,&json!({"jev_aux_mode":"session"})).unwrap();
-        assert!(!env.contains_key("JEV_TEXTO_API_KEY"),"ajuda pela sessão: a chave herdada do servidor não vai ao Codex");
+        assert!(!env.contains_key("JEV_TEXTO_API_KEY") && !env.contains_key("JEV_AUX_API_KEY"),"ajuda pela sessão: a chave herdada do servidor não vai ao Codex");
         assert_eq!(env["JEV_TEXTO_CMD"],"c");
         // Adicional: sem a identidade da principal; apagada ou sem marcador falha com o código da conta.
         let other = home.path().join(".codex-work");
