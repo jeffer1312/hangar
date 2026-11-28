@@ -38,7 +38,14 @@ uma página própria com o texto todo. Novidade de um parágrafo só, sem anima�
 | `ancora` | Opcional. Id de uma peça da tela do app nativo (lista em `desktop-native/src/tour/anchors.rs`); com ele, o modal oferece "Mostrar no app", que aponta a peça com um balão. Id desconhecido: o teste do nativo falha. O Expo ignora. |
 | `manual` | Opcional. Id de um artigo de `docs/manual/` (o nome do arquivo sem `.md`). Vira o botão "Ler no manual" e põe a novidade em "Mudou recentemente" no artigo. Artigo que não existe: o botão não aparece. |
 
-## Mudança visível sem novidade
+## Quando o portão cobra
 
-Se a mudança aparece na tela mas não merece anúncio, a mensagem do commit leva a linha
-`HANGAR_SEM_NOVIDADE: <motivo>`.
+O portão do PR (`scripts/check-novidade.sh`, passo `novidade` do `gate.yml`) falha quando o PR muda
+`desktop-native/src`, `mobile/` ou `messages/`, ou traz um commit `feat` em qualquer pasta, sem um
+arquivo novo aqui. Recurso novo com peça própria na tela do nativo também ganha uma dica do tour
+(`desktop-native/src/tour/steps.rs`); a skill `hangar-novidade` faz as duas coisas.
+
+## Mudança sem novidade
+
+Se a pessoa não percebe nada (refatoração, teste, texto interno), a mensagem de um commit leva a linha
+`HANGAR_SEM_NOVIDADE: <motivo>`. Conserto que a pessoa nota é `correcao`, não escape.
