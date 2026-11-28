@@ -3,7 +3,7 @@ import { configureApi, type EventSourceLike } from './apiEnv';
 import { _limparEsfriamentoParaTestes } from './esfriamento';
 import {
   MOBILE_TOUR_DONE, MOBILE_TOUR_SKIPPED, mergeTourProgress, mobileTourOutcome, nextTip, planMobileTour, runAction,
-  runChoice, runStep, sameTourProgress, seenTip, seenTour, startTourRun, tipsSwitch, tourProgressFor, tourTipsOff,
+  runChoice, runStep, sameTourProgress, seenTip, seenTour, startTourRun, tipsSwitch, tourListsReady, tourProgressFor, tourTarget, tourTipsOff,
 } from './tour';
 
 describe('junção do visto', () => {
@@ -48,6 +48,13 @@ describe('plano do tour do celular', () => {
     const { steps, tips } = planMobileTour(0);
     expect(steps.map((s) => s.id)).toEqual(['new', 'search', 'attach', 'dictation', 'model']);
     expect(tips.map((t) => t.id)).toEqual(['tour-menu', 'media']);
+  });
+
+  it('no modo nova conversa as peças da lista viram dica e o tour segue pelas da conversa', () => {
+    const { steps, tips } = planMobileTour(3, 'newConversation');
+    expect(steps.map((s) => s.id)).toEqual(['attach', 'dictation', 'model']);
+    expect(tips.map((t) => t.id)).toEqual(['tour-menu', 'tour-search', 'media']);
+    expect(planMobileTour(0, 'newConversation').steps.map((s) => s.id)).toEqual(['attach', 'dictation', 'model']);
   });
 
   it('com sessões o primeiro passo some sem virar dica', () => {
@@ -102,6 +109,41 @@ describe('dicas', () => {
   it('dicas desligadas não aparecem', () => {
     expect(nextTip(tips, new Set(['chat-more']), tipsSwitch(true))).toBeNull();
     expect(nextTip(tips, new Set(['chat-more']), mergeTourProgress(tipsSwitch(true, new Date(1)), tipsSwitch(false, new Date(2))))?.id).toBe('media');
+  });
+});
+
+describe('balão da vez', () => {
+  const { steps, tips } = planMobileTour(2);
+  const run = startTourRun(steps);
+
+  it('passo com a peça na tela vence a dica', () => {
+    expect(tourTarget(run, tips, new Set(['session-row', 'chat-more']), {}, false)).toEqual({ kind: 'step', step: steps[0], n: 1, total: 5 });
+  });
+
+  it('passo sem a peça espera e segura as dicas só até travar', () => {
+    expect(tourTarget(run, tips, new Set(['chat-more']), {}, false)).toBeNull();
+    expect(tourTarget(run, tips, new Set(['chat-more']), {}, true)).toEqual({ kind: 'tip', step: tips[0] });
+  });
+
+  it('sem volta em curso, a dica da peça na tela', () => {
+    expect(tourTarget(null, tips, new Set(['chat-more']), {}, false)?.step.id).toBe('media');
+    expect(tourTarget(runChoice(run, 'later').run, tips, new Set(['chat-more']), {}, false)?.step.id).toBe('media');
+  });
+});
+
+describe('listas prontas para contar sessões', () => {
+  const bucket = (loaded: boolean, error: string | null = null, invite = false) => ({ loaded, error, server: { invite: invite || undefined } });
+
+  it('espera todas as máquinas responderem', () => {
+    expect(tourListsReady([bucket(true), bucket(false)])).toBe(false);
+    expect(tourListsReady([bucket(true), bucket(true)])).toBe(true);
+  });
+
+  it('máquina em queda e convite não seguram; nenhuma lista lida, sim', () => {
+    expect(tourListsReady([bucket(true), bucket(false, 'offline')])).toBe(true);
+    expect(tourListsReady([bucket(true), bucket(false, null, true)])).toBe(true);
+    expect(tourListsReady([bucket(false, 'offline')])).toBe(false);
+    expect(tourListsReady([])).toBe(false);
   });
 });
 

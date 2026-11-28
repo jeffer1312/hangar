@@ -79,15 +79,21 @@ export const MOBILE_TIPS: readonly TourStep[] = [
 /** Dica nascida de um passo que não cabia na hora: id próprio para não se confundir com as dicas. */
 export const stepTipId = (step: TourStep) => `tour-${step.id}`;
 
+/** Peças que só existem na tela inicial em modo lista: no modo nova conversa (e no tablet) elas não aparecem. */
+const LIST_ANCHORS = new Set(['home-new', 'session-row', 'list-search']);
+export type TourHomeMode = 'sessions' | 'newConversation';
+
 /**
- * Planeja o tour com o número de sessões lido. Passo sem a condição sai e vira dica, oferecida
- * quando a peça aparecer; o primeiro (lista vazia) sem ela só some.
+ * Planeja o tour com o número de sessões lido e o modo da tela inicial. Passo sem a condição, ou
+ * cuja peça não existe no modo atual, sai e vira dica, oferecida quando a peça aparecer; o
+ * primeiro (lista vazia) sem ela só some.
  */
-export function planMobileTour(sessions: number): { steps: TourStep[]; tips: TourStep[] } {
+export function planMobileTour(sessions: number, home: TourHomeMode = 'sessions'): { steps: TourStep[]; tips: TourStep[] } {
   const steps: TourStep[] = [];
   const tips: TourStep[] = [];
   for (const step of MOBILE_TOUR) {
-    const holds = step.need === 'emptyList' ? sessions === 0 : step.need === 'sessions' ? sessions > 0 : true;
+    const shown = home === 'sessions' || !LIST_ANCHORS.has(step.anchor);
+    const holds = shown && (step.need === 'emptyList' ? sessions === 0 : step.need === 'sessions' ? sessions > 0 : true);
     if (holds) steps.push(step);
     else if (step.need !== 'emptyList') tips.push({ ...step, id: stepTipId(step) });
   }
@@ -129,6 +135,29 @@ export const runStep = (run: TourRun): TourStep | null => (run.index === null ? 
 export function nextTip(tips: readonly TourStep[], onScreen: ReadonlySet<string>, progress: TourProgress): TourStep | null {
   if (tourTipsOff(progress)) return null;
   return tips.find((tip) => onScreen.has(tip.anchor) && !tourTipSeen(progress, tip.id)) ?? null;
+}
+
+/** O que o balão mostra agora. */
+export type TourTarget = { kind: 'step'; step: TourStep; n: number; total: number } | { kind: 'tip'; step: TourStep };
+
+/**
+ * Passo pendente com a peça na tela vence; fora da tela ele espera, e as dicas também, até
+ * `stalled` (a peça sumiu por tempo demais): aí as dicas voltam a aparecer enquanto ele espera.
+ */
+export function tourTarget(run: TourRun | null, tips: readonly TourStep[], onScreen: ReadonlySet<string>, progress: TourProgress, stalled: boolean): TourTarget | null {
+  const step = run ? runStep(run) : null;
+  if (step && run?.index != null) {
+    if (onScreen.has(step.anchor)) return { kind: 'step', step, n: run.index + 1, total: run.steps.length };
+    if (!stalled) return null;
+  }
+  const tip = nextTip(tips, onScreen, progress);
+  return tip ? { kind: 'tip', step: tip } : null;
+}
+
+/** Lista de cada máquina do dono: só conta sessões quando todas responderam, fora as que estão em queda. */
+export function tourListsReady(buckets: readonly { loaded: boolean; error: string | null; server: { invite?: unknown } }[]): boolean {
+  const own = buckets.filter((b) => !b.server.invite);
+  return own.some((b) => b.loaded) && own.every((b) => b.loaded || b.error !== null);
 }
 
 /** `GET`/`PUT /api/tour-progress`. Servidor sem a rota (404/405): `null`. */
