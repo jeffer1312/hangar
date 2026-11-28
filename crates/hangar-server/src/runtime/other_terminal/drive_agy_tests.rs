@@ -177,8 +177,10 @@ const KIMI_QUEUED: &str = "  ⠋ Working for 6s\n   ❯ 1. corrige o parser\n   
 #[test]
 fn kimi_numbered_message_of_the_person_is_not_a_question() {
     let analysis = super::drive::screen(hangar_transcript::Provider::Kimi, KIMI_QUEUED);
-    assert_ne!(analysis.state, "awaiting_input");
+    assert_eq!(analysis.state, "working");
     assert_eq!((analysis.question, analysis.options, analysis.overlay), (None, None, false));
+    let stopped = KIMI_QUEUED.replace("  ⠋ Working for 6s\n", "");
+    assert_eq!(super::drive::screen(hangar_transcript::Provider::Kimi, &stopped).state, "idle", "sem spinner, a sessão parada");
     assert_eq!(super::drive::screen(hangar_transcript::Provider::Claude, KIMI_QUEUED).state, "awaiting_input", "no Claude Code é menu");
 }
 
@@ -187,6 +189,12 @@ fn kimi_open_panel_occupies_the_box_without_becoming_a_question() {
     let analysis = super::drive::screen(hangar_transcript::Provider::Kimi, KIMI_APPROVAL);
     assert!(analysis.overlay);
     assert_ne!(analysis.state, "awaiting_input", "a aprovação é publicada pelo arquivo da conversa");
+}
+
+#[test]
+fn kimi_panel_footer_quoted_in_the_conversation_does_not_occupy_the_box() {
+    let history = format!("  ↑/↓ select · 1/2 choose · ↵ confirm\n  type answer\n{}", "  linha da conversa\n".repeat(10));
+    assert!(!super::drive::screen(hangar_transcript::Provider::Kimi, &(history + KIMI_IDLE)).overlay);
 }
 
 const KIMI_IDLE: &str = "╭────────────────────────────────────╮\n│ >                                  │\n╰────────────────────────────────────╯\n Never Ask  K3.1 Pro thinking: high  /help: show commands\n context: 6% (60k/1M)";

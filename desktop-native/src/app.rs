@@ -3285,7 +3285,7 @@ impl Hangar {
             }
             // Com "Na conversa" escolhido, o Ctrl+Enter é a saída para a Fila; nos outros modos ele segue sem ação.
             InputEvent::PressEnter { secondary: true, shift: false } if !self.connection_dialog
-                && self.queue_mode() == appearance::DeliveryMode::Conversation => {
+                && appearance::get().delivery_mode() == appearance::DeliveryMode::Conversation => {
                 self.submit_as(false, false, true, window, cx);
             }
             // A lista de comandos acompanha o que se digita.
@@ -9183,8 +9183,8 @@ impl Hangar {
     fn offer_root_tips(&mut self) {
         for tip in crate::tour::steps::TIPS.iter().filter(|tip| tip.on_sight).map(|tip| tip.step) {
             // Com o envio Direto escolhido não há o que ensinar no painel.
-            if tip.id == "queue-direct" && (appearance::get().delivery_mode() == appearance::DeliveryMode::Direct
-                || !matches!(self.provider().0, "claude" | "codex")) { continue; }
+            if tip.id == "queue-direct" && (self.queue_mode() == appearance::DeliveryMode::Direct
+                || !queue::steers_by_message(self.provider().0)) { continue; }
             // Antes da âncora: lida, ela pediria outro quadro a cada movimento, mesmo de dica já vista.
             if self.tour.may_offer(tip.id) && popup::anchor_bounds(tip.anchor).is_some() { self.offer_step_tip(tip); }
         }
