@@ -119,6 +119,9 @@ pub trait WindowExt: Sized {
     /// Closes the Dialog with this id, even below others; `false` if already closed.
     fn close_dialog_by_id(&mut self, id: DialogId, cx: &mut App) -> bool;
 
+    /// Whether the Dialog with this id is open; one playing its exit is not.
+    fn is_dialog_open(&mut self, id: DialogId, cx: &mut App) -> bool;
+
     /// Closes all active Dialogs.
     fn close_all_dialogs(&mut self, cx: &mut App);
 
@@ -230,6 +233,11 @@ impl WindowExt for Window {
         WindowState::update(self, cx, |root, window, cx| {
             root.close_dialog_by_id(id, window, cx)
         })
+    }
+
+    #[inline]
+    fn is_dialog_open(&mut self, id: DialogId, cx: &mut App) -> bool {
+        WindowState::read(self, cx).is_dialog_open(id)
     }
 
     #[inline]

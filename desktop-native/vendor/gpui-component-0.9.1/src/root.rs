@@ -426,6 +426,13 @@ impl WindowState {
         DialogId(id)
     }
 
+    /// Whether the dialog with this id is open and not playing its exit.
+    pub fn is_dialog_open(&self, id: DialogId) -> bool {
+        self.active_dialogs
+            .iter()
+            .any(|dialog| dialog.id == id.0 && !dialog.closing)
+    }
+
     /// Closes the dialog with this id wherever it sits in the stack; `false`
     /// when it is no longer open. The newest one closes like
     /// [`WindowState::close_dialog`]. One below others leaves focus alone, and

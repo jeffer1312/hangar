@@ -33,7 +33,8 @@ Origem: crate `gpui-component` 0.9.1 do crates.io (repositório `longbridge/gpui
   foi para lá; no diálogo, a subida de 2 px vai na animação `slide-down` do `Positioner`, que substituiu o `top` do
   cartão.
 
-- `src/root.rs`, `src/window_ext.rs` e `src/lib.rs`: `WindowExt::open_dialog_with_id` devolve o `DialogId` do diálogo aberto, e
+- `src/root.rs`, `src/window_ext.rs` e `src/lib.rs`: `WindowExt::open_dialog_with_id` devolve o `DialogId` do diálogo aberto,
+  `WindowExt::is_dialog_open` diz se ele segue aberto (o que está na animação de saída não está), e
   `WindowExt::close_dialog_by_id` fecha esse diálogo onde ele estiver na pilha (o mais novo fecha como o `close_dialog`;
   um de baixo sai sem mexer no foco, e o de cima herda para onde o foco volta). Motivo: o "O que chegou para você" fecha
   sozinho depois de um tempo parado, e o `close_dialog` fecharia o diálogo que estiver por cima dele.
