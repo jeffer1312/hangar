@@ -82,7 +82,7 @@ console.log(JSON.stringify({
   hookSpecificOutput: {
     hookEventName: 'PreToolUse',
     additionalContext:
-      `[novidade] ${aviso.replace(/^falta:\s*/, '')} O portão do PR falha sem ela.\n` +
+      `[novidade] O portão do PR falha sem ela. ${aviso.replace(/^falta:\s*/, '')}\n` +
       'Antes de abrir o PR, invoque a skill hangar-novidade (escreve docs/novidades/<data>-<nome>.md e, ' +
       'se for recurso novo visível, a animação e a dica do tour). Se a pessoa não percebe nada, siga com o PR e ' +
       "registre 'HANGAR_SEM_NOVIDADE: <motivo>' num commit.",
