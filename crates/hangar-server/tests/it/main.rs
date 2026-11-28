@@ -105,6 +105,19 @@ pub fn use_cano_bin() {
     if let Err(other) = hangar_server::runtime::process::use_cano_binary(bin) {
         panic!("o cano já tinha sido resolvido para {}", other.display());
     }
+    // Um `systemd-run` falso, que só executa o resto: nenhum escopo no systemd da máquina, e o relançamento,
+    // que recusa subir sem escopo, passa igual com ou sem o barramento do usuário (o `verificar-local` não tem).
+    #[cfg(unix)] {
+        static FAKE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        let fake = FAKE.get_or_init(|| {
+            let fake = exe.with_file_name("fake-systemd-run");
+            write_executable(&fake, "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done; shift\nexec \"$@\"\n");
+            fake
+        });
+        let prefix = std::iter::once(fake.clone().into_os_string()).chain(["--user", "--scope", "--collect", "-q", "--"].map(Into::into)).collect();
+        // Já sondado por quem subiu antes sem este passo: só fica gravado o escopo provado, que também serve.
+        let _ = hangar_server::runtime::process::use_scope_prefix(prefix);
+    }
 }
 
 /// No filho de um `fork` feito por teste: fecha o que herdou do processo de testes, menos `keep` e a
