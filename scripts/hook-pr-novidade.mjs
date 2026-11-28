@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Hook (PreToolUse, Bash) — antes de `gh pr create`, lembra o modelo de escrever a novidade quando
-// o PR muda tela do app sem arquivo em docs/novidades/. Só lembra: nunca bloqueia.
+// o PR muda tela do app ou traz commit feat sem arquivo em docs/novidades/. Não bloqueia: quem barra é o portão.
 // O check é scripts/check-novidade.sh, o mesmo que o CI roda.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -76,15 +76,17 @@ const env = { ...process.env };
 delete env.GITHUB_ACTIONS;
 const r = spawnSync('bash', [script, `${origem}..${ponta}`], { cwd: raiz, encoding: 'utf8', env });
 const aviso = (r.stderr || '').trim();
-if (r.status !== 0 || !aviso.startsWith('aviso:')) process.exit(0);
+// Worktree de branch antiga ainda tem o check que só avisava (saída 0, "aviso:").
+const falta = (r.status === 1 && aviso.startsWith('falta:')) || (r.status === 0 && aviso.startsWith('aviso:'));
+if (!falta) process.exit(0);
 
 console.log(JSON.stringify({
   hookSpecificOutput: {
     hookEventName: 'PreToolUse',
     additionalContext:
-      `[novidade] ${aviso.replace(/^aviso:\s*/, '')}\n` +
+      `[novidade] O portão do PR falha sem ela. ${aviso.replace(/^(falta|aviso):\s*/, '')}\n` +
       'Antes de abrir o PR, invoque a skill hangar-novidade (escreve docs/novidades/<data>-<nome>.md e, ' +
-      'se for recurso novo visível, a animação). Se não há nada que a pessoa veja, siga com o PR e ' +
+      'se for recurso novo visível, a animação e a dica do tour). Se a pessoa não percebe nada, siga com o PR e ' +
       "registre 'HANGAR_SEM_NOVIDADE: <motivo>' num commit.",
   },
 }));
