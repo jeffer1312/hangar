@@ -1702,7 +1702,8 @@ mod tests {
         lines.extend((0..tools).map(|i| json!({"type": "user", "uuid": format!("t{i}"), "timestamp": at(3 + i),
             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": format!("x{i}"),
                 "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "A".repeat(1024)}}]}]}})));
-        lines.push(said("a9", 30, "pronto"));
+        // Depois da última ferramenta: o histórico ordena pela hora, e a resposta antes dela não seria a final.
+        lines.push(said("a9", 3 + tools, "pronto"));
         lines
     }
 
