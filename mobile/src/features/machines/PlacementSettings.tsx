@@ -25,8 +25,9 @@ const AGENT_MODES = [
 const DAYS = [m.native_placement_day_1, m.native_placement_day_2, m.native_placement_day_3, m.native_placement_day_4, m.native_placement_day_5,
   m.native_placement_day_6, m.native_placement_day_7];
 
-type Limits = { mem: string; working: string; cpu: string };
-const limitsText = (c: PlacementConfig): Limits => ({ mem: String(c.limits.mem_free_pct), working: String(c.limits.working), cpu: String(c.limits.cpu_pct) });
+type Limits = { mem: string; working: string; open: string; cpu: string };
+const limitsText = (c: PlacementConfig): Limits => ({ mem: String(c.limits.mem_free_pct), working: String(c.limits.working), open: String(c.limits.open),
+  cpu: String(c.limits.cpu_pct) });
 
 // Regras do balanceamento: lidas da máquina escolhida nas Configurações e gravadas em todas as próprias que responderam.
 export default function PlacementSettings() {
@@ -40,7 +41,7 @@ export default function PlacementSettings() {
 
   const [machines, setMachines] = useState<PlacementMachine[] | null>(null);
   const [draft, setDraft] = useState<PlacementConfig | null>(null);
-  const [limits, setLimits] = useState<Limits>({ mem: '', working: '', cpu: '' });
+  const [limits, setLimits] = useState<Limits>({ mem: '', working: '', open: '', cpu: '' });
   const [rule, setRule] = useState<{ project: string | null; server: string | null }>({ project: null, server: null });
   const [schedule, setSchedule] = useState({ days: [] as number[], from: '', to: '', tz: placementLocalTz(), avoid: null as string | null });
   const [saved, setSaved] = useState<PlacementSaved[] | null>(null);
@@ -100,7 +101,7 @@ export default function PlacementSettings() {
 
   const save = () => {
     if (!draft || !machines || saving) return;
-    const checked = placementLimits(limits.mem, limits.working, limits.cpu);
+    const checked = placementLimits(limits.mem, limits.working, limits.cpu, limits.open);
     if (!checked.ok) { setError(checked.error); haptic.error(); return; }
     const clone_dirs = Object.fromEntries(Object.entries(draft.clone_dirs).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
     const config: PlacementConfig = { ...draft, limits: checked.value, clone_dirs };
@@ -151,6 +152,8 @@ export default function PlacementSettings() {
           onChangeText={(mem) => { setError(''); setSaved(null); setLimits((l) => ({ ...l, mem })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
         <MachineField label={m.native_placement_limit_working()} accessibilityHint={m.native_placement_limit_working_help()} value={limits.working}
           onChangeText={(working) => { setError(''); setSaved(null); setLimits((l) => ({ ...l, working })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
+        <MachineField label={m.native_placement_limit_open()} accessibilityHint={m.native_placement_limit_open_help()} value={limits.open}
+          onChangeText={(open) => { setError(''); setSaved(null); setLimits((l) => ({ ...l, open })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
         <MachineField label={`${m.native_placement_limit_cpu()} (%)`} accessibilityHint={m.native_placement_limit_cpu_help()} value={limits.cpu}
           onChangeText={(cpu) => { setError(''); setSaved(null); setLimits((l) => ({ ...l, cpu })); }} keyboardType="number-pad" maxLength={3} editable={!saving} />
       </SectionCard>

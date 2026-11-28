@@ -23,7 +23,10 @@ struct Config {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct Limits { mem_free_pct: u32, working: u32, cpu_pct: u32 }
+struct Limits { mem_free_pct: u32, working: u32, #[serde(default = "default_open")] open: u32, cpu_pct: u32 }
+
+/// Servidor sem o limite de abertas: a tela mostra o padrão que o servidor novo usaria.
+fn default_open() -> u32 { 10 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct ProjectRule { project: String, server: String }
@@ -67,6 +70,7 @@ type Choices = (Vec<String>, Vec<(String, String)>);
 struct Inputs {
     mem: Entity<InputState>,
     working: Entity<InputState>,
+    open: Entity<InputState>,
     cpu: Entity<InputState>,
     from: Entity<InputState>,
     to: Entity<InputState>,
@@ -107,12 +111,13 @@ async fn read(api: Api) -> (Option<String>, Read, Option<Facts>) {
 }
 
 /// Os números dos limites como o servidor aceita (`store::validate`); `Err` é a chave do aviso.
-fn limits(mem: &str, working: &str, cpu: &str) -> Result<Limits, &'static str> {
+fn limits(mem: &str, working: &str, open: &str, cpu: &str) -> Result<Limits, &'static str> {
     let pct = |s: &str| s.trim().parse::<u32>().ok().filter(|n| *n <= 100);
     let mem_free_pct = pct(mem).ok_or("placement_limit_pct_invalid")?;
     let cpu_pct = pct(cpu).ok_or("placement_limit_pct_invalid")?;
     let working = working.trim().parse::<u32>().ok().filter(|n| *n >= 1).ok_or("placement_limit_working_invalid")?;
-    Ok(Limits { mem_free_pct, working, cpu_pct })
+    let open = open.trim().parse::<u32>().ok().filter(|n| *n >= 1).ok_or("placement_limit_open_invalid")?;
+    Ok(Limits { mem_free_pct, working, open, cpu_pct })
 }
 
 /// A regra de horário como o servidor aceita: hora `HH:MM` e fuso IANA, senão ela nunca valeria.
@@ -255,6 +260,7 @@ impl Hangar {
             None => Inputs {
                 mem: field(limits.mem_free_pct.to_string(), String::new(), window, cx),
                 working: field(limits.working.to_string(), String::new(), window, cx),
+                open: field(limits.open.to_string(), String::new(), window, cx),
                 cpu: field(limits.cpu_pct.to_string(), String::new(), window, cx),
                 from: field(String::new(), "09:00".into(), window, cx),
                 to: field(String::new(), "18:00".into(), window, cx),
@@ -271,7 +277,7 @@ impl Hangar {
         let (Some(draft), Some(inputs)) = (&self.placement.draft, &self.placement.inputs) else { return Err(tr("invalid_response")) };
         let text = |input: &Entity<InputState>| input.read(cx).value().to_string();
         let mut config = draft.clone();
-        config.limits = limits(&text(&inputs.mem), &text(&inputs.working), &text(&inputs.cpu)).map_err(tr)?;
+        config.limits = limits(&text(&inputs.mem), &text(&inputs.working), &text(&inputs.open), &text(&inputs.cpu)).map_err(tr)?;
         merge_clone_dirs(&mut config.clone_dirs, inputs, cx);
         Ok(config)
     }
@@ -393,6 +399,8 @@ impl Hangar {
                 number("placement-mem", &inputs.mem, "%", tr("placement_limit_memory")).into_any_element()))
             .child(self.row(IconName::Activity, "placement_limit_working", Some(tr("placement_limit_working_help")), true,
                 number("placement-working", &inputs.working, "", tr("placement_limit_working")).into_any_element()))
+            .child(self.row(IconName::Layers, "placement_limit_open", Some(tr("placement_limit_open_help")), true,
+                number("placement-open", &inputs.open, "", tr("placement_limit_open")).into_any_element()))
             .child(self.row(IconName::Cpu, "placement_limit_cpu", Some(tr("placement_limit_cpu_help")), true,
                 number("placement-cpu", &inputs.cpu, "%", tr("placement_limit_cpu")).into_any_element()));
 
@@ -509,7 +517,7 @@ mod tests {
 
     #[test]
     fn the_server_config_round_trips_without_losing_a_field() {
-        let wire = json!({"ui_mode": "suggest", "agent_mode": "auto", "limits": {"mem_free_pct": 15, "working": 6, "cpu_pct": 80},
+        let wire = json!({"ui_mode": "suggest", "agent_mode": "auto", "limits": {"mem_free_pct": 15, "working": 6, "open": 10, "cpu_pct": 80},
             "project_rules": [{"project": "git:github.com/a/b", "server": "nb"}],
             "schedule_rules": [{"days": [1, 5], "from": "09:00", "to": "18:00", "tz": "America/Sao_Paulo", "avoid": "nb"}],
             "clone_dirs": {"nb": "/h/Projetos"}});
@@ -519,10 +527,17 @@ mod tests {
 
     #[test]
     fn limits_follow_what_the_server_accepts() {
-        assert_eq!(limits("15", " 6 ", "80"), Ok(Limits { mem_free_pct: 15, working: 6, cpu_pct: 80 }));
-        assert_eq!(limits("101", "6", "80"), Err("placement_limit_pct_invalid"));
-        assert_eq!(limits("15", "6", "abc"), Err("placement_limit_pct_invalid"));
-        assert_eq!(limits("15", "0", "80"), Err("placement_limit_working_invalid"));
+        assert_eq!(limits("15", " 6 ", "10", "80"), Ok(Limits { mem_free_pct: 15, working: 6, open: 10, cpu_pct: 80 }));
+        assert_eq!(limits("101", "6", "10", "80"), Err("placement_limit_pct_invalid"));
+        assert_eq!(limits("15", "6", "10", "abc"), Err("placement_limit_pct_invalid"));
+        assert_eq!(limits("15", "0", "10", "80"), Err("placement_limit_working_invalid"));
+        assert_eq!(limits("15", "6", "0", "80"), Err("placement_limit_open_invalid"));
+    }
+
+    #[test]
+    fn a_server_without_the_open_limit_reads_the_default() {
+        let wire = json!({"mem_free_pct": 15, "working": 6, "cpu_pct": 80});
+        assert_eq!(serde_json::from_value::<Limits>(wire).unwrap().open, 10);
     }
 
     #[test]

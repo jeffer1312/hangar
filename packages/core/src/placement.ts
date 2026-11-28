@@ -6,7 +6,7 @@ import * as m from './paraglide/messages';
 
 export type PlacementUiMode = 'off' | 'suggest' | 'ask';
 export type PlacementAgentMode = 'off' | 'auto' | 'ask';
-export interface PlacementLimits { mem_free_pct: number; working: number; cpu_pct: number }
+export interface PlacementLimits { mem_free_pct: number; working: number; open: number; cpu_pct: number }
 export interface PlacementProjectRule { project: string; server: string }
 /** `days`: 1 = segunda … 7 = domingo; vazio vale todos. */
 export interface PlacementScheduleRule { days: number[]; from: string; to: string; tz: string; avoid: string }
@@ -20,7 +20,7 @@ export interface PlacementConfig {
   clone_dirs: Record<string, string>;
 }
 
-export type PlacementExclusion = 'missing' | 'not_capable' | 'schedule' | 'memory' | 'working' | 'cpu' | 'no_clone_dir';
+export type PlacementExclusion = 'missing' | 'not_capable' | 'schedule' | 'memory' | 'working' | 'open' | 'cpu' | 'no_clone_dir';
 export type PlacementReason =
   | { code: 'same_folder' }
   | { code: 'unpublished'; why: 'ahead' | 'dirty' | 'no_upstream' }
@@ -42,8 +42,12 @@ export interface PlacementFacts { server_id: string; version: string; repos: { p
 // A escolha espera até 2 s pelos fatos de cada máquina: o prazo cobre isso e a ida e volta.
 const WAIT = 5000;
 
+/** Servidor sem o limite de abertas: a tela mostra o padrão que o servidor novo usaria. */
+const DEFAULT_OPEN = 10;
+
 export function getPlacementConfig(server: Server): Promise<PlacementConfig> {
-  return apiFetchForServer<PlacementConfig>(server, '/api/placement/config', undefined, WAIT);
+  return apiFetchForServer<PlacementConfig>(server, '/api/placement/config', undefined, WAIT)
+    .then((c) => ({ ...c, limits: { ...c.limits, open: c.limits?.open ?? DEFAULT_OPEN } }));
 }
 
 /** Grava e devolve o que o servidor guardou. */
@@ -77,6 +81,7 @@ function exclusionText(why: string): string {
     case 'schedule': return m.native_placement_exclusion_schedule();
     case 'memory': return m.native_placement_exclusion_memory();
     case 'working': return m.native_placement_exclusion_working();
+    case 'open': return m.native_placement_exclusion_open();
     case 'cpu': return m.native_placement_exclusion_cpu();
     case 'no_clone_dir': return m.native_placement_exclusion_no_clone_dir();
     default: return why;
@@ -151,26 +156,33 @@ export async function placementSuggestionFor(active: Server, machines: readonly 
   return found ? reply(found) : null;
 }
 
-/** A pasta escolhida tem regra de projeto para outra máquina: a Nova conversa oferece abrir lá. `server`: o id que a
- *  máquina informa (vai no `machine` do pedido); `serverId`: a mesma máquina na lista do app; `cwd`: a pasta da oferta. */
-export interface PlacementRuleOffer { server: string; serverId: string; project: string; cwd: string }
+/** A escolha para a pasta escolhida aponta outra máquina: pela regra do projeto (`project`), a Nova conversa oferece abrir
+ *  lá; pela carga (`project` nulo), já marca lá. `server`: o id que a máquina informa (vai no `machine` do pedido);
+ *  `serverId`: a mesma máquina na lista do app; `cwd`: a pasta da oferta; `text`: o motivo da escolha. */
+export interface PlacementRuleOffer { server: string; serverId: string; project: string | null; text: string; cwd: string }
 
-/** A máquina e o projeto da regra, quando o motivo da escolha é uma regra de projeto. */
-export function placementRuleOf(placement: Partial<Placement>): { server: string; project: string } | null {
+/** A máquina da escolha e, pela regra de projeto, o projeto; só regra e carga apontam outra máquina para a pasta. */
+export function placementOfferOf(placement: Partial<Placement>): { server: string; project: string | null } | null {
   const r = placement.reason;
-  if (r?.code !== 'project_rule' || !r.project || !placement.server) return null;
-  return { server: placement.server, project: placementProjectTitle(r.project) };
+  if (!placement.server) return null;
+  if (r?.code === 'project_rule') return r.project ? { server: placement.server, project: placementProjectTitle(r.project) } : null;
+  return r?.code === 'least_loaded' ? { server: placement.server, project: null } : null;
 }
 
-/** A oferta da regra para `cwd`, perguntada à máquina marcada; com a tela em "desligado" nada é pedido.
- *  `null`: sem regra, regra para a própria marcada, ou máquina fora de `machines`. Falha de leitura rejeita. */
+/** A oferta para `cwd`, perguntada à máquina marcada; com a tela em "desligado" nada é pedido. `null`: a escolha fica na
+ *  própria marcada, ou a máquina está fora de `machines`. Falha de leitura rejeita. */
 export async function placementRuleOfferFor(marked: Server, machines: readonly Server[], cwd: string): Promise<PlacementRuleOffer | null> {
   const config = await getPlacementConfig(marked);
   if (config.ui_mode === 'off') return null;
-  const rule = placementRuleOf(await suggestPlacement(marked, { cwd, machine: 'auto' }));
-  if (!rule || await identOf(marked) === rule.server) return null;
-  const found = (await othersWithIdent(machines, marked)).find(([, id]) => id === rule.server)?.[0];
-  return found ? { server: rule.server, serverId: found.id, project: rule.project, cwd } : null;
+  const placement = await suggestPlacement(marked, { cwd, machine: 'auto' });
+  const offer = placementOfferOf(placement);
+  if (!offer || await identOf(marked) === offer.server) return null;
+  const others = await othersWithIdent(machines, marked);
+  const found = others.find(([, id]) => id === offer.server)?.[0];
+  if (!found) return null;
+  const names = new Map(others.flatMap(([s, id]) => id ? [[id, s.label] as const] : []));
+  const text = placementReasonText(placement, (id) => names.get(id) ?? id);
+  return { server: offer.server, serverId: found.id, project: offer.project, text, cwd };
 }
 
 // Conta, motor, perfil e reserva são da máquina daqui: com eles o servidor recusa abrir noutra. Lá vale o padrão de lá.
@@ -214,7 +226,7 @@ export function savePlacementAll(servers: readonly Server[], config: PlacementCo
 }
 
 // O servidor devolve `clone_dirs` em ordem alfabética; o rascunho, na ordem em que foi editado.
-const configKey = (c: PlacementConfig) => JSON.stringify([c.ui_mode, c.agent_mode, c.limits.mem_free_pct, c.limits.working, c.limits.cpu_pct,
+const configKey = (c: PlacementConfig) => JSON.stringify([c.ui_mode, c.agent_mode, c.limits.mem_free_pct, c.limits.working, c.limits.open, c.limits.cpu_pct,
   c.project_rules.map((r) => [r.project, r.server]), c.schedule_rules.map((r) => [r.days, r.from, r.to, r.tz, r.avoid]),
   Object.entries(c.clone_dirs).sort(([a], [b]) => a.localeCompare(b))]);
 export const samePlacementConfig = (a: PlacementConfig, b: PlacementConfig) => configKey(a) === configKey(b);
@@ -236,12 +248,13 @@ export function placementProjects(machines: readonly PlacementMachine[]): string
 export type PlacementCheck<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /** Os números dos limites como o servidor aceita (`store::validate`). */
-export function placementLimits(mem: string, working: string, cpu: string): PlacementCheck<PlacementLimits> {
+export function placementLimits(mem: string, working: string, cpu: string, open: string): PlacementCheck<PlacementLimits> {
   const int = (s: string) => /^\d+$/.test(s.trim()) ? Number(s.trim()) : NaN;
-  const [memPct, cpuPct, sessions] = [int(mem), int(cpu), int(working)];
+  const [memPct, cpuPct, sessions, opened] = [int(mem), int(cpu), int(working), int(open)];
   if (!(memPct <= 100) || !(cpuPct <= 100)) return { ok: false, error: m.native_placement_limit_pct_invalid() };
   if (!(sessions >= 1)) return { ok: false, error: m.native_placement_limit_working_invalid() };
-  return { ok: true, value: { mem_free_pct: memPct, working: sessions, cpu_pct: cpuPct } };
+  if (!(opened >= 1)) return { ok: false, error: m.native_placement_limit_open_invalid() };
+  return { ok: true, value: { mem_free_pct: memPct, working: sessions, open: opened, cpu_pct: cpuPct } };
 }
 
 function validTimeZone(tz: string): boolean {

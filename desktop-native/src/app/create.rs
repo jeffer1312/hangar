@@ -1118,7 +1118,7 @@ impl NewSession {
         }));
     }
 
-    /// A pasta escolhida pode ter regra de projeto para outra máquina: pergunta à máquina marcada. Pasta nova refaz a pergunta.
+    /// A pasta escolhida pode ir para outra máquina, pela regra de projeto ou pela carga: pergunta à máquina marcada. Pasta nova refaz a pergunta.
     fn ask_rule(&mut self, cx: &mut Context<Self>) {
         (self.rule_offer, self.rule_seq) = (None, self.rule_seq + 1);
         if self.baton.is_some() || self.scheduled { return; }
@@ -1245,7 +1245,7 @@ impl NewSession {
         // A pasta da criação em voo não muda: a coluna da esquerda fica parada até a resposta.
         if self.creating { return; }
         self.root = Some(root);
-        if self.compact && pick { self.picked = Some(path.clone()); self.reset_git(); self.load_branches(window, cx); }
+        if self.compact && pick { self.picked = Some(path.clone()); self.reset_git(); self.load_branches(window, cx); self.ask_rule(cx); }
         let remember = path.clone();
         self.link.runtime.spawn_blocking(move || crate::appearance::remember_root(&remember));
         self.scan_dir(path, cx);
@@ -1597,7 +1597,7 @@ impl NewSession {
         // Worktree que já existe: a sessão nasce dentro dela, sem pedir worktree nova.
         let cwd = self.existing.clone().filter(|_| !self.new_branch).unwrap_or(cwd);
         let mut name = if self.compact { basename(&cwd).to_owned() } else { self.name.read(cx).value().trim().to_owned() };
-        // "Abrir na <máquina>" da regra: o servidor desta tela traduz a pasta e encaminha; a sessão é de lá.
+        // Oferta aceita (regra ou carga): o servidor desta tela traduz a pasta e encaminha; a sessão é de lá.
         let there = match self.taken_offer().map(|offer| (offer.server.clone(), offer.key.clone())) {
             None => None,
             Some((server, key)) => match self.choice_of(&key).map(|c| Api::new(&c.address, &c.token)) {
@@ -1797,8 +1797,9 @@ impl NewSession {
             CreateReply::RuleOffer(seq, result) => {
                 if seq != self.rule_seq { return None; }
                 match result {
-                    Err(error) => eprintln!("[nova-conversa] regra de projeto da pasta não lida: {}", error.detail),
-                    Ok(offer) => self.rule_offer = offer,
+                    Err(error) => eprintln!("[nova-conversa] máquina da pasta não lida: {}", error.detail),
+                    // Máquina trocada à mão: a carga só oferece, como a regra.
+                    Ok(offer) => self.rule_offer = offer.map(|offer| super::placement::RuleOffer { taken: offer.taken && !self.machine_touched, ..offer }),
                 }
             }
             CreateReply::Repos(seq, result) => {
@@ -3029,7 +3030,7 @@ impl NewSession {
         let badge = credential.as_deref().and_then(|id| self.account_badge(id)).cloned();
         // A conta forçada acima do limite mostra o uso na pílula, na cor do menu de contas.
         let forced = self.forced_window().map(|(window, pct)| format!("{window} {}%", pct.round()));
-        // Depois do "Abrir na <máquina>" da regra, a pílula mostra a máquina da regra; a pasta continua a escolhida aqui.
+        // Com a oferta aceita (regra ou carga), a pílula mostra a máquina dela; a pasta continua a escolhida aqui.
         let shown = self.shown_key();
         let tag = self.machine_tag(&shown).cloned();
         let (machine, mark_id) = match self.taken_offer().and(self.choice_of(&shown)) {

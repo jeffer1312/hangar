@@ -2329,6 +2329,27 @@ describe('CreateSessionSheet Codex', () => {
     } finally { act(() => root.unmount()); }
   });
 
+  it('conversa nova: a carga da pasta já marca a outra máquina, sem clique, e cria lá pelo servidor daqui', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    calls.ruleOffer.mockImplementation(async (_s: unknown, _m: unknown, cwd: string) =>
+      ({ server: 'vm', serverId: 'server-c', project: null, text: 'motivo-carga', cwd }));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      calls.scan.mockResolvedValue({ entries: [{ name: 'Child', path: '/repo/child', is_git: true, has_claude_md: false }] });
+      await openFolder(container);
+      await act(async () => [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Child'))!.click());
+      await flushDismiss();
+      await settle();
+      expect(container.textContent).toContain('native_new_chat_machine_suggested');
+      expect(button(container, 'native_placement_rule_open')).toBeUndefined();
+      await send(container);
+      const [asked, body] = calls.create.mock.calls[0];
+      expect(asked).toMatchObject({ id: 'server-b' });
+      expect(body).toMatchObject({ cwd: '/repo/child', machine: 'vm' });
+      expect(calls.replace).toHaveBeenCalledWith('/s/server-c/nova');
+    } finally { act(() => root.unmount()); }
+  });
+
   it('cria Claude no destino explícito do projeto', async () => {
     const { container, root } = await renderSheet();
     await openSettings(container);

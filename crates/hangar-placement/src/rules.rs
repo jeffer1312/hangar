@@ -39,18 +39,19 @@ pub enum AgentMode {
 }
 
 /// Máquina sai da escolha com memória livre abaixo de `mem_free_pct`, `working` ou mais sessões
-/// trabalhando, ou processador acima de `cpu_pct`.
+/// trabalhando, `open` ou mais sessões abertas, ou processador acima de `cpu_pct`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Limits {
     pub mem_free_pct: u32,
     pub working: u32,
+    pub open: u32,
     pub cpu_pct: u32,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { mem_free_pct: 15, working: 6, cpu_pct: 80 }
+        Self { mem_free_pct: 15, working: 6, open: 10, cpu_pct: 80 }
     }
 }
 
@@ -149,7 +150,7 @@ mod tests {
     #[test]
     fn missing_fields_take_the_defaults() {
         let c: PlacementConfig = serde_json::from_str(r#"{"limits":{"working":3}}"#).unwrap();
-        assert_eq!(c.limits, Limits { mem_free_pct: 15, working: 3, cpu_pct: 80 });
+        assert_eq!(c.limits, Limits { mem_free_pct: 15, working: 3, open: 10, cpu_pct: 80 });
         assert_eq!((c.ui_mode, c.agent_mode), (UiMode::Suggest, AgentMode::Auto));
     }
 }

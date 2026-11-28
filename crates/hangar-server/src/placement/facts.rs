@@ -41,6 +41,8 @@ pub(crate) async fn local(st: &Arc<AppState>, project: Option<&ProjectId>, with_
     let rows = rows.ok_or("placement_facts_list_unavailable")?;
     let (mut roots, clone_dir, load) = scan.map_err(|_| "placement_facts_unavailable")??;
     let working = u32::try_from(rows.iter().filter(|row| row.state == "working").count()).unwrap_or(u32::MAX);
+    // Sessão morta continua na lista até ser dispensada, mas não ocupa a máquina.
+    let open = u32::try_from(rows.iter().filter(|row| row.state != "dead").count()).unwrap_or(u32::MAX);
     let folders = rows.iter().filter_map(|row| row.git_cwd.clone().filter(|c| !c.is_empty()).or_else(|| row.cwd.clone())).collect::<Vec<_>>();
     let project = project.cloned();
     let repos = if !with_repos { Vec::new() } else { tokio::task::spawn_blocking(move || {
@@ -57,7 +59,7 @@ pub(crate) async fn local(st: &Arc<AppState>, project: Option<&ProjectId>, with_
     let version = crate::update::running_package().map_or_else(|| env!("CARGO_PKG_VERSION").to_owned(), |p| p.version.clone());
     Ok(MachineFacts {
         server_id: st.current_server_id(), version, capable: true,
-        mem_total: load.mem_total, mem_available: load.mem_available, working, cpu_pct: load.cpu_pct,
+        mem_total: load.mem_total, mem_available: load.mem_available, working, open: Some(open), cpu_pct: load.cpu_pct,
         repos, clone_dir,
     })
 }

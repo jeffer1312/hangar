@@ -86,7 +86,7 @@ fn shared_preferences_copy_placement_rules_to_the_destination() {
     let target_home = target.path().join("account-home");
     let rules = PlacementConfig {
         ui_mode: UiMode::Ask,
-        limits: Limits { mem_free_pct: 25, working: 3, cpu_pct: 90 },
+        limits: Limits { mem_free_pct: 25, working: 3, open: 7, cpu_pct: 90 },
         // Pasta de outra máquina: vai como está, sem virar caminho do destino.
         clone_dirs: [("vm".to_owned(), source_home.join("Projetos").to_string_lossy().into_owned())].into(),
         ..Default::default()

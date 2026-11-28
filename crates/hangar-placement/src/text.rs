@@ -13,7 +13,7 @@ pub fn text(p: &Placement) -> String {
         ReasonCode::PlainDir => "pasta sem git (ou sem origin) que só existe nesta máquina".to_owned(),
         ReasonCode::ProjectRule { project } => format!("a regra do projeto {} manda para {}", project.0, p.server),
         ReasonCode::LocalWithinLimits => "esta máquina está dentro dos limites".to_owned(),
-        ReasonCode::LeastLoaded { local_out } => format!("esta máquina saiu da escolha ({}); {} tem menos sessões trabalhando",
+        ReasonCode::LeastLoaded { local_out } => format!("esta máquina saiu da escolha ({}); {} tem menos sessões abertas",
             exclusion(*local_out), p.server),
         ReasonCode::NoCandidate => "nenhuma máquina dentro dos limites: fica nesta".to_owned(),
         ReasonCode::NotBalanced { why } => format!("fora do balanceamento ({})", why_text(why)),
@@ -37,6 +37,7 @@ fn exclusion(why: Exclusion) -> &'static str {
         Exclusion::Schedule => "regra de horário",
         Exclusion::Memory => "pouca memória livre",
         Exclusion::Working => "muitas sessões trabalhando",
+        Exclusion::Open => "muitas sessões abertas",
         Exclusion::Cpu => "processador acima do limite",
         Exclusion::NoCloneDir => "sem o repositório e sem pasta de clone",
     }
@@ -62,7 +63,7 @@ mod tests {
     fn the_text_says_where_and_why_with_the_warnings() {
         let p = Placement { server: "nb".into(), reason: ReasonCode::LeastLoaded { local_out: Exclusion::Working }, clone: None,
             warnings: vec![Warning::RuleServerOut { server: "vm".into(), why: Exclusion::Missing }] };
-        assert_eq!(text(&p), "esta máquina saiu da escolha (muitas sessões trabalhando); nb tem menos sessões trabalhando; \
+        assert_eq!(text(&p), "esta máquina saiu da escolha (muitas sessões trabalhando); nb tem menos sessões abertas; \
             a máquina da regra, vm, ficou fora (desligada ou sem resposta)");
         let kept = Placement { server: "pc".into(), reason: ReasonCode::NotBalanced { why: "orq".into() }, clone: None, warnings: Vec::new() };
         assert_eq!(text(&kept), "fora do balanceamento (orquestração)");

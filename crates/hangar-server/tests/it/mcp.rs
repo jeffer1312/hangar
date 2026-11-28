@@ -1702,7 +1702,7 @@ fn isolated_accounts(state: &mut AppState) {
 async fn placement_suggest_chooses_without_opening() {
     let s = scene_tuned(false, None, false, "", Share::Absent, isolated_accounts).await;
     // Limites folgados: a carga é a da máquina que roda o teste.
-    write_json(&s.home.join(".hangar/placement.json"), json!({"limits": {"mem_free_pct": 0, "working": 1000, "cpu_pct": 100}}));
+    write_json(&s.home.join(".hangar/placement.json"), json!({"limits": {"mem_free_pct": 0, "working": 1000, "open": 1000, "cpu_pct": 100}}));
     std::fs::create_dir_all(s.home.join("plain")).unwrap();
     let url = format!("http://{}/api/placement/suggest", s.addr);
     let suggest = |cwd: PathBuf| { let url = url.clone(); async move {
