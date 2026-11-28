@@ -173,7 +173,7 @@ pub fn agy_mode_args(mode: Option<PermissionMode>) -> Vec<String> {
 /// Sem a pasta em `trustedWorkspaces` o `agy` nasce preso no "Do you trust the contents of this project?", e sem
 /// o hook de estado no `hooks.json` da conta a lista não acha a conversa do pane. As liberações do recado e
 /// as regras globais (`AGENTS.md`) vão junto. Falha só vai ao log.
-pub fn agy_pretrust(home: &Path, account: &Account, cwd: &str) {
+pub fn agy_pretrust(home: &Path, env: &BTreeMap<String, String>, account: &Account, cwd: &str) {
     let account = agy_account(account);
     let path = account.settings_path(home);
     if let Err(error) = hangar_antigravity::settings::trust_workspace(&path, Path::new(cwd)) {
@@ -186,7 +186,10 @@ pub fn agy_pretrust(home: &Path, account: &Account, cwd: &str) {
     if let Err(error) = crate::harness_setup::agy_hooks::install(home, &hooks) {
         tracing::warn!(file = %hooks.display(), %error, "hook do Antigravity não gravado; a sessão abre sem ligar a conversa");
     }
-    if let Err(error) = crate::harness_setup::agy_hooks::status_line(home, &account) {
+    let mut accounts_env = crate::accounts::environment::AccountEnvironment::from_map(env.clone());
+    accounts_env.home = home.to_owned();
+    let version = crate::harness_setup::agy_hooks::installed_version(&accounts_env);
+    if account.is_default() && let Err(error) = crate::harness_setup::agy_hooks::status_line(home, &account, version) {
         tracing::warn!(file = %path.display(), %error, "statusline do Antigravity não gravada; a cota da conta não atualiza");
     }
     crate::harness_setup::persona::sync_agy(home);

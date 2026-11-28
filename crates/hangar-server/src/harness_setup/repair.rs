@@ -216,7 +216,7 @@ impl Service {
                 .into())
             }
             "hooks-agy" => {
-                let changed = super::agy_hooks::sync(&env.home).map_err(failed)?;
+                let changed = super::agy_hooks::sync(&env.home, super::agy_hooks::installed_version(env)).map_err(failed)?;
                 if health::agy_hooks(&env.home)["ok"] != true {
                     return Err(invalid(
                         "hooks do Antigravity não ficaram instalados — ver o log do backend",

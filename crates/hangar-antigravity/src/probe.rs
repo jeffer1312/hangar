@@ -45,6 +45,11 @@ fn run(program: &Path, cwd: &Path, env: &ProcessEnv, args: &[&str], limit: Durat
     }
 }
 
+/// A versão do `agy` instalado (`agy --version`); None sem resposta no prazo ou sem versão na saída.
+pub fn version(program: &Path, cwd: &Path, env: &ProcessEnv, limit: Duration) -> std::io::Result<Option<(u32, u32, u32)>> {
+    Ok(run(program, cwd, env, &["--version"], limit)?.and_then(|(ok, text)| ok.then(|| crate::version::parse(&text)).flatten()))
+}
+
 /// Some(true) com login, Some(false) sem; None quando o agy não respondeu no prazo ou falhou de outro jeito.
 pub fn signed_in(program: &Path, cwd: &Path, env: &ProcessEnv, limit: Duration) -> std::io::Result<Option<bool>> {
     Ok(run(program, cwd, env, &["models"], limit)?.and_then(|(ok, text)| answer(ok, &text)))

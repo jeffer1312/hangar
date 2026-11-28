@@ -73,7 +73,10 @@ pub fn status_line(path: &Path, command: &str, ours: impl Fn(&str) -> bool) -> R
         Some(_) => return Ok(StatusLine::Taken),
     };
     let current = line.get("command").and_then(Value::as_str).unwrap_or("").trim();
-    if (!current.is_empty() && !ours(current)) || line.get("enabled") == Some(&Value::Bool(false)) {
+    let kind = line.get("type").and_then(Value::as_str).unwrap_or("");
+    if (!current.is_empty() && !ours(current)) || line.get("enabled") == Some(&Value::Bool(false))
+        || !(kind.is_empty() || kind == "command")
+    {
         return Ok(StatusLine::Taken);
     }
     let before = line.clone();
@@ -200,6 +203,7 @@ mod tests {
         let path = dir.path().join("settings.json");
         for own in [r#"{"statusLine":{"type":"command","command":"~/minha-barra.sh"}}"#,
                     r#"{"statusLine":{"type":"","command":"","enabled":false}}"#,
+                    r#"{"statusLine":{"type":"default"}}"#,
                     r#"{"statusLine":true}"#] {
             std::fs::write(&path, own).unwrap();
             assert_eq!(status_line(&path, OURS, ours).unwrap(), StatusLine::Taken, "{own}");

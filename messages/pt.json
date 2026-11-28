@@ -12729,7 +12729,7 @@
   "mobile_antigravity_in_use": "em uso por uma sessão",
   "mobile_antigravity_delete_failed": "Não foi possível apagar a conta do Google",
   "mobile_accounts_antigravity_add": "+ Conta do Google",
-  "mobile_antigravity_no_quota": "Cota do Antigravity ainda sem leitura: ela vem do /usage do próprio agy.",
+  "mobile_antigravity_no_quota": "A cota do Antigravity aparece com ele aberto numa sessão com terminal, pela barra de status que o Hangar configura no agy. Uma barra de status sua no lugar dela impede a leitura.",
   "erro_conta_antigravity_adicional": "O Antigravity com terminal só usa a conta padrão (a do ~/.gemini). Abra sem escolher outra conta.",
   "erro_permissao_so_na_abertura": "Este modo só vale ao abrir a sessão; reabra nele para usar.",
   "erro_permissao_ciclo_agy": "Não alcançou {alvo} no ciclo do shift+tab — ficou em {ficou}.",

@@ -277,11 +277,24 @@ impl AccountService {
     /// A cota do `agy` pela última statusline que ele passou ao Hangar (`hangar_antigravity::quota`). Arquivo local,
     /// lido a cada pedido e fora do cache das cotas; sem leitura ainda, a conta fica sem cota.
     fn agy_quota(&self) -> Option<Value> {
+        // Diário só quando o problema muda: a lista relê a cota a cada pedido.
+        static LAST: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+        let problem = |code: Option<&'static str>| {
+            let mut last = LAST.lock().unwrap_or_else(|p| p.into_inner());
+            if *last == code { return false; }
+            *last = code;
+            if let (Some(code), Some(diag)) = (code, self.quotas.diag.get()) {
+                diag.report("rust.quota_sources_partial", "cotas:antigravity", code, "cota do Antigravity gravada não lida");
+            }
+            code.is_some()
+        };
         let path = hangar_antigravity::Account::default().quota_path(&self.env.home);
         let saved = match hangar_antigravity::quota::read(&path) {
             Ok(saved) => saved?,
             Err(error) => {
-                tracing::warn!(code = "agy_quota_unreadable", file = %path.display(), ?error, "cota do Antigravity gravada não lida");
+                if problem(Some("agy_quota_unreadable")) {
+                    tracing::warn!(code = "agy_quota_unreadable", file = %path.display(), ?error, "cota do Antigravity gravada não lida");
+                }
                 let reason = if matches!(error, hangar_antigravity::quota::ReadError::Format) { "formato-desconhecido" } else { "leitura-falhou" };
                 return Some(reading("indisponivel", vec![], Some(reason)));
             }
@@ -289,9 +302,12 @@ impl AccountService {
         let windows = hangar_antigravity::quota::windows(&saved, now());
         // Cota gravada sem nenhuma janela legível: o agy mudou o formato, não é cota cheia.
         if windows.is_empty() {
-            tracing::warn!(code = "agy_quota_unparsed", "cota do Antigravity gravada sem janela legível");
+            if problem(Some("agy_quota_unparsed")) {
+                tracing::warn!(code = "agy_quota_unparsed", file = %path.display(), "cota do Antigravity gravada sem janela legível");
+            }
             return Some(reading("indisponivel", vec![], Some("formato-desconhecido")));
         }
+        problem(None);
         let mut value = reading("lida", windows, None);
         value["ts"] = saved["seen"].clone();
         Some(value)

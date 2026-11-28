@@ -1735,12 +1735,14 @@ fn provider_hooks_agy_statusline_records_the_quota_and_prints_nothing() {
     assert!(result.stdout.is_empty(), "sem saída, a barra padrão do agy segue sozinha");
     let saved = hangar_antigravity::quota::read(&data.join("hangar-quota.json")).unwrap().expect("cota gravada");
     assert_eq!(saved["buckets"]["gemini-weekly"]["remaining_fraction"], 0.5533508);
-    // Conta adicional roda com GEMINI_HOME e grava na pasta dela.
+    // O agy com terminal ignora GEMINI_HOME: a cota é sempre da conta padrão, mesmo com a variável no pane.
     let extra = root.path().join(".antigravity-trabalho");
     std::fs::create_dir_all(extra.join("antigravity-cli")).unwrap();
+    std::fs::remove_file(data.join("hangar-quota.json")).unwrap();
     let result = run(root.path(), "agy-statusline", payload, &[("GEMINI_HOME", extra.to_str().unwrap())]);
     assert!(result.status.success());
-    assert!(hangar_antigravity::quota::read(&extra.join("antigravity-cli/hangar-quota.json")).unwrap().is_some());
+    assert!(hangar_antigravity::quota::read(&data.join("hangar-quota.json")).unwrap().is_some());
+    assert!(!extra.join("antigravity-cli/hangar-quota.json").exists());
     // Entrada quebrada não prende o agy: sai 0 e não imprime nada.
     let broken = run(root.path(), "agy-statusline", b"{ quebrado", &[]);
     assert!(broken.status.success() && broken.stdout.is_empty());

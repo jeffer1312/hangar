@@ -257,9 +257,8 @@ fn agy_statusline(input: Result<&[u8], &'static str>) -> ExitCode {
         .and_then(|bytes| serde_json::from_slice::<Value>(bytes).map_err(|_| "invalid_json".to_owned()))
         .and_then(|value| {
             let home = std::env::home_dir().ok_or("home_unavailable")?;
-            // Conta adicional roda com `GEMINI_HOME`; a padrão, sem ele.
-            let account = std::env::var_os("GEMINI_HOME").filter(|dir| !dir.is_empty())
-                .map_or_else(hangar_antigravity::Account::default, |dir| hangar_antigravity::Account::extra(PathBuf::from(dir)));
+            // Sempre a conta padrão: o `agy` com terminal ignora `GEMINI_HOME` (login e dados ficam no `~/.gemini`).
+            let account = hangar_antigravity::Account::default();
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| "clock_before_epoch")?;
             hangar_antigravity::quota::record(&value, &account.quota_path(&home), now.as_secs_f64())
                 .map_err(|error| format!("quota_write_failed:{:?}", error.kind()))
