@@ -30,7 +30,7 @@ it('comandos não passam por nenhum modo automático', () => {
   expect(select('/clear', { mode: 'direct' })).toBeUndefined();
 });
 it.each([
-  ['claude', false, true], ['claude', true, false], ['codex', false, false], ['kimi', false, false],
+  ['claude', false, true], ['claude', true, false], ['codex', false, false], ['kimi', false, true],
 ] as const)('Direto seleciona a rota de %s (sem terminal: %s)', (provider, headless, terminalClaude) => {
   expect(select('oi', { mode: 'direct', provider, headless })).toEqual({ kind: 'direct', terminalClaude });
 });
@@ -124,7 +124,7 @@ it('"Na conversa" vale só com a sessão trabalhando, em Claude, Codex e Kimi, e
   expect(pick({ provider: 'codex', headless: true })).toEqual({ kind: 'conversation' });
   expect(pick({ state: 'idle' })).toBeUndefined();
   // O Ctrl+S do Kimi entra no turno sem cortá-lo: lá "Na conversa" é o envio direto.
-  expect(pick({ provider: 'kimi', headless: false })).toEqual({ kind: 'direct', terminalClaude: false });
+  expect(pick({ provider: 'kimi', headless: false })).toEqual({ kind: 'direct', terminalClaude: true });
   expect(pick({}, '/clear')).toBeUndefined();
 });
 

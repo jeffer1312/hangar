@@ -103,9 +103,18 @@ pub fn wants_steer_queue(p: &Params, sent: &Sent) -> bool {
     p.steer && matches!(sent, Sent::Done { entry: true, delivered, .. } if !*delivered || p.kimi)
 }
 
-pub fn was_steered(operation_id: &str, promoted: &Result<RuntimeReply, RuntimeError>) -> bool {
+/// No Kimi o Ctrl+S promove a fila da TUI inteira, onde a mensagem acabou de entrar: a resposta não lista ids.
+pub fn was_steered(operation_id: &str, kimi: bool, promoted: &Result<RuntimeReply, RuntimeError>) -> bool {
     matches!(promoted, Ok(reply) if reply.disposition == Disposition::Accepted
-        && reply.payload["ids"].as_array().is_some_and(|ids| ids.iter().any(|id| id == operation_id)))
+        && (reply.payload["ids"].as_array().is_some_and(|ids| ids.iter().any(|id| id == operation_id))
+            || kimi && reply.payload["steered"] == true))
+}
+
+/// O resultado da escolha do Jev. No Kimi, entregue sem orientar é a mensagem esperando na fila da TUI.
+pub fn timing_outcome(steer: bool, kimi: bool, body: &Value, note: &'static str) -> &'static str {
+    if steer && body["delivered"] != true { "refused" }
+    else if steer && kimi && body["steered"] != true { "queue" }
+    else if !steer && body["delivered"] == true { "delivered" } else { note }
 }
 
 pub fn input_answer(sent: &Sent, steered: bool) -> (StatusCode, Value) {
@@ -356,7 +365,7 @@ async fn send_with_entry(st: &AppState, name: &str, target: &WriteTarget, text: 
             payload }).await;
         // O recado já está na fila: falha de orientação nunca desfaz nem repete o envio.
         if let Err(error) = &promoted { tracing::warn!(session = %name, code = %error.code, "orientação do recado falhou; ele segue na fila"); }
-        steered = was_steered(&operation_id, &promoted);
+        steered = was_steered(&operation_id, params.kimi, &promoted);
     }
     let mut answer=input_answer(&sent, steered);
     if uncertain {answer.1["uncertain"]=json!(true);}
@@ -401,8 +410,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     // `false`: o pedido foi para a fila comum (Claude com terminal, Pi, omp, Kimi, Antigravity, comando de barra).
     if wants_conversation && result.0.is_success() { result.1["conversation"] = json!(conversation); }
     if let Some(note) = note {
-        let outcome = if steer && result.1["delivered"] != true { "refused" }
-            else if !steer && result.1["delivered"] == true { "delivered" } else { note };
+        let outcome = timing_outcome(steer, ctx.target.provider == "kimi", &result.1, note);
         tracing::info!(target: "delivery_timing", session=%ctx.name, outcome, "decisão de entrega aplicada");
         result.1["timing_note"] = json!(outcome);
     }
@@ -808,6 +816,10 @@ pub async fn steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
                 },
             }
         }
+        // O Ctrl+S do Kimi não leva texto: a mensagem é digitada na fila da TUI e então orientada, como no Direto.
+        crate::runtime::gateway::EntryHandle::OtherTerminal { .. } if text.is_some() => {
+            send_with_receipt(&ctx.st, &ctx.name, &ctx.target, text.as_deref().unwrap_or_default(), true, false, None, false).await
+        }
         headless => {
             let (kind, payload) = match &text {
                 // `now`: o botão corta o turno do Claude; o Codex ignora.
@@ -897,6 +909,24 @@ mod broadcast_tests {
             assert_eq!(body["delivered"], delivered);
             assert_eq!(body["steered"], steered);
         }
+    }
+
+    #[test]
+    fn kimi_steer_counts_when_its_tui_queue_was_promoted() {
+        let reply = |payload: Value| Ok(RuntimeReply { operation_id: "s".into(), disposition: Disposition::Accepted, payload });
+        assert!(was_steered("op", true, &reply(json!({"ok": true, "steered": true}))));
+        assert!(!was_steered("op", true, &reply(json!({"ok": true, "steered": false, "sem_fila": true}))));
+        assert!(!was_steered("op", false, &reply(json!({"ok": true, "steered": true}))), "fora do Kimi vale a lista de ids");
+        assert!(was_steered("op", false, &reply(json!({"ids": ["op"]}))));
+    }
+
+    #[test]
+    fn jev_direct_on_kimi_without_the_steer_is_a_queued_message() {
+        assert_eq!(timing_outcome(true, true, &json!({"delivered": true, "steered": false}), "direct"), "queue");
+        assert_eq!(timing_outcome(true, true, &json!({"delivered": true, "steered": true}), "direct"), "direct");
+        assert_eq!(timing_outcome(true, false, &json!({"delivered": true, "steered": false}), "direct"), "direct");
+        assert_eq!(timing_outcome(true, true, &json!({"delivered": false}), "direct"), "refused");
+        assert_eq!(timing_outcome(false, true, &json!({"delivered": true}), "queue"), "delivered");
     }
 
     #[test]

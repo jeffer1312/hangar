@@ -3444,7 +3444,8 @@ async fn dispatch(registry:&RuntimeRegistry,envelope:&Envelope) -> Result<Value,
         "submit"=> {
             if matches!(&handle,EntryHandle::Terminal {..}) && (command.get("steer").is_some_and(|value|!value.is_boolean())
                 || command.get("pre_transcript").is_some_and(|value|!value.is_boolean())) {return Err(failure("terminal_payload"));}
-            let kind = if command["steer"] == true && !matches!(&handle,EntryHandle::Terminal {..}) { OperationKind::Steer } else { OperationKind::Input };
+            // O `steer` dos outros agentes de terminal só aperta Ctrl+S e perderia o texto: lá ele é digitado.
+            let kind = if command["steer"] == true && !matches!(&handle,EntryHandle::Terminal {..} | EntryHandle::OtherTerminal {..}) { OperationKind::Steer } else { OperationKind::Input };
             let reply = handle.command(RuntimeCommand { operation_id:envelope.operation_id.clone(),kind,
                 payload:json!({"text":command["text"],"pre_transcript":command["pre_transcript"].as_bool().unwrap_or(false)}) }).await?;
             serde_json::to_value(reply).map_err(|_|failure("reply_json"))

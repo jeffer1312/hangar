@@ -161,9 +161,11 @@ pub(crate) fn screen(provider: hangar_transcript::Provider, pane: &str) -> crate
                 analysis.state = if analysis.spinner.is_some() { "working" } else { "idle" }.into();
             }
             // O painel de aprovação ou de escolha (rodapé `↵ confirm`, `↵ choose`…) ocupa a caixa: nada se digita sobre ele.
-            // Só o fim da tela: o mesmo texto citado na conversa não é painel aberto.
+            // Só o fim da tela, abaixo da caixa: o painel aberto ocupa o lugar dela, e o rodapé citado na conversa
+            // fica acima.
             let lines: Vec<&str> = pane.trim_end().lines().collect();
-            let bottom = lines[lines.len().saturating_sub(8)..].join("\n");
+            let after_box = lines.iter().rposition(|line| line.trim_start().starts_with('╰')).map_or(0, |at| at + 1);
+            let bottom = lines[after_box.max(lines.len().saturating_sub(8))..].join("\n");
             analysis.overlay |= kimi_approval_open(&bottom) || kimi_picker_open(&bottom);
             analysis
         }

@@ -42,7 +42,8 @@ export function queueSendMode(mode: DeliveryMode, ready: boolean, state: string,
   if (state !== 'working' || !deliveryProvider(provider) || isSlashCommand(message)) return;
   // O Ctrl+S do Kimi entra no turno sem cortá-lo: lá "Na conversa" é o mesmo envio direto.
   const effective = provider === 'kimi' && mode === 'conversation' ? 'direct' : mode;
-  if (effective === 'direct') return { kind: 'direct', terminalClaude: provider === 'claude' && !headless };
+  // `terminalClaude`: vai pelo `/input` com `steer`. O `/steer` do Claude com terminal ignora o texto, e o do Kimi só aperta Ctrl+S.
+  if (effective === 'direct') return { kind: 'direct', terminalClaude: (provider === 'claude' && !headless) || provider === 'kimi' };
   if (effective === 'conversation') return { kind: 'conversation' };
   if (mode !== 'jev' || !ready) return;
   let latest = -1;

@@ -195,6 +195,8 @@ fn kimi_open_panel_occupies_the_box_without_becoming_a_question() {
 fn kimi_panel_footer_quoted_in_the_conversation_does_not_occupy_the_box() {
     let history = format!("  ↑/↓ select · 1/2 choose · ↵ confirm\n  type answer\n{}", "  linha da conversa\n".repeat(10));
     assert!(!super::drive::screen(hangar_transcript::Provider::Kimi, &(history + KIMI_IDLE)).overlay);
+    let just_above = format!("  ↑/↓ select · 1/2 choose · ↵ confirm\n{KIMI_IDLE}");
+    assert!(!super::drive::screen(hangar_transcript::Provider::Kimi, &just_above).overlay, "citado logo acima da caixa");
 }
 
 const KIMI_IDLE: &str = "╭────────────────────────────────────╮\n│ >                                  │\n╰────────────────────────────────────╯\n Never Ask  K3.1 Pro thinking: high  /help: show commands\n context: 6% (60k/1M)";
