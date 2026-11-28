@@ -5,7 +5,7 @@
 use super::*;
 use super::subagent::SubConversation;
 use crate::appearance::SideTab;
-use crate::conversation::{Activity, AgentRun, TaskStatus};
+use crate::conversation::{Activity, AgentRun, TaskStatus, prompt_key};
 use hangar_api::state::{CodexCommand, CodexSubagent};
 type NativeAgents = std::collections::BTreeMap<String, CodexSubagent>;
 
@@ -108,6 +108,8 @@ pub(super) enum ActivityReply {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct SubRun {
     agent_id: String, agent_type: Option<String>, prompt: Option<String>, calls: u64, last_tool: Option<String>,
+    /// `prompt_key` do prompt, feito na leitura: o desenho casa subagentes e Agents várias vezes por quadro.
+    prompt_key: Option<String>,
     agent_path: Option<String>,
     nickname: Option<String>,
     finished: bool, unreadable: bool, tools: Vec<(String, u64)>,
@@ -138,6 +140,7 @@ fn wall_seconds(at: &str) -> Option<f64> {
 
 fn parse_sub(item: &Value) -> Option<SubRun> {
     let text = |item: &Value, key: &str| item.get(key).and_then(Value::as_str).map(str::to_owned);
+    let prompt = text(item, "prompt");
     Some(SubRun {
         state: text(item, "state").filter(|s| !s.is_empty()),
         ended: text(item, "endedAt").as_deref().and_then(wall_seconds),
@@ -150,7 +153,8 @@ fn parse_sub(item: &Value) -> Option<SubRun> {
         agent_path: text(item, "agentPath"),
         nickname: text(item, "nickname"),
         agent_type: text(item, "agentType").filter(|t| !t.is_empty()),
-        prompt: text(item, "prompt"),
+        prompt_key: prompt.as_deref().map(prompt_key),
+        prompt,
         calls: item.get("toolCalls").and_then(Value::as_u64).unwrap_or(0),
         last_tool: item.get("recent").and_then(Value::as_array).and_then(|recent| recent.last()).and_then(|last| text(last, "name")),
         finished: item.get("finished").and_then(Value::as_bool).unwrap_or(false),
@@ -212,39 +216,34 @@ fn interval(seconds: f64) -> String {
 
 fn now_seconds() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.) }
 
-fn norm(text: &str) -> String { text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase() }
-
 /// O subagente do disco de um Agent: prompt normalizado inteiro, senão os 400 primeiros caracteres (o mais recente
 /// vence, e a lista já vem do mais recém-escrito).
-fn agent_model(subs: &[SubRun], agent_id: Option<&str>, agent_path: Option<&str>, prompt: Option<&str>, asked: Option<String>) -> Option<String> {
-    let sub = match agent_id {
-        Some(id) => subs.iter().find(|s| s.agent_id == id),
-        None => match agent_path {
-            Some(path) => subs.iter().find(|sub| sub.agent_path.as_deref() == Some(path)),
-            None => match_sub(subs, prompt),
-        },
-    };
+fn agent_model(subs: &[SubRun], agent: &AgentRun, asked: Option<String>) -> Option<String> {
     // Na lista sem modelo (só erro de API, ilegível): o apelido seria afirmar o que não rodou.
-    match sub { Some(s) => s.model.clone(), None => asked }
+    match match_agent(subs, agent) { Some(s) => s.model.clone(), None => asked }
 }
 
 fn match_sub<'a>(subs: &'a [SubRun], prompt: Option<&str>) -> Option<&'a SubRun> {
-    let full = norm(prompt?);
+    match_key(subs, &prompt_key(prompt?))
+}
+
+/// Como `match_sub`, com o prompt já em `prompt_key`.
+fn match_key<'a>(subs: &'a [SubRun], full: &str) -> Option<&'a SubRun> {
     if full.is_empty() { return None; }
     let only = |test: &dyn Fn(&str) -> bool| {
-        let mut found = subs.iter().filter(|s| s.prompt.as_deref().is_some_and(test));
+        let mut found = subs.iter().filter(|s| s.prompt_key.as_deref().is_some_and(test));
         match (found.next(), found.next()) { (Some(sub), None) => Some(sub), _ => None }
     };
-    only(&|prompt| norm(prompt) == full).or_else(|| {
+    only(&|key| key == full).or_else(|| {
         let head: String = full.chars().take(400).collect();
-        only(&|prompt| norm(prompt).starts_with(&head))
+        only(&|key| key.starts_with(&head))
     })
 }
 
 fn match_agent<'a>(subs: &'a [SubRun], agent: &AgentRun) -> Option<&'a SubRun> {
     if let Some(id) = &agent.agent_id { return subs.iter().find(|sub| &sub.agent_id == id); }
     if let Some(path) = &agent.agent_path { return subs.iter().find(|sub| sub.agent_path.as_ref() == Some(path)); }
-    match_sub(subs, agent.prompt.as_deref())
+    agent.prompt_key.as_deref().and_then(|key| match_key(subs, key))
 }
 
 fn agent_running(agent: &AgentRun, agents: &[AgentRun], subs: &[SubRun], now: f64) -> bool {
@@ -309,10 +308,10 @@ fn ended_by_parent(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
 /// com o outro e mais ninguém.
 fn parent_of<'a>(agents: &'a [AgentRun], subs: &[SubRun], run: &SubRun) -> Option<&'a AgentRun> {
     if let Some(agent) = agents.iter().find(|a| (a.agent_id.is_some() || a.agent_path.is_some()) && match_agent(std::slice::from_ref(run), a).is_some()) { return Some(agent); }
-    let subs_of = |prompt: Option<&str>| subs.iter().filter(|s| match_sub(std::slice::from_ref(*s), prompt).is_some()).count();
-    let mut by_prompt = agents.iter().filter(|a| a.agent_id.is_none() && a.agent_path.is_none() && match_sub(std::slice::from_ref(run), a.prompt.as_deref()).is_some());
+    let subs_of = |agent: &AgentRun| subs.iter().filter(|s| match_agent(std::slice::from_ref(*s), agent).is_some()).count();
+    let mut by_prompt = agents.iter().filter(|a| a.agent_id.is_none() && a.agent_path.is_none() && match_agent(std::slice::from_ref(run), a).is_some());
     match (by_prompt.next(), by_prompt.next()) {
-        (Some(agent), None) if subs_of(agent.prompt.as_deref()) == 1 => Some(agent),
+        (Some(agent), None) if subs_of(agent) == 1 => Some(agent),
         _ => None,
     }
 }
@@ -323,9 +322,9 @@ fn agent_failed(agents: &[AgentRun], subs: &[SubRun], call: usize) -> bool {
     let Some(agent) = agents.iter().find(|a| a.call == call) else { return false };
     if agent.agent_id.is_some() || agent.agent_path.is_some() { return match_agent(subs, agent).is_some_and(|sub| sub.failed); }
     let owned = |s: &SubRun| agents.iter().any(|a| (a.agent_id.is_some() || a.agent_path.is_some()) && match_agent(std::slice::from_ref(s), a).is_some());
-    let mut candidates = subs.iter().filter(|s| !owned(s) && match_sub(std::slice::from_ref(*s), agent.prompt.as_deref()).is_some());
+    let mut candidates = subs.iter().filter(|s| !owned(s) && match_agent(std::slice::from_ref(*s), agent).is_some());
     let (Some(sub), None) = (candidates.next(), candidates.next()) else { return false };
-    let claimants = agents.iter().filter(|a| a.agent_id.is_none() && a.agent_path.is_none() && match_sub(std::slice::from_ref(sub), a.prompt.as_deref()).is_some()).count();
+    let claimants = agents.iter().filter(|a| a.agent_id.is_none() && a.agent_path.is_none() && match_agent(std::slice::from_ref(sub), a).is_some()).count();
     claimants == 1 && sub.failed
 }
 
@@ -1641,7 +1640,7 @@ impl Hangar {
     /// O modelo do card do Agent: o que respondeu, quando o subagente já está na lista; antes, o apelido pedido.
     pub(super) fn agent_card_model(&self, call: usize, asked: Option<String>) -> Option<String> {
         let Some(agent) = self.conversation.activity.agents.iter().find(|a| a.call == call) else { return asked };
-        agent_model(&self.act.subs, agent.agent_id.as_deref(), agent.agent_path.as_deref(), agent.prompt.as_deref(), asked)
+        agent_model(&self.act.subs, agent, asked)
     }
 
     pub(super) fn effective_agent(&self, call: usize) -> Option<AgentRun> {
@@ -1930,12 +1929,12 @@ pub(crate) fn side_tab_slot(selected: bool, button: Button) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentRun, SubRun, agent_failed, base_title, has_older, interval, match_sub, next_limit, sub_done, sub_title, DETAIL_PAGE};
+    use super::{AgentRun, SubRun, agent_failed, base_title, has_older, interval, match_sub, next_limit, prompt_key, sub_done, sub_title, DETAIL_PAGE};
 
     #[test]
     fn codex_history_waits_for_proven_state_and_late_detail_cannot_reopen_finished_child() {
         let agent = AgentRun { call: 0, id: "spawn".into(), description: "review".into(), subagent_type: None,
-            model: None, prompt: None, running: true, waiting: false, agent_id: None, agent_path: Some("/root/review".into()), started_at: None, finished_at: None, background: false };
+            model: None, prompt: None, prompt_key: None, running: true, waiting: false, agent_id: None, agent_path: Some("/root/review".into()), started_at: None, finished_at: None, background: false };
         assert!(!super::native_running(&agent, &[], None, false));
         let mut states = super::NativeAgents::from([("child".into(), super::CodexSubagent {
             agent_path: Some("/root/review".into()), state: Some("finished".into()), ended_at: Some(1000.), ..Default::default()
@@ -2340,7 +2339,7 @@ mod tests {
 
     fn parent(id: &str, prompt: &str, agent_id: Option<&str>, running: bool) -> AgentRun {
         AgentRun { call: 0, id: id.into(), description: String::new(), subagent_type: None, model: None, prompt: Some(prompt.into()),
-            running, waiting: false, agent_id: agent_id.map(Into::into), agent_path: None, started_at: None, finished_at: None, background: false }
+            prompt_key: Some(prompt_key(prompt)), running, waiting: false, agent_id: agent_id.map(Into::into), agent_path: None, started_at: None, finished_at: None, background: false }
     }
 
     /// Interrompido não manda aviso ao pai: fora do Codex, a faixa de rodando aceita o fim que o servidor leu.
@@ -2394,7 +2393,7 @@ mod tests {
     }
 
     fn sub(id: &str, prompt: &str) -> SubRun {
-        SubRun { agent_id: id.into(), agent_path: None, nickname: None, agent_type: None, prompt: Some(prompt.into()), calls: 0, last_tool: None, finished: false, unreadable: false, tools: Vec::new(), failed: false, started: None,
+        SubRun { agent_id: id.into(), agent_path: None, nickname: None, agent_type: None, prompt: Some(prompt.into()), prompt_key: Some(prompt_key(prompt)), calls: 0, last_tool: None, finished: false, unreadable: false, tools: Vec::new(), failed: false, started: None,
             state: None, ended: None, updated: None, can_message: false, message_blocked: None, problem: None, model: None }
     }
 
@@ -2469,14 +2468,16 @@ mod tests {
         use super::{agent_model, parse_sub};
         let answered = parse_sub(&serde_json::json!({"agentId": "a", "agentPath":"/root/review", "prompt": "faz X", "model": "gpt-6.1-sol"})).unwrap();
         let subs = vec![answered, sub("b", "faz Y")];
-        assert_eq!(agent_model(&subs, None, None, Some("faz X"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(agent_model(&subs, Some("a"), None, Some("outro prompt"), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(agent_model(&subs, None, None, Some("faz Y"), Some("opus".into())), None);
-        assert_eq!(agent_model(&subs, None, None, Some("ainda não listado"), Some("opus".into())).as_deref(), Some("opus"));
-        assert_eq!(agent_model(&[], None, None, Some("faz X"), None), None);
-        assert_eq!(agent_model(&[], None, Some("/root/review"), None, Some("asked".into())).as_deref(), Some("asked"));
-        assert_eq!(agent_model(&subs, None, Some("/root/review"), None, Some("asked".into())).as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(agent_model(&subs, Some("other-uuid"), Some("/root/review"), None, Some("asked".into())).as_deref(), Some("asked"));
+        let agent = |id: Option<&str>, path: Option<&str>, prompt: Option<&str>| AgentRun { agent_id: id.map(Into::into), agent_path: path.map(Into::into),
+            prompt: prompt.map(Into::into), prompt_key: prompt.map(prompt_key), ..parent("t", "", None, false) };
+        assert_eq!(agent_model(&subs, &agent(None, None, Some("faz X")), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, &agent(Some("a"), None, Some("outro prompt")), Some("opus".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, &agent(None, None, Some("faz Y")), Some("opus".into())), None);
+        assert_eq!(agent_model(&subs, &agent(None, None, Some("ainda não listado")), Some("opus".into())).as_deref(), Some("opus"));
+        assert_eq!(agent_model(&[], &agent(None, None, Some("faz X")), None), None);
+        assert_eq!(agent_model(&[], &agent(None, Some("/root/review"), None), Some("asked".into())).as_deref(), Some("asked"));
+        assert_eq!(agent_model(&subs, &agent(None, Some("/root/review"), None), Some("asked".into())).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(agent_model(&subs, &agent(Some("other-uuid"), Some("/root/review"), None), Some("asked".into())).as_deref(), Some("asked"));
     }
 
     #[test]

@@ -84,8 +84,8 @@ test("sem terminal: o `/pull` só declara agent_message, entrega ao subagente e 
   for (const pull of pulls) expect(pull).toMatchObject({ sessao: "sessao-h", token: "tok", modos: ["agent_message"], session_id: "sid" });
   expect(pulls[0]!.estado).toBeUndefined();
   expect(enviados).toEqual([{ to: "a1", text: "olá" }]);
-  expect(posts.filter((p) => p.path === "agent-sent").map((p) => p.body)).toEqual([
-    { sessao: "sessao-h", token: "tok", id: "m1", isDelivered: true },
+  expect(posts.filter((p) => p.path === "agent-sent").map((p) => p.body)).toMatchObject([
+    { sessao: "sessao-h", token: "tok", id: "m1", isDelivered: true, attemptedAt: expect.any(Number) },
   ]);
   // A entrada da sessão sem terminal é do stdin do runtime: nada de prompt nem recibo por aqui.
   expect(prompts).toEqual([]);

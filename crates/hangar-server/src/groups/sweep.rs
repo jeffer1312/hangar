@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use super::exit::leave_and_notify;
+use super::exit::leave_dead_member;
 use super::service::{BoxFuture, GroupError, GroupService};
 use super::store::file_stem;
 use crate::list::bridge::Produced;
@@ -32,6 +32,10 @@ pub trait SweepEnv: Send + Sync {
     fn live_names(&self) -> BoxFuture<'_, Result<Vec<String>, String>>;
     /// Sai do grupo e avisa as outras máquinas; devolve os ex-companheiros.
     fn leave<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Vec<String>, GroupError>>;
+    /// Filhas marcadas sem pai: a marca sai quando a filha some da lista.
+    fn orphans(&self) -> BoxFuture<'_, Vec<String>> { Box::pin(async { Vec::new() }) }
+    /// Tira a marca das que sumiram.
+    fn forget_orphans<'a>(&'a self, _names: &'a [String]) -> BoxFuture<'a, ()> { Box::pin(async {}) }
     /// Uma vez por sequência de falhas (`FAILED_EVENT`), uma na volta (`RECOVERED_EVENT`) e uma por
     /// rodada em pânico (`PANICKED_EVENT`).
     fn report(&self, event: &'static str, code: &str);
@@ -69,7 +73,9 @@ impl Sweeper {
             Ok(found) => found,
             Err(error) => return warn_once("groups_sweep_read_failed", &error),
         };
-        if sidecars.is_empty() {
+        // A órfã não tem mais sidecar quando o grupo dela era só o pai: ela é conferida à parte.
+        let orphans = self.env.orphans().await;
+        if sidecars.is_empty() && orphans.is_empty() {
             self.absent.clear();
             return;
         }
@@ -87,11 +93,13 @@ impl Sweeper {
             }
         }
         let referenced = referenced_locals(&sidecars);
-        if referenced.is_empty() {
+        if referenced.is_empty() && orphans.is_empty() {
             self.absent.clear();
             return;
         }
         let live = match self.env.live_names().await {
+            // Só marcas de órfã: a lista vazia pode ser todas fechadas, e não é falha a registrar. As marcas ficam.
+            Ok(names) if names.is_empty() && referenced.is_empty() => return,
             Ok(names) if names.is_empty() => return self.failed(EMPTY_LIST),
             Ok(names) => names,
             Err(code) => return self.failed(&code),
@@ -102,18 +110,27 @@ impl Sweeper {
         // O stem do sidecar é saneado e a lista traz o nome cru: tira os dois, ou uma sessão
         // com espaço no nome seria dada como morta.
         let alive: HashSet<String> = live.iter().cloned().chain(live.iter().map(|n| file_stem(n))).collect();
-        let candidates: Vec<String> = referenced.into_iter().filter(|n| !alive.contains(n)).collect();
+        // A marca de órfã guarda o nome cru: o stem de `a b` viva não segura a marca de outra `a-b` que sumiu.
+        let raw: HashSet<&String> = live.iter().collect();
+        let mut candidates: Vec<String> = referenced.iter().filter(|n| !alive.contains(*n))
+            .chain(orphans.iter().filter(|n| !raw.contains(n))).cloned().collect();
+        candidates.sort_unstable();
+        candidates.dedup();
         self.absent.retain(|n, _| candidates.contains(n));
         let now = Instant::now();
+        let mut gone = Vec::new();
         for name in candidates {
             let first = *self.absent.entry(name.clone()).or_insert(now);
             if now.duration_since(first) < MIN_ABSENCE { continue; }
             self.absent.remove(&name);
+            if orphans.contains(&name) { gone.push(name.clone()); }
+            if !referenced.contains(&name) { continue; }
             match self.env.leave(&name).await {
                 Ok(ex) => tracing::info!(code = "groups_dead_member_left", session = %name, peers = ?ex, "groups: sessão morta fora do app saiu do grupo"),
                 Err(error) => tracing::warn!(code = "groups_dead_member_leave_failed", session = %name, %error, "groups: sessão morta fora do app não saiu do grupo"),
             }
         }
+        if !gone.is_empty() { self.env.forget_orphans(&gone).await; }
     }
 
     /// A lista que falha não vira "ninguém vivo": a rodada não varre, e o diário ganha uma linha por sequência.
@@ -166,13 +183,17 @@ impl SweepEnv for AppEnv {
 
     fn leave<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Vec<String>, GroupError>> {
         Box::pin(async move {
-            let (ex, warnings) = leave_and_notify(&self.st, &self.groups, name, "sweep_dead_member").await?;
+            let (ex, warnings) = leave_dead_member(&self.st, &self.groups, name).await?;
             if !warnings.is_empty() {
                 tracing::warn!(code = "groups_dead_member_peer_not_notified", session = name, count = warnings.len(), "groups: a saída não avisou todos os ex-companheiros de fora");
             }
             Ok(ex)
         })
     }
+
+    fn orphans(&self) -> BoxFuture<'_, Vec<String>> { Box::pin(super::link_orphans::marked(&self.st)) }
+
+    fn forget_orphans<'a>(&'a self, names: &'a [String]) -> BoxFuture<'a, ()> { Box::pin(super::link_orphans::gone(&self.st, names)) }
 
     fn report(&self, event: &'static str, code: &str) {
         let reason = match event {

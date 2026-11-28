@@ -32,6 +32,7 @@ impl Scope {
                 "claude" => PermissionMode::claude(&value.permission).is_some(),
                 "codex" => PermissionMode::codex(&value.permission).is_some(),
                 "antigravity" => PermissionMode::antigravity(&value.permission).is_some(),
+                "kimi" => PermissionMode::kimi(&value.permission).is_some(),
                 _ => false,
             })
     }

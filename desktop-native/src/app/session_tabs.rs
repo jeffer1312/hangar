@@ -548,7 +548,8 @@ impl Hangar {
         let state = |s: &SessionInfo| {
             let text = tr(&format!("chip_{}", if s.limited == Some(true) { "limited" } else { s.state.as_str() }));
             // A etiqueta da filha e a aba-mãe não têm largura para o selo: ele vai na dica e no que o leitor de tela diz.
-            if s.asleep { format!("{text} · {}", tr_shared("session_asleep_badge", &[])) } else { text }
+            let text = if s.asleep { format!("{text} · {}", tr_shared("session_asleep_badge", &[])) } else { text };
+            match &s.orphaned_from { Some(parent) => format!("{text} · {}", tr_shared("session_orphaned_from", &[("name", parent)])), None => text }
         };
         let host = self.server_label(cx);
         let machine = |t: &Target| self.server_entry(&t.server).map(|s| s.label.clone()).unwrap_or_else(|| host.clone());
@@ -696,6 +697,7 @@ impl Hangar {
         if session.pending_questions > 0 { label.push_str(&format!(" · ? {}", session.pending_questions)); }
         let asleep = tr_shared("session_asleep_badge", &[]);
         if session.asleep { label.push_str(&format!(" · {asleep}")); }
+        if let Some(parent) = &session.orphaned_from { label.push_str(&format!(" · {}", tr_shared("session_orphaned_from", &[("name", parent)]))); }
         let review = self.work_review_badge(&target.server, &target.name);
         if let Some((text, _)) = &review { label.push_str(&format!(" · {text}")); }
         // A aba de trás de um grupo é posicionada pela faixa dele: sem placa.

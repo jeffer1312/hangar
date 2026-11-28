@@ -271,6 +271,9 @@ impl OtherIo for EditorAwareOtherIo {
     ) -> BoxFuture<'a, Result<(), RuntimeError>> {
         self.base.write(target, value, literal, guard)
     }
+    fn kimi_permission(&self) -> BoxFuture<'_, Result<Option<String>, RuntimeError>> {
+        self.base.kimi_permission()
+    }
     fn release<'a>(&'a self) -> BoxFuture<'a, ()> {
         Box::pin(async {})
     }

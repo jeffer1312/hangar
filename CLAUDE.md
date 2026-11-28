@@ -280,6 +280,11 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **Config e opção moram em MODAL, não em painel docado.** Só o `DesktopSessionContext` fica
   docado. Tela de config usa **container query**, nunca media query — quem aperta a linha é a
   largura do painel.
+- **Página de configuração do nativo ocupa a largura do painel.** A coluna vem de
+  `page_column` (`desktop-native/src/app/settings.rs`); página não define largura própria. Só texto
+  corrido para em `READING_WIDTH` (explicação da página, da seção e da linha, e o artigo do
+  Manual). Ao criar página, use `page_top`, `section_head` e `setting_row`, que já aplicam isso.
+  [Decisão](docs/decisoes/frontend.md#configurações-do-nativo-ocupam-a-largura-do-painel-27112026).
 - **Configurações do Expo usam listas de ajustes agrupados.** Cada linha mostra o nome e o
   valor atual; o toque edita ou abre os detalhes. Agrupe opções relacionadas, com rótulos únicos
   e explicações curtas quando ajudarem a decidir. Ações frequentes ficam à vista; diagnóstico
@@ -314,6 +319,10 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   transcript confirmar. [Regra](docs/decisoes/harnesses.md#mensagem-na-conversa-sem-cortar-o-turno-16112026).
 - **Dedup de fila/pending é delicado** — bolhas `pending`/`queued-` reconciliam por texto
   normalizado contra o transcript real.
+- **Envio só é incerto quando pode ter chegado; 503 com código anterior à escrita e conexão que
+  não abriu voltam o texto como recusa, e o incerto some quando a conversa mostra a mensagem.** As
+  cópias são `input_not_sent`/`settle_input_refusal` (nativo) e `isInputRefusal` (core), com a
+  mesma lista de códigos. [Medição](docs/decisoes/frontend.md#envio-que-não-saiu-e-envio-incerto-27112026).
 - **Vite HMR pode servir componente VAZIO** (stub <1KB, sem erro no console): a tela some sem
   nada quebrar. Remédio: reiniciar o serviço do front. Verificação de front SEMPRE inclui abrir
   a tela e confirmar que montou.
@@ -398,7 +407,8 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 ### Harnesses — Claude, Codex, Pi, omp, Kimi, Antigravity → [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md)
 
 **Antes de mexer em** `backend/app/adapters/codex/`, `codex_*.py`, `crates/hangar-server/src/harness_setup/`,
-`crates/hangar-antigravity/`, `crates/hangar-server/src/runtime/` (atores Claude/Codex,
+`crates/hangar-antigravity/`, `crates/hangar-auto-continue/`, `crates/hangar-server/src/session_write/limit_switch.rs`,
+`crates/hangar-server/src/runtime/` (atores Claude/Codex,
 lançamento, relançamento e religação ao mesmo cano em `cano_reconnect.rs`), statusline/prévia, hooks de estado, ou em sessão sem terminal:
 **leia a seção "Regras vigentes" de `docs/decisoes/harnesses.md`**. Cada regra ali já custou um
 bug calado.
@@ -1011,6 +1021,9 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `--resume` explícito, subcomando e flag desconhecida seguem com o CLI cru. Depois de reboot ou
   queda do tmux o Rust restaura as sessões com terminal pelo spec (`~/.hangar/session-restore.json`,
   comando no `new-session`, nunca digitado no shell); o tmux-resurrect pula as sessões do Hangar.
+  Servidor tmux da fotografia ainda vivo nunca ganha outro por cima (sem socket, `SIGUSR1` o faz
+  recriá-lo), e a conversa presa num agente vivo não ganha um segundo processo pelo `--resume`;
+  a lista não escolhe entre dois registros nativos vivos da mesma conversa. [Motivo](docs/decisoes/plataforma.md#servidor-tmux-antigo-vivo-não-ganha-outro-por-cima-27112026).
   Sessão que bate o limite de uso troca de conta sozinha pela reabertura (só Claude). Login recusado
   segue o mesmo vigia: com login no disco reabre uma vez na mesma conta; recusou de novo ou o login
   sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. Não há lançador
@@ -1072,7 +1085,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   [plataforma.md](docs/decisoes/plataforma.md#tempo-da-sessão-parada-vem-da-conversa-não-do-mtime-05112026).
 - **A lista do dono é do Rust; o estado vem dos atores em processo.** `GET /api/sessions` e
   `/api/sessions/events` do dono saem do `ListHub` (`list/hub.rs`): um produtor por servidor,
-  ligado enquanto houver lista aberta, tique de 1,5 s, JSON só quando a assinatura muda; cada
+  ligado enquanto houver lista aberta ou assinatura interna (filha ligada; continuar sozinho com sessão
+  Claude com terminal ativa há pouco ou à espera da rede), tique de 1,5 s, JSON só quando a assinatura muda; cada
   conexão só lê o publicado. Escrita nas pastas de estado das contas (marcador, registro nativo,
   pergunta aberta) reclassifica só a sessão afetada sobre a última rodada boa, juntada em 150 ms;
   observador que falha vai ao diário e o tique continua valendo. Pi/omp/Kimi usam o estado
@@ -1100,11 +1114,18 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
 - **Sessão filha ligada: `link` na abertura, vínculo no arquivo de grupo da filha.** Só o dono liga
   (`erro_link_convidado`), só local (`erro_link_remoto`), nunca em grupo `orq`. O vínculo é
   `linked_by` no sidecar da filha e vale só com o pai entre os `peers`; o pai sair o apaga. Ligar
-  não injeta protocolo de grupo, nem no `SessionStart`. `interrupt` (MCP) só alcança filha ligada a
-  quem chama. A resposta final de turno pedido pelo pai volta sozinha como `[de: <filha>]` (só
-  Claude e Codex), por uma assinatura interna da lista que não conta como app aberto; sem esperar
-  bloqueante. Os clientes calculam a linha "N subagentes" da lista. Motivo em
-  [plataforma.md](docs/decisoes/plataforma.md#sessão-filha-ligada-a-quem-a-abriu).
+  não injeta protocolo de grupo, nem no `SessionStart`: a filha recebe uma linha curta no começo do
+  `initial_prompt` (sem ele, nada). `interrupt`, `child_status` e `child_answer` (MCP) só alcançam
+  filha ligada a quem chama. A resposta final de turno pedido pelo pai volta sozinha como
+  `[de: <filha>]` (só Claude e Codex), por uma assinatura interna da lista que não conta como app
+  aberto; sem esperar bloqueante. A pergunta (`AskUserQuestion`) da filha chega ao pai uma vez por
+  `interaction_id` e é respondida por `child_answer`; menu e permissão só avisam. Parar com
+  `cascade=1` (botão Parar e tool `interrupt`) para as descendentes até 3 níveis; cancelar cartão
+  de pergunta não cascateia. Fechar o pai pelo dono, com a morte confirmada, interrompe as filhas
+  (pelo convidado, não) e as mantém abertas; toda saída do grupo grava `orphaned_from` nelas. Os clientes calculam a linha
+  "N subagentes" da lista. Motivo em
+  [plataforma.md](docs/decisoes/plataforma.md#sessão-filha-ligada-a-quem-a-abriu) e
+  [plataforma.md](docs/decisoes/plataforma.md#filhas-ligadas-pergunta-ao-pai-parar-em-cascata-e-pai-que-fecha-27112026).
 - **A porta privada de loopback do Rust mora no mesmo processo**, anunciada na saúde somente como
   endereço; o segredo é gerado na subida e nunca sai dele. Uma captura canônica
   por rodada, sem grade auxiliar: quem captura o pane de Claude com terminal para o

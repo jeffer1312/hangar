@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile.workspace = true

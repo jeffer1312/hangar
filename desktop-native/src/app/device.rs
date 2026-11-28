@@ -839,7 +839,7 @@ impl Hangar {
     pub(super) fn page_top(&self, title: &'static str, lead: String) -> Div {
         div().flex().flex_col()
             .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(tr(title)))
-            .child(div().mt(px(6.)).text_color(theme::muted()).child(lead))
+            .child(div().mt(px(6.)).max_w(px(super::settings::READING_WIDTH)).text_color(theme::muted()).child(lead))
     }
 
     pub(super) fn heading(&self, key: &'static str) -> Div {

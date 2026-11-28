@@ -57,6 +57,22 @@ const problemLabels: Record<string, () => string> = {
   interacao_indisponivel: m.problema_interacao_indisponivel,
 };
 
+// Os tetos do continuar sozinho com frase própria; o `chain` e o desconhecido ficam com a geral.
+const cappedLabels: Record<string, () => string> = {
+  hourly: m.problema_auto_continue_capped_hourly,
+  once: m.problema_auto_continue_capped_once,
+};
+
+/** Um teto do continuar sozinho barrou (`auto_continue_capped`, ou com `:<teto>`): a frase do teto, nunca o código cru. */
+export function autoContinueCappedLabel(detail: string | null | undefined): string | null {
+  const text = detail?.trim() ?? '';
+  if (!text.startsWith('auto_continue_capped')) return null;
+  const cap = text.slice('auto_continue_capped'.length);
+  if (cap && !cap.startsWith(':')) return null;
+  const name = cap.slice(1);
+  return (name && Object.hasOwn(cappedLabels, name) ? cappedLabels[name] : m.problema_auto_continue_capped)();
+}
+
 /** O texto de um código de problema conhecido; `null` para o desconhecido. */
 export function problemLabel(code: string | null | undefined): string | null {
   return code && Object.hasOwn(problemLabels, code) ? problemLabels[code]() : null;
@@ -72,7 +88,9 @@ export function SessionProblem({ problem, detail }: Props) {
     : null;
   const exitCode = match ? Number(match[1]) : NaN;
   const hasDetail = Number.isSafeInteger(exitCode);
-  const label = problem && Object.hasOwn(problemLabels, problem) ? problemLabels[problem]() : m.session_problem_unknown();
+  // A troca de conta barrada pelo teto do continuar sozinho diz o teto, não "a troca falhou".
+  const capped = problem === 'limit_switch_failed' ? autoContinueCappedLabel(detail) : null;
+  const label = capped ?? (problem && Object.hasOwn(problemLabels, problem) ? problemLabels[problem]() : m.session_problem_unknown());
   // Runtime e observação mandam código e frase fixa do Rust, sem texto da conversa: pode ir à tela.
   const runtimeDetail = problem === 'runtime_falhou' || problem === 'terminal_observacao_falhou' || problem === 'terminal_input_stalled' ? detail?.split('\n')[0] : null;
 

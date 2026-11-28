@@ -133,6 +133,10 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if matches!(*method, Method::PUT | Method::DELETE) && tail == Some("hidden") {
         return true;
     }
+    // Continuar sozinho depois de queda (`auto_continue`): interruptor e Cancelar, só do dono, nunca repassada.
+    if matches!(*method, Method::PUT | Method::DELETE) && tail == Some("auto-continue") {
+        return true;
+    }
     // A pergunta lateral do Claude, com e sem terminal, e o histórico dela.
     if matches!(*method, Method::POST | Method::GET) && tail == Some("btw") {
         return true;

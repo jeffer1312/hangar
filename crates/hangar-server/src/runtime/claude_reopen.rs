@@ -423,7 +423,7 @@ fn spec_of(procs:&dyn ProcessView,pid:i64,key:&str,name:&str,cwd:String,created:
         subagent_model:if engine {None} else {env("CLAUDE_CODE_SUBAGENT_MODEL")},customizations:None,
         jev:env("HANGAR_JEV").as_deref()==Some("on"),code_mode:env(crate::session_open::claude::CODE_MODE_ENV).is_some_and(|v|crate::config_sync::runtime::env_value_on(&Value::from(v))),
         read_only:env("HANGAR_ORQ_READ_ONLY").as_deref()==Some("1"),
-        worktree:None,creator:None,created_at:created,conversation:None,name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false };
+        worktree:None,creator:None,created_at:created,conversation:None,name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false,auto_continue_off:false };
     Ok((spec,settings))
 }
 
@@ -518,7 +518,7 @@ pub fn settle_switches(env:&crate::accounts::environment::AccountEnvironment) {
                         key: to.key.clone(), provider: to.provider, conversation: to.conversation,
                         permission_mode: to.permission_mode.map(|mode| mode.name().to_owned()), cwd: Some(to.cwd),
                         died_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
-                        cause: "provider_switch_interrupted".into(),
+                        cause: "provider_switch_interrupted".into(), orphan_pid: None, orphan_birth: None, orphan_descendants: Vec::new(), orphan_transcript: None,
                     });
                     if !recorded { continue; }
                 }
@@ -1529,7 +1529,7 @@ mod tests {
             provider:crate::session_open::AgentProvider::Claude,surface:Surface::Terminal,account:Account::Default,
             account_source:crate::session_open::AccountSource::Explicit,model:None,effort:None,service_tier:None,permission_mode:None,
             subagent_model:None,customizations:None,jev:false,code_mode:false,read_only:false,worktree:None,creator:None,created_at:0.0,conversation:None,
-            name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false };
+            name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false,auto_continue_off:false };
         let adopted = format!("terminal_{}", "e6".repeat(32));
         assert!(SwitchMark::write(home.path(),&spec(&adopted)).unwrap().is_none());
         let key = "0123456789abcdef0123456789abcdef";

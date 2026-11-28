@@ -4051,7 +4051,11 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   `terminal_died` para o resto), com Reabrir (`POST /api/sessions/{name}/reopen`, pelo spec, como o
   restore) e Dispensar (`POST /api/sessions/{name}/dismiss`, que só age se o nome ainda está caído: a
   linha velha no app não fecha a sessão que acabou de reabrir). `/exit` e kill pedido não deixam `Failed with result`: é a pessoa
-  saindo, sem linha (decisão do usuário). Sem journal (Windows/psmux) não há registro. A linha caída
+  saindo, sem linha (decisão do usuário). Sem journal (Windows/psmux) não há registro pela queda; lá a
+  linha vem do servidor do psmux vivo que perdeu a ficha em `~/.psmux` (`<nome>.port`): o `ls` não o vê, e
+  ele seguia com o agente e segurando o nome. A busca roda a cada tique do restore (`session_open/orphans.rs`,
+  processo com mais de 60 s). O nome conta como ocupado, mas a linha só é acionável se a própria instância
+  estiver ligada ao registro da sessão, como define [Windows](windows.md#regras-vigentes). A linha caída
   fica fora do push e da varredura de grupos. O build roda em escopo próprio com teto: o `cargo-pinned`
   abre o dele (`MemoryHigh` pela memória livre) e o `verificar-local` roda inteiro no `scripts/memory-scope`
   (só `MemoryMax`: com `MemoryHigh` o Node tira o heap do teto menor e o `svelte-check` estoura). Falta de
@@ -4243,6 +4247,84 @@ provedor, grupos e recados. Faltavam quatro coisas, que entraram assim.
 - **A linha "N subagentes" é calculada em cada cliente, não é mod.** Mod só existe em sessão Claude
   (`AbovePrompt` do plugin); o pai pode ser Codex, Pi ou Kimi. A lista já traz estado, provedor,
   modelo e `last_reply` de cada filha (`SessionRow.linked_by`).
+
+## Filhas ligadas: pergunta ao pai, Parar em cascata e pai que fecha (27/11/2026)
+
+Origem: a comparação com o orchestration-v2 do T3 Code (`~/Projetos/t3code/apps/server/src/orchestration-v2/`):
+`DelegatedTaskQuestionReactor.ts` leva a pergunta da tarefa delegada à conversa do pai, e
+`ThreadManagementService.ts:1743-1810` (`stopDelegatedTasks`) para a árvore de filhas junto com o
+pai. Medição nas conversas desta máquina, 30 dias (scripts em `/tmp/analise-t3/`): 43 filhas ligadas
+contra 3 583 chamadas do subagente nativo (`Agent`); em 15 das 43 o pai esperou com `sleep` (68
+vezes); 15 de 29 filhas mandaram a resposta final por recado à mão, além da que já voltava sozinha;
+26 de 29 rodavam em `bypassPermissions`; `AskUserQuestion` apareceu em 4. A filha que travava numa
+pergunta ficava parada até o dono abrir a conversa dela, e parar ou fechar o pai não alcançava
+ninguém.
+
+- **Texto de quando delegar no pai, linha curta na filha.** O pai lê o texto (marca `Delegar:`,
+  `hangar_delegation::guidance::MARKER`) na descrição do `new_session`, no `help.txt` do
+  `hangar-send` e no bloco do `CLAUDE.md`; o teste confere só a marca, porque cada superfície quebra
+  linha de um jeito. A filha recebe `guidance::child_prefix` no começo do `initial_prompt` só nos
+  provedores com retorno automático (`link_return::returnable`: Claude, Codex e Antigravity). Pi, omp e
+  Kimi ficam sem a linha: ela manda não responder por recado, e nada voltaria sozinho ao pai. Não no `SessionStart`: o `link_child` grava o `linked_by` depois de o processo subir, e
+  o hook pode rodar antes. Sem `initial_prompt`, nada: um segundo turno quebraria o retorno (a última
+  mensagem do usuário deixaria de ser o pedido do pai). O resumo e o título tiram a linha
+  (`without_child_prefix`).
+- **`child_status` lê pela rota `/history`.** Devolve estado, pergunta aberta e a resposta final
+  inteira em páginas de `MAX_CHARS` (`offset`/`next_offset`), o mesmo turno que o retorno lê; o pai
+  deixa de esperar com `sleep`. A página leva `answer_key`, a identidade da resposta: pedida com ela
+  depois de a filha responder outra coisa, volta `child_status_cursor_expired` em vez de juntar pedaços
+  de duas respostas. `returned` só conta o texto: o aviso de que a resposta não voltou (limite, turno
+  sem texto) grava a mesma chave com `returned_notice`. O `interaction_id` é o de `open_interaction`,
+  o mesmo do aviso e do `/answer`. `sessions` ganha `linked_by`, `question` e `orphaned_from`; chamada
+  de sessão de convidado com login lista só as sessões que ele alcança, sem nome das outras.
+- **Pergunta encaminhada uma vez por `interaction_id`; menu e permissão só avisam.** A vigia do
+  retorno (`groups/link_return.rs`) manda `[de: <filha>]` ao pai depois de 20 s de pergunta aberta,
+  com teto por filha em 10 min. Só `InteractionKind::Question` (o `AskUserQuestion`) traz "Responda com
+  child_answer"; a chave gravada (`asked_key`) é o ID, e um ID novo para a mesma pergunta vai de novo
+  porque o pai precisa dele. Menu da TUI, aprovação de plano (`plan:<id>`) e permissão são do dono: o
+  aviso não cita o ID e a chave é o texto, então não se repete, e o `child_answer` recusa com
+  `erro_permissao_do_dono`. No Claude com terminal todo menu é `Menu`, inclusive "Do you want to
+  proceed?". Interação resolvida com o aviso ainda na fila do pai tira a linha dela
+  (`asked_queue_id`); pai ocupado ou acordando mantém a linha registrada e tenta de novo em 30 s.
+  Gravação do registro que falha guarda a linha na memória da vigia, para o cancelamento ainda achá-la.
+  Interação fechada leva junto o `asked_key`: senão, depois de um reinício, o próximo pedido de mesmo
+  texto seria dado como já avisado.
+  Tipo ilegível (vínculo da conversa ainda por ligar logo ao subir) espera mais `KIND_GRACE` (60 s)
+  antes de virar aviso ao dono: o aviso não se refaz como pergunta depois. `[de: …]` e não
+  `[painel: …]`: o painel diz "não responda".
+- **`child_answer` passa pela `/answer` com o `interaction_id` do aviso.** Codex com terminal não
+  informa quem resolveu: a resposta sai "enviada, sem confirmação" e não se tenta de novo.
+- **Parar só cascateia com `?cascade=1`.** Cancelar um cartão de pergunta também chama
+  `/interrupt`, e não pode parar as filhas. Mandam o parâmetro o botão Parar do nativo e do Expo e a
+  tool `interrupt`. A árvore sai de `cascade::plan`, em largura, até `MAX_DEPTH = 3` níveis e sem
+  voltar a quem já apareceu (vínculo em ciclo termina). Só conta como parada a resposta que confirma
+  que não há turno; a que não parou vai no `cascade.failed` da resposta, num aviso só, e no diário
+  (`rust.link_cascade_failed`). Arquivos de grupo ilegíveis: a resposta do pai fica como veio e leva
+  `cascade.unavailable` (sem nomes), e a tela diz que as filhas não foram conferidas, porque a pessoa
+  pediu para parar a árvore e elas podem seguir trabalhando. Sem serviço de grupos não há filha ligada
+  e nada vem. O nativo e o Expo só devolvem ao campo a mensagem ainda não mostrada depois do Esc
+  confirmado: com `interrupted: false` ou falha ela segue onde estava.
+  O pai sem turno é o caso normal depois de delegar: adormecido ou estacionado responde sem turno sem
+  acordar, e a recusa da admissão (sem turno, abrindo) não segura a cascata. Com descendente
+  conhecida, pai sem turno ou abrindo vira 200 `{"interrupted": false, "cascade": …}`; senão a tela
+  mostraria erro e jogaria fora o resultado das filhas.
+- **Fechar o pai interrompe as filhas e as mantém abertas (4B).** Só no fechamento do dono: o
+  convidado alcança a sessão, não a árvore dela, como no `/interrupt`. Só depois de a morte do pai ser
+  confirmada: com o kill falho, nada muda nelas. As descendentes são lidas antes do fechamento (o de
+  Pi/omp/Kimi sai do grupo por dentro, e a saída apaga o `linked_by`) e interrompidas depois dele; o
+  Pi/omp/Kimi que some sozinho só marca, como a varredura. A filha que não parou volta no `warning` do
+  fechamento (`linked_child_not_stopped`), em todo agente do pai: é o campo que os clientes leem. Toda saída do grupo grava a marca em
+  `~/.hangar/link-orphans.json` (`hangar_delegation::orphans`): o DELETE (dono ou convidado), a
+  limpeza de Pi/omp/Kimi, o `DELETE /pair` e a varredura de membro morto, que é quem tira o pai que
+  morreu sozinho. A saída que falha depois de valer (o contrato que não foi para o arquivo) marca as
+  filhas que já perderam o vínculo; a desfeita não marca nenhuma. A marca é só o rótulo da linha: a
+  falha ao gravá-la ou tirá-la vai ao diário (`rust.link_orphan_failed`), nunca ao aviso da tela. A linha leva
+  `orphaned_from`, e os clientes mostram "sem pai · era de <pai>" em toda lista e barra (linha, trilho, abas, bandeja, busca;
+  no Expo, a linha, o chip e o trilho do tablet). A marca sai quando a filha fecha, é
+  religada, some da lista ou nome reusado abre outra vida; rename a leva junto. Pela tela, fechar um
+  pai com filhas abertas pergunta "fechar também as N filhas?".
+- **Sem teto de recados pai↔filha.** Nenhum laço medido nos 30 dias; o `storm` do grupo e o teto do
+  retorno já seguram a tempestade.
 
 ## Aviso na tela só para ação que falhou ou bloqueio real (20/10/2026)
 
@@ -5911,3 +5993,38 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   da atualização, guardado só como marca `settings:<cliente>:<aparelho>` em `snapshot_keys` do arquivo do
   dia, que nunca vai no pacote. O painel mostra máquinas, não vezes. O canal de
   atualização não entrou: já vai no `env` do pacote.
+
+## Servidor tmux antigo vivo não ganha outro por cima (27/11/2026)
+
+Uma máquina passou a mostrar sessões pulando entre "trabalhando" e "parada" a cada 1,5–3 s na lista
+de todos os clientes. Cada conversa afetada tinha dois processos Claude vivos: o da sessão e um
+antigo, preso num servidor tmux que ninguém mais alcançava.
+
+- **Como os dois nasceram.** Minutos depois de uma atualização automática, o servidor tmux deixou de
+  atender pelo socket, mas seguiu vivo com as sessões e os agentes. O cliente do tmux responde
+  `no server running` tanto para o socket ausente quanto para a conexão recusada, e o restore leu
+  isso como servidor morto (`multiplexador.perdido`, `mux_died_machine_up`). O `new-session` da
+  restauração, ao encontrar o socket recusando, apaga o arquivo e sobe outro servidor; cada sessão
+  voltou com `--resume`, e os agentes antigos seguiram rodando nas mesmas conversas. A prova com um
+  socket sem ouvinte reproduz as duas mensagens; apagar o socket de um servidor vivo e mandar
+  `SIGUSR1` faz o mesmo servidor voltar a atender, com as sessões dele.
+- **Por que a lista pulava.** O registro nativo do Claude (`<conta>/sessions/<pid>.json`) era lido
+  para um mapa por id de conversa; com dois arquivos do mesmo id, valia o último da iteração de um
+  `HashMap` novo a cada tique. Um dizia `busy`, o outro `idle`.
+- **Regras.** A lista guarda todos os registros da conversa e só usa o nativo quando há um vivo; com
+  dois vivos, vale o marcador do hook. A fotografia guarda o pid do servidor tmux (`mux_pid`); a
+  antiga, sem ele, o acha pelo nascimento perto do `#{start_time}`, nunca contando o servidor de
+  agora. Antigo vivo e nada no socket: `SIGUSR1` (até 3 vezes), sem reabrir nada. Antigo vivo com
+  outro no socket, ou dúvida sobre qual é: nada reaberto por cima, e o servidor de agora passa a ser o
+  da fotografia, para as sessões novas seguirem guardadas; as do antigo ficam à parte (`stranded`),
+  seguras para a varredura de grupos e fora da contagem de ausência, e voltam a ser restauradas quando
+  ele acabar. Com o pid gravado, o antigo só conta se não nasceu depois do servidor da fotografia
+  (o pid reaproveitado depois do reboot nasceu depois; o relógio ajustado pelo NTP desloca o
+  nascimento lido, por isso não se exige o mesmo segundo). Antes de cada `--resume`, só sai o agente
+  `claude` da conversa cujo servidor tmux (a variável `TMUX` dele) já acabou e cujo pai é o init
+  ou o `systemd` do usuário (a `TMUX` é herdada por um terminal aberto de dentro do pane), junto
+  com os processos abaixo dele, com `SIGTERM` e, passado o prazo, `SIGKILL`; o registro nativo que
+  o `SIGKILL` deixa é apagado. Já aberta no servidor de agora, a restauração é pulada
+  (`restore_already_open`); fora do tmux, ela recua (`restore_conversation_open`). Pid reaproveitado por outro programa não conta.
+- **Não confirmado:** por que o servidor tmux parou de atender naquela janela. A memória da máquina
+  estava sob pressão, e os comandos ao tmux já falhavam por tempo antes da restauração.

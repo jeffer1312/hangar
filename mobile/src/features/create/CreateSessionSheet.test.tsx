@@ -295,7 +295,7 @@ vi.mock('../../paraglide/messages', () => ({
     'native_ctl_speed_ultrafast_hint native_ctl_speed_ultrafast_unavailable cliproxy_bound_account cliproxy_no_bound_account ' +
     'cliproxy_choose_connected_account conta_cota_sem_leitura ' +
     'reasoning_level_low reasoning_level_medium reasoning_level_high reasoning_level_xhigh reasoning_level_max reasoning_level_ultra ' +
-    'native_mode_plan native_mode_manual native_mode_auto native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk chat_mode_plan config_motores_modelo_padrao ' +
+    'native_kimi_mode_manual native_kimi_mode_yolo native_kimi_mode_auto native_mode_plan native_mode_manual native_mode_auto native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk chat_mode_plan config_motores_modelo_padrao ' +
     'codex_contexto_titulo codex_contexto_padrao codex_contexto_salvando comum_falha_aplicar config_server_tentar_de_novo home_new_conversation ' +
     'tags_apply_all tags_apply_ok tags_apply_offline tags_apply_old tags_apply_absent tags_apply_failed tags_apply_retry tags_saving tags_apply_needs_default ' +
     'native_create_provider_aria native_create_default_for_harness ' +

@@ -67,8 +67,19 @@ const sameList = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((v, i) => v === b[i]);
 
 function defaultAuthForPreset(preset?: IntegrationPreset | null): AuthKind {
-  if (!preset) return 'oauth_dcr';
-  return preset.auth_kind === 'oauth_manual_client' ? 'oauth_manual_client' : 'oauth_dcr';
+  switch (preset?.auth_kind) {
+    case 'none': return 'none';
+    case 'bearer': return 'bearer';
+    case 'oauth_manual_client': return 'oauth_manual_client';
+    default: return 'oauth_dcr';
+  }
+}
+
+/** Preset público de URL editável aceita OAuth: a URL trocada pode apontar para um endpoint com login. */
+function presetAuthChoices(preset: IntegrationPreset): AuthKind[] {
+  if (preset.auth_kind === 'oauth_dcr_or_bearer') return ['oauth_dcr', 'bearer'];
+  if (preset.auth_kind === 'none' && preset.url_editable) return ['none', 'oauth_dcr'];
+  return [defaultAuthForPreset(preset)];
 }
 
 /** Folha para criar (preset do catálogo ou customizada) ou editar uma integração existente. */
@@ -112,9 +123,14 @@ export function IntegrationEditorSheet({
   );
   const [envText, setEnvText] = useState('');
 
-  const [authKind, setAuthKind] = useState<AuthKind>(
-    editing?.auth.kind ?? defaultAuthForPreset(preset),
-  );
+  // Cloudflare criada antes do preset público, ainda na URL padrão: a edição já propõe "Sem autenticação".
+  const [authKind, setAuthKind] = useState<AuthKind>(() => {
+    if (!editing) return defaultAuthForPreset(preset);
+    const publicDefault = preset?.auth_kind === 'none'
+      && editing.transport.kind === 'remote_http'
+      && editing.transport.url === preset.url;
+    return publicDefault && editing.auth.kind === 'oauth_dcr' ? 'none' : editing.auth.kind;
+  });
   const [clientId, setClientId] = useState(
     editing?.auth.kind === 'oauth_manual_client' ? editing.auth.client_id : '',
   );
@@ -157,9 +173,7 @@ export function IntegrationEditorSheet({
   const isPreset = !!preset;
   const urlEditable = isPreset ? preset.url_editable : true;
   const authChoices: AuthKind[] = isPreset
-    ? preset.auth_kind === 'oauth_dcr_or_bearer'
-      ? ['oauth_dcr', 'bearer']
-      : [defaultAuthForPreset(preset)]
+    ? presetAuthChoices(preset)
     : transportKind === 'local_stdio'
       ? ['none']
       : ['oauth_dcr', 'oauth_manual_client', 'bearer', 'none'];
@@ -367,7 +381,7 @@ export function IntegrationEditorSheet({
       {preset?.setup_guide ? (
         <>
           <MachineHelp>{m.integrations_setup_guide_title()}</MachineHelp>
-          <SetupGuideBlock guide={preset.setup_guide} showGoogleTestingHint={preset.id.startsWith('google-')} />
+          <SetupGuideBlock guide={preset.setup_guide} />
         </>
       ) : null}
 
