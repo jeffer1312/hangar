@@ -24,11 +24,14 @@ use super::integrations as mcp_integrations;
 use super::nav;
 use super::whatsapp::{self, Trim};
 use crate::groups::exit::segment;
+use crate::groups::{link_return, link_state};
 use crate::groups::model::Sidecar;
 use crate::groups::peers::PeerClient;
+use crate::interactions::InteractionKind;
 use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
 use crate::vault::{VaultError, exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
+use hangar_api::chat::ChatEvent;
 use hangar_whatsapp::outbox;
 use zeroize::Zeroizing;
 
@@ -126,6 +129,13 @@ struct Contract { conteudo: Option<String>, #[serde(default)] mtime: Option<Stri
 
 #[derive(Deserialize)]
 struct Close { alvo: String }
+
+#[derive(Deserialize)]
+struct ChildStatus { alvo: String, #[serde(default)] offset: Option<usize>, #[serde(default)] answer_key: Option<String> }
+
+/// `answers` no formato do corpo do `/answer`, que confere cada item.
+#[derive(Deserialize)]
+struct ChildAnswer { alvo: String, interaction_id: String, answers: Vec<Value> }
 
 #[derive(Deserialize)]
 struct RequestSecret { label: String, reason: String, #[serde(default)] placeholder: Option<String> }
@@ -403,16 +413,67 @@ fn verb_refusal(verb: &str) -> Option<String> {
     (!NAV_VERBS.contains(&verb)).then(|| format!("verbo desconhecido: {verb} (aceitos: {})", NAV_VERBS.join(", ")))
 }
 
-/// `interrupt`: a voz não abre filha ligada (nasce sem `creator`), e Esc na própria sessão mataria o turno de quem chama.
+/// `interrupt`, `child_status` e `child_answer`: a voz não abre filha ligada (nasce sem `creator`), e Esc na própria
+/// sessão mataria o turno de quem chama.
 fn interrupt_caller_refusal(me: &str, voice: bool, alvo: &str) -> Option<String> {
-    if voice { return Some("recusado: a voz não interrompe sessão; só quem abriu a filha com `link` interrompe".into()); }
-    if alvo.contains("::") { return Some("interrupt só alcança sessão desta máquina".into()); }
+    if voice { return Some("recusado: a voz não tem filha ligada; só quem abriu a filha com `link` a alcança".into()); }
+    if alvo.contains("::") { return Some("só alcança filha desta máquina".into()); }
     (alvo == me).then(|| format!("recusado: '{alvo}' é esta sessão"))
 }
 
-/// O vínculo só vale com o pai ainda no grupo da filha: sair do grupo desfaz o poder de interromper.
-fn link_refusal(me: &str, alvo: &str, sidecar: Option<&Sidecar>) -> Option<String> {
-    (sidecar.and_then(Sidecar::linked_parent) != Some(me)).then(|| format!("erro_interromper_nao_ligada: '{alvo}' não é filha ligada a você (aberta por você com new_session `link`)"))
+/// O vínculo só vale com o pai ainda no grupo da filha: sair do grupo desfaz o poder sobre ela. `code` é o da tool.
+fn link_refusal(me: &str, alvo: &str, sidecar: Option<&Sidecar>, code: &str) -> Option<String> {
+    (sidecar.and_then(Sidecar::linked_parent) != Some(me)).then(|| format!("{code}: '{alvo}' não é filha ligada a você (aberta por você com new_session `link`)"))
+}
+
+/// Só a pergunta (`AskUserQuestion`) é do pai; menu da TUI, aprovação de plano e permissão são do dono. Tipo
+/// desconhecido segue à rota, que confere a identidade e só responde pergunta.
+fn answer_refusal(kind: Option<&InteractionKind>, alvo: &str) -> Option<String> {
+    matches!(kind, Some(InteractionKind::Menu | InteractionKind::Approval)).then(|| format!(
+        "erro_permissao_do_dono: o pedido aberto em '{alvo}' é menu ou permissão, e quem decide é o dono no app; child_answer só responde pergunta"))
+}
+
+const ANSWER_UNCONFIRMED: &str = "enviada, sem confirmação; não tente de novo";
+
+/// A resposta da rota. Sem confirmação a escrita já foi feita (o Codex com terminal não diz quem resolveu):
+/// é resultado, não erro, para o pai não repetir.
+fn answer_outcome(status: u16, value: Value) -> Outcome {
+    if (200..300).contains(&status) { return Ok(dict(value)); }
+    if status == 409 && value["detail"]["code"] == "erro_sem_confirmacao_resposta" {
+        return Ok(dict(json!({"sent": true, "confirmed": false, "message": ANSWER_UNCONFIRMED})));
+    }
+    Err(coded(status, &value))
+}
+
+/// Janelas do histórico lidas para trás até a última mensagem do usuário: a resposta final é a do turno que ela abriu.
+/// O histórico inteiro de uma conversa longa passaria do teto do corpo da rota.
+const CHILD_WINDOWS: [usize; 2] = [400, 4000];
+
+/// A rota junta a fila do Hangar e as notas dos avisos da CLI; o retorno lê sem elas. Mantidas, a nota viraria a
+/// resposta e o recado ainda na fila abriria um turno vazio, e `returned` não bateria com o `returned_key` gravado.
+/// `queued-agent:` e afins (com `:`) vêm do próprio transcript e ficam.
+fn transcript_only(e: &ChatEvent) -> bool {
+    let queued = e.id.starts_with("local-") || e.id.strip_prefix("queued-").is_some_and(|rest| !rest.contains(':'));
+    !queued && !crate::transcript::is_cli_note(&e.id)
+}
+
+/// O 404 da rota do histórico para sessão sem transcript.
+fn not_born_yet(status: u16, value: &Value) -> bool {
+    status == 404 && value["detail"]["code"] == "erro_sessao_inexistente"
+}
+
+/// Uma página da resposta final, contada em `char`; `offset` além do fim volta página vazia. `key` é a identidade da
+/// resposta: a página seguinte pedida com ela não junta o pedaço de outra.
+fn answer_page(text: &str, offset: usize, key: &str) -> Value {
+    let total = text.chars().count();
+    let page: String = text.chars().skip(offset).take(link_return::MAX_CHARS).collect();
+    let end = offset.saturating_add(link_return::MAX_CHARS);
+    json!({"text": page, "offset": offset, "total_chars": total, "next_offset": (end < total).then_some(end), "answer_key": key})
+}
+
+/// O texto da resposta `key` voltou ao pai: o aviso de que ela não voltou grava a mesma chave e não conta.
+fn returned_text(link: Option<&link_state::LinkReturn>, key: &str) -> bool {
+    link.is_some_and(|l| l.returned_key.as_deref() == Some(key) && !l.returned_notice)
 }
 
 impl Tools {
@@ -456,6 +517,8 @@ impl Tools {
             "new_session" => match args(name, raw) { Ok(a) => self.new_session(headers, a).await, Err(e) => Err(e) },
             "close_session" => match args::<Close>(name, raw) { Ok(a) => self.close_session(headers, &a.alvo).await, Err(e) => Err(e) },
             "interrupt" => match args::<Close>(name, raw) { Ok(a) => self.interrupt(headers, &a.alvo).await, Err(e) => Err(e) },
+            "child_status" => match args(name, raw) { Ok(a) => self.child_status(headers, a).await, Err(e) => Err(e) },
+            "child_answer" => match args(name, raw) { Ok(a) => self.child_answer(headers, a).await, Err(e) => Err(e) },
             "browser_open" => match args(name, raw) { Ok(a) => self.browser_open(headers, a).await, Err(e) => Err(e) },
             "html_render" => match args(name, raw) { Ok(a) => self.html_render(headers, a).await, Err(e) => Err(e) },
             "browser" => match args(name, raw) { Ok(a) => self.browser(headers, a).await, Err(e) => Err(e) },
@@ -549,6 +612,17 @@ impl Tools {
         let dims = Dims::new().with("tool", tool).with("error", code.is_some());
         telemetry.count_in(epoch, Event::McpTool, dims, 1);
         crate::telemetry_hooks::record_action(&self.st, period, hangar_usage_diary::OwnerAction::Mcp, tool.as_str(), stage, code, took).await;
+    }
+
+    /// O convidado com login dono da sessão `name`; `None` = sessão do dono. Convidados ilegíveis sem última leitura
+    /// boa é erro: a lista inteira não sai sem saber quem pergunta.
+    async fn login_guest_of(&self, name: &str) -> Result<Option<crate::login_guests::store::Guest>, String> {
+        let life = crate::login_guests::gate::session_life(&self.st, name).await;
+        let (store, name) = (self.st.login_guests.store.clone(), name.to_owned());
+        tokio::task::spawn_blocking(move || {
+            if store.snapshot(true).is_none() { return Err("sessions_guests_unreadable: arquivo de convidados ilegível".to_owned()); }
+            Ok(store.owner(&name, life.as_deref(), true))
+        }).await.map_err(|_| "sessions_guests_unreadable: a leitura dos convidados foi interrompida".to_owned())?
     }
 
     fn home(&self) -> PathBuf {
@@ -664,11 +738,21 @@ impl Tools {
     async fn sessions(&self, headers: &HeaderMap) -> Outcome {
         let me = self.caller(headers).await.ok().filter(|(_, voice)| !voice).map(|(name, _)| name);
         let rows = self.ok(Method::GET, "/api/sessions", None).await?;
-        let rows: Vec<Value> = rows.as_array().into_iter().flatten().map(|s| json!({"name": s["name"], "state": s["state"],
+        let mut rows: Vec<Value> = rows.as_array().cloned().unwrap_or_default();
+        // A rota é lida com o token do dono: a sessão de um convidado com login só vê o que ele alcança.
+        if let Some(name) = &me && let Some(guest) = self.login_guest_of(name).await? {
+            let store = self.st.login_guests.store.clone();
+            rows = tokio::task::spawn_blocking(move || guest_view(rows, |name, life| store.visible(Some(&guest), name, life))).await
+                .map_err(|_| "sessions_guests_unreadable: a leitura dos convidados foi interrompida".to_owned())?;
+        }
+        let rows: Vec<Value> = rows.iter().map(|s| json!({"name": s["name"], "state": s["state"],
             "cwd": s["cwd"], "provider": s["provider"], "headless": s["headless"],
             "voce": s["name"].as_str().is_some_and(|n| Some(n) == me.as_deref()), "grupo": s["pair_gid"],
             // Membro de outra máquina vem como `servidor::sessao`; `dona` só em grupo entre máquinas.
-            "membros": s["pair_peers"], "dona": s["pair_owner"]})).collect();
+            "membros": s["pair_peers"], "dona": s["pair_owner"],
+            // A filha ligada diz quem a abriu (ou de quem ficou sem, se ele fechou), e a pergunta aberta dela
+            // aparece sem abrir a conversa.
+            "linked_by": s["linked_by"], "question": s["question"], "orphaned_from": s["orphaned_from"]})).collect();
         let content = rows.iter().map(|r| ContentBlock::text(serde_json::to_string_pretty(r).unwrap_or_default())).collect();
         let mut result = CallToolResult::success(content);
         result.structured_content = Some(json!({"result": rows}));
@@ -797,10 +881,86 @@ impl Tools {
         if !identity::exists(&Local { home: &home, mux: &self.st.list.env().mux }, alvo).await {
             return Err(format!("sessão '{alvo}' não existe (tool `sessions`)"));
         }
+        self.linked_child(&me, alvo, "erro_interromper_nao_ligada").await?;
+        // Parar a filha para também as filhas dela, como o Parar da tela.
+        let (status, value) = self.route_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt?cascade=1", segment(alvo)), None).await;
+        if (200..300).contains(&status) { return Ok(dict(value)); }
+        // Sem turno com netas já vem 200; outra recusa da filha (ocupada, abrindo) leva a cascata junto.
+        let cascade = value.get("cascade").map(|c| format!(" (cascade: {c})")).unwrap_or_default();
+        Err(format!("{}{cascade}", detail(status, &value)))
+    }
+
+    /// `alvo` é filha ligada a `me`, pelo arquivo de grupo dela; senão a recusa com o código da tool.
+    async fn linked_child(&self, me: &str, alvo: &str, code: &str) -> Result<(), String> {
         let groups = self.st.groups.as_ref().ok_or("grupos indisponíveis neste servidor: o vínculo da filha não pode ser conferido")?;
         let sidecar = groups.link(alvo).await.map_err(|e| format!("arquivo de grupo de '{alvo}' ilegível: {e}"))?;
-        if let Some(refusal) = link_refusal(&me, alvo, sidecar.as_ref()) { return Err(refusal); }
-        self.ok_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt", segment(alvo)), None).await.map(dict)
+        link_refusal(me, alvo, sidecar.as_ref(), code).map_or(Ok(()), Err)
+    }
+
+    /// Estado e resposta final da filha ligada, sem `sleep` nem recado: o histórico pela rota de sempre e os fatos da
+    /// linha da lista. A resposta só existe com o turno terminado; enquanto a filha trabalha ou pergunta, `answer` é nulo.
+    async fn child_status(&self, headers: &HeaderMap, a: ChildStatus) -> Outcome {
+        let (me, voice) = self.caller(headers).await?;
+        let alvo = a.alvo.as_str();
+        if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo) { return Err(refusal); }
+        self.linked_child(&me, alvo, "erro_nao_ligada").await?;
+        let produced = self.st.list.snapshot().await.map_err(|_| "child_status_list_failed: a lista de sessões não respondeu")?;
+        let row = produced.rows.iter().find(|r| r.name == alvo);
+        let events = self.child_events(&me, alvo, row.is_some()).await?;
+        let busy = row.is_some_and(|r| matches!(r.state.as_str(), "working" | "awaiting_input"));
+        let answer = if busy { None } else { link_return::final_answer(&events).map(|(e, _)| e.text.clone().unwrap_or_default()) };
+        let key = link_return::reply_key(&events);
+        if let Some(asked) = a.answer_key.as_deref().filter(|k| !k.is_empty()) && (answer.is_none() || asked != key) {
+            return Err(format!("child_status_cursor_expired: a resposta de '{alvo}' mudou desde a página lida; recomece sem offset"));
+        }
+        let dir = self.st.hangar_dir.clone();
+        let links = link_state::blocking(move || link_state::read(&dir)).await
+            .map_err(|e| format!("child_status_returns_unreadable: link-returns.json ilegível ({:?})", e.kind()))?;
+        let returned = returned_text(links.get(alvo), &key);
+        Ok(dict(json!({
+            "state": row.map(|r| r.state.clone()), "question": row.and_then(|r| r.question.clone()),
+            "options": row.and_then(|r| r.options.clone()), "interaction_id": row.and_then(|r| link_return::open_interaction(r).or_else(|| r.interaction_id.clone())),
+            "last_reply_at": row.and_then(|r| r.last_reply_at), "returned": returned,
+            "answer": answer.map(|text| answer_page(&text, a.offset.unwrap_or(0), &key)),
+        })))
+    }
+
+    /// Responde a pergunta aberta na filha ligada pela rota `/answer` de sempre, uma vez só: a rota confere o
+    /// `interaction_id` e recusa o que mudou (`erro_interacao_desatualizada`).
+    async fn child_answer(&self, headers: &HeaderMap, a: ChildAnswer) -> Outcome {
+        let (me, voice) = self.caller(headers).await?;
+        let alvo = a.alvo.as_str();
+        if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo) { return Err(refusal); }
+        self.linked_child(&me, alvo, "erro_nao_ligada").await?;
+        if let Some(refusal) = answer_refusal(self.interaction_kind(alvo, &a.interaction_id).await.as_ref(), alvo) { return Err(refusal); }
+        let body = json!({"answers": a.answers, "interaction_id": a.interaction_id});
+        let (status, value) = self.route_from(Some(&me), Method::POST, &format!("/api/sessions/{}/answer", segment(alvo)), Some(body)).await;
+        answer_outcome(status, value)
+    }
+
+    /// O tipo da interação pelo mesmo vínculo que a rota confere; vínculo ilegível ou ID fora da loja é `None`.
+    async fn interaction_kind(&self, alvo: &str, id: &str) -> Option<InteractionKind> {
+        let runtime = self.st.state.runtime.get()?;
+        let binding = runtime.interaction_binding(alvo).await.ok()?;
+        self.st.interactions.expected(&binding, Some(id)).ok().map(|expected| expected.target.kind)
+    }
+
+    /// O fim do histórico até o último pedido, pulando o continue sozinho como o retorno. Rota com erro ou corpo torto é erro, nunca página vazia.
+    /// `listed`: a filha está na lista; sem transcript ainda, ela acabou de nascer e não tem resposta.
+    async fn child_events(&self, me: &str, alvo: &str, listed: bool) -> Result<Vec<ChatEvent>, String> {
+        let mut events = Vec::new();
+        for limit in CHILD_WINDOWS {
+            let path = format!("/api/sessions/{}/history?limit={limit}", segment(alvo));
+            let (status, value) = self.route_from(Some(me), Method::GET, &path, None).await;
+            if listed && not_born_yet(status, &value) { return Ok(Vec::new()); }
+            if !(200..300).contains(&status) { return Err(format!("child_status_history_failed: {}", coded(status, &value))); }
+            events = serde_json::from_value::<Vec<ChatEvent>>(value)
+                .map_err(|e| format!("child_status_history_failed: histórico de '{alvo}' ilegível ({e})"))?;
+            let exhausted = events.len() < limit;
+            events.retain(transcript_only);
+            if exhausted || events.iter().any(link_return::user_request) { break; }
+        }
+        Ok(events)
     }
 
     /// O navegador fica no app que mostrou a sessão por último: o de outra máquina quando ele a mostrou depois do app
@@ -1349,6 +1509,7 @@ fn host_fill_refusal(refusal: hangar_browser_host::Refusal) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hangar_api::chat::ChatKind;
 
     #[test]
     fn only_an_owner_session_counts_a_tool() {
@@ -1359,6 +1520,22 @@ mod tests {
         assert!(counts_as_owner(guests(), "minha", None), "sessão do dono conta");
         assert!(counts_as_owner(Ok::<_, ()>(None), "minha", None), "sem convidados, tudo é do dono");
         assert!(!counts_as_owner(Err(()), "minha", None), "convidados ilegíveis não contam");
+    }
+
+    /// O `sessions` de um convidado com login só lista o que ele alcança, sem a pergunta nem o nome das outras.
+    #[test]
+    fn a_login_guest_lists_only_the_sessions_it_reaches() {
+        let rows = vec![
+            json!({"name": "dela", "lifecycle_id": "k:1", "question": "Qual base?", "pair_peers": ["dona", "irma"], "linked_by": "dona"}),
+            json!({"name": "irma", "lifecycle_id": "k:2", "orphaned_from": "dona"}),
+            json!({"name": "dona", "lifecycle_id": "k:3", "question": "segredo do dono"}),
+        ];
+        let visible = |name: &str, life: Option<&str>| matches!((name, life), ("dela", Some("k:1")) | ("irma", Some("k:2")));
+        let seen = guest_view(rows, visible);
+        assert_eq!(seen.iter().map(|r| r["name"].as_str().unwrap()).collect::<Vec<_>>(), ["dela", "irma"]);
+        assert_eq!(seen[0]["question"], "Qual base?", "a pergunta da sessão dele aparece");
+        assert_eq!((&seen[0]["pair_peers"], &seen[0]["linked_by"], &seen[1]["orphaned_from"]), (&json!(["irma"]), &Value::Null, &Value::Null));
+        assert!(!seen.iter().any(|r| r.to_string().contains("segredo")), "{seen:?}");
     }
 
     #[tokio::test]
@@ -1402,12 +1579,81 @@ mod tests {
 
     #[test]
     fn only_the_linked_parent_still_in_the_group_interrupts() {
-        assert_eq!(link_refusal("pai", "filha", Some(&child(Some("pai"), &["pai", "outra"]))), None);
-        let refused = |s: Option<&Sidecar>| link_refusal("pai", "filha", s).is_some_and(|e| e.starts_with("erro_interromper_nao_ligada:"));
+        const CODE: &str = "erro_interromper_nao_ligada";
+        assert_eq!(link_refusal("pai", "filha", Some(&child(Some("pai"), &["pai", "outra"])), CODE), None);
+        let refused = |s: Option<&Sidecar>| link_refusal("pai", "filha", s, CODE).is_some_and(|e| e.starts_with("erro_interromper_nao_ligada:"));
         assert!(refused(Some(&child(Some("outra"), &["pai", "outra"]))), "filha de outra sessão");
         assert!(refused(Some(&child(None, &["pai"]))), "par comum, sem vínculo");
         assert!(refused(Some(&child(Some("pai"), &["outra"]))), "pai saiu do grupo");
         assert!(refused(None), "sem arquivo de grupo");
+        // As tools novas recusam com o código delas; o do `interrupt` não muda.
+        assert!(link_refusal("pai", "filha", None, "erro_nao_ligada").is_some_and(|e| e.starts_with("erro_nao_ligada: 'filha'")));
+    }
+
+    /// O `child_status` lê o mesmo turno que o retorno: sem a fila do Hangar e sem as notas da CLI.
+    #[test]
+    fn the_status_reads_the_transcript_without_queue_or_cli_notes() {
+        let ev = |kind: ChatKind, id: &str| ChatEvent { kind, id: id.into(), text: Some("x".into()), ..Default::default() };
+        let mut events = vec![
+            ev(ChatKind::UserMsg, "u1"), ev(ChatKind::AssistantMsg, "a1"), ev(ChatKind::AssistantMsg, "retry-ok:a1"),
+            ev(ChatKind::AssistantMsg, "local-9"), ev(ChatKind::UserMsg, "queued-q1"), ev(ChatKind::UserMsg, "queued-agent:h1"),
+        ];
+        events.retain(transcript_only);
+        let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["u1", "a1", "queued-agent:h1"]);
+    }
+
+    /// Filha que recebeu o continue sozinho: o `child_status` segue no pedido do pai, e a linha de erro de antes do
+    /// continue não vira resposta enquanto a filha não termina.
+    #[test]
+    fn the_status_skips_the_automatic_continue_like_the_return() {
+        let ev = |kind: ChatKind, id: &str, text: &str| ChatEvent { kind, id: id.into(), text: Some(text.into()), ..Default::default() };
+        let again = ev(ChatKind::UserMsg, "c1", hangar_auto_continue::text::TRANSIENT);
+        // Janela só com o continue não para a leitura: ela cresce até o pedido do pai.
+        assert!(!link_return::user_request(&again));
+        let mut events = vec![
+            ev(ChatKind::UserMsg, "u1", "[de: pai] x"), ev(ChatKind::AssistantMsg, "e1", "API Error: Connection lost mid-response."), again,
+        ];
+        events.retain(transcript_only);
+        assert!(link_return::final_answer(&events).is_none(), "o erro antes do continue não é a resposta");
+        assert_eq!(link_return::reply_key(&events), "sem-resposta:u1");
+        events.push(ev(ChatKind::AssistantMsg, "a1", "feito"));
+        let (answer, asked) = link_return::final_answer(&events).unwrap();
+        assert_eq!((answer.text.as_deref(), asked.map(|e| e.id.as_str())), (Some("feito"), Some("u1")));
+        assert_eq!(link_return::reply_key(&events), "a1");
+    }
+
+    /// Só o 404 de sessão sem transcript é a filha recém-aberta; outro erro da rota segue erro.
+    #[test]
+    fn only_the_missing_transcript_is_a_child_not_born_yet() {
+        let missing = json!({"detail": {"code": "erro_sessao_inexistente", "msg": "session or transcript not found"}});
+        assert!(not_born_yet(404, &missing));
+        assert!(!not_born_yet(500, &missing));
+        assert!(!not_born_yet(404, &json!({"detail": "Not Found"})));
+        assert!(!not_born_yet(502, &json!({"detail": "resposta da rota ilegível"})));
+    }
+
+    #[test]
+    fn the_answer_is_paged_in_chars() {
+        let text = format!("{}{}{}", "á".repeat(8000), "b".repeat(8000), "ç".repeat(4000));
+        let first = answer_page(&text, 0, "k1");
+        assert_eq!((first["text"].as_str().unwrap(), &first["next_offset"]), ("á".repeat(8000).as_str(), &json!(8000)));
+        assert_eq!((&first["total_chars"], &first["answer_key"]), (&json!(20000), &json!("k1")));
+        assert_eq!(answer_page(&text, 8000, "k1")["text"], "b".repeat(8000));
+        let last = answer_page(&text, 16000, "k1");
+        assert_eq!((last["text"].as_str().unwrap(), &last["next_offset"]), ("ç".repeat(4000).as_str(), &Value::Null));
+        let past = answer_page(&text, 30000, "k1");
+        assert_eq!((past["text"].as_str().unwrap(), &past["next_offset"], &past["offset"]), ("", &Value::Null, &json!(30000)));
+    }
+
+    /// O aviso de que a resposta não voltou grava a chave dela para não se repetir, mas não conta como texto devolvido.
+    #[test]
+    fn a_notice_in_place_of_the_answer_is_not_returned() {
+        let link = |notice| link_state::LinkReturn { returned_key: Some("k1".into()), returned_notice: notice, ..Default::default() };
+        assert!(returned_text(Some(&link(false)), "k1"));
+        assert!(!returned_text(Some(&link(true)), "k1"));
+        assert!(!returned_text(Some(&link(false)), "k2"));
+        assert!(!returned_text(None, "k1"));
     }
 
     /// O erro da rota do WhatsApp chega à tool com o código na frente e a frase dela.
@@ -1652,6 +1898,20 @@ mod tests {
 /// O mesmo dono da abertura (`session_guest`): o nome em outra vida é do dono; convidados ilegíveis não contam.
 fn counts_as_owner<E>(guests: Result<Option<Value>, E>, name: &str, life: Option<&str>) -> bool {
     matches!(guests, Ok(raw) if raw.as_ref().is_none_or(|raw| crate::session_open::server::session_guest(raw, name, life).is_none()))
+}
+
+/// A lista vista por um convidado com login: só as sessões que `visible` (nome, vida) deixa, e nelas nenhum nome de
+/// sessão que ele não alcança (companheiros, quem abriu a filha).
+fn guest_view(rows: Vec<Value>, visible: impl Fn(&str, Option<&str>) -> bool) -> Vec<Value> {
+    let seen: std::collections::HashSet<String> = rows.iter()
+        .filter_map(|r| r["name"].as_str().filter(|name| visible(name, r["lifecycle_id"].as_str())).map(str::to_owned)).collect();
+    rows.into_iter().filter(|r| r["name"].as_str().is_some_and(|name| seen.contains(name))).map(|mut r| {
+        if let Some(peers) = r["pair_peers"].as_array_mut() { peers.retain(|p| p.as_str().is_some_and(|p| seen.contains(p))); }
+        for field in ["linked_by", "orphaned_from"] {
+            if r[field].as_str().is_some_and(|p| !seen.contains(p)) { r[field] = Value::Null; }
+        }
+        r
+    }).collect()
 }
 
 /// A rota pública como o dono, fora de uma tool: a recusa do rascunho na chamada largada também passa por aqui.

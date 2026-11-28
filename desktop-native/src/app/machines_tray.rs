@@ -397,8 +397,10 @@ impl Hangar {
         let state = session.display_state();
         let readonly = session.read_only();
         let asleep = session.asleep.then(|| tr_shared("session_asleep_badge", &[]));
+        let orphan = session.orphaned_from.as_deref().map(|parent| tr_shared("session_orphaned_from", &[("name", parent)]));
         let mut tip = format!("{} · {}", session.name, tr(&format!("chip_{state}")));
         if let Some(text) = &asleep { tip.push_str(&format!(" · {text}")); }
+        if let Some(text) = &orphan { tip.push_str(&format!(" · {text}")); }
         let review = self.work_review_badge(key, &session.name);
         if let Some((text, _)) = &review { tip.push_str(&format!(" · {text}")); }
         let pick = target.clone();
@@ -424,8 +426,8 @@ impl Hangar {
                     .child(div().min_w_0().truncate().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).child(session.name.clone()))
                     .child(div().flex_shrink_0().px(px(6.)).rounded_full().bg(chip_bg).text_color(chip_fg).text_size(px(10.5))
                         .child(tr(&format!("chip_{state}"))))
-                    .children(asleep.map(|text| div().flex_shrink_0().px(px(6.)).rounded_full().bg(theme::inset()).text_color(theme::muted())
-                        .text_size(px(10.5)).child(text)))
+                    .children(asleep.into_iter().chain(orphan).map(|text| div().flex_shrink_0().px(px(6.)).rounded_full().bg(theme::inset())
+                        .text_color(theme::muted()).text_size(px(10.5)).child(text)))
                     .children(review.and_then(|_| self.work_review_chip_button(&target, true, cx)))
                     .when(readonly, |el| el.child(div().flex_shrink_0().text_size(px(9.5)).text_color(theme::muted()).child(tr("machines_tray_read_only"))))
                     .when(session.pending_questions > 0, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::warning())

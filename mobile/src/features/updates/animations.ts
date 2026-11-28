@@ -1,3 +1,4 @@
+import { KimiPermissionsAnimation } from './kimi-permissions-animation';
 import { ScheduledTasksAnimation } from './ScheduledTasksAnimation';
 import { ReviewsAnimation } from './reviews-animation';
 import type { ComponentType } from 'react';
@@ -16,6 +17,7 @@ import { CompactIdleAnimation } from './CompactIdleAnimation';
 import { DesktopToolLookAnimation } from './DesktopToolLookAnimation';
 import { ConnectAnimation } from './ConnectAnimation';
 import { ConnectSignInAnimation } from './ConnectSignInAnimation';
+import { ConnectRemoveComputerAnimation } from './ConnectRemoveComputerAnimation';
 import { ConversationGalleryAnimation } from './ConversationGalleryAnimation';
 import { DreamAnimation } from './DreamAnimation';
 import { FolderBranchAnimation } from './FolderBranchAnimation';
@@ -41,6 +43,7 @@ import { TelemetryConsentAnimation } from './TelemetryConsentAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
+  'kimi-permissions': KimiPermissionsAnimation,
   'ajustes-sessao-abas': SessionSettingsAnimation,
   antigravity: AntigravityAnimation,
   'termos-antigravity': AntigravityTermsAnimation,
@@ -64,6 +67,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'galeria-da-conversa': ConversationGalleryAnimation,
   'hangar-connect': ConnectAnimation,
   'entrar-pelo-connect': ConnectSignInAnimation,
+  'connect-remover-computador': ConnectRemoveComputerAnimation,
   'login-usuario-senha': LoginPasswordAnimation,
   'ocultar-da-lista': HideFromListAnimation,
   'plugins-do-claude': PluginsAnimation,

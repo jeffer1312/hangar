@@ -1,5 +1,6 @@
 //! `~/.hangar/link-returns.json`: quando cada filha foi ligada ao criador e quando a resposta dela
-//! voltou a ele (`{"<filha>": {"linked_at": f64, "returned_at": f64|null, "returned_key": str|null}}`).
+//! voltou a ele (`{"<filha>": {"linked_at": f64, "returned_at": f64|null, "returned_key": str|null}}`), mais a última
+//! pergunta da filha avisada ao pai (`asked_key`, `asked_queue_id`), só quando houve.
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -15,6 +16,17 @@ pub struct LinkReturn {
     /// Qual resposta voltou: `last_reply_at` muda com qualquer escrita no transcript, a resposta não.
     #[serde(default)]
     pub returned_key: Option<String>,
+    /// O que voltou com `returned_key` foi só o aviso de que a resposta não voltou (limite, turno sem texto): a chave
+    /// segura o aviso repetido, mas o texto não chegou ao pai.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub returned_notice: bool,
+    /// Última interação avisada ao pai: a pergunta pelo `interaction_id`, menu e permissão pelo texto do aviso
+    /// (`notice:<hash>`). O ID nasce outro depois de reiniciar: só a pergunta vai de novo, com o novo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_key: Option<String>,
+    /// Linha do aviso na fila do pai: some a pergunta, ela sai se ainda espera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_queue_id: Option<String>,
 }
 
 pub type LinkReturns = BTreeMap<String, LinkReturn>;
@@ -96,7 +108,7 @@ mod tests {
     fn linking_writes_linked_at_and_keeps_the_other_children() {
         let dir = tempfile::tempdir().unwrap();
         assert!(read(dir.path()).unwrap().is_empty());
-        update(dir.path(), |all| { all.insert("b".into(), LinkReturn { linked_at: 1.0, returned_at: Some(2.0), returned_key: None }); }).unwrap();
+        update(dir.path(), |all| { all.insert("b".into(), LinkReturn { linked_at: 1.0, returned_at: Some(2.0), ..LinkReturn::default() }); }).unwrap();
         record_linked(dir.path(), &["a".to_owned()], 10.5).unwrap();
         let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(path(dir.path())).unwrap()).unwrap();
         assert_eq!(raw, serde_json::json!({"a": {"linked_at": 10.5, "returned_at": null, "returned_key": null},
@@ -118,7 +130,7 @@ mod tests {
     fn old_files_load_rename_moves_the_entry_and_retain_prunes() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(path(dir.path()), r#"{"a": {"linked_at": 1.0, "returned_at": 2.0}, "b": {"linked_at": 3.0}}"#).unwrap();
-        assert_eq!(read(dir.path()).unwrap()["a"], LinkReturn { linked_at: 1.0, returned_at: Some(2.0), returned_key: None });
+        assert_eq!(read(dir.path()).unwrap()["a"], LinkReturn { linked_at: 1.0, returned_at: Some(2.0), ..LinkReturn::default() });
         rename(dir.path(), "a", "a2").unwrap();
         rename(dir.path(), "sumiu", "x").unwrap();
         let all = read(dir.path()).unwrap();
@@ -129,9 +141,28 @@ mod tests {
     }
 
     #[test]
+    fn an_old_file_without_the_question_fields_reads_none_and_writes_them_only_when_set() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(path(dir.path()), r#"{"a": {"linked_at": 1.0, "returned_at": null, "returned_key": "k"}}"#).unwrap();
+        let a = read(dir.path()).unwrap()["a"].clone();
+        assert_eq!((a.asked_key, a.asked_queue_id), (None, None));
+        update(dir.path(), |all| {
+            let a = all.get_mut("a").unwrap();
+            a.asked_key = Some("q1".into());
+            a.asked_queue_id = Some("row1".into());
+        }).unwrap();
+        let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(path(dir.path())).unwrap()).unwrap();
+        assert_eq!(raw["a"]["asked_key"], "q1");
+        assert_eq!(raw["a"]["asked_queue_id"], "row1");
+        // Religar zera a pergunta da vida anterior.
+        record_linked(dir.path(), &["a".to_owned()], 5.0).unwrap();
+        assert_eq!(read(dir.path()).unwrap()["a"], LinkReturn { linked_at: 5.0, ..LinkReturn::default() });
+    }
+
+    #[test]
     fn a_linked_child_without_entry_gets_one_from_now_and_existing_ones_stay() {
         let dir = tempfile::tempdir().unwrap();
-        let old = LinkReturn { linked_at: 1.0, returned_at: Some(2.0), returned_key: Some("k".into()) };
+        let old = LinkReturn { linked_at: 1.0, returned_at: Some(2.0), returned_key: Some("k".into()), ..LinkReturn::default() };
         update(dir.path(), |all| { all.insert("a".into(), old.clone()); }).unwrap();
         let created = ensure_linked(dir.path(), &["a".to_owned(), "b".to_owned()], 50.0).unwrap();
         assert_eq!(created, ["b"]);

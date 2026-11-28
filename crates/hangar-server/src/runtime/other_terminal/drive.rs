@@ -1729,6 +1729,139 @@ async fn agy_permission(context: &mut Control<'_>, payload: &Value, set: bool) -
         json!({"ok":false,"mode":current,"current":current,"requested":requested,"error_code":"erro_permissao_ciclo_agy"})))
 }
 
+
+const KIMI_MODES: [&str; 3] = ["manual", "yolo", "auto"];
+const KIMI_MODE_LABELS: [&str; 3] = ["Always Ask", "Ask When Needed", "Never Ask"];
+
+fn kimi_mode_row(line: &str) -> Option<usize> {
+    let label = line.trim().trim_start_matches('❯').trim();
+    KIMI_MODE_LABELS.iter().position(|name| label == *name || label.strip_prefix(name).is_some_and(|tail| tail.trim() == "← current"))
+}
+
+struct KimiPermissionMenu { selected: usize, current: usize }
+
+fn kimi_permission_menu(pane: &str) -> Option<KimiPermissionMenu> {
+    let lines: Vec<_> = pane.lines().collect();
+    let title = lines.iter().rposition(|line| line.trim() == "Select permission mode")?;
+    let rule = |line: &&str| line.matches('─').count() >= 10 && line.trim().chars().all(|ch| ch == '─');
+    if !lines[..title].iter().rev().find(|line| !line.trim().is_empty()).is_some_and(rule) { return None; }
+    let bottom = title + 1 + lines[title + 1..].iter().position(rule)?;
+    // O seletor substitui a caixa: um título citado no histórico acima da caixa não é menu aberto.
+    if lines[bottom + 1..].iter().any(|line| line.trim_start().starts_with('╭')) { return None; }
+    let mut selected = None;
+    let mut current = None;
+    let mut present = [false; 3];
+    for line in &lines[title + 1..bottom] {
+        if let Some(index) = kimi_mode_row(line) {
+            present[index] = true;
+            if line.trim_start().starts_with('❯') { selected = Some(index); }
+            if line.trim_end().ends_with("← current") { current = Some(index); }
+        }
+    }
+    present.into_iter().all(|seen| seen).then_some(KimiPermissionMenu { selected: selected?, current: current? })
+}
+
+async fn close_kimi_permissions(context: &mut Control<'_>) -> Result<(), RuntimeError> {
+    context.write("Escape", false, false).await?;
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        context.pause(PROOF_INTERVAL, false).await?;
+        let frame = context.frame(false, false).await?;
+        if kimi_permission_menu(&frame.text).is_none() && composer(context.target, &frame).is_some() { return Ok(()); }
+        if Instant::now() >= until { return Err(failure("erro_permissao_leitura")); }
+    }
+}
+
+async fn open_kimi_permissions(context: &mut Control<'_>) -> Result<KimiPermissionMenu, RuntimeError> {
+    context.write("/permission", true, false).await?;
+    context.pause(SETTLE, false).await?;
+    context.write("Enter", false, false).await?;
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        context.pause(PROOF_INTERVAL, false).await?;
+        let frame = context.frame(false, false).await?;
+        if let Some(menu) = kimi_permission_menu(&frame.text) { return Ok(menu); }
+        if Instant::now() >= until {
+            // Sem o seletor, nada do comando fica para quem digitar depois: tela aberta ou o texto na caixa.
+            // Escape num turno em voo o interromperia, e numa aprovação aberta a recusaria. A limpeza não
+            // troca o motivo da falha.
+            let state = screen(context.target.provider, &frame.text).state;
+            let frame = if composer(context.target, &frame).is_none() && !matches!(state.as_str(), "working" | "awaiting_input") {
+                let escaped = context.write("Escape", false, false).await.is_ok() && context.pause(SETTLE, false).await.is_ok();
+                if escaped { context.frame(false, false).await.ok() } else { None }
+            } else { Some(frame) };
+            if frame.is_some_and(|frame| composer(context.target, &frame).is_some_and(|draft| draft.content.trim() == "/permission")) {
+                let _ = context.write("C-u", false, false).await;
+            }
+            return Err(failure("erro_permissao_leitura"));
+        }
+    }
+}
+
+async fn kimi_permission(context: &mut Control<'_>, payload: &Value, set: bool) -> Result<OtherControlOutcome, RuntimeError> {
+    context.guard(false).await?;
+    let current = context.io.kimi_permission().await?;
+    if !set {
+        return Ok(context.reply(RuntimeDisposition::Accepted,
+            json!({"current":current,"modes":KIMI_MODES,"sondavel":false,"previous_non_plan":null})));
+    }
+    let requested = payload["mode"].as_str().unwrap_or_default();
+    let refuse = |context: &Control<'_>, code: &str| context.reply(RuntimeDisposition::Rejected,
+        json!({"current":current,"requested":requested,"error_code":code}));
+    let Some(wanted) = KIMI_MODES.iter().position(|mode| *mode == requested) else {
+        return Ok(refuse(context, "erro_permissao_invalida"));
+    };
+    if current.as_deref() == Some(requested) {
+        return Ok(context.reply(RuntimeDisposition::Accepted, json!({"mode":current,"current":current,"changed":false})));
+    }
+    let frame = context.frame(false, false).await?;
+    let analysis = screen(context.target.provider, &frame.text);
+    if kimi_permission_menu(&frame.text).is_some() || analysis.overlay || analysis.state == "awaiting_input" {
+        return Ok(refuse(context, "permission_menu_open"));
+    }
+    // O comando usa a caixa da TUI: não se mistura ao rascunho nem à entrada de um turno em voo.
+    if analysis.state == "working" { return Ok(refuse(context, "erro_sessao_trabalhando")); }
+    match composer(context.target, &frame) {
+        Some(composer) if composer.is_empty() => {}
+        Some(_) => return Ok(refuse(context, "erro_caixa_com_rascunho")),
+        None => return Ok(refuse(context, "erro_permissao_leitura")),
+    }
+    let menu = open_kimi_permissions(context).await?;
+    let selected = menu.selected;
+    for _ in 0..selected.abs_diff(wanted) {
+        context.write(if wanted < selected { "Up" } else { "Down" }, false, false).await?;
+    }
+    context.pause(INPUT_SETTLE, false).await?;
+    context.write("Enter", false, false).await?;
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        context.pause(PROOF_INTERVAL, false).await?;
+        let frame = context.frame(false, false).await?;
+        let actual = context.io.kimi_permission().await?;
+        let closed = kimi_permission_menu(&frame.text).is_none() && composer(context.target, &frame).is_some();
+        if closed && actual.as_deref() == Some(requested) {
+            return Ok(context.reply(RuntimeDisposition::Accepted, json!({"mode":requested,"current":requested,"changed":true})));
+        }
+        if closed && actual.is_none() {
+            if !composer(context.target, &frame).is_some_and(|draft| draft.is_empty()) {
+                return Ok(context.unknown("erro_permissao_leitura"));
+            }
+            // Antes da primeira mensagem ainda não há wire: o tique do seletor é a confirmação.
+            let menu = open_kimi_permissions(context).await?;
+            let actual = Some(KIMI_MODES[menu.current]);
+            close_kimi_permissions(context).await?;
+            if actual == Some(requested) {
+                return Ok(context.reply(RuntimeDisposition::Accepted, json!({"mode":requested,"current":requested,"changed":true})));
+            }
+            return Ok(context.unknown("erro_permissao_leitura"));
+        }
+        if Instant::now() >= until {
+            if kimi_permission_menu(&frame.text).is_some() { close_kimi_permissions(context).await?; }
+            return Ok(context.unknown("erro_permissao_leitura"));
+        }
+    }
+}
+
 pub async fn control(
     target: &OtherTarget,
     io: &dyn OtherIo,
@@ -1830,6 +1963,11 @@ pub async fn control(
             {
                 agy_permission(&mut context, payload, kind == "set_permission_mode").await
             }
+            "permission_modes" | "set_permission_mode"
+                if target.provider == hangar_transcript::Provider::Kimi =>
+            {
+                kimi_permission(&mut context, payload, kind == "set_permission_mode").await
+            }
             "steer" | "steer_queue" | "steer_entry" => {
                 // O quadro guardado pode ser de antes de a mensagem entrar na fila da TUI: relê antes de concluir.
                 let waiting = |frame: &Result<OtherFrame, RuntimeError>| {
@@ -1854,17 +1992,16 @@ pub async fn control(
                     ));
                 }
                 context.write("C-s", false, false).await?;
-                context.pause(SETTLE, false).await?;
-                let after = context.frame(false, false).await?;
-                if !after.text.trim().is_empty()
-                    && !after.text.contains("ctrl-s to steer immediately")
-                {
-                    Ok(context.reply(
-                        RuntimeDisposition::Accepted,
-                        json!({"ok":true,"steered":true}),
-                    ))
-                } else {
-                    Ok(context.unknown("other_terminal_steer_unconfirmed"))
+                // O Kimi tira a fila depois da resposta assíncrona à orientação. Espera o sinal,
+                // sem repetir C-s: a primeira tecla já pode ter sido aceita.
+                let until = Instant::now() + Duration::from_secs(5);
+                loop {
+                    context.pause(PROOF_INTERVAL, false).await?;
+                    let after = context.frame(false, false).await?;
+                    if !after.text.trim().is_empty() && !after.text.contains("ctrl-s to steer immediately") {
+                        break Ok(context.reply(RuntimeDisposition::Accepted, json!({"ok":true,"steered":true})));
+                    }
+                    if Instant::now() >= until { break Ok(context.unknown("other_terminal_steer_unconfirmed")); }
                 }
             }
             _ => Err(failure("other_terminal_control_unavailable")),

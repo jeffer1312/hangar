@@ -178,11 +178,11 @@ export async function errorDetail(res: Response): Promise<string> {
 
 // Mensagem traduzida + o CÓDIGO cru do backend (`erro_*`). O código é o que deixa quem chama
 // decidir por identidade e não por texto — a mensagem muda com o idioma.
-async function lerErro(res: Response): Promise<{ msg: string; code?: string; envelope?: Record<string, unknown> }> {
+async function lerErro(res: Response): Promise<{ msg: string; code?: string; envelope?: Record<string, unknown>; detail?: string }> {
   const text = await res.text().catch(() => '');
   try {
     const j = JSON.parse(text);
-    if (j && typeof j.detail === 'string') return { msg: j.detail };
+    if (j && typeof j.detail === 'string') return { msg: j.detail, detail: j.detail };
     const envelope = j?.detail ?? j;
     if (envelope && typeof envelope.code === 'string') {
       return { msg: formataErro(envelope)!, code: envelope.code, envelope };
@@ -192,6 +192,14 @@ async function lerErro(res: Response): Promise<{ msg: string; code?: string; env
   // nao popula statusText) — sem este ultimo fallback, quem le `.message` (TtsBar, ServerSettings)
   // trata string vazia como "sem erro" e desenha a UI de sucesso por cima de uma falha real.
   return { msg: text || res.statusText || `falha ${res.status} sem detalhe do servidor` };
+}
+
+/** Erro "status: detalhe" de uma resposta !ok, com o status e o código do servidor. O `server_starting` do
+ *  porteiro da subida vem como texto no `detail` e vira o código: é ele que o `isInputRefusal` lê. */
+export async function failureWithCode(res: Response): Promise<Error & { status: number; code?: string }> {
+  const { msg, code, detail } = await lerErro(res);
+  return Object.assign(new Error(`${res.status}: ${msg}`), {
+    status: res.status, code: code ?? (detail === 'server_starting' ? detail : undefined) });
 }
 
 // Rotas GET que estão falhando por rede AGORA. O diário ganha uma linha na primeira falha e uma
@@ -1036,7 +1044,7 @@ export async function sendInputForServer(s: Server, name: string, text: string, 
   // Só o servidor anterior ao "Na conversa" vai pela fila comum: ele recusa a chave nova antes de gravar.
   // Outro 422 é recusa de verdade e aparece, sem trocar o modo calado.
   if (delivery && res.status === 422 && await rejectsDeliveryField(res)) { res = await post({ text }); accepted = false; }
-  if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
+  if (!res.ok) throw await failureWithCode(res);
   if (!accepted) return false;
   // Só o `false` dito pelo servidor é fila comum: corpo ilegível não prova nada, e a mensagem segue na conversa.
   const body = await res.json().catch(() => null) as { conversation?: unknown } | null;
@@ -2179,6 +2187,14 @@ export async function deleteSession(name: string): Promise<{ ok: boolean; warnin
   });
 }
 
+// Fechar em sequência (o pai com as filhas) não pode seguir o servidor ativo: ele pode mudar no meio, e o
+// DELETE seguinte iria a outra máquina. O teto cobre o fechamento que espera o processo morrer.
+export function deleteSessionForServer(s: Server, name: string): Promise<{ ok: boolean; warning: unknown | null }> {
+  return apiFetchForServer<{ ok: boolean; warning: unknown | null }>(s, `/api/sessions/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  }, 60_000);
+}
+
 // Renomeia a sessao do tmux. Devolve o nome final (sanitizado pelo backend).
 export async function renameSession(name: string, newName: string, server?: Server | null): Promise<{ ok: boolean; name: string }> {
   return sessionFetch<{ ok: boolean; name: string }>(server, `/api/sessions/${encodeURIComponent(name)}/rename`, {
@@ -2194,14 +2210,44 @@ export function isFallenSession(s: { state?: string | null; problema?: string | 
   return s.state === 'dead' && (FALLEN_PROBLEMS as readonly string[]).includes(s.problema ?? '');
 }
 
-// Reabre a sessão caída pelo spec dela, na mesma conversa.
-export async function reopenFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
-  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/reopen`, { method: 'POST' });
+// Reabre a sessão caída pelo spec dela, na mesma conversa. `continue`: o "Reabrir e continuar", que manda o
+// turno cortado seguir; `continued: false` com `code` diz por que o continue não saiu (a sessão reabriu).
+// `lifecycleId`: a vida que a linha mostrava (órfão do psmux); outra vida é recusada.
+export async function reopenFallenSession(
+  name: string,
+  server?: Server | null,
+  opts?: { continue?: boolean; lifecycleId?: string | null },
+): Promise<{ ok: boolean; continued?: boolean; code?: string }> {
+  return actOnFallenSession(name, 'reopen', server, opts?.lifecycleId, opts?.continue);
 }
 
-// Tira a caída da lista; recusa (404) se o nome já voltou vivo, em vez de fechar a sessão reaberta.
-export async function dismissFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
-  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/dismiss`, { method: 'POST' });
+const autoContinuePath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/auto-continue`;
+
+// Interruptor do continuar sozinho da sessão; a linha muda quando a lista seguinte trouxer o `auto_continue_off` novo.
+export async function setSessionAutoContinue(name: string, enabled: boolean, server?: Server | null): Promise<void> {
+  await sessionFetch<unknown>(server, autoContinuePath(name), {
+    method: 'PUT', body: JSON.stringify({ enabled }), signal: AbortSignal.timeout(15_000),
+  });
+}
+
+// Cancelar da nota que espera a rede. `false`: nada esperava (o desfecho já saiu e a nota chega trocada).
+export async function cancelSessionAutoContinue(name: string, server?: Server | null): Promise<boolean> {
+  const reply = await sessionFetch<{ cancelled?: boolean }>(server, autoContinuePath(name), {
+    method: 'DELETE', signal: AbortSignal.timeout(15_000),
+  });
+  return reply?.cancelled === true;
+}
+
+export async function dismissFallenSession(name: string, server?: Server | null, lifecycleId?: string | null): Promise<{ ok: boolean }> {
+  return actOnFallenSession(name, 'dismiss', server, lifecycleId);
+}
+
+function actOnFallenSession(name: string, action: 'reopen' | 'dismiss', server?: Server | null, lifecycleId?: string | null, continueTurn?: boolean) {
+  const params = new URLSearchParams();
+  if (lifecycleId) params.set('lifecycle_id', lifecycleId);
+  if (continueTurn) params.set('continue', '1');
+  const query = params.size ? `?${params}` : '';
+  return sessionFetch<{ ok: boolean; continued?: boolean; code?: string }>(server, `/api/sessions/${encodeURIComponent(name)}/${action}${query}`, { method: 'POST' });
 }
 
 // Relança uma sessão "sem id" com `claude --resume <uuid>` -> passa a rastreá-la, continuando a
@@ -2248,6 +2294,22 @@ export function isAbortError(e: unknown): boolean {
 const _semResposta = new WeakSet<object>();
 export function isNoResponse(e: unknown): boolean {
   return typeof e === 'object' && e !== null && _semResposta.has(e);
+}
+
+// Os 503 do `/input` que o servidor só dá antes de gravar; a mesma lista do `INPUT_REFUSED_BEFORE_WRITE` do nativo.
+// Lista fechada: a fila da sessão que ainda abre grava e depois pode falhar com o código do ator, e reenviar duplicaria.
+const INPUT_REFUSED_BEFORE_WRITE = new Set(['server_starting', 'runtime_unhealthy', 'runtime_unavailable', 'runtime_watcher',
+  'orq_runs_unavailable', 'codex_terminal_unadopted', 'codex_sidecar_invalid', 'claude_sidecar_invalid',
+  'antigravity_sidecar_invalid', 'erro_lista_indisponivel', 'erro_mux_indisponivel']);
+
+/** O `/input` que com certeza não gravou: recusa 4xx (408 é prazo no meio, incerto) ou 503 de código anterior à
+ *  escrita. `runtime_reply_lost`, 5xx sem código e queda de rede ficam incertos. Regra igual à `settle_input_refusal`
+ *  do nativo: as duas mudam juntas. */
+export function isInputRefusal(error: unknown): boolean {
+  const { status, code } = (error ?? {}) as { status?: unknown; code?: unknown };
+  if (typeof status !== 'number') return false;
+  if (status === 503) return typeof code === 'string' && INPUT_REFUSED_BEFORE_WRITE.has(code);
+  return status >= 400 && status < 500 && status !== 408;
 }
 
 // Estourou o TETO de tempo (AbortSignal.timeout), que NÃO é o mesmo que cancelamento por quem
@@ -3805,16 +3867,42 @@ export async function skipQuestion(name: string, requestId: string, interactionI
   return res.json() as Promise<{ ok: boolean }>;
 }
 
+/** `cascade` só vem com `cascade=1` e descendente ligada conhecida, ou com `unavailable` quando o servidor não
+ *  conseguiu ler quais são as filhas. `interrupted: false` = o pai não tinha turno e só as descendentes foram
+ *  paradas (com `cascade=1`, sem turno não é erro). */
+export interface InterruptResult {
+  ok: boolean;
+  interrupted?: boolean;
+  cascade?: { interrupted: string[]; failed: { name: string; code: string }[]; unavailable?: string };
+}
+
 // clear=true tambem limpa o input do terminal (2o Esc no backend). So passar quando havia msg pendente.
-export async function interrupt(name: string, clear = false, server?: Server): Promise<void> {
-  const q = clear ? '?clear=true' : '';
+// `cascade` só no botão Parar: cancelar o cartão de pergunta usa a mesma rota e não pode parar as filhas.
+export async function interrupt(name: string, clear = false, server?: Server, opts?: { cascade?: boolean }): Promise<InterruptResult> {
+  const params = new URLSearchParams();
+  if (clear) params.set('clear', 'true');
+  if (opts?.cascade) params.set('cascade', '1');
+  const qs = params.toString();
+  const q = qs ? `?${qs}` : '';
   const path = `/api/sessions/${encodeURIComponent(name)}/interrupt${q}`;
   const init = {
     method: 'POST',
     body: JSON.stringify({}),
   };
-  await (server ? apiFetchForServer<{ ok: boolean }>(server, path, init)
-                : apiFetch<{ ok: boolean }>(path, init));
+  return server ? apiFetchForServer<InterruptResult>(server, path, init)
+                : apiFetch<InterruptResult>(path, init);
+}
+
+/** As filhas ligadas não foram conferidas: podem seguir trabalhando, e a tela avisa. */
+export function interruptCascadeUnchecked(result: InterruptResult | null | undefined): boolean {
+  const unavailable = result?.cascade?.unavailable;
+  return typeof unavailable === 'string' && unavailable.length > 0;
+}
+
+/** As descendentes que não pararam junto; resposta sem `cascade` (servidor antigo, sem filhas) é lista vazia. */
+export function interruptCascadeFailed(result: InterruptResult | null | undefined): string[] {
+  const failed = result?.cascade?.failed;
+  return Array.isArray(failed) ? failed.map((f) => f?.name).filter((n): n is string => typeof n === 'string' && n.length > 0) : [];
 }
 
 /** Clique num botão que um mod desenhou na faixa ou num painel. `copied` e `opened` são o que o mod

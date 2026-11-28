@@ -110,6 +110,14 @@ pub fn pane(spec: &SessionSpec, conversation: Conversation, ctx: &AgentContext) 
         (other, _) => return Err(OpenError::new(500, "erro_criacao_sessao", format!("{} não abre por este plano", other.name()))),
     };
     command.extend(choice(spec));
+    if spec.provider == AgentProvider::Kimi && matches!(conversation, Conversation::New(_)) {
+        match spec.permission_mode {
+            Some(PermissionMode::Yolo) => command.push("--yolo".into()),
+            Some(PermissionMode::Auto) => command.push("--auto".into()),
+            None => {}
+            Some(_) => return Err(OpenError::new(409, "erro_permissao_invalida", "modo de abertura do Kimi inválido")),
+        }
+    }
     let agy_env = (spec.provider == AgentProvider::Antigravity)
         .then(|| hangar_antigravity::env::process_env(&agy_account(&spec.account), ctx.server_env.keys().cloned()));
     if let Some(agy) = &agy_env {

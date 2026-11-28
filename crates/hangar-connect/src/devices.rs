@@ -69,6 +69,9 @@ struct Device {
     unconfirmed_token_hashes: Vec<String>,
     #[serde(default)]
     last_seen: Option<u64>,
+    /// O `last_seen` que está no disco, ou a última tentativa de levá-lo: só memória.
+    #[serde(skip)]
+    last_seen_saved: Option<u64>,
     /// Aparelho que aprovou este; `None` é o dono. Revogar um leva junto tudo que ele aprovou.
     #[serde(default)]
     approved_by: Option<DeviceId>,
@@ -84,6 +87,8 @@ struct Device {
 
 /// Entregas sem confirmação que seguem valendo; a mais velha sai, senão um par fora do ar acumularia tokens.
 const MAX_UNCONFIRMED: usize = 3;
+/// O uso do aparelho vai ao disco no máximo uma vez neste intervalo: um fsync por pedido custaria caro.
+pub const LAST_SEEN_SAVE_EVERY: u64 = 60 * 60;
 
 impl Device {
     fn accepts(&self, hash: &str) -> bool {
@@ -105,6 +110,9 @@ struct State {
     devices: Vec<Device>,
     /// Nonce gasto e até quando o bilhete dele valeria: depois disso a validade já o recusa.
     nonces: HashMap<String, u64>,
+    /// Desde quando o `last_seen` vai ao disco: antes disso, `last_seen` nulo não prova que a credencial nunca foi usada.
+    #[serde(default)]
+    tracked_since: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -155,6 +163,8 @@ pub struct Row {
     pub status: Status,
     pub last_seen: Option<u64>,
     pub created_at: u64,
+    /// O mesmo em toda linha: `last_seen` nulo só diz "sem uso" a partir daqui.
+    pub tracked_since: u64,
     /// Só no pedido esperando, e só de celular que mandou o `install_id`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_code: Option<String>,
@@ -176,14 +186,20 @@ pub struct Store {
     /// que eles aprovaram aqui, refeito a cada mudança no registro. Só memória: a próxima leitura boa desfaz.
     /// Sempre travado depois de `state`.
     suspended: Mutex<Option<HashSet<DeviceId>>>,
+    /// `tracked_since` saiu do relógio no carregamento, não do arquivo.
+    tracked_since_loaded: bool,
 }
 
 impl Store {
     pub fn new(dir: PathBuf, identity: Option<ServiceIdentity>) -> Self {
         let clock = system_clock();
         let path = dir.join("devices.json");
-        let (state, fault) = load(&path, clock());
-        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault, suspended: Mutex::new(None) }
+        let (mut state, fault) = load(&path, clock());
+        // Arquivo de antes do uso ir ao disco: a contagem começa agora. Só vai ao disco na próxima gravação; até lá,
+        // cada subida recomeça, o que só adia a limpeza.
+        let tracked_since_loaded = state.tracked_since.is_none();
+        state.tracked_since.get_or_insert_with(|| clock());
+        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault, suspended: Mutex::new(None), tracked_since_loaded }
     }
 
     /// Vai para `status().error`. shortcut: lido só na subida, a recusa fica até reiniciar o servidor; reler a cada pedido custaria disco no porteiro.
@@ -192,6 +208,10 @@ impl Store {
     }
 
     pub fn with_clock(mut self, clock: Clock) -> Self {
+        // O relógio chega depois do carregamento: o começo que saiu do relógio segue o novo.
+        if self.tracked_since_loaded {
+            self.state.get_mut().unwrap_or_else(|e| e.into_inner()).tracked_since = Some(clock());
+        }
         self.clock = clock;
         self
     }
@@ -221,6 +241,7 @@ impl Store {
                 return Err(Refusal::Io(io::Error::other(fault.clone())));
             }
             write(&self.path, &next)?;
+            mark_last_seen_saved(&mut next);
             *state = next;
             if let Some(suspended) = self.lock_suspended().as_mut() {
                 *suspended = account_cascade(&state);
@@ -237,7 +258,7 @@ impl Store {
     /// `install_id` vem do celular e só agrupa os pedidos dele no cartão de aprovação. Bilhete que a conta liberou
     /// nasce [`Status::Approved`]; os outros, [`Status::Pending`].
     pub fn redeem_from(&self, ticket: &str, signature: &str, secret: &str, install_id: Option<&str>) -> Result<(DeviceId, Status), Refusal> {
-        if install_id.is_some_and(|id| id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')) {
+        if install_id.is_some_and(|id| !valid_install(id)) {
             return Err(Refusal::InstallId);
         }
         let identity = self.identity.read().unwrap_or_else(|e| e.into_inner()).clone().ok_or(Refusal::NotLinked)?;
@@ -273,7 +294,7 @@ impl Store {
             let status = if account_device.is_some() { Status::Approved } else { Status::Pending };
             state.devices.push(Device { id: id.clone(), name, status,
                 created_at: now, denied_at: None, verifier: Some(verifier), token_hash: None, next_token_hash: None, unconfirmed_token_hashes: Vec::new(), last_seen: None,
-                approved_by: None, approved_at: account_device.is_some().then_some(now), install_id: install_id.map(str::to_owned), account_device });
+                last_seen_saved: None, approved_by: None, approved_at: account_device.is_some().then_some(now), install_id: install_id.map(str::to_owned), account_device });
             Ok((id, status))
         })
     }
@@ -378,11 +399,32 @@ impl Store {
 
     /// Aparelho sem aprovação: quem chama já provou a senha do dono.
     pub fn enroll(&self, name: &str) -> Result<(DeviceId, String), Refusal> {
+        self.enroll_install(name, None)
+    }
+
+    /// Como [`Store::enroll`]. A mesma instalação pedindo de novo recebe token novo na entrada que já tinha:
+    /// o app que perdeu a credencial não soma outra linha na lista.
+    pub fn enroll_install(&self, name: &str, install_id: Option<&str>) -> Result<(DeviceId, String), Refusal> {
+        if install_id.is_some_and(|id| !valid_install(id)) {
+            return Err(Refusal::InstallId);
+        }
         self.update(|state, now| {
-            let (id, token) = (credentials::id(), credentials::token());
+            let token = credentials::token();
+            let hash = Some(credentials::hash(token.as_bytes()));
+            // Só entrada nascida com a senha: a resgatada por bilhete tem outra prova e outro dono da decisão.
+            let mine = install_id.and_then(|install| state.devices.iter_mut().find(|d| d.status == Status::Approved
+                && d.verifier.is_none() && d.account_device.is_none() && d.install_id.as_deref() == Some(install)));
+            if let Some(device) = mine {
+                (device.name, device.token_hash, device.next_token_hash) = (display_name(name), hash, None);
+                device.unconfirmed_token_hashes.clear();
+                // O uso e a idade eram do token perdido: a entrada nova não pode parecer usada nem velha.
+                (device.last_seen, device.last_seen_saved, device.created_at) = (None, None, now);
+                return Ok((device.id.clone(), token));
+            }
+            let id = credentials::id();
             state.devices.push(Device { id: id.clone(), name: display_name(name), status: Status::Approved, created_at: now,
-                denied_at: None, verifier: None, token_hash: Some(credentials::hash(token.as_bytes())), next_token_hash: None, unconfirmed_token_hashes: Vec::new(), last_seen: None,
-                approved_by: None, approved_at: Some(now), install_id: None, account_device: None });
+                denied_at: None, verifier: None, token_hash: hash, next_token_hash: None, unconfirmed_token_hashes: Vec::new(), last_seen: None,
+                last_seen_saved: None, approved_by: None, approved_at: Some(now), install_id: install_id.map(str::to_owned), account_device: None });
             Ok((id, token))
         })
     }
@@ -418,15 +460,17 @@ impl Store {
         let now = (self.clock)();
         let mut state = self.lock();
         prune(&mut state, now);
+        let tracked_since = state.tracked_since.unwrap_or(now);
         state.devices.iter().map(|d| {
             let install = d.install_id.as_deref().filter(|_| d.status == Status::Pending);
-            Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, created_at: d.created_at,
+            Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, created_at: d.created_at, tracked_since,
                 install_code: install.map(install_code), install_group: install.map(install_group),
                 account_device: d.account_device.clone() }
         }).collect()
     }
 
-    /// shortcut: `last_seen` só vai ao disco com a próxima gravação; gravar por pedido custaria um fsync a cada um.
+    /// `last_seen` vai ao disco no primeiro uso e depois no máximo uma vez por [`LAST_SEEN_SAVE_EVERY`]; falha
+    /// de gravação só vai ao log, nunca recusa quem apresentou o token.
     pub fn verify(&self, token: &[u8]) -> Option<DeviceId> {
         let presented = credentials::hash(token);
         let now = (self.clock)();
@@ -437,16 +481,28 @@ impl Store {
         drop(suspended);
         // Usar o token novo prova a entrega, mesmo com a resposta dela perdida no caminho. Vai ao disco: depois
         // de reiniciar, o antigo voltaria a valer e a prova sairia com ele.
-        if state.devices[index].next_token_hash.as_deref().is_some_and(|next| same(next, &presented)) {
-            state.devices[index].promote_if_next(&presented);
+        let promoted = state.devices[index].next_token_hash.as_deref().is_some_and(|next| same(next, &presented));
+        let device = &mut state.devices[index];
+        if promoted {
+            device.promote_if_next(&presented);
+        }
+        // Sem isto a tela diria "Ainda não apareceu" depois de reiniciar, para credencial em uso.
+        let stale = device.last_seen_saved.is_none_or(|saved| now >= saved.saturating_add(LAST_SEEN_SAVE_EVERY));
+        device.last_seen = Some(now);
+        let id = device.id.clone();
+        if promoted || stale {
             let written = match &self.fault { Some(fault) => Err(io::Error::other(fault.clone())), None => write(&self.path, &state) };
-            if let Err(error) = written {
-                tracing::warn!(code = "connect_device_promote_failed", device = %state.devices[index].id, "token novo aceito sem ir ao disco: {error}");
+            match written {
+                Ok(()) => mark_last_seen_saved(&mut state),
+                Err(error) if promoted => tracing::warn!(code = "connect_device_promote_failed", device = %id, "token novo aceito sem ir ao disco: {error}"),
+                Err(error) => {
+                    // Conta como tentativa: disco com defeito não vira um aviso por pedido.
+                    state.devices[index].last_seen_saved = Some(now);
+                    tracing::warn!(code = "connect_device_last_seen_failed", device = %id, "último uso do aparelho não foi ao disco: {error}");
+                }
             }
         }
-        let device = &mut state.devices[index];
-        device.last_seen = Some(now);
-        Some(device.id.clone())
+        Some(id)
     }
 
     pub fn is_active(&self, id: &str) -> bool {
@@ -456,6 +512,13 @@ impl Store {
     /// O hash guardado é a chave da prova: a máquina mostra que conhece o token sem guardá-lo.
     pub fn proof_key(&self, id: &str) -> Option<String> {
         self.lock().devices.iter().find(|d| d.id == id && d.status == Status::Approved).and_then(|d| d.token_hash.clone())
+    }
+}
+
+/// O estado inteiro acabou de ir ao disco: o `last_seen` de cada aparelho está lá.
+fn mark_last_seen_saved(state: &mut State) {
+    for device in &mut state.devices {
+        device.last_seen_saved = device.last_seen;
     }
 }
 
@@ -501,6 +564,10 @@ fn deny(device: &mut Device, now: u64) {
     device.denied_at.get_or_insert(now);
 }
 
+fn valid_install(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 fn prune(state: &mut State, now: u64) {
     state.nonces.retain(|_, expires_at| *expires_at > now);
     for device in &mut state.devices {
@@ -535,7 +602,10 @@ fn load(path: &Path, now: u64) -> (State, Option<String>) {
         }
     };
     match serde_json::from_slice::<State>(&bytes) {
-        Ok(state) => (state, None),
+        Ok(mut state) => {
+            mark_last_seen_saved(&mut state);
+            (state, None)
+        }
         Err(error) => {
             // Ilegível vira "nenhum aparelho": perde acessos, e vai pro lado para a próxima gravação não apagá-lo.
             tracing::warn!(code = "connect_devices_unreadable", "{} ilegível, começando vazio: {error}", path.display());
@@ -700,6 +770,101 @@ mod tests {
         assert_eq!(store.verify(local_token.as_bytes()), Some(local), "aprovado nesta máquina não depende da conta");
         assert!(store.suspend_account_devices(false));
         assert_eq!(store.verify(token.as_bytes()), Some(released));
+    }
+
+    #[test]
+    fn the_same_install_enrolling_again_keeps_one_entry() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let dir = dir();
+        let now = Arc::new(AtomicU64::new(NOW));
+        let ticking = now.clone();
+        let store = store(&dir).with_clock(Arc::new(move || ticking.load(Ordering::Relaxed)));
+        let (first, lost) = store.enroll_install("Pixel", Some("install-1")).unwrap();
+        assert_eq!(store.verify(lost.as_bytes()), Some(first.clone()));
+        now.store(NOW + 500, Ordering::Relaxed);
+        let (again, token) = store.enroll_install("Pixel 8", Some("install-1")).unwrap();
+        assert_eq!(again, first, "a mesma instalação fica na mesma entrada");
+        let row = |store: &Store| store.list().into_iter().find(|row| row.device_id == first).unwrap();
+        assert_eq!((row(&store).last_seen, row(&store).created_at), (None, NOW + 500), "não herda o uso nem a idade do token perdido");
+        assert_eq!(super::tests::store(&dir).list()[0].last_seen, None, "o uso zerado foi ao disco");
+        assert_eq!(store.verify(lost.as_bytes()), None, "o token perdido deixa de valer");
+        assert_eq!(store.verify(token.as_bytes()), Some(first.clone()));
+        assert_eq!(row(&store).last_seen, Some(NOW + 500));
+        let (other, _) = store.enroll_install("Outro", Some("install-2")).unwrap();
+        let (old_app, _) = store.enroll("App antigo").unwrap();
+        assert!(other != first && old_app != first);
+        let rows = store.list();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.iter().find(|row| row.device_id == first).unwrap().name, "Pixel 8");
+        assert!(matches!(store.enroll_install("x", Some("com espaço")), Err(Refusal::InstallId)));
+    }
+
+    #[test]
+    fn enrolling_never_takes_over_a_device_that_came_with_a_ticket() {
+        let dir = dir();
+        let store = store(&dir);
+        let (text, signature) = ticket("n1", "s1", json!({}));
+        let (redeemed, _) = store.redeem_from(&text, &signature, "s1", Some("install-1")).unwrap();
+        store.approve(&redeemed, None).unwrap();
+        let (enrolled, _) = store.enroll_install("celular", Some("install-1")).unwrap();
+        assert_ne!(enrolled, redeemed);
+        assert!(matches!(store.status(&redeemed, "s1").unwrap(), Poll::Approved(Some(_))), "o resgatado segue com a prova dele");
+    }
+
+    #[test]
+    fn last_seen_goes_to_disk_at_most_once_an_hour() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let dir = dir();
+        let now = Arc::new(AtomicU64::new(NOW));
+        let ticking = now.clone();
+        let store = store(&dir).with_clock(Arc::new(move || ticking.load(Ordering::Relaxed)));
+        let (id, token) = store.enroll("App").unwrap();
+        let seen_in = |store: &Store| store.list().into_iter().find(|row| row.device_id == id).unwrap().last_seen;
+        let on_disk = || seen_in(&super::tests::store(&dir));
+        assert_eq!(on_disk(), None);
+
+        assert_eq!(store.verify(token.as_bytes()), Some(id.clone()));
+        assert_eq!(on_disk(), Some(NOW), "o primeiro uso vai ao disco");
+
+        now.store(NOW + 60, Ordering::Relaxed);
+        assert_eq!(store.verify(token.as_bytes()), Some(id.clone()));
+        assert_eq!(seen_in(&store), Some(NOW + 60), "na memória anda a cada pedido");
+        assert_eq!(on_disk(), Some(NOW), "dentro da hora não grava de novo");
+
+        let later = NOW + LAST_SEEN_SAVE_EVERY;
+        now.store(later, Ordering::Relaxed);
+        assert_eq!(store.verify(token.as_bytes()), Some(id.clone()));
+        assert_eq!(on_disk(), Some(later), "passada a hora, grava de novo");
+    }
+
+    #[test]
+    fn a_file_without_tracked_since_starts_counting_at_the_load() {
+        let dir = dir();
+        store(&dir).enroll("App").unwrap();
+        let file = dir.0.join("devices.json");
+        let mut saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["tracked_since"], json!(NOW), "a gravação leva o começo da contagem");
+        saved.as_object_mut().unwrap().remove("tracked_since");
+        std::fs::write(&file, serde_json::to_vec(&saved).unwrap()).unwrap();
+
+        let old = store(&dir).with_clock(Arc::new(|| NOW + 500));
+        assert!(old.list().iter().all(|row| row.tracked_since == NOW + 500), "arquivo antigo conta do carregamento");
+        old.enroll("Outro").unwrap();
+
+        let reloaded = store(&dir).with_clock(Arc::new(|| NOW + 900));
+        assert!(reloaded.list().iter().all(|row| row.tracked_since == NOW + 500), "com o campo no arquivo, ele fica");
+    }
+
+    #[test]
+    fn a_restarted_store_does_not_write_last_seen_again_within_the_hour() {
+        let dir = dir();
+        let (id, token) = store(&dir).enroll("App").unwrap();
+        assert_eq!(store(&dir).verify(token.as_bytes()), Some(id.clone()));
+        let file = dir.0.join("devices.json");
+        let saved = std::fs::read(&file).unwrap();
+        let restarted = store(&dir).with_clock(Arc::new(|| NOW + 60));
+        assert_eq!(restarted.verify(token.as_bytes()), Some(id));
+        assert_eq!(std::fs::read(&file).unwrap(), saved, "o `last_seen` lido do disco conta como gravado");
     }
 
     #[test]

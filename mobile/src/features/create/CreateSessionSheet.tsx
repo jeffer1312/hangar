@@ -11,7 +11,7 @@ import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount, getAn
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
   PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory, getRootsForServer, pickFolderRoot } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
-  CREATE_SESSION_PROVIDERS, canChooseSurface, permissionModes, effortLevels, contextRefsPlainText, machineLabel, serverColor, tagHex } from '@hangar/core';
+  CREATE_SESSION_PROVIDERS, KIMI_OPEN_PERMISSION_MODES, canChooseSurface, permissionModes, effortLevels, contextRefsPlainText, machineLabel, serverColor, tagHex } from '@hangar/core';
 import type { AccountBadge } from '@hangar/core';
 import { useShallow } from 'zustand/react/shallow';
 import { useSessions } from '../../stores/sessions';
@@ -19,6 +19,7 @@ import { MACHINE_ICON_NAME } from '../tags/tagVisuals';
 import { AccountGlyph } from '../sessions/SessionPlate';
 import type { AntigravityAccount, ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo, Server, SessionDefaults, WorktreeChoice, WorktreeRepo } from '@hangar/core';
 import { SessionSettingsControl } from '../../chat/SessionSettings';
+import { permissionLabel } from '../pills/permissionLabel';
 import { semEsforco } from '../pills/pills';
 import { SettingsList } from '../../ui/SettingsList';
 import { useServers } from '../../stores/servers';
@@ -698,7 +699,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       ...(engineAccount ? { engine_account: engineAccount, engine_binding: engineConfig?.cliproxy_binding } : {}),
       model: (provider === 'claude' || provider === 'pi' || provider === 'kimi' || provider === 'omp') ? modelo || null : null,
       effort: (provider === 'claude' || provider === 'pi' || provider === 'omp') ? esforco || null : null,
-      permission_mode: provider === 'claude' ? permissao || null : null,
+      permission_mode: provider === 'claude' || provider === 'kimi' ? permissao || null : null,
       subagent_model: provider === 'claude' && !engine ? subagente || null : null,
       ...headlessField,
     };
@@ -723,7 +724,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const resumePrewarm = useCallback(() => reserve.current?.resume(), []);
 
   // A escolha de agora no formato do padrão do servidor; a permissão é a que iria no pedido.
-  const defaultPermission = provider === 'claude' ? permissao : provider === 'codex' ? (canHeadless && headless ? permissao : '')
+  const defaultPermission = provider === 'claude' || provider === 'kimi' ? permissao : provider === 'codex' ? (canHeadless && headless ? permissao : '')
     : provider === 'antigravity' ? agyPermission : '';
   // Gravação de um escopo que já saiu não cobre o padrão lido do escopo novo.
   const onDefaultSaved = useCallback((key: string, value: SessionDefaults | null) =>
@@ -1094,6 +1095,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         onChange={choosePermission}
       />
     </View>
+  ) : provider === 'kimi' ? (
+    <View style={styles.field}>
+      <Text style={styles.label}>{m.criar_permissao()}</Text>
+      <PanelSelect value={permissao}
+        options={[{ value: '', label: m.criar_padrao() }, ...KIMI_OPEN_PERMISSION_MODES.map((n) => ({ value: n, label: permissionLabel(n, 'kimi') }))]}
+        onChange={choosePermission} />
+    </View>
   ) : provider === 'antigravity' ? (
     <View style={styles.field}>
       <Text style={styles.label}>{m.criar_permissao()}</Text>
@@ -1353,6 +1361,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
                 onAction={chooseEffort} /> : null}
               {provider === 'claude' ? <SettingRow icon="ShieldCheck" label={m.criar_permissao()} value={permissao || m.criar_padrao()}
                 actions={[{ id: '', title: m.criar_permissao_padrao(), state: on(!permissao) }, ...CLAUDE_PERMISSION_MODES.map((n) => ({ id: n, title: n, state: on(n === permissao) }))]}
+                onAction={choosePermission} /> : null}
+              {provider === 'kimi' ? <SettingRow icon="ShieldCheck" label={m.criar_permissao()} value={permissao ? permissionLabel(permissao, 'kimi') : m.criar_padrao()}
+                actions={[{ id: '', title: m.criar_padrao(), state: on(!permissao) }, ...KIMI_OPEN_PERMISSION_MODES.map((n) => ({ id: n, title: permissionLabel(n, 'kimi'), state: on(n === permissao) }))]}
                 onAction={choosePermission} /> : null}
               {provider === 'antigravity' ? <SettingRow icon="ShieldCheck" label={m.criar_permissao()} value={agyPermission || m.criar_padrao()}
                 actions={[{ id: '', title: m.criar_padrao(), state: on(!agyPermission) }, ...agyModes.map((n) => ({ id: n, title: n, state: on(n === agyPermission) }))]}

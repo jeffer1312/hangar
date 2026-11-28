@@ -263,6 +263,8 @@ impl OpenHost for ServerHost {
     fn release_name<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), OpenError>> {
         Box::pin(async move {
             self.st.list.forget(name);
+            // A marca de filha sem pai era da vida que acabou; a falha fica no diário e não impede abrir.
+            crate::groups::link_orphans::reused(&self.st, name).await;
             self.st.list.invalidate();
             let (base, owned) = (self.env.claude_base.clone(), name.to_owned());
             if let Err(error) = tokio::task::spawn_blocking(move || forget_queue(&base, &owned)).await
@@ -393,7 +395,8 @@ async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller
             Ok(link) => link,
             Err(error) => return Decision::Refused(error),
         };
-        let decision = match (decide(&st, &host, request, caller).await, claim) {
+        let line_parent = child_line_parent(&st, &link).await;
+        let decision = match (decide(&st, &host, request, caller, line_parent.as_deref()).await, claim) {
             (Decision::Opened(opened), Some(guest)) => match host.claim(opened, &guest).await {
                 Ok(opened) => Decision::Opened(opened),
                 Err(error) => Decision::Refused(error),
@@ -402,13 +405,29 @@ async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller
         };
         match decision {
             Decision::Opened(mut opened) => {
-                if let Some(error) = link_child(&st, link, &opened.body).await
-                    && let Some(body) = opened.body.as_object_mut() { body.insert("link_error".into(), error); }
+                if let Some(error) = link_child(&st, link, &opened.body).await {
+                    // A filha já leu que a resposta volta sozinha; sem a ligação ela não volta.
+                    if line_parent.is_some() {
+                        let child = opened.body["name"].as_str().unwrap_or_default();
+                        crate::groups::link_return::line_unlinked(&st, child, error["detail"].as_str().unwrap_or_default());
+                    }
+                    if let Some(body) = opened.body.as_object_mut() { body.insert("link_error".into(), error); }
+                }
                 Decision::Opened(opened)
             }
             decision => decision,
         }
     }).await.unwrap_or_else(|_| Decision::Refused(OpenError::new(500, "erro_criacao_sessao", "a abertura não terminou")))
+}
+
+/// O pai cuja linha a filha recebe (`LinkPlan::line_parent`), com o grupo dele lido agora.
+async fn child_line_parent(st: &AppState, link: &super::LinkPlan) -> Option<String> {
+    let super::LinkPlan::Join(parent) = link else { return None };
+    let parent_orq = match &st.groups {
+        Some(groups) => groups.link(parent).await.ok().map(|sidecar| sidecar.is_some_and(|s| s.orq)),
+        None => None,
+    };
+    link.line_parent(parent_orq).map(str::to_owned)
 }
 
 /// Põe a sessão aberta no grupo da criadora pela rota de grupo. Falhar não fecha a sessão: devolve o
@@ -437,7 +456,8 @@ async fn link_child(st: &Arc<AppState>, link: super::LinkPlan, opened: &Value) -
 
 /// Resolve e abre o que é do Rust: com terminal de todo provedor, e o Claude e o Codex sem terminal.
 /// Recusa da resolução é do Rust: as dele são as do Python mais os consertos.
-pub async fn decide(st: &Arc<AppState>, host: &ServerHost, mut request: SessionOpenRequest, caller: OpenCaller) -> Decision {
+/// `child_of`: o pai cuja linha vai no começo do primeiro prompt da filha ligada.
+pub async fn decide(st: &Arc<AppState>, host: &ServerHost, mut request: SessionOpenRequest, caller: OpenCaller, child_of: Option<&str>) -> Decision {
     // A reserva pré-aquecida é só do dono: o nome derivado que só ela segura fica para esta abertura.
     let owner = matches!(caller, OpenCaller::Owner);
     request.take_reserved_name = owner;
@@ -445,7 +465,7 @@ pub async fn decide(st: &Arc<AppState>, host: &ServerHost, mut request: SessionO
         Some(id) if owner => Some(super::adopt::Adopting::take(st.prewarm.clone(), &id, &mut request).await),
         _ => None,
     };
-    let decision = decide_adopting(st, host, &request, &caller, adopting.as_mut()).await;
+    let decision = decide_adopting(st, host, &request, &caller, child_of, adopting.as_mut()).await;
     if let Some(adopting) = adopting {
         let error = match &decision { Decision::Refused(error) => Some(error), _ => None };
         let name = match &decision { Decision::Opened(opened) => opened.body["name"].as_str().unwrap_or_default(), _ => request.name.as_deref().unwrap_or_default() };
@@ -454,7 +474,7 @@ pub async fn decide(st: &Arc<AppState>, host: &ServerHost, mut request: SessionO
     decision
 }
 
-async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &SessionOpenRequest, caller: &OpenCaller,
+async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &SessionOpenRequest, caller: &OpenCaller, child_of: Option<&str>,
                          mut adopting: Option<&mut super::adopt::Adopting>) -> Decision {
     let facts_env = host.env.clone();
     let runtime = tokio::runtime::Handle::current();
@@ -476,6 +496,7 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
     // O spec desta resolução contra o guardado na reserva: nada resolvido nem montado de novo para ela.
     if let Some(adopting) = adopting.as_deref_mut() { adopting.compare(&resolved).await; }
     if !super::open::opens_here(&resolved.spec) { return Decision::NotOurs; }
+    if let Some(parent) = child_of { resolved.prefix_child_line(parent); }
     if let super::Account::Codex { account_id } = &resolved.spec.account {
         match codex_preparation(st,account_id).await {
             Ok(warning) => resolved.warnings.extend(warning),

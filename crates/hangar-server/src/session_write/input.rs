@@ -330,6 +330,12 @@ async fn send(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer
 /// orientação sem `now`, que espera a ferramenta em curso acabar.
 #[allow(clippy::too_many_arguments)]
 async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer: bool, conversation: bool, expected_turn: Option<Value>, include_uncertain: bool) -> (StatusCode, Value) {
+    send_with_entry(st,name,target,text,steer,conversation,expected_turn,include_uncertain).await.0
+}
+
+/// Como `send_with_receipt`, com o id da operação: é o da linha que o recado (texto sem `/`) criou na fila.
+#[allow(clippy::too_many_arguments)]
+async fn send_with_entry(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer: bool, conversation: bool, expected_turn: Option<Value>, include_uncertain: bool) -> ((StatusCode, Value), String) {
     let operation_id = random_hex(16);
     // No Claude com terminal o Orientar aperta `ctrl+x ctrl+s`, que corta o turno: lá o próprio ator digita a
     // mensagem marcada mesmo com o Claude trabalhando.
@@ -350,7 +356,7 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
             let result = handle.control(random_hex(16), "steer_entry".into(), payload).await;
             let mut answer = terminal_input_answer(&sent, &result);
             if uncertain { answer.1["uncertain"] = json!(true); }
-            return answer;
+            return (answer, operation_id);
         }
         let promoted = target.handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::SteerQueue,
             payload }).await;
@@ -360,7 +366,7 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
     }
     let mut answer=input_answer(&sent, steered);
     if uncertain {answer.1["uncertain"]=json!(true);}
-    answer
+    (answer, operation_id)
 }
 
 /// No Claude, o ator terminal conduz o `/clear`; no Codex, ele é controle de conversa nova.
@@ -402,6 +408,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         result.1["timing_note"] = json!(outcome);
     }
     count_input(st.counting().filter(|_| owner), &ctx.target.provider, ctx.target.terminal, &text, steer, &result);
+    if owner && result.0.is_success() { crate::auto_continue::owner_wrote(&st, &ctx.name, &text); }
     crate::diag::record(crate::diag::diary_dir(), vec![received_line(&ctx.name, ctx.headers(), peer, &text, steer, &result)], "mensagem recebida");
     answer(&ctx, result)
 }
@@ -428,6 +435,9 @@ fn count_input(telemetry: Option<&hangar_telemetry::Telemetry>, provider: &str, 
 
 static COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^/[a-z][a-z0-9:_-]{0,30}$").unwrap());
 static FROM: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^\s*\[(de|grupo|de fora|painel):\s*([A-Za-z0-9._:-]{1,64})").unwrap());
+
+/// Recado de outra sessão ou aviso do app (`[de: …]`, `[grupo: …]`, `[de fora: …]`, `[painel: …]`), não a pessoa.
+pub(crate) fn is_relay(text: &str) -> bool { FROM.is_match(text) }
 
 /// De onde veio cada mensagem e o que aconteceu com ela, sem o texto: o cliente (`hangar-mcp (de x)`,
 /// app), o remetente do recado (`[de: x]`), o endereço, o pedido do cliente e a resposta da entrega.
@@ -497,25 +507,31 @@ pub(super) async fn unowned_response(st: &AppState, name: &str, peer: SocketAddr
 
 /// Texto para a sessão adormecida: vai à fila da chave dela e a vida nova o entrega; o acordar já corre à parte.
 async fn queue_while_asleep(st: &AppState, name: &str, key: &str, text: &str) -> (StatusCode, Value) {
-    let Some(runtime) = st.state.runtime.get() else { return (StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_watcher", "o servidor ainda não abriu as sessões", json!({}))) };
+    queue_while_asleep_entry(st, name, key, text).await.0
+}
+
+/// `queue_while_asleep` com o id da linha que entrou na fila do ator, quando entrou por ela; a fila da sessão
+/// adormecida não devolve id.
+async fn queue_while_asleep_entry(st: &AppState, name: &str, key: &str, text: &str) -> ((StatusCode, Value), Option<String>) {
+    let Some(runtime) = st.state.runtime.get() else { return ((StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_watcher", "o servidor ainda não abriu as sessões", json!({}))), None) };
     // Comando de barra não tem linha na fila: só a vida nova o executa.
     if !queued(text) {
         let error = crate::runtime::gateway::asleep_waking();
-        return (StatusCode::CONFLICT, detail_body(&error.code, &error.message, json!({})));
+        return ((StatusCode::CONFLICT, detail_body(&error.code, &error.message, json!({}))), None);
     }
     match runtime.queue_asleep(name, key, text).await {
-        Ok(()) => (StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})),
+        Ok(()) => ((StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})), None),
         // A vida nova já pegou a fila e o acordar ainda confere a subida (a porta segue fechada): o texto entra
         // pela fila do ator dela, uma vez só, e ele o entrega quando ficar pronto.
         Err(error) if error.code == "runtime_lease" => {
             let id = random_hex(16);
             let row = crate::runtime::queue::Action::Append { text: text.into(), delivered: false, ts: None, pre_transcript: true, entry_id: Some(id.clone()) };
-            match runtime.queue_action(name, id, row).await {
-                Ok(_) => (StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})),
-                Err(other) => (StatusCode::SERVICE_UNAVAILABLE, detail_body(&other.code, &other.message, json!({}))),
+            match runtime.queue_action(name, id.clone(), row).await {
+                Ok(_) => ((StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})), Some(id)),
+                Err(other) => ((StatusCode::SERVICE_UNAVAILABLE, detail_body(&other.code, &other.message, json!({}))), None),
             }
         }
-        Err(error) => (StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({}))),
+        Err(error) => ((StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({}))), None),
     }
 }
 
@@ -543,6 +559,13 @@ pub async fn deliver_text(st: &AppState, name: &str, text: &str) -> Result<(), V
 /// O mesmo recado, com a resposta inteira do `/input` (o broadcast a devolve por sessão).
 pub async fn deliver_reply(st: &AppState, name: &str, text: &str) -> (StatusCode, Value) {
     write_input(st, name, text, false).await
+}
+
+/// O mesmo recado, com o id da linha que ele criou na fila de `name`, para tirá-la depois se ainda esperar.
+/// A entrada do Rust tem esse id, e a adormecida cuja vida nova já pegou a fila também; a fila da adormecida,
+/// abrindo ou sem dono voltam `None`.
+pub async fn deliver_reply_entry(st: &AppState, name: &str, text: &str) -> ((StatusCode, Value), Option<String>) {
+    write_input_entry(st, name, text, false).await
 }
 
 /// Entregue ou não, ninguém confirmou: o ator saiu depois de receber, o motor não respondeu, ou o `/clear`
@@ -652,11 +675,15 @@ async fn queue_bound_input(st:&AppState,runtime:&crate::runtime::gateway::Runtim
 /// O `/input` do dono feito por dentro, com a resposta inteira (o recado do par externo devolve
 /// o que a entrega respondeu).
 pub async fn write_input(st: &AppState, name: &str, text: &str, steer: bool) -> (StatusCode, Value) {
+    write_input_entry(st, name, text, steer).await.0
+}
+
+async fn write_input_entry(st: &AppState, name: &str, text: &str, steer: bool) -> ((StatusCode, Value), Option<String>) {
     let route = match st.state.runtime.get() {
         Some(runtime) => route_write(runtime, name, WriteRoute::Input, st.write_gate_wait).await,
         None => Write::Unowned,
     };
-    match route {
+    let answer = match route {
         Write::Rust(held, target) if is_codex_clear(&target.provider, text) => {
             let result = super::codex::clear(&target, text, Some(st.term.clone())).await;
             drop(held);
@@ -669,13 +696,14 @@ pub async fn write_input(st: &AppState, name: &str, text: &str, steer: bool) -> 
             result
         }
         Write::Rust(held, target) => {
-            let result = send(st, name, &target, text, steer, None).await;
+            let (result, entry) = send_with_entry(st, name, &target, text, steer, false, None, false).await;
             drop(held);
-            result
+            let entry = (result.0.is_success() && queued(text)).then_some(entry);
+            return (result, entry);
         }
         Write::Busy => (StatusCode::CONFLICT, busy_body()),
         Write::Opening(key) => queue_opening(st, name, &key, text, steer).await,
-        Write::Asleep(key) => queue_while_asleep(st, name, &key, text).await,
+        Write::Asleep(key) => return queue_while_asleep_entry(st, name, &key, text).await,
         // Pedido que veio pela ponte do Python: a entrega sai depois da resposta da rota, num prazo
         // (`groups::bridge::deliver_deferred`).
         Write::Unowned => match crate::groups::bridge::current() {
@@ -683,7 +711,8 @@ pub async fn write_input(st: &AppState, name: &str, text: &str, steer: bool) -> 
             None => super::unowned::input_answer(super::unowned::send(st, name, text).await),
         },
         Write::Failed(error) => (super::failed_status(&error), detail_body(&error.code, &error.message, json!({}))),
-    }
+    };
+    (answer, None)
 }
 
 /// Corpo do `BroadcastBody` do FastAPI (estrito): `names` não vazio de textos e `text`.

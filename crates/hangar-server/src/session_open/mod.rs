@@ -17,11 +17,14 @@ pub mod fallen;
 pub mod legacy_restore;
 pub mod local;
 pub mod open;
+pub mod orphans;
 pub mod record;
 pub mod resolve;
 pub mod restore;
 pub mod server;
 pub mod terminal;
+#[cfg(test)]
+mod kimi_permission_tests;
 #[cfg(test)]
 mod tests;
 
@@ -67,11 +70,12 @@ impl ServiceTier {
     pub fn is_fast(self) -> bool { self != Self::Default }
 }
 
-/// Modo de permissão: os do `claude --help` e os do picker `/permissions` do Codex.
+/// Modos de permissão aceitos pelo lançador de cada agente.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionMode {
     #[serde(rename = "acceptEdits")] AcceptEdits,
     #[serde(rename = "auto")] Auto,
+    #[serde(rename = "yolo")] Yolo,
     #[serde(rename = "bypassPermissions")] BypassPermissions,
     #[serde(rename = "manual")] Manual,
     #[serde(rename = "dontAsk")] DontAsk,
@@ -92,9 +96,14 @@ impl PermissionMode {
     pub fn name(self) -> &'static str {
         match self {
             Self::AcceptEdits => "acceptEdits", Self::Auto => "auto", Self::BypassPermissions => "bypassPermissions",
-            Self::Manual => "manual", Self::DontAsk => "dontAsk", Self::Plan => "plan",
+            Self::Yolo => "yolo", Self::Manual => "manual", Self::DontAsk => "dontAsk", Self::Plan => "plan",
             Self::AskForApproval => "Ask for approval", Self::ApproveForMe => "Approve for me", Self::FullAccess => "Full Access",
         }
+    }
+
+    /// Modos que a CLI do Kimi aceita por flag na abertura; sem flag vale a configuração dele.
+    pub fn kimi(name: &str) -> Option<Self> {
+        [Self::Yolo, Self::Auto].into_iter().find(|mode| mode.name() == name)
     }
 
     pub fn claude(name: &str) -> Option<Self> { Self::CLAUDE.into_iter().find(|m| m.name() == name) }
@@ -306,6 +315,33 @@ impl SessionOpenRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkPlan { No, Join(String), Unlinked(&'static str, &'static str) }
 
+impl LinkPlan {
+    /// O pai cuja linha a filha recebe: só quando a ligação deve dar certo. `parent_orq` é o grupo do pai
+    /// lido antes de abrir (`None` = grupos fora ou ilegíveis); grupo `orq` recusa filha ligada, e a
+    /// linha prometeria um retorno que não vem.
+    pub fn line_parent(&self, parent_orq: Option<bool>) -> Option<&str> {
+        match (self, parent_orq) {
+            (LinkPlan::Join(parent), Some(false)) => Some(parent),
+            _ => None,
+        }
+    }
+}
+
+impl Resolved {
+    /// A filha ligada recebe a linha dela no começo do primeiro prompt; sem prompt não ganha um, porque
+    /// a linha sozinha abriria um turno que ninguém pediu. Só o provedor que devolve a resposta sozinho:
+    /// a Pi, omp e Kimi a linha mandaria não responder, e nada voltaria. Decidido depois da resolução,
+    /// porque o provedor omitido vem da criadora. Vai no prompt, não no `SessionStart`: o vínculo só é
+    /// gravado depois de o processo subir.
+    pub fn prefix_child_line(&mut self, parent: &str) {
+        if !crate::groups::link_return::returnable(self.spec.provider.name()) { return; }
+        if let Some(prompt) = self.initial_prompt.as_mut().filter(|p| !p.is_empty()) {
+            // Espaço, não quebra de linha: o prompt de uma linha continua de uma linha no pane.
+            *prompt = format!("{} {prompt}", hangar_delegation::guidance::child_prefix(parent));
+        }
+    }
+}
+
 /// Recusa da abertura no envelope do Python: `{"detail": {code, params, msg}}`, ou `{"detail": msg}`
 /// nos 400 que o Python manda sem código (`model_args`).
 #[derive(Clone, Debug, PartialEq)]
@@ -408,6 +444,10 @@ pub struct SessionSpec {
     /// Nasceu sem hooks (`SessionOpenRequest::disable_hooks`): a reabertura mantém.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hooks_off: bool,
+    /// O dono desligou o continuar sozinho depois de queda passageira; propriedade da sessão, não opção
+    /// de abertura. Ausente = ligado.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_continue_off: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

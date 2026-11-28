@@ -13,6 +13,7 @@ mod code_comments;
 mod compact_idle;
 mod composer_history;
 mod connect_approval;
+mod connect_remove_computer;
 mod connect_sign_in;
 mod conversation_gallery;
 mod desktop_tool_look;
@@ -31,6 +32,7 @@ mod adopt_cliproxy;
 mod scheduled_tasks;
 mod hide_from_list;
 mod image_reveal;
+mod kimi_permissions;
 mod rename_suggestion;
 mod search_conversations;
 mod server_status;
@@ -77,6 +79,7 @@ pub type NewsAnimation = fn(started: Instant, width: Pixels, window: &mut Window
 /// A animação pelo nome do arquivo da novidade (`animacao:`); nome desconhecido = cartão só com texto.
 pub fn animation(name: &str) -> Option<NewsAnimation> {
     match name {
+        "kimi-permissions" => Some(kimi_permissions::render),
         "historico-compositor" => Some(composer_history::render),
         "codex-atividade" => Some(codex_activity::render),
         "etiquetas-maquina-conta" => Some(account_tags::render),
@@ -121,6 +124,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "whatsapp-somente-leitura" => Some(whatsapp_readonly::render),
         "whatsapp-draft" => Some(whatsapp_draft::render),
         "entrar-pelo-connect" => Some(connect_sign_in::render),
+        "connect-remover-computador" => Some(connect_remove_computer::render),
         "portas-da-sessao" => Some(session_ports::render),
         "antigravity" => Some(antigravity::render),
         "termos-antigravity" => Some(agy_terms::render),

@@ -5,7 +5,7 @@ import { haptic } from '../../ui/haptics';
 import { useSettingsColors } from './colors';
 
 /** Linha de marcar várias, dentro de um `SectionCard`: o quadrado diz o estado e o toque inteiro troca. */
-export function CheckRow({ title, description, checked, onToggle, disabled, dot }: {
+export function CheckRow({ title, description, checked, onToggle, disabled, dot, onLongPress, longPressLabel }: {
   title: string;
   description?: string;
   checked: boolean;
@@ -13,12 +13,18 @@ export function CheckRow({ title, description, checked, onToggle, disabled, dot 
   disabled?: boolean;
   /** Ponto de ligado/desligado à esquerda; ausente quando o estado não é conhecido. */
   dot?: 'on' | 'off';
+  /** Toque longo para o que não é marcar (as opções do item); `longPressLabel` o oferece ao leitor de tela, sem o gesto. */
+  onLongPress?: () => void;
+  longPressLabel?: string;
 }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   return <Pressable accessibilityRole="checkbox" accessibilityLabel={title} accessibilityHint={description}
     accessibilityState={{ checked, disabled }} disabled={disabled}
     onPress={() => { haptic.selection(); onToggle(); }}
+    onLongPress={onLongPress ? () => { haptic.selection(); onLongPress(); } : undefined}
+    accessibilityActions={onLongPress && longPressLabel ? [{ name: 'longpress', label: longPressLabel }] : undefined}
+    onAccessibilityAction={onLongPress ? (event) => { if (event.nativeEvent.actionName === 'longpress') onLongPress(); } : undefined}
     style={({ pressed }) => [styles.row, { borderTopColor: c.border, opacity: disabled ? 0.5 : 1 }, pressed && { backgroundColor: c.hover }]}>
     {dot ? <View style={[styles.dot, { backgroundColor: dot === 'on' ? theme.tokens.status.success : c.faint }]} /> : null}
     <View style={styles.texts}>

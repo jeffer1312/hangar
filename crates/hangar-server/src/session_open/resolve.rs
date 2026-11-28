@@ -318,7 +318,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     }
 
     let inherited_codex_mode = if saved_first { saved_codex_mode.or(inherited_codex_mode) } else { inherited_codex_mode.or(saved_codex_mode) };
-    if permission.is_none() && provider == AgentProvider::Claude {
+    if permission.is_none() && matches!(provider, AgentProvider::Claude | AgentProvider::Kimi) {
         permission = saved_permission.filter(|_| !saved_first);
     }
 
@@ -411,6 +411,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
             .unwrap_or(PermissionMode::FullAccess)),
         // Sem escolha, o `agy` abre no modo padrão dele. Com terminal não há como abrir no modo que pergunta
         // (`--mode` só aceita accept-edits, auto e plan): um `manual` salvo como padrão não vale ali.
+        AgentProvider::Kimi => permission.as_deref().and_then(PermissionMode::kimi),
         AgentProvider::Antigravity => permission.as_deref().and_then(PermissionMode::antigravity)
             .filter(|mode| headless || *mode != PermissionMode::Manual),
         _ => None,
@@ -458,7 +459,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         worktree: request.branch.clone().map(|branch| WorktreeSpec { branch, new_branch: request.new_branch, base: request.base.clone(), path: None }),
         creator: request.creator.clone(), created_at: facts.now(), conversation: None,
         name_auto: Some(name_auto), rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
-        hooks_off: request.disable_hooks,
+        hooks_off: request.disable_hooks, auto_continue_off: false,
     };
     // Nascer já no plano sem terminal deixaria a sessão sem modo de base. O ilegível vale bypass, como o
     // `modo_da_conta` do Python: o modo pedido já está escolhido, só a volta do plano depende dele.
@@ -723,7 +724,7 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
         }
     }
     // O Codex sem terminal aceita o modo dele (vira sandbox e aprovação).
-    if permission.is_some() && !claude && !(provider == AgentProvider::Codex && headless) && provider != AgentProvider::Antigravity {
+    if permission.is_some() && !claude && !(provider == AgentProvider::Codex && headless) && provider != AgentProvider::Antigravity && provider != AgentProvider::Kimi {
         return Err(OpenError::new(409, "erro_permissao_so_claude", "modo de permissao so vale para claude"));
     }
     if request.code_mode == Some(true) && !claude {
@@ -799,6 +800,8 @@ fn validate_choice(provider: AgentProvider, model: Option<&str>, effort: Option<
     }
     let (known, modes): (fn(&str) -> Option<PermissionMode>, &[PermissionMode]) = if provider == AgentProvider::Antigravity {
         (PermissionMode::antigravity, &PermissionMode::ANTIGRAVITY)
+    } else if provider == AgentProvider::Kimi {
+        (PermissionMode::kimi, &[PermissionMode::Yolo, PermissionMode::Auto])
     } else {
         (PermissionMode::claude, &PermissionMode::CLAUDE)
     };

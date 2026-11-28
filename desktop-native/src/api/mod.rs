@@ -178,6 +178,8 @@ impl Failure {
     fn transport(post: bool) -> Self {
         Self { uncertain: post, ..Self::local(if post { "delivery_uncertain" } else { "network_error" }) }
     }
+    /// `/input` que nem saiu daqui: o texto volta ao campo sem o risco de duplicar.
+    fn not_sent() -> Self { Self::local("send_not_sent") }
     /// Sem resposta: entra nas falhas recentes do servidor com status 0.
     fn lost(method: &str, error: &reqwest::Error, post: bool) -> Self {
         if let Some(url) = error.url() { recent::record(method, url, 0, Some("transport")); }
@@ -243,6 +245,30 @@ fn session_life_key(code: &str) -> Option<(&str, Option<&'static str>)> {
         | "erro_grupo_limpeza_falhou" | "erro_troca_modo" | "erro_recarregar" | "erro_retomar" | "erro_recarregar_sem_terminal" => Some((code, None)),
         _ => family.map(|key| (code, Some(key))),
     }
+}
+
+/// O que o Parar fez. `parent`: o pai foi interrompido (`interrupted: false` = ele não tinha turno, e só as filhas
+/// receberam o Parar; servidor antigo, sem o campo, conta como interrompido). `failed`: filhas que não pararam.
+/// `unchecked`: o servidor não conseguiu ler quais são as filhas.
+#[derive(Debug, Default, PartialEq)]
+pub struct Interrupted {
+    pub parent: bool,
+    pub failed: Vec<String>,
+    pub unchecked: bool,
+}
+
+impl Interrupted {
+    fn of(body: &Value) -> Self {
+        Self { parent: body.get("interrupted").and_then(Value::as_bool).unwrap_or(true), failed: cascade_failed(body),
+            unchecked: body.pointer("/cascade/unavailable").is_some_and(|v| !v.is_null()) }
+    }
+}
+
+/// Nomes de `cascade.failed` da resposta do `/interrupt`.
+fn cascade_failed(body: &Value) -> Vec<String> {
+    body.pointer("/cascade/failed").and_then(Value::as_array).map(|failed| failed.iter()
+        .filter_map(|f| f.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_owned)).collect())
+        .unwrap_or_default()
 }
 
 /// Caminho e bilhete de `open_url` (só página de sessão) sobre `route`, com o prefixo de caminho dela.
@@ -480,7 +506,7 @@ impl Api {
             let (body, failure) = failed_response(r, true, "POST", Some(self.base.as_str())).await;
             return if rejects_delivery_field(body.as_ref()) {
                 self.send(name, text).await.map(|delivery| Delivery { conversation: Some(false), ..delivery })
-            } else { Err(failure) };
+            } else { Err(settle_input_refusal(failure)) };
         }
         self.delivery(r).await
     }
@@ -497,11 +523,12 @@ impl Api {
     async fn post_input(&self, name: &str, body: &Value) -> Result<Response, Failure> {
         self.client.post(self.endpoint(Some(name), Some("input")))
             .json(body).timeout(Duration::from_secs(60))
-            .send().await.map_err(|_| Failure::transport(true))
+            .send().await.map_err(|e| if input_not_sent(&e) { Failure::not_sent() } else { Failure::transport(true) })
     }
 
     async fn delivery(&self, r: Response) -> Result<Delivery, Failure> {
-        let delivery: Delivery = self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))?;
+        let delivery: Delivery = self.checked(r, true).await.map_err(settle_input_refusal)?
+            .json().await.map_err(|_| Failure::transport(true))?;
         if !delivery.ok { return Err(Failure::transport(true)); }
         Ok(delivery)
     }
@@ -843,12 +870,23 @@ impl Api {
         mermaid_failure(status.as_u16(), message)
     }
 
-    pub async fn interrupt(&self, name: &str, clear: bool) -> Result<(), Failure> {
+    /// `cascade` só no Parar: cancelar o cartão de pergunta usa a mesma rota e não pode parar as filhas.
+    pub async fn interrupt(&self, name: &str, clear: bool, cascade: bool) -> Result<Interrupted, Failure> {
         let mut url = self.endpoint(Some(name), Some("interrupt"));
-        url.query_pairs_mut().append_pair("clear", if clear { "true" } else { "false" });
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("clear", if clear { "true" } else { "false" });
+            if cascade { query.append_pair("cascade", "1"); }
+        }
         let r = self.client.post(url).timeout(Duration::from_secs(15)).send().await.map_err(|_| Failure::transport(true))?;
-        self.checked(r, true).await?;
-        Ok(())
+        let r = self.checked(r, true).await?;
+        match r.json::<Value>().await {
+            Ok(body) => Ok(Interrupted::of(&body)),
+            // Com a cascata, o corpo diz se o pai tinha turno e quais filhas pararam: ilegível é resultado incerto,
+            // nunca "todas pararam". Sem ela, o 200 já é a resposta.
+            Err(_) if cascade => Err(Failure::transport(true)),
+            Err(_) => Ok(Interrupted { parent: true, ..Interrupted::default() }),
+        }
     }
 
     // Mutação sem retry: timeout ou queda depois de enviar vira incerteza, nunca repetição.
@@ -859,9 +897,14 @@ impl Api {
     /// Pedido na rota da sessão com método e consulta próprios; o `act` é o caso `POST`/`DELETE` sem consulta.
     pub async fn request(&self, name: &str, method: Method, path: &[&str], query: Option<(&str, &str)>, body: Option<Value>, seconds: u64)
         -> Result<Value, Failure> {
+        self.request_query(name, method, path, query.as_slice(), body, seconds).await
+    }
+
+    pub async fn request_query(&self, name: &str, method: Method, path: &[&str], query: &[(&str, &str)], body: Option<Value>, seconds: u64)
+        -> Result<Value, Failure> {
         let mut url = self.endpoint(Some(name), None);
         url.path_segments_mut().expect("validated HTTP base").extend(path);
-        if let Some((key, value)) = query { url.query_pairs_mut().append_pair(key, value); }
+        if !query.is_empty() { url.query_pairs_mut().extend_pairs(query); }
         let label = method.clone();
         let mut req = self.client.request(method, url);
         if let Some(body) = body { req = req.json(&body); }
@@ -1367,6 +1410,28 @@ async fn failed_response(response: Response, post: bool, method: &str, identity:
     recent::record(method, &url, status, code.as_deref());
     let detail = failure_detail(body.clone(), status);
     (body, Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
+}
+
+/// O `/input` não saiu daqui: a conexão não abriu (porta fechada, nome que não resolve) ou o pedido nem se montou.
+/// Corte depois de conectar fica incerto: o servidor pode ter gravado.
+fn input_not_sent(error: &reqwest::Error) -> bool { error.is_connect() || error.is_builder() }
+
+/// Os 503 do `/input` que o servidor só dá antes de gravar. Lista fechada: a fila da sessão que ainda abre grava e
+/// depois pode falhar com o código do ator (`other_terminal_life_changed`, `queue_io`), e isso fica incerto.
+const INPUT_REFUSED_BEFORE_WRITE: &[&str] = &["runtime_unhealthy", "runtime_unavailable", "runtime_watcher",
+    "orq_runs_unavailable", "codex_terminal_unadopted", "codex_sidecar_invalid", "claude_sidecar_invalid",
+    "antigravity_sidecar_invalid", "erro_lista_indisponivel", "erro_mux_indisponivel"];
+
+/// A regra "não saiu" do `/input`, a mesma do `isInputRefusal` do core: só o 503 de código que vem antes de gravar
+/// é recusa; o resto (`runtime_reply_lost` incluído) fica incerto. 408 é prazo de quem estava no meio: incerto.
+fn settle_input_refusal(mut failure: Failure) -> Failure {
+    match failure.status {
+        Some(503) if failure.detail == "server_starting"
+            || failure.code.as_deref().is_some_and(|code| INPUT_REFUSED_BEFORE_WRITE.contains(&code)) => failure.uncertain = false,
+        Some(408) => failure.uncertain = true,
+        _ => {}
+    }
+    failure
 }
 
 /// A recusa do `/input` anterior ao "Na conversa": campo desconhecido `delivery` (`extra_forbidden`).
@@ -1978,6 +2043,46 @@ mod tests {
         ]);
     }
 
+    #[tokio::test]
+    async fn interrupt_sends_cascade_only_when_asked() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            for reply in [r#"{"ok":true}"#, r#"{"ok":true,"cascade":{"interrupted":["kid-a"],"failed":[{"name":"kid-b","code":"cascade_timeout"}]}}"#,
+                r#"{"ok":true,"interrupted":false,"cascade":{"interrupted":[],"failed":[],"unavailable":"groups_unavailable"}}"#, r#"{"ok":tr"#] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                    head.push_str(&line);
+                    if line == "\r\n" { break; }
+                }
+                seen.push(head.lines().next().unwrap().split_whitespace().take(2).collect::<Vec<_>>().join(" "));
+                stream.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).as_bytes()).await.unwrap();
+            }
+            seen
+        });
+        let api = Api::new(&format!("http://{address}"), "fixture-token").unwrap();
+        assert_eq!(api.interrupt("a b", false, false).await.unwrap(), Interrupted { parent: true, ..Interrupted::default() });
+        assert_eq!(api.interrupt("a b", true, true).await.unwrap(), Interrupted { parent: true, failed: vec!["kid-b".to_owned()], unchecked: false });
+        // Pai sem turno e filhas não lidas: nada disso é "parou".
+        assert_eq!(api.interrupt("a b", false, true).await.unwrap(), Interrupted { parent: false, failed: Vec::new(), unchecked: true });
+        // Corpo cortado depois do 200: resultado incerto, não "nenhuma filha falhou".
+        assert!(api.interrupt("a b", false, true).await.unwrap_err().uncertain);
+        assert_eq!(server.await.unwrap(), vec![
+            "POST /api/sessions/a%20b/interrupt?clear=false".to_owned(),
+            "POST /api/sessions/a%20b/interrupt?clear=true&cascade=1".to_owned(),
+            "POST /api/sessions/a%20b/interrupt?clear=false&cascade=1".to_owned(),
+            "POST /api/sessions/a%20b/interrupt?clear=false&cascade=1".to_owned(),
+        ]);
+        assert_eq!(cascade_failed(&json!({"cascade": {"failed": [{"name": "kid-c", "code": "interrupt_unconfirmed"}]}})), vec!["kid-c".to_owned()]);
+        assert!(cascade_failed(&Value::Null).is_empty());
+    }
+
     /// A recusa de conta em uso com a lista vira o que perguntar; sem lista (servidor antigo) ou vazia, erro comum.
     #[test]
     fn account_in_use_refusal_carries_its_holders() {
@@ -1992,5 +2097,103 @@ mod tests {
         assert_eq!(account_holders(&empty), None);
         let other = json!({"detail": {"code": "erro_conta_cheia", "params": {"sessoes": ["web"]}}});
         assert_eq!(account_holders(&other), None);
+    }
+
+    /// Servidor de um pedido só: lê o `/input` inteiro e devolve `reply` (vazio: fecha sem responder).
+    async fn input_server(reply: String) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let (mut first, mut length) = (String::new(), 0usize);
+            loop {
+                let mut line = String::new();
+                assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                if first.is_empty() { first = line.clone(); }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap(); }
+                if line == "\r\n" { break; }
+            }
+            assert!(first.starts_with("POST /api/sessions/fixture/input "), "{first}");
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).await.unwrap();
+            stream.write_all(reply.as_bytes()).await.unwrap();
+        });
+        (address, server)
+    }
+
+    fn input_reply(status: &str, body: &str) -> String {
+        format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    }
+
+    async fn send_through(reply: String) -> Failure {
+        let (address, server) = input_server(reply).await;
+        let failure = super::Api::new(&address, "fixture-owner").unwrap().send("fixture", "oi").await.unwrap_err();
+        server.await.unwrap();
+        failure
+    }
+
+    #[tokio::test]
+    async fn send_to_a_refused_port_is_not_sent() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let failure = super::Api::new(&format!("http://{address}"), "fixture-owner").unwrap().send("fixture", "oi").await.unwrap_err();
+        assert!(!failure.uncertain, "{failure:?}");
+        assert_eq!(failure.detail, "send_not_sent");
+        assert_eq!(failure.status, None);
+    }
+
+    #[tokio::test]
+    async fn send_cut_after_connect_stays_uncertain() {
+        let failure = send_through(String::new()).await;
+        assert!(failure.uncertain, "{failure:?}");
+        assert_eq!(failure.detail, "delivery_uncertain");
+    }
+
+    #[tokio::test]
+    async fn send_503_with_code_is_a_refusal() {
+        let unhealthy = send_through(input_reply("503 Service Unavailable",
+            r#"{"detail":{"code":"runtime_unhealthy","params":{},"msg":"runtime unhealthy"}}"#)).await;
+        assert!(!unhealthy.uncertain, "{unhealthy:?}");
+        assert_eq!(unhealthy.status, Some(503));
+        assert_eq!(unhealthy.code.as_deref(), Some("runtime_unhealthy"));
+        assert_eq!(Some(unhealthy.detail), crate::i18n::tr_web("runtime_unhealthy", &std::collections::HashMap::new()));
+        let no_runtime = send_through(input_reply("503 Service Unavailable",
+            r#"{"detail":{"code":"runtime_unavailable","params":{},"msg":"sem registro"}}"#)).await;
+        assert!(!no_runtime.uncertain, "{no_runtime:?}");
+        assert_eq!(no_runtime.code.as_deref(), Some("runtime_unavailable"));
+        let starting = send_through(input_reply("503 Service Unavailable", r#"{"detail":"server_starting"}"#)).await;
+        assert!(!starting.uncertain, "{starting:?}");
+        assert_eq!(starting.status, Some(503));
+        assert_eq!(starting.code, None);
+        assert_eq!(starting.detail, "server_starting");
+    }
+
+    #[tokio::test]
+    async fn send_503_reply_lost_and_bare_502_stay_uncertain() {
+        let lost = send_through(input_reply("503 Service Unavailable",
+            r#"{"detail":{"code":"runtime_reply_lost","params":{},"msg":"reply lost"}}"#)).await;
+        assert!(lost.uncertain, "{lost:?}");
+        assert_eq!(lost.code.as_deref(), Some("runtime_reply_lost"));
+        let bare = send_through(input_reply("502 Bad Gateway", "")).await;
+        assert!(bare.uncertain, "{bare:?}");
+        assert_eq!(bare.status, Some(502));
+        let proxy = send_through(input_reply("503 Service Unavailable", "")).await;
+        assert!(proxy.uncertain, "503 sem código: {proxy:?}");
+        let timeout = send_through(input_reply("408 Request Timeout", "")).await;
+        assert!(timeout.uncertain, "408: {timeout:?}");
+    }
+
+    /// A fila da Pi/omp/Kimi que ainda abre grava a linha e depois pode falhar com o código do ator: reenviar duplicaria.
+    #[tokio::test]
+    async fn send_503_with_a_code_from_after_the_write_stays_uncertain() {
+        for code in ["other_terminal_life_changed", "queue_io"] {
+            let body = format!(r#"{{"detail":{{"code":"{code}","params":{{}},"msg":"x"}}}}"#);
+            let failure = send_through(input_reply("503 Service Unavailable", &body)).await;
+            assert!(failure.uncertain, "{code}: {failure:?}");
+            assert_eq!(failure.code.as_deref(), Some(code));
+        }
     }
 }

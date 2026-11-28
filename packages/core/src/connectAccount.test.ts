@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
 import { addMachine, approveAccountDevice, changeAccountPassword, deviceStatus, endAccountSessions, listAccountDevices, listMachines, lookupName,
-  registerDevice, revokeAccountDevice, signIn, signInAnywhere, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
+  registerDevice, removeAccountMachine, revokeAccountDevice, signIn, signInAnywhere, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
 import { installCode } from './installCode';
 import { _resetRotasForTests } from './rota';
 import type { Server } from './servers';
@@ -263,6 +263,34 @@ describe('aparelho da conta', () => {
     expect(calls.map(credential)).toEqual(Array(3).fill(['Bearer account-token', 'ad1', 'ad-secret']));
   });
 
+  it('remove o computador da conta com a sessão e a credencial do aparelho', async () => {
+    const calls = network(() => new Response(null, { status: 204 }));
+    await removeAccountMachine(released, 'pc 2');
+    expect(calls.map((call) => `${call.method} ${call.url.href}`)).toEqual([`DELETE ${SERVICE}/v1/machines/pc%202`]);
+    expect(calls.map(credential)).toEqual([['Bearer account-token', 'ad1', 'ad-secret']]);
+  });
+
+  it('recusa da remoção sai com o status e sem o texto do serviço', async () => {
+    network(() => json({ error: 'eco: senha' }, 403));
+    const error: unknown = await removeAccountMachine(released, 'outra').catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: 'connect_request_failed', status: 403 });
+    expect(String(error)).not.toContain('senha');
+  });
+
+  it('404 do serviço conta como já removido', async () => {
+    network(() => json({ error: 'não encontrado', reason: null }, 404));
+    await expect(removeAccountMachine(released, 'outra')).resolves.toBeUndefined();
+  });
+
+  it('404 que não veio do serviço não conta como removido', async () => {
+    for (const answer of [new Response('<html>not found</html>', { status: 404 }), json({ error: 5 }, 404), json(['error'], 404),
+      json({ error: 'Not Found' }, 404)]) {
+      network(() => answer);
+      const error: unknown = await removeAccountMachine(released, 'outra').catch((e: unknown) => e);
+      expect(error).toMatchObject({ code: 'connect_machine_remove_unavailable', status: 404 });
+    }
+  });
+
   it('o código de conferência do pendente vem pronto do serviço e é o mesmo que o celular calcula', async () => {
     const code = installCode('install-1');
     network(() => json([{ ...row, install_code: code }, { ...row, device_id: 'ad3', install_code: null }]));
@@ -332,6 +360,21 @@ describe('upgradeToDevice', () => {
     network(() => json({}, 401));
     expect(await upgradeToDevice(owner)).toBe(owner);
     expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('manda o nome do aparelho e a instalação, para a máquina reaproveitar a entrada dela', async () => {
+    configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized, origin: null,
+      createEventSource: () => { throw new Error('sem SSE'); },
+      deviceIdentity: () => ({ kind: 'android', id: 'install-1' }), deviceName: () => 'Pixel do Jefferson' });
+    const calls = machineWith(MACHINE_URL);
+    await upgradeToDevice(owner);
+    expect(enrolls(calls)[0].body).toEqual({ device_name: 'Pixel do Jefferson', install_id: 'install-1' });
+  });
+
+  it('sem nome e sem instalação, fica o nome genérico', async () => {
+    const calls = machineWith(MACHINE_URL);
+    await upgradeToDevice(owner);
+    expect(enrolls(calls)[0].body).toEqual({ device_name: 'Hangar app' });
   });
 
   it('pedidos juntos registram um aparelho só', async () => {

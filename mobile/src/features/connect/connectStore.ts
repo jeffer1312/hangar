@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import { addMachine, approveAccountDevice, changeAccountPassword, CONNECT_SERVICE_URL, deviceStatus, endAccountSessions, installCode, listAccountDevices,
-  listMachines, normalizeGuestUser, registerDevice, registrarDiag, revokeAccountDevice, signIn, signInAnywhere as signInByName, signUp,
+  listMachines, normalizeGuestUser, registerDevice, registrarDiag, removeAccountMachine, revokeAccountDevice, signIn, signInAnywhere as signInByName, signUp,
   upgradeToDevice } from '@hangar/core';
 import type { AccountDevice, AccountDeviceKey, AccountDeviceStatus, AccountSession, ConnectMachine, Server } from '@hangar/core';
 import { validInstallField, vouchAccountDevice } from '../machines/api';
@@ -59,6 +59,8 @@ export interface ConnectState {
   answerDevice(deviceId: string, approve: boolean): Promise<void>;
   /** Este aparelho perdeu o acesso: registra outro pedido de liberação. */
   requestDeviceAgain(): Promise<void>;
+  /** Tira o computador da conta e o servidor dele deste app, e relê a lista. Falha rejeita com a frase da tela. */
+  removeMachine(machine: ConnectMachine): Promise<void>;
 }
 
 const CODES: Record<string, () => string> = {
@@ -66,6 +68,7 @@ const CODES: Record<string, () => string> = {
   connect_device_revoked: m.connect_error_device_revoked,
   connect_device_required: m.connect_error_device_required,
   connect_vault_failed: m.connect_error_vault,
+  connect_machine_remove_unavailable: m.connect_error_machine_remove_unavailable,
   connect_device_denied: m.connect_error_denied,
   connect_approval_expired: m.connect_error_expired,
   connect_token_lost: m.connect_error_token_lost,
@@ -498,6 +501,24 @@ export const useConnect = create<ConnectState>((set, get) => {
       renew = true;
       set({ device: null, deviceError: '', devices: noDevices });
       await get().refreshDevices();
+    },
+    async removeMachine(machine) {
+      const { account } = get();
+      if (!account) throw new Error(m.connect_session_ended());
+      // Já fora da conta, o core devolve como feito: falta só a limpeza daqui.
+      try { await removeAccountMachine(sessionOf(account), machine.machine_id); }
+      catch (error) {
+        if (statusOf(error) === 401) {
+          if (get().account?.token === account.token) await dropAccount(m.connect_session_ended());
+          throw new Error(m.connect_session_ended());
+        }
+        throw new Error(failure(error, 'machine'));
+      }
+      // Fora da conta ele deixa de abrir pelo Connect: a entrada guardada só ficaria recusando.
+      const servers = useServers.getState();
+      for (const server of ownServers(servers.servers).filter((candidate) => sameMachine(candidate, machine))) servers.remove(server.id);
+      setEntry(machine.machine_id, null);
+      if (get().account?.token === account.token) await get().refreshMachines();
     },
   };
 });

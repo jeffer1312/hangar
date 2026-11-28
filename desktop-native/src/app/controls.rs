@@ -195,9 +195,18 @@ impl Controls {
     }
 }
 
+/// Linha do seletor, compartilhada com a demonstração da novidade.
+pub(crate) fn control_option(id: SharedString, content: AnyElement, current: bool, lit: bool, disabled: bool) -> Button {
+    popup::row(id, current).disabled(disabled)
+        .when(lit && !current, |el| el.bg(theme::text().opacity(0.06)))
+        .child(div().w_full().flex().items_center().gap_2().child(content)
+            .when(current, |el| el.child(chrome::small_icon(IconName::Check, 16., theme::accent()))))
+}
+
 // Modo conhecido aparece traduzido; valor que o backend inventar depois aparece cru.
-fn shown(ctl: Ctl, value: String) -> String {
+fn shown(provider: &str, ctl: Ctl, value: String) -> String {
     match ctl {
+        Ctl::Mode if provider == "kimi" => tr(&format!("kimi_mode_{value}")),
         Ctl::Effort => effort_label(&value),
         Ctl::Fast if value == "priority" => tr("ctl_fast_on"),
         Ctl::Fast if value == "ultrafast" => format!("{} {}", tr("ctl_speed_ultrafast"), tr("ctl_fast_on")),
@@ -484,7 +493,8 @@ impl Hangar {
                 [Some(Ctl::Model), (!haiku).then_some(Ctl::Effort), Some(Ctl::Mode)].into_iter().flatten().collect()
             }
             "codex" => vec![Ctl::Model, Ctl::Effort, Ctl::Mode, Ctl::Permission],
-            "pi" | "omp" | "kimi" => vec![Ctl::Model, Ctl::Effort],
+            "pi" | "omp" => vec![Ctl::Model, Ctl::Effort],
+            "kimi" => vec![Ctl::Model, Ctl::Effort, Ctl::Mode],
             // O esforço do Antigravity mora no id do modelo: a pílula do modelo troca os dois.
             "antigravity" => vec![Ctl::Model, Ctl::Mode],
             _ => Vec::new(),
@@ -494,7 +504,7 @@ impl Hangar {
     fn ctl_label(&self, ctl: Ctl) -> Option<String> {
         let key = self.selected_key()?;
         let live = self.ctl_live(ctl);
-        if ctl == Ctl::Mode && let Some(target) = self.controls.mode_target.get(&key) { return Some(target.mode.clone()); }
+        if ctl == Ctl::Mode && self.provider().0 != "kimi" && let Some(target) = self.controls.mode_target.get(&key) { return Some(target.mode.clone()); }
         match self.controls.applied.get(&(key, ctl)) {
             Some((applied, before)) if *before == live => Some(applied.clone()),
             _ => live,
@@ -543,6 +553,7 @@ impl Hangar {
             ("codex", Ctl::Permission) if headless || probe => Some((vec!["codex-permissions"], vec![])),
             ("codex", Ctl::Permission) => None,
             ("pi" | "omp", _) => Some((vec!["pi", "models"], vec![])),
+            ("kimi", Ctl::Mode) => Some((vec!["permission-modes"], vec![])),
             ("kimi", _) => Some((vec!["kimi", "models"], vec![])),
             ("antigravity", Ctl::Model) => Some((vec!["antigravity", "models"], vec![])),
             // O ciclo do `agy` é fixo: a leitura não mexe no terminal, sem a sonda do Claude.
@@ -590,7 +601,7 @@ impl Hangar {
         if self.open_read_only() { return; }
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
         let provider = self.provider().0;
-        if !matches!(provider, "claude" | "antigravity") { return; }
+        if !matches!(provider, "claude" | "antigravity" | "kimi") { return; }
         let query: Vec<(&'static str, &'static str)> = if provider == "claude" { vec![("sondar", "1")] } else { Vec::new() };
         if let Some((reading, steps)) = &mut self.controls.cycle_after_read && *reading == key {
             *steps += 1;
@@ -646,7 +657,8 @@ impl Hangar {
 
     /// Anda `steps` modos a partir do que a pílula mostra. Com a troca em voo só o alvo anda; a resposta manda o resto.
     fn step_mode(&mut self, key: SessionKey, modes: &[String], steps: usize, cx: &mut Context<Self>) {
-        let from = self.ctl_label(Ctl::Mode);
+        // O Kimi não mostra o alvo na pílula, mas a tecla seguinte anda a partir dele.
+        let from = self.controls.mode_target.get(&key).map(|target| target.mode.clone()).or_else(|| self.ctl_label(Ctl::Mode));
         let Some(mode) = mode_ahead(modes, from.as_deref(), steps).filter(|m| from.as_deref() != Some(m.as_str())) else { return; };
         let live = self.ctl_live(Ctl::Mode);
         self.controls.mode_target.entry(key.clone()).or_insert_with(|| ModeTarget { mode: String::new(), before: live, answers: Vec::new() }).mode = mode;
@@ -787,6 +799,8 @@ impl Hangar {
                     keyed(choice(name, String::new(), vec!["antigravity", "model"], json!({"model": id}), on), &id)
                 }).collect()
             }
+            ("kimi", Ctl::Mode) => list(catalog, "modes").iter().filter_map(Value::as_str).map(|mode|
+                choice(tr(&format!("kimi_mode_{mode}")), String::new(), vec!["permission-mode"], json!({"mode":mode}), current == mode)).collect(),
             ("antigravity", Ctl::Mode) => antigravity_modes(catalog).into_iter().map(|(m, enabled)| Choice { enabled,
                 ..choice(tr(&format!("mode_{m}")), String::new(), vec!["permission-mode"], json!({"mode": m}), current == m) }).collect(),
             _ => Vec::new(),
@@ -931,7 +945,7 @@ impl Hangar {
                         let note = if pending { (tr("ctl_pending_confirm"), true) }
                             else if partial { (tr("ctl_effort_not_applied"), true) }
                             else if let Some(warnings) = reopen_warnings(&value) { (warnings, true) }
-                            else { (tr("ctl_applied").replace("{what}", &tr(&format!("ctl_{}", ctl.key()))).replace("{value}", &shown(ctl, label)), false) };
+                            else { (tr("ctl_applied").replace("{what}", &tr(&format!("ctl_{}", ctl.key()))).replace("{value}", &shown(self.provider().0, ctl, label)), false) };
                         self.action_feedback.insert(key, note);
                     }
                     Err(error) => {
@@ -991,7 +1005,7 @@ impl Hangar {
         for ctl in self.ctl_list() {
             if paired && ctl == Ctl::Effort { continue; }
             let name = tr(&format!("ctl_{}", ctl.key()));
-            let value = self.ctl_label(ctl).map(|v| shown(ctl, v)).map(|v| match ctl {
+            let value = self.ctl_label(ctl).map(|v| shown(self.provider().0, ctl, v)).map(|v| match ctl {
                 Ctl::Model if claude => spaced(&v),
                 Ctl::Model if self.provider().0 == "antigravity" => self.antigravity_model_name(&v),
                 _ => v,
@@ -1018,9 +1032,10 @@ impl Hangar {
                     }))).into_any_element());
                 continue;
             }
-            // O modo pedido pelo Shift+Tab já aparece como valor; "aplicando" fica para a troca pelo painel.
+            // Claude e Antigravity antecipam o alvo do teclado; o Kimi mantém o modo confirmado.
+            let kimi_mode = ctl == Ctl::Mode && self.provider().0 == "kimi";
             let shifting = ctl == Ctl::Mode && self.controls.mode_target.contains_key(&key);
-            let text = if busy == Some(ctl) && !shifting { tr("ctl_applying").replace("{what}", &name) } else { value.clone().unwrap_or_else(|| name.clone()) };
+            let text = if busy == Some(ctl) && !shifting && !kimi_mode { tr("ctl_applying").replace("{what}", &name) } else { value.clone().unwrap_or_else(|| name.clone()) };
             let id = SharedString::from(format!("ctl-{}", ctl.key()));
             let listener = cx.listener(move |this, _, window, cx| {
                 this.open_ctl(ctl, false, cx);
@@ -1030,7 +1045,7 @@ impl Hangar {
                 let plan = self.ctl_label(ctl).as_deref() == Some("plan");
                 let aria = format!("{name}: {text}");
                 let pill = if crate::appearance::conversation_beta() { super::beta_mode_pill(id.clone(), text, cx) } else { super::menu_pill(id.clone(), text, plan, cx) };
-                mode = Some(popup::anchor(div(), id.clone()).child(pill.selected(open == Some(ctl)).disabled(!self.chat_online)
+                mode = Some(popup::anchor(div(), id.clone()).child(pill.selected(open == Some(ctl)).disabled(!self.chat_online).loading(kimi_mode && busy == Some(ctl))
                     .tooltip(name.clone()).accessibility_label(aria)
                     .on_click(listener)).into_any_element());
                 continue;
@@ -1149,11 +1164,7 @@ impl Hangar {
             div().flex_1().min_w_0().flex().flex_col().gap(px(1.)).child(name)
                 .when(!c.detail.is_empty(), |el| el.child(div().truncate().text_xs().text_color(theme::muted()).child(c.detail)))
         };
-        popup::row(id, current).disabled(busy || !enabled)
-            // Véu do texto, como o do Zeron: `theme::hover()` sólido tem a cor do cartão no clássico escuro.
-            .when(lit && !current, |el| el.bg(theme::text().opacity(0.06)))
-            .child(div().w_full().flex().items_center().gap_2().child(text)
-                .when(current, |el| el.child(chrome::small_icon(IconName::Check, 16., theme::accent()))))
+        control_option(id, text.into_any_element(), current, lit, busy || !enabled)
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered && enabled && this.controls.highlight != Some(n) { this.controls.highlight = Some(n); cx.notify(); }
             }))

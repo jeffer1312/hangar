@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { ChatEvent } from '@hangar/core';
-import { fixStates, fixTracker, isApiError, isFixRunningNote, noticeAction, sameFixStates, noticeCount, noticeDetail, noticeKey, noticeKeyLabel, noticeTitle, parseNoticeIgnores } from './notices';
+import * as m from '../../paraglide/messages';
+import { autoContinueCancellable, autoContinueText, fixStates, fixTracker, isApiError, isAutoContinue, isFixRunningNote, noticeAction, sameFixStates, noticeCount, noticeDetail, noticeKey, noticeKeyLabel, noticeTitle, parseNoticeIgnores } from './notices';
 
 const ev = (text: string, notice_meta: ChatEvent['notice_meta'], extra: Partial<ChatEvent> = {}): ChatEvent =>
   ({ kind: 'assistant_msg', id: 'local-1', text, notice_meta, ...extra }) as ChatEvent;
@@ -67,6 +68,32 @@ describe('aviso da CLI do Claude', () => {
     const track = fixTracker();
     expect(track([fix('f1', 'running'), tail], 1).get('hookfail:a')?.state).toBe('running');
     expect(track([fix('f1', 'failed'), tail], 2).get('hookfail:a')).toEqual({ state: 'failed' });
+  });
+
+  // Horário local: o texto mostra HH:MM do aparelho, em qualquer fuso.
+  const at = (hour: number, minute: number) => new Date(2026, 10, 27, hour, minute).getTime() / 1000;
+  const autoNote = (state: string, extra: Record<string, unknown> = {}) =>
+    ev('texto do servidor', { kind: 'auto_continue', state, stopped_at: at(10, 5), count: 1, ...extra } as ChatEvent['notice_meta']);
+
+  test('continuar sozinho: a nota lê os horários do meta, trocada a cada passo', () => {
+    expect(isAutoContinue(autoNote('waiting'))).toBe(true);
+    expect(autoContinueText(autoNote('waiting'))).toBe(m.auto_continue_waiting_line({ stopped: '10:05' }));
+    expect(autoContinueText(autoNote('continued', { continued_at: at(10, 20), count: 2 }))).toBe(m.auto_continue_line({ stopped: '10:05', continued: '10:20' }));
+    expect(autoContinueText(autoNote('failed', { code: 'erro_envio_falhou' }))).toBe(m.auto_continue_failed_line({ stopped: '10:05', code: 'erro_envio_falhou' }));
+    expect(autoContinueText(autoNote('cancelled'))).toBe(m.auto_continue_cancelled_line({ stopped: '10:05' }));
+    expect(autoContinueText(autoNote('skipped', { code: 'user_after_stop' }))).toBe(m.auto_continue_skipped_line({ stopped: '10:05' }));
+    // Reboot: `stopped_at` é a hora do boot, o texto diz só quando continuou.
+    expect(autoContinueText(autoNote('continued', { cause: 'reboot', continued_at: at(10, 20) }))).toBe(m.auto_continue_reboot_line({ continued: '10:20' }));
+    expect(autoContinueText(autoNote('failed', { cause: 'reboot', code: 'erro_envio_falhou' }))).toBe(m.auto_continue_reboot_failed_line({ code: 'erro_envio_falhou' }));
+    expect(autoContinueText(autoNote('de-uma-versao-futura'))).toBe('texto do servidor');
+    expect(isAutoContinue(ev('⚙️ x', { state: 'waiting' }))).toBe(false);
+  });
+
+  test('continuar sozinho: Cancelar só na nota que espera a rede', () => {
+    expect(autoContinueCancellable(autoNote('waiting'))).toBe(true);
+    for (const state of ['continued', 'failed', 'cancelled', 'skipped']) expect(autoContinueCancellable(autoNote(state))).toBe(false);
+    expect(autoContinueCancellable(autoNote('waiting', { cause: 'reboot' }))).toBe(false);
+    expect(autoContinueCancellable(ev('x', { fix_of: 'hookfail:a', attempt: 1, state: 'waiting' }))).toBe(false);
   });
 
   test('lista ignorada: aceita a rota e o evento, recusa o torto', () => {

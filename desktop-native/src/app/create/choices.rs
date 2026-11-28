@@ -11,8 +11,9 @@ pub(in crate::app) const PERMISSIONS: [&str; 6] = ["acceptEdits", "auto", "bypas
 pub(in crate::app) const CODEX_PERMISSIONS: [&str; 3] = ["Ask for approval", "Approve for me", "Full Access"];
 
 /// O nome do modo como o seletor da conversa mostra; o do Codex já vem escrito, e o vazio é o padrão da conta.
-fn permission_label(mode: &str) -> String {
+fn permission_label(mode: &str, provider: &str) -> String {
     if mode.is_empty() { tr("create_permission_default") }
+    else if provider == "kimi" { tr(&format!("kimi_mode_{mode}")) }
     else if PERMISSIONS.contains(&mode) { tr(&format!("mode_{mode}")) }
     else { mode.to_owned() }
 }
@@ -715,6 +716,7 @@ impl NewSession {
         if self.is_transfer() { return None; }
         match (self.provider, self.headless && !self.headless_inherited()) {
             ("claude", _) => Some(&PERMISSIONS),
+            ("kimi", _) => Some(&["yolo", "auto"]),
             ("codex", true) => Some(&CODEX_PERMISSIONS),
             ("antigravity", true) => Some(&AGY_HEADLESS_PERMISSIONS),
             // Sem o `manual`, que o `agy` com terminal não tem.
@@ -771,7 +773,7 @@ impl NewSession {
         // O `manual` escolhido sem terminal não vai para o agy com terminal, que recusaria a abertura.
         if self.provider == "antigravity" && !self.permission.is_empty() && !modes.contains(&self.permission.as_str()) { self.permission.clear(); }
         let choices: Vec<ModelChoice> = std::iter::once(ModelChoice { id: String::new(), label: tr("create_permission_default"), hint: String::new() })
-            .chain(modes.iter().map(|m| ModelChoice { id: (*m).into(), label: (*m).into(), hint: String::new() })).collect();
+            .chain(modes.iter().map(|m| ModelChoice { id: (*m).into(), label: if self.provider == "kimi" { permission_label(m, self.provider) } else { (*m).into() }, hint: String::new() })).collect();
         let at = Self::pick_at(&choices, &self.permission);
         self.permission_pick = Some(picker(choices, at, false, |this, id, _, _| { this.scheduled_touch(&["permission_mode"]); (this.permission, this.permission_touched) = (id, true); }, window, cx));
     }
@@ -840,7 +842,7 @@ impl NewSession {
             let current = self.permission.clone();
             let rows = std::iter::once(String::new()).chain(self.permissions().unwrap_or_default().iter().map(|m| (*m).to_owned()))
                 .map(|mode| picker::row_view(SharedString::from(format!("new-chat-permission-{mode}")), "",
-                        name(&format!("permission-{mode}"), permission_label(&mode), String::new()), current == mode, false, None, None)
+                        name(&format!("permission-{mode}"), permission_label(&mode, self.provider), String::new()), current == mode, false, None, None)
                     .disabled(self.creating)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.scheduled_touch(&["permission_mode"]);
@@ -909,7 +911,7 @@ impl NewSession {
         let center = div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).px(px(4.)).children(engine)
             .when(!access_open, |el| el.child(search)).child(list);
         let access = self.permissions().map(|_| {
-            let shown = permission_label(&self.permission);
+            let shown = permission_label(&self.permission, self.provider);
             Button::new("new-chat-access").ghost().small().selected(access_open).disabled(self.creating)
                 .accessibility_label(format!("{}: {shown}", tr("create_permission")))
                 .child(div().flex().items_center().gap(px(6.)).text_size(px(13.5)).text_color(theme::muted())

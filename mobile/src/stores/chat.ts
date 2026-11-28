@@ -42,6 +42,7 @@ import {
   splitContextRefs,
   parseCodexOutput,
   givenUpSlot,
+  isInputRefusal,
   type ContextRef,
 } from '@hangar/core';
 import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEvent, EventSourceLike, Server, QueuePanel, QueueEdit } from '@hangar/core';
@@ -1205,11 +1206,15 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           else await sendInputForServer(target, name, trimmed);
         } catch (err) {
           // O /steer também usa 409 quando escreveu sem confirmar: não presumir recusa.
-          if ((mode === 'steer' || (typeof mode === 'object' && mode.kind === 'direct' && !mode.terminalClaude)) && (err as { status?: number } | null)?.status === 409) {
+          const steer = mode === 'steer' || (typeof mode === 'object' && mode.kind === 'direct' && !mode.terminalClaude);
+          const status = (err as { status?: number } | null)?.status;
+          if (steer && status === 409) {
             throw new Error(m.queue_steer_uncertain(), { cause: err });
           }
+          // O 503 com código só é recusa no `/input`: o do `/steer` continua incerto.
+          if (steer && status === 503) throw Object.assign(new Error((err as Error).message, { cause: err }), { status });
           // A linha local do painel sai em qualquer falha: se a mensagem entrou na fila mesmo assim, o servidor a lista.
-          if (queue || isInputRejected(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
+          if (queue || isInputRefusal(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
           throw err;
         }
       }, draftRevision).catch((error: unknown) => {
@@ -1237,11 +1242,6 @@ export function settleDelivered(serverId: string, name: string, draft: Conversat
     }).catch(() => {});
   }
   chatStore(serverId, name).use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
-}
-
-function isInputRejected(error: unknown): boolean {
-  const status = (error as { status?: number } | null)?.status;
-  return typeof status === 'number' && status >= 400 && status < 500 && status !== 408;
 }
 
 // O snapshot precede qualquer POST e já esvazia o campo enviado; só a falha devolve o texto.
@@ -1302,9 +1302,13 @@ export async function submitConversationDraft(serverId: string, name: string, te
       });
     };
     try { await deliver(); } catch (error) {
-      const rejected = isInputRejected(error);
+      const rejected = isInputRefusal(error);
       settle(rejected ? 'rejected' : 'unknown');
       if (!rejected && (error instanceof TypeError || isNoResponse(error))) throw new Error(m.chat_envio_incerto(), { cause: error });
+      // O porteiro da subida manda só o código; status e código seguem para quem decide pelo erro.
+      if (rejected && (error as { code?: unknown } | null)?.code === 'server_starting') {
+        throw Object.assign(new Error(m.chat_envio_servidor_subindo(), { cause: error }), { status: 503, code: 'server_starting' });
+      }
       throw error;
     }
     // Entregue: falha local aqui não pode virar "não enviado", senão a pessoa reenvia e duplica.

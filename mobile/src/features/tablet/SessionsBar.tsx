@@ -63,7 +63,7 @@ export function SessionsBar({ placement, selected, onPick, onNew, onWorkReview }
     if (placement === 'left' && !rail) return <SessionRow key={keyOf(s)} session={s} mostrarServidor compact selected={isSelected(s)} onPress={onPick} onWorkReview={reviewOf(s)} />;
     if (rail) return (
       <Pressable key={keyOf(s)} onPress={() => onPick(s)} accessibilityRole="button"
-        accessibilityLabel={`${s.name}, ${s.serverLabel}, ${rotuloEstado(s.state)}${s.asleep ? `, ${m.session_asleep_badge()}` : ''}`} accessibilityState={{ selected: isSelected(s) }}
+        accessibilityLabel={`${s.name}, ${s.serverLabel}, ${rotuloEstado(s.state)}${s.asleep ? `, ${m.session_asleep_badge()}` : ''}${s.orphaned_from ? `, ${m.session_orphaned_from({ name: s.orphaned_from })}` : ''}`} accessibilityState={{ selected: isSelected(s) }}
         style={({ pressed }) => [styles.railItem, { backgroundColor: isSelected(s) || pressed ? superficie(theme, 0.8) : 'transparent' }]}>
         <SessionAvatar session={s} size={30} />
         <View style={styles.dot}><StateDot state={s.state} size={6} /></View>

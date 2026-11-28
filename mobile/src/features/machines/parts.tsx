@@ -12,21 +12,26 @@ import * as m from '../../paraglide/messages';
 
 export function MachineSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const insets = useSafeAreaInsets();
-  const c = useSettingsColors();
   return <Sheet open sizes={['large']} scrollable onDismiss={onClose}>
     <KeyboardAvoidingView automaticOffset behavior="padding" style={{ flex: 1 }}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
-        <View style={styles.heading}>
-          <Text accessibilityRole="header" style={[styles.title, { color: c.text }]}>{title}</Text>
-          <Pressable accessibilityRole="button" accessibilityLabel={m.sessao_fechar()} onPress={onClose} style={styles.close}>
-            <Icon name="X" size={21} color={c.muted} />
-          </Pressable>
-        </View>
+        <MachineSheetHeading title={title} onClose={onClose} />
         {children}
       </ScrollView>
     </KeyboardAvoidingView>
   </Sheet>;
 }
+/** O título do detalhe com o X de fechar: a folha e a miniatura da novidade usam o mesmo. */
+export function MachineSheetHeading({ title, onClose }: { title: string; onClose: () => void }) {
+  const c = useSettingsColors();
+  return <View style={styles.heading}>
+    <Text accessibilityRole="header" style={[styles.title, { color: c.text }]}>{title}</Text>
+    <Pressable accessibilityRole="button" accessibilityLabel={m.sessao_fechar()} onPress={onClose} style={styles.close}>
+      <Icon name="X" size={21} color={c.muted} />
+    </Pressable>
+  </View>;
+}
+
 export function ConnectionDot({ label, loaded, error }: { label: string; loaded: boolean; error?: string | null }) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
