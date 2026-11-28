@@ -9,6 +9,7 @@ import { OFFLINE_NOTICE_MS, type AggSession, type GroupBy, type Server, type Ses
 const calls = vi.hoisted(() => ({
   alert: vi.fn(),
   deleteSession: vi.fn(),
+  deleteSessionForServer: vi.fn(),
   hideSession: vi.fn(),
   error: vi.fn(),
   ok: vi.fn(),
@@ -28,6 +29,7 @@ const calls = vi.hoisted(() => ({
 vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
   deleteSession: calls.deleteSession,
+  deleteSessionForServer: calls.deleteSessionForServer,
   hideSession: calls.hideSession,
   rotaDecidida: () => true,
   probeServerResponse: async (server: Server) => ({ ok: true, status: 200,
@@ -103,6 +105,10 @@ vi.mock('../../paraglide/messages', async (importOriginal) => ({ ...await import
   par_grupo_titulo: ({ n }: { n: number }) => `par_grupo_titulo:${n}`,
   session_hide_whole_group: ({ n }: { n: number }) => `session_hide_whole_group:${n}`,
   session_hide_group_skipped: ({ names }: { names: string }) => `session_hide_group_skipped:${names}`,
+  session_close_only_this: () => 'session_close_only_this',
+  session_close_with_children: ({ n }: { n: number }) => `session_close_with_children:${n}`,
+  session_close_children_question: ({ name, n }: { name: string; n: number }) => `session_close_children_question:${name}:${n}`,
+  session_close_children_failed: ({ names }: { names: string }) => `session_close_children_failed:${names}`,
   session_hidden_group: ({ n }: { n: number }) => `session_hidden_group:${n}`,
   session_hide_failed: ({ error }: { error: string }) => `session_hide_failed:${error}`,
   session_show_failed: ({ error }: { error: string }) => `session_show_failed:${error}`,
@@ -203,6 +209,7 @@ beforeEach(() => {
   _resetSessionsForTests();
   vi.clearAllMocks();
   calls.deleteSession.mockReset();
+  calls.deleteSessionForServer.mockReset();
   useAparencia.setState({ agrupar: 'server', organizar: 'sessions' });
   calls.realRow = false;
   calls.reduced = false;
@@ -787,6 +794,81 @@ describe('SessionList', () => {
     await act(async () => { container.querySelector<HTMLButtonElement>('[data-row="srv1::fixture"]')!.click(); });
     await act(async () => { confirm(1)(); });
     expect(calls.deleteSession).toHaveBeenCalledTimes(2);
+  });
+
+  const family = (): SessionInfo[] => [
+    { name: 'pai', state: 'idle', jsonl: '/tmp/pai.jsonl' },
+    { name: 'filha-b', state: 'idle', jsonl: '/tmp/filha-b.jsonl', linked_by: 'pai' },
+    { name: 'filha-a', state: 'working', jsonl: '/tmp/filha-a.jsonl', linked_by: 'pai' },
+    { name: 'outra', state: 'idle', jsonl: '/tmp/outra.jsonl' },
+  ];
+  type Choice = { text: string; style?: string; onPress?: () => void };
+
+  it('closing_a_parent_with_children_offers_both', async () => {
+    calls.sessions = family();
+    calls.deleteSession.mockResolvedValue({ ok: true, warning: null });
+    await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-row="srv1::pai"]')!.click());
+    const [title, body, choices] = calls.alert.mock.calls[0] as [string, string, Choice[]];
+    expect(title).toBe('sessao_excluir');
+    expect(body).toBe('session_close_children_question:pai:2');
+    expect(choices.map((c) => c.text)).toEqual(['comum_cancelar', 'session_close_only_this', 'session_close_with_children:2']);
+    // Sem filhas a confirmação é a de sempre.
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-row="srv1::outra"]')!.click());
+    expect((calls.alert.mock.calls[1][2] as Choice[]).map((c) => c.text)).toEqual(['comum_cancelar', 'sessao_excluir_curto']);
+    // "Só esta" fecha só o pai: as filhas param pelo servidor e ficam na lista.
+    await act(async () => { choices.find((c) => c.text === 'session_close_only_this')!.onPress!(); });
+    expect(calls.deleteSession).toHaveBeenCalledExactlyOnceWith('pai');
+    expect(container.querySelector('[data-row="srv1::pai"]')).toBeNull();
+    expect(container.querySelector('[data-row="srv1::filha-a"]')).not.toBeNull();
+    expect(container.querySelector('[data-row="srv1::filha-b"]')).not.toBeNull();
+  });
+
+  it('with_children_deletes_children_then_parent', async () => {
+    calls.sessions = family();
+    let first!: (value: { ok: boolean; warning: null }) => void;
+    calls.deleteSessionForServer
+      .mockReturnValueOnce(new Promise((done) => { first = done; }))
+      .mockRejectedValueOnce(new Error('falhou'))
+      .mockResolvedValueOnce({ ok: true, warning: null });
+    await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-row="srv1::pai"]')!.click());
+    const choices = calls.alert.mock.calls[0][2] as Choice[];
+    await act(async () => { choices.find((c) => c.text === 'session_close_with_children:2')!.onPress!(); });
+    // Uma de cada vez, a primeira filha antes de tudo; as três linhas somem na hora.
+    expect(calls.deleteSessionForServer.mock.calls.map(([, name]) => name)).toEqual(['filha-a']);
+    for (const name of ['pai', 'filha-a', 'filha-b']) expect(container.querySelector(`[data-row="srv1::${name}"]`)).toBeNull();
+    expect(container.querySelector('[data-row="srv1::outra"]')).not.toBeNull();
+
+    // Abrir uma conversa de outra máquina no meio troca o servidor ativo: os fechamentos seguintes ficam na da linha.
+    await act(async () => { useServers.setState({ activeId: 'srv2' }); });
+    await act(async () => { first({ ok: true, warning: null }); });
+    await vi.waitFor(() => expect(calls.deleteSessionForServer).toHaveBeenCalledTimes(3));
+    expect(calls.deleteSessionForServer.mock.calls.map(([, name]) => name)).toEqual(['filha-a', 'filha-b', 'pai']);
+    expect(calls.deleteSessionForServer.mock.calls.map(([target]) => (target as Server).id)).toEqual(['srv1', 'srv1', 'srv1']);
+    expect(calls.deleteSession).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(calls.error).toHaveBeenCalled());
+    expect(calls.error).toHaveBeenCalledExactlyOnceWith('session_close_children_failed:filha-b (falhou)');
+    expect(calls.ok).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-row="srv1::filha-b"]'), 'a que falhou volta').not.toBeNull();
+    expect(container.querySelector('[data-row="srv1::pai"]')).toBeNull();
+    expect(container.querySelector('[data-row="srv1::filha-a"]')).toBeNull();
+  });
+
+  it('with_children_shows_every_close_warning', async () => {
+    calls.sessions = family();
+    calls.deleteSessionForServer
+      .mockResolvedValueOnce({ ok: true, warning: 'aviso-filha-a' })
+      .mockResolvedValueOnce({ ok: true, warning: null })
+      .mockResolvedValueOnce({ ok: true, warning: 'aviso-pai' });
+    await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-row="srv1::pai"]')!.click());
+    const choices = calls.alert.mock.calls[0][2] as Choice[];
+    await act(async () => { choices.find((c) => c.text === 'session_close_with_children:2')!.onPress!(); });
+    await vi.waitFor(() => expect(calls.error).toHaveBeenCalled());
+    // Nenhuma exclusão recusada: os dois avisos chegam juntos, o da filha não esconde o do pai.
+    expect(calls.error).toHaveBeenCalledExactlyOnceWith('aviso-filha-a\naviso-pai');
+    expect(calls.ok).not.toHaveBeenCalled();
   });
 
   it('parar de acompanhar remove só o convite, sem DELETE nem troca da máquina ativa', async () => {

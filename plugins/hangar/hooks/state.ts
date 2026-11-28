@@ -124,7 +124,8 @@ export function registerState(on: On) {
     if (e.agentId) {
       agentDone(e.agentId, { answer: e.answer, isAborted: e.isAborted });
       // O de fundo termina pela task-notification; interrompido, ela não vem, e o fim é este.
-      if (!background.has(e.agentId) || e.isAborted) await agentLife($, e.agentId, e.isAborted ? "failed" : "finished");
+      // O `completed` da chamada Agent pode ter chegado antes e já encerrado este.
+      if ((!background.has(e.agentId) || e.isAborted) && !ended.has(e.agentId)) await agentLife($, e.agentId, e.isAborted ? "failed" : "finished");
       return next(e);
     }
     await send($, "idle", { motivo: e.reason }, true);
@@ -140,6 +141,19 @@ export function registerState(on: On) {
       if (e.background) background.add(r.agentId);
       // O de primeiro plano pode ter acabado antes de o `next` voltar.
       if (!ended.has(r.agentId)) await agentLife($, r.agentId, "running");
+    }
+    return r;
+  });
+
+  // Agent chamado de dentro de um script do Code Mode nasce em segundo plano, mas a chamada espera o fim e a
+  // task-notification não vem para a conversa: o `completed` da própria chamada é o fim.
+  on("tool.call", { tool: "Agent" }, async ($, e, next) => {
+    const r = await next(e);
+    const result = (r as { result?: unknown }).result as { status?: unknown; agentId?: unknown } | undefined;
+    const id = typeof result?.agentId === "string" ? result.agentId : "";
+    if (id && result?.status === "completed" && !r.isError) {
+      background.delete(id);
+      if (!ended.has(id)) await agentLife($, id, "finished");
     }
     return r;
   });

@@ -257,7 +257,7 @@ const ROLLOUT_TAILS:[u64;2] = [1 << 20,16 << 20];
 /// O modo de permissão da última rodada gravada no rollout (`turn_context`), sem ler a tela, e quando ela
 /// foi gravada (epoch s, se a linha disser). `Ok(None)`: a conversa ainda não teve rodada; `Err`: rollout
 /// ilegível ou política fora dos três modos. Bloqueante.
-fn rollout_mode(path:&Path) -> Result<Option<(&'static str,Option<f64>)>,()> {
+pub(crate) fn rollout_mode(path:&Path) -> Result<Option<(&'static str,Option<f64>)>,()> {
     use std::io::{Read,Seek,SeekFrom};
     let mut file = std::fs::File::open(path).map_err(|_|())?;
     let size = file.metadata().map_err(|_|())?.len();

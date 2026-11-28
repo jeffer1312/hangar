@@ -659,6 +659,16 @@ fn archive_rows_carry_the_head_and_the_last_message() {
 }
 
 #[test]
+fn a_linked_child_preview_is_the_request_not_the_child_line() {
+    // A linha que abre o prompt de toda filha ligada sai do resumo, que vira título na Busca e no Arquivo.
+    let env = Env::small(quiet());
+    let first = format!("{} revisa o parser", hangar_delegation::guidance::child_prefix("pai"));
+    let path = env.write(SID, &[line(&first, "u1", "user"), line("feito", "a1", "assistant")], false);
+    env.index.update().unwrap();
+    assert_eq!(env.index.archive_rows()[&*path.to_string_lossy()].preview, "revisa o parser");
+}
+
+#[test]
 fn server_accounts_skip_repeats_and_add_the_server_last() {
     // `archive._contas`: sem repetir pelo caminho real; a do servidor por último se não veio.
     let tmp = tempfile::tempdir().unwrap();

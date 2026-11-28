@@ -4,6 +4,7 @@ pub mod scheduled_tasks;
 mod session_tools;
 mod projects_routes;
 pub mod accounts;
+pub mod auto_continue;
 mod auxiliary;
 pub mod archive_history;
 pub mod archive_list;

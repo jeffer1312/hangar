@@ -77,6 +77,10 @@ hangar-plugins.workspace = true
 hangar-connectors.workspace = true
 hangar-integrations.workspace = true
 hangar-mission.workspace = true
+# Filhas ligadas: quando delegar, cascata do Parar e filhas sem pai.
+hangar-delegation.workspace = true
+# Continuar sozinho depois de parada passageira (`auto_continue`).
+hangar-auto-continue.workspace = true
 # Telemetria anônima de uso (`telemetry_routes`).
 hangar-telemetry.workspace = true
 hangar-ticket-actions.workspace = true

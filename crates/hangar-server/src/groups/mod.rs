@@ -7,6 +7,7 @@ pub mod fed_exit;
 pub mod fed_notice;
 pub mod federation;
 pub mod legacy;
+pub mod link_orphans;
 pub mod link_return;
 pub mod link_state;
 pub mod local;

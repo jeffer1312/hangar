@@ -35,6 +35,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         crate::routes::cors(req.headers(), response.headers_mut());
         return response;
     };
+    // Lidas antes do fechamento: o do Pi/omp/Kimi sai do grupo por dentro, e a saída apaga o `linked_by` delas.
+    let children = children_to_stop(&st, &name, owner).await;
     // A chave antes do kill (depois dele o pane não a diz mais); os arquivos do cofre saem só no sucesso.
     let vault_files = crate::vault::files::before_close(&st, &name).await;
     if let Some(closed) = runtime.close_other(&name).await {
@@ -42,9 +44,11 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             Ok(body) => {
                 if let Some(files) = vault_files { files.done(); }
                 closed_line(&st, &name, owner, req.headers(), peer);
+                let stopped = stop_children(&st, children).await;
                 let mut response = super::json_response(StatusCode::OK, body);
                 crate::routes::cors(req.headers(), response.headers_mut());
-                return response;
+                // No `warning`, que os clientes leem, como no fechamento pelo Rust.
+                return with_warnings(&name, response, stopped, Vec::new()).await;
             },
             // A sessão já acabou: fecha pelo nome, como qualquer outra que acabou (D17).
             Err(error) if error.code == "other_terminal_dead" => {},
@@ -82,6 +86,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         Ok(closed) => closed,
         Err(error) => return close_failed(&st, &name, &error, req.headers()),
     };
+    // A espera e os tetos da continuação saem com ela: outra sessão com o nome nasce sem eles.
+    crate::auto_continue::forget(&st, &name);
     // Fechada de propósito não volta no próximo reboot, de qualquer agente; recusada, segue voltando.
     if let Some(dirs) = st.list.env().dirs.as_ref() { crate::session_open::restore::forget(&dirs.home, &name); }
     closed_line(&st, &name, owner, req.headers(), peer);
@@ -93,7 +99,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         cleanup.push(cleanup_failed(&st, &name, "close_chain_failed", "o vínculo then da sessão encerrada não saiu"));
     }
     record_closed_name(&st, &name, closed["transcript"].as_str()).await;
-    let leave = match st.groups.clone() { Some(groups) => leave_warnings(&st, &groups, &name, "session_closed").await, None => Vec::new() };
+    let leave = match st.groups.clone() { Some(groups) => leave_stopping_children(&st, &groups, &name, "session_closed", children).await, None => Vec::new() };
+    crate::groups::link_orphans::closed(&st, &name).await;
     cleanup.extend(after_close(&st, &name).await);
     let mut response = super::json_response(StatusCode::OK, json!({"ok": true, "warning": null}));
     crate::routes::cors(req.headers(), response.headers_mut());
@@ -103,8 +110,19 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 /// Limpeza que não terminou depois de a sessão fechar: vai ao diário e volta no `warning`, com o código.
 fn cleanup_failed(st: &AppState, name: &str, code: &str, reason: &'static str) -> Value {
     st.diag.report("rust.close_failed", name, code, reason);
+    cleanup_warning(code)
+}
+
+/// O corpo do aviso de limpeza que não terminou, com o código.
+fn cleanup_warning(code: &str) -> Value {
     json!({"code": "erro_limpeza_fechamento_falhou", "params": {"codigo": code},
         "msg": format!("a sessão fechou, mas a limpeza não terminou ({code})")})
+}
+
+/// A filha ligada que não parou junto com o pai: ela segue aberta, não fechou.
+fn child_not_stopped(code: &str) -> Value {
+    json!({"code": "linked_child_not_stopped", "params": {"codigo": code},
+        "msg": format!("a filha ligada não parou junto e segue aberta ({code})")})
 }
 
 /// O nome que a conversa tinha, para o Arquivo e o "reabre a X" (o `closed_names.record` do Python, na
@@ -131,6 +149,29 @@ fn name_env(st: &AppState) -> Option<crate::runtime::close_name::NameEnv> {
 /// A conversa que a lista conhece para o nome (o `_jsonl_of_session` do Python).
 async fn listed_transcript(st: &AppState, name: &str) -> Option<std::path::PathBuf> {
     st.list.discovered_session(name).await.ok().flatten().and_then(|(row, _)| row.jsonl).map(std::path::PathBuf::from)
+}
+
+/// As descendentes ligadas que o fechamento para: só no fechamento do dono, porque o convidado alcança a
+/// sessão, não a árvore dela. Arquivos de grupo ilegíveis ficam no diário: o fechamento não falhou por isso.
+async fn children_to_stop(st: &AppState, name: &str, owner: bool) -> Vec<hangar_delegation::cascade::CascadeTarget> {
+    if !owner || st.groups.is_none() { return Vec::new(); }
+    crate::session_write::control::cascade_targets(st, name).await.unwrap_or_default()
+}
+
+/// Interrompe as descendentes lidas antes do fechamento; elas seguem abertas, as filhas marcadas sem pai
+/// pela saída do grupo. A que não parou vai no aviso `{sessao, erro}` (o diário já tem o `rust.link_cascade_failed`).
+async fn stop_children(st: &Arc<AppState>, targets: Vec<hangar_delegation::cascade::CascadeTarget>) -> Vec<Value> {
+    if targets.is_empty() { return Vec::new(); }
+    let (_, failed) = crate::session_write::control::interrupt_descendants(st, targets).await;
+    failed.into_iter().map(|(child, code)| json!({"sessao": child, "erro": child_not_stopped(&code)})).collect()
+}
+
+/// A saída do grupo de quem já morreu, e depois a interrupção das descendentes `children`, lidas antes.
+async fn leave_stopping_children(st: &Arc<AppState>, groups: &crate::groups::service::GroupService, name: &str, why: &'static str,
+                                 children: Vec<hangar_delegation::cascade::CascadeTarget>) -> Vec<Value> {
+    let mut warnings = leave_warnings(st, groups, name, why).await;
+    warnings.extend(stop_children(st, children).await);
+    warnings
 }
 
 /// Sai do grupo; os avisos que não saíram e a falha da própria saída viram `{sessao, erro}`.
@@ -320,7 +361,9 @@ pub fn other_cleanup(state:std::sync::Weak<AppState>)->crate::runtime::other_ter
         let Some(st)=state.upgrade()else{return Ok(vec![]);};let Some(runtime)=st.state.runtime.get().cloned()else{return Ok(vec![json!({"code":"other_cleanup_unavailable"})]);};
         let life=closed.life;let mut warnings=Vec::new();let name=life.name().to_owned();
         if !runtime.other_cleanup_allowed(&life).await? {return Ok(vec![json!({"code":"other_cleanup_replaced"})]);}
+        // Só a saída e a marca de órfã: quem interrompe as filhas é o `DELETE` do dono, que as lê antes de fechar.
         if let Some(groups)=st.groups.clone(){warnings.extend(leave_warnings(&st,&groups,&name,"other_session_closed").await);}
+        if runtime.other_cleanup_allowed(&life).await? {crate::groups::link_orphans::closed(&st,&name).await;}
         if runtime.other_cleanup_allowed(&life).await? && let Some(share)=st.share.clone() {
             match share.store.revoke_session(&name,None) {Ok(0)=>{},Ok(_)=>crate::share::owner_routes::sync_tunnel(&share).await,Err(_)=>warnings.push(json!({"code":"other_share_cleanup_failed"}))}
         }

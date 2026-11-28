@@ -741,6 +741,43 @@ fn subagent_lifecycle_follows_the_latest_run_of_each_agent() {
 }
 
 #[test]
+fn a_code_mode_agent_ends_on_the_completed_result_of_its_own_call() {
+    // Agent chamado de dentro de um script do Code Mode: nasce em segundo plano e o fim chega pelo resultado da chamada.
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    let agent = "a99239389a4ec1a28";
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),10.0);
+    line(&mut engine,json!({"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":agent,"run_id":"0mwz846wc-c6910257","task_type":"local_agent","subagent_type":"general-purpose","description":"ping test"}]}),10.0);
+    line(&mut engine,json!({"type":"system","subtype":"task_started","task_id":agent,"run_id":"0mwz846wc-c6910257","tool_use_id":"toolu_cc_fb0ad5c7","description":"ping test","subagent_type":"general-purpose","is_backgrounded":true,"spawn_depth":1,"task_type":"local_agent"}),10.0);
+    assert_eq!(engine.view()["subagents"][agent]["state"],"running");
+    line(&mut engine,json!({"type":"user","parent_tool_use_id":null,"timestamp":"2026-11-27T16:35:42.739Z",
+        "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_cc_fb0ad5c7","content":[{"type":"text","text":"pong"}]}]},
+        "tool_use_result":{"status":"completed","agentId":agent,"content":[{"type":"text","text":"pong"}]}}),11.0);
+    assert_eq!(engine.view()["subagents"][agent],json!({"state":"completed","run_id":"0mwz846wc-c6910257","end_time":1795797342739i64}));
+    // O turno acaba antes de a CLI tirar o agente do conjunto vivo: o encerrado não fica no rótulo.
+    line(&mut engine,json!({"type":"result","subtype":"success","is_error":false}),12.0);
+    let label = engine.view()["public_state"]["label"].clone();
+    assert!(label.is_null(),"o subagente encerrado sai do rótulo: {label}");
+    // A CLI ainda o lista no conjunto vivo depois do fim: continua fora do rótulo.
+    line(&mut engine,json!({"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":agent,"run_id":"0mwz846wc-c6910257","task_type":"local_agent","subagent_type":"general-purpose","description":"ping test"}]}),12.5);
+    let label = engine.view()["public_state"]["label"].clone();
+    assert!(label.is_null(),"o conjunto vivo atrasado não devolve o encerrado ao rótulo: {label}");
+    assert_eq!(engine.view()["subagents"][agent]["state"],"completed");
+}
+
+#[test]
+fn an_agent_launched_in_the_background_keeps_running_after_the_launch_result() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    let agent = "ad4039a60cfe4be2a";
+    line(&mut engine,json!({"type":"system","subtype":"task_started","task_id":agent,"run_id":"r1","task_type":"local_agent","is_backgrounded":true}),10.0);
+    line(&mut engine,json!({"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_cc_236f41e5","content":"Async agent launched successfully."}]},
+        "tool_use_result":{"isAsync":true,"status":"async_launched","agentId":agent}}),10.5);
+    assert_eq!(engine.view()["subagents"][agent]["state"],"running");
+    line(&mut engine,json!({"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_cc_236f41e5","content":"falhou","is_error":true}]},
+        "tool_use_result":{"status":"completed","agentId":agent}}),11.0);
+    assert_eq!(engine.view()["subagents"][agent]["state"],"running","resultado com erro não encerra");
+}
+
+#[test]
 fn echoed_user_message_with_our_uuid_proves_the_delivery() {
     let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
     let effects = engine.command(RuntimeCommand { operation_id:"msg".into(),kind:OperationKind::Input,payload:json!({"text":"Olá"}) },clock(10.0)).unwrap();

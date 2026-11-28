@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members =["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-notice-actions", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-ticket-actions", "hangar-work-review", "hangar-agent-hooks", "hangar-send", "hangar-registration", "hangar-open-cli", "hangar-install-setup", "hangar-status", "hangar-local-server", "hangar-cliproxy-setup", "hangar-managed-binary", "hangar-video", "hangar-whatsapp", "hangar-guest-accounts", "hangar-connect-client", "hangar-session-open-fields", "hangar-port-tunnel","hangar-session-ports", "hangar-port-stop", "hangar-browser-host", "hangar-antigravity", "hangar-mcp-stdio", "hangar-integrations", "hangar-telemetry"]
+members =["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-notice-actions", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-delegation", "hangar-ticket-actions", "hangar-work-review", "hangar-agent-hooks", "hangar-send", "hangar-registration", "hangar-open-cli", "hangar-install-setup", "hangar-status", "hangar-local-server", "hangar-cliproxy-setup", "hangar-managed-binary", "hangar-video", "hangar-whatsapp", "hangar-guest-accounts", "hangar-connect-client", "hangar-session-open-fields", "hangar-port-tunnel","hangar-session-ports", "hangar-port-stop", "hangar-browser-host", "hangar-antigravity", "hangar-mcp-stdio", "hangar-integrations", "hangar-telemetry", "hangar-auto-continue"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,6 +17,7 @@ hangar-dream = { path = "hangar-dream" }
 hangar-computer-control-setup = { path = "hangar-computer-control-setup" }
 hangar-connectors = { path = "hangar-connectors" }
 hangar-mission = { path = "hangar-mission" }
+hangar-delegation = { path = "hangar-delegation" }
 hangar-ticket-actions = { path = "hangar-ticket-actions" }
 hangar-work-review = { path = "hangar-work-review" }
 hangar-agent-hooks = { path = "hangar-agent-hooks" }
@@ -40,6 +41,7 @@ hangar-connect-client = { path = "hangar-connect-client" }
 hangar-antigravity = { path = "hangar-antigravity" }
 hangar-integrations = { path = "hangar-integrations" }
 hangar-telemetry = { path = "hangar-telemetry" }
+hangar-auto-continue = { path = "hangar-auto-continue" }
 # A mesma do lockfile do app nativo (vem pelo wgpu): a libmpv é carregada na hora, sem ligar ao binário.
 libloading = "=0.8.9"
 # Mesmas versões do desktop-native/Cargo.toml: o hangar-api entra nos dois builds.

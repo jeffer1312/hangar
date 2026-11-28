@@ -27,7 +27,7 @@ const REVIEW_HIT_SLOP = { top: 14, bottom: 14, left: 6, right: 6 };
 
 const keyOf = (s: { serverId: string; name: string }) => `${s.serverId}::${s.name}`;
 const waits = (s: AggSession) => s.state === 'awaiting_input' || !!s.pending_questions || !!s.limited;
-const description = (s: AggSession) => `${s.serverLabel}, ${rotuloEstado(s.state)}${s.limited ? `, ${m.sessao_limite()}` : ''}${s.asleep ? `, ${m.session_asleep_badge()}` : ''}`;
+const description = (s: AggSession) => `${s.serverLabel}, ${rotuloEstado(s.state)}${s.limited ? `, ${m.sessao_limite()}` : ''}${s.asleep ? `, ${m.session_asleep_badge()}` : ''}${s.orphaned_from ? `, ${m.session_orphaned_from({ name: s.orphaned_from })}` : ''}`;
 const agentOf = (s: AggSession) => s.provider === 'claude' && /gpt|openai|codex/i.test(s.engine ?? '') ? 'codex' : s.provider;
 
 // O prefixo compartilhado sai só até um separador; o nome inteiro continua no toque longo.
