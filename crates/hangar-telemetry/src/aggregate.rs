@@ -13,10 +13,10 @@ use crate::buckets::Bucket;
 use crate::diary::DetailSource;
 use crate::events::{Dims, Event};
 use crate::queue::{self, DayFile};
-use crate::send::Failure;
+use crate::send::{Failure, Post};
 use crate::state::{self, Acceptance, Collection, State};
 use crate::switch::{self, Disabled};
-use crate::wire::{Counter, Env, MAX_COUNT, is_id};
+use crate::wire::{Counter, Env, MAX_COUNT, Refusal, RefusalKind, is_id};
 
 /// Relógio de parede; os testes injetam o deles.
 pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
@@ -56,6 +56,8 @@ pub struct Telemetry {
     pub(crate) unreachable_day: Mutex<Option<String>>,
     /// Quem projeta falhas e trilha do diário; sem ele o pacote sai só com contadores.
     pub(crate) detail: OnceLock<DetailSource>,
+    /// Quem leva o aviso único de recusa; sem ele, o aviso não sai.
+    pub(crate) refusal_post: OnceLock<Post>,
 }
 
 pub(crate) struct Settings {
@@ -178,6 +180,7 @@ impl Telemetry {
             notes: Mutex::new(recovered.into_iter().map(Failure::Disk).collect()),
             unreachable_day: Mutex::new(None),
             detail: OnceLock::new(),
+            refusal_post: OnceLock::new(),
             clock,
         };
         telemetry.refresh()?;
@@ -381,6 +384,26 @@ impl Telemetry {
             stored?;
         }
         Ok(self.refresh_held().err())
+    }
+
+    /// "Não enviar" dito pelo dono: grava como `set_consent(false)` e devolve o aviso único de recusa quando
+    /// esta máquina nunca mandou um e nenhum desligamento do ambiente vale. A marca é gravada antes de
+    /// devolver: no máximo um aviso por máquina, mesmo que o envio falhe. A marca que não se grava não
+    /// manda nada e volta como a falha a registrar. Bloqueante.
+    pub fn refuse(&self) -> io::Result<(Option<io::Error>, Option<Refusal>)> {
+        let accepted = self.consent() == Some(true);
+        let applied = self.set_consent(false)?;
+        let _io = lock(&self.io)?;
+        let mut settings = lock(&self.settings)?;
+        if settings.state.refusal_reported || settings.disabled.is_some() || settings.env_unreadable {
+            return Ok((applied, None));
+        }
+        let mut next = settings.state.clone();
+        next.refusal_reported = true;
+        if let Err(e) = state::store(&self.home, &next) { return Ok((applied.or(Some(e)), None)); }
+        settings.state = next;
+        let kind = if accepted { RefusalKind::Revoked } else { RefusalKind::Declined };
+        Ok((applied, Some(Refusal::new(kind, &self.batch_env))))
     }
 
     /// O dono desta máquina e quando ele nasceu (segundos Unix), para a convergência com os peers.
@@ -597,7 +620,7 @@ pub(crate) mod tests {
         pub(crate) fn start_as_is(&self) -> Telemetry { self.start_with(Arc::new(|_: &str| -> Option<String> { None })) }
 
         /// Como `start_as_is`, com o ambiente do processo de `lookup`.
-        fn start_with(&self, lookup: EnvLookup) -> Telemetry {
+        pub(crate) fn start_with(&self, lookup: EnvLookup) -> Telemetry {
             let config = Config {
                 home: self.home.path().to_owned(),
                 backend: None,

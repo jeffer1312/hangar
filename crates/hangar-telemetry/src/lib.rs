@@ -12,6 +12,8 @@ pub mod diary;
 #[cfg(feature = "runtime")]
 mod queue;
 #[cfg(feature = "runtime")]
+mod refusal;
+#[cfg(feature = "runtime")]
 mod send;
 #[cfg(feature = "runtime")]
 mod state;
@@ -20,6 +22,8 @@ mod switch;
 
 #[cfg(feature = "runtime")]
 pub use aggregate::{Clock, Config, EnvLookup, Telemetry};
+#[cfg(feature = "runtime")]
+pub use refusal::send_refusal;
 #[cfg(feature = "runtime")]
 pub use send::{DEFAULT_URL, Failure, Post, PostFuture};
 #[cfg(feature = "runtime")]

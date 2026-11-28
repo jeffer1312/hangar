@@ -193,6 +193,14 @@ No Windows, `~` é a pasta do seu usuário.
 - `PUT {"consent":false}` revoga, mesmo de um cliente antigo, e apaga a fila de B e as das versões
   anteriores (`~/.hangar/telemetry/` e `~/.hangar/telemetry-scope-2/`). O que o receptor já recebeu
   não é apagado pela revogação.
+- Se você recusar, o servidor manda uma única vez um aviso anônimo de que recusou (só a versão e o
+  sistema), e nada mais: `{"kind", "version", "os", "channel"}` em `POST /v1/declined`, com `kind`
+  `declined` (a primeira resposta foi não) ou `revoked` (tinha aceitado e desligou). Sem
+  `machine_id`, `owner_id`, lote nem dia; o receptor só soma 1 no dia em que recebe. A marca
+  `refusal_reported` no `telemetry.json` faz o aviso sair uma vez por máquina, mesmo mudando de ideia
+  depois. Não sai com `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1`, CI ou `.env` ilegível, nem pedido de
+  convidado. São até quatro tentativas em segundo plano; se nenhuma chegar, o código vai ao diário de
+  uso e o aviso não é tentado de novo.
 
 Sem resposta, nenhum contador é contado nem gravado: só existe o `telemetry.json`, com `consent: null` e
 os dois números aleatórios.
@@ -221,7 +229,7 @@ máquina de outra pessoa no `peers.json`, as duas passam a contar como um dono s
 
 ## Para onde vai
 
-`https://telemetry.hangar.dev.br/v1/batch`, atrás do proxy da Cloudflare. O receptor é código aberto,
+`https://telemetry.hangar.dev.br/v1/batch` (o aviso de recusa, `/v1/declined` do mesmo endereço), atrás do proxy da Cloudflare. O receptor é código aberto,
 em [`services/telemetry-ingest`](../services/telemetry-ingest): grava o pacote num Postgres, não lê
 IP, limita o corpo a 2 MiB e guarda evento ou valor que ainda não conhece em vez de
 recusar. Os dados ficam 400 dias. Só o mantenedor do Hangar e quem ele convidar veem o resumo, na

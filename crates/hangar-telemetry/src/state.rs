@@ -34,6 +34,9 @@ pub(crate) struct State {
     pub(crate) option_b: Option<Acceptance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) collection: Option<Collection>,
+    /// O aviso único de recusa já saiu desta máquina (ou foi tentado): nunca sai de novo.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) refusal_reported: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +61,7 @@ struct Stored {
     // Campos inválidos não devem transformar um 'não' em ausência de resposta.
     option_b: Option<serde_json::Value>,
     collection: Option<serde_json::Value>,
+    refusal_reported: Option<bool>,
 }
 
 fn path(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry.json") }
@@ -85,7 +89,7 @@ pub(crate) fn load(home: &Path, now: DateTime<Utc>) -> io::Result<(State, Option
     let unrecognized = stored.consent == Some(true) || stored.consent_scope.is_some();
     let state = State {
         legacy: stored.consent.filter(|consent| !consent), machine_id: machine_id.unwrap_or_else(|| random_hex(16)), owner_id, owner_created,
-        option_b, collection,
+        option_b, collection, refusal_reported: stored.refusal_reported == Some(true),
     };
     if !complete || unrecognized { store(home, &state)?; }
     Ok((state, recovered))
