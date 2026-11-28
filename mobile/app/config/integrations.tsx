@@ -310,6 +310,7 @@ export default function IntegrationsScreen() {
           }
           editing={activeEditor.mode === 'edit' ? activeEditor.integration : null}
           existingIds={existingIds}
+          existingIntegrations={integrations ?? []}
           onClose={() => {
             if (!sameServerScope(activeEditor.serverKey)) return;
             closeEditor(activeEditor.instance);

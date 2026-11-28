@@ -16,8 +16,8 @@
       "steps": [
         "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Gmail e também o serviço MCP dela (gmailmcp.googleapis.com); são duas ativações separadas.",
         "Em Google Auth Platform → Público-alvo, escolha Externo se a conta for @gmail.com ou Interno se for Google Workspace. Em Externo, ainda em Público-alvo, use Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail.",
-        "Em Clientes → Criar cliente, escolha Aplicativo da Web, marque \"Use this client for an AI-powered agent\" (is_agentic) e, em URIs de redirecionamento autorizados, cole http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
-        "Copie o ID do cliente e a chave secreta do cliente do Google para os campos Client ID e Client Secret abaixo e salve: o navegador abre para você autorizar.",
+        "Em Clientes, use um cliente OAuth para agentes deste projeto ou crie um Aplicativo da Web com \"Use this client for an AI-powered agent\" (is_agentic). No cliente escolhido, confira se http://127.0.0.1:<porta>/api/integrations/oauth/callback está nas URIs de redirecionamento autorizadas.",
+        "Use as credenciais do mesmo projeto já salvas no Hangar ou informe o Client ID e o Client Secret. Ao salvar, o Google pede autorização para este serviço.",
         "Conta @gmail.com em Externo fica em modo de teste: o Google derruba a autorização a cada 7 dias e a integração pede Reconectar."
       ],
       "docs_hint": "Google Cloud Console → Google Auth Platform → Clientes",
@@ -45,8 +45,8 @@
       "steps": [
         "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Google Drive e também o serviço MCP dela (drivemcp.googleapis.com); são duas ativações separadas.",
         "Em Google Auth Platform → Público-alvo, escolha Externo se a conta for @gmail.com ou Interno se for Google Workspace. Em Externo, ainda em Público-alvo, use Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail.",
-        "Em Clientes → Criar cliente, escolha Aplicativo da Web, marque \"Use this client for an AI-powered agent\" (is_agentic) e, em URIs de redirecionamento autorizados, cole http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
-        "Copie o ID do cliente e a chave secreta do cliente do Google para os campos Client ID e Client Secret abaixo e salve: o navegador abre para você autorizar.",
+        "Em Clientes, use um cliente OAuth para agentes deste projeto ou crie um Aplicativo da Web com \"Use this client for an AI-powered agent\" (is_agentic). No cliente escolhido, confira se http://127.0.0.1:<porta>/api/integrations/oauth/callback está nas URIs de redirecionamento autorizadas.",
+        "Use as credenciais do mesmo projeto já salvas no Hangar ou informe o Client ID e o Client Secret. Ao salvar, o Google pede autorização para este serviço.",
         "Conta @gmail.com em Externo fica em modo de teste: o Google derruba a autorização a cada 7 dias e a integração pede Reconectar."
       ],
       "docs_hint": "Google Cloud Console → Google Auth Platform → Clientes",
@@ -74,8 +74,8 @@
       "steps": [
         "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Google Calendar e também o serviço MCP dela (calendarmcp.googleapis.com); são duas ativações separadas.",
         "Em Google Auth Platform → Público-alvo, escolha Externo se a conta for @gmail.com ou Interno se for Google Workspace. Em Externo, ainda em Público-alvo, use Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail.",
-        "Em Clientes → Criar cliente, escolha Aplicativo da Web, marque \"Use this client for an AI-powered agent\" (is_agentic) e, em URIs de redirecionamento autorizados, cole http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
-        "Copie o ID do cliente e a chave secreta do cliente do Google para os campos Client ID e Client Secret abaixo e salve: o navegador abre para você autorizar.",
+        "Em Clientes, use um cliente OAuth para agentes deste projeto ou crie um Aplicativo da Web com \"Use this client for an AI-powered agent\" (is_agentic). No cliente escolhido, confira se http://127.0.0.1:<porta>/api/integrations/oauth/callback está nas URIs de redirecionamento autorizadas.",
+        "Use as credenciais do mesmo projeto já salvas no Hangar ou informe o Client ID e o Client Secret. Ao salvar, o Google pede autorização para este serviço.",
         "Conta @gmail.com em Externo fica em modo de teste: o Google derruba a autorização a cada 7 dias e a integração pede Reconectar."
       ],
       "docs_hint": "Google Cloud Console → Google Auth Platform → Clientes",

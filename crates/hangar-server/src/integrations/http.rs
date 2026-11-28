@@ -12,6 +12,8 @@ use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use hangar_core::http::{detail, json_response};
+use hangar_core::ids::valid_slug;
+use hangar_integrations::catalog::is_google_workspace_client;
 use hangar_integrations::{
     ApprovalDecision, ApprovalError, AuthConfig, CancelOutcome, ClientError, IntegrationConfig,
     IntegrationSecrets, IntegrationStatus, IntegrationUpdate, OAuthError, OAuthOrigin,
@@ -226,6 +228,20 @@ struct IntegrationView {
     last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     brand: Option<hangar_integrations::Brand>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    can_reuse_google_credentials: Option<bool>,
+}
+
+fn google_credentials<'a>(
+    config: &'a IntegrationConfig,
+    secrets: Option<&'a IntegrationSecrets>,
+) -> Option<(&'a str, &'a Zeroizing<String>)> {
+    let AuthConfig::OAuthManualClient { client_id, .. } = &config.auth else {
+        return None;
+    };
+    let secret = secrets?.client_secret.as_ref()?;
+    (is_google_workspace_client(config) && !client_id.trim().is_empty() && !secret.trim().is_empty())
+        .then_some((client_id.as_str(), secret))
 }
 
 fn build_view(
@@ -243,11 +259,13 @@ fn build_view(
         hangar_integrations::Transport::LocalStdio { .. } => None,
     };
     let brand = hangar_integrations::brand_for(config.preset.as_deref(), url);
+    let can_reuse_google_credentials = google_credentials(&config, secrets).is_some().then_some(true);
     IntegrationView {
         config,
         status,
         last_error,
         brand,
+        can_reuse_google_credentials,
     }
 }
 
@@ -293,6 +311,8 @@ struct CreateIntegrationBody {
     allowed_tools: BTreeSet<String>,
     #[serde(default)]
     secrets: Option<SecretsPatch>,
+    #[serde(default)]
+    reuse_google_credentials_from: Option<String>,
 }
 
 fn default_enabled() -> bool {
@@ -519,6 +539,37 @@ async fn list_integrations(state: &AppState) -> Response {
     json_response(StatusCode::OK, json!({"integrations": views}))
 }
 
+async fn load_google_credentials(
+    state: &AppState,
+    source_id: &str,
+) -> Result<(String, Zeroizing<String>), Response> {
+    fn unavailable() -> Response {
+        detail(
+            StatusCode::CONFLICT,
+            "integration_google_credentials_unavailable",
+            "As credenciais do Google escolhidas não estão mais disponíveis.",
+            json!({}),
+        )
+    }
+
+    let _guard = state.integrations.lock_integration(source_id).await;
+    let source = state
+        .integrations
+        .registry
+        .get(source_id)
+        .map_err(registry_error)?
+        .filter(is_google_workspace_client)
+        .ok_or_else(unavailable)?;
+    let secrets = state
+        .integrations
+        .secrets
+        .get(source_id)
+        .await
+        .map_err(secret_store_error)?;
+    let (client_id, secret) = google_credentials(&source, secrets.as_ref()).ok_or_else(unavailable)?;
+    Ok((client_id.to_owned(), secret.clone()))
+}
+
 async fn create_integration(state: &AppState, request: Request) -> Response {
     let body: CreateIntegrationBody = match read_json_body(request).await {
         Ok(parsed) => parsed,
@@ -526,14 +577,19 @@ async fn create_integration(state: &AppState, request: Request) -> Response {
     };
 
     let mut initial_secrets = IntegrationSecrets::default();
-    if let Some(patch) = body.secrets
-        && let Err(resp) = apply_secrets_patch(&mut initial_secrets, patch)
-    {
-        return resp;
+    if let Some(patch) = body.secrets {
+        if body.reuse_google_credentials_from.is_some()
+            && (patch.oauth_client_secret.is_some() || patch.client_secret.is_some())
+        {
+            return invalid_body();
+        }
+        if let Err(resp) = apply_secrets_patch(&mut initial_secrets, patch) {
+            return resp;
+        }
     }
 
     let now = now_unix_secs();
-    let config = IntegrationConfig {
+    let mut config = IntegrationConfig {
         id: body.id,
         name: body.name,
         preset: body.preset,
@@ -547,6 +603,26 @@ async fn create_integration(state: &AppState, request: Request) -> Response {
         created_at: now,
         updated_at: now,
     };
+    if let Some(source_id) = body.reuse_google_credentials_from {
+        if !valid_slug(&source_id, 64)
+            || source_id == config.id
+            || !is_google_workspace_client(&config)
+        {
+            return invalid_body();
+        }
+        let AuthConfig::OAuthManualClient { client_id, .. } = &mut config.auth else {
+            return invalid_body();
+        };
+        if !client_id.is_empty() {
+            return invalid_body();
+        }
+        let (saved_id, saved_secret) = match load_google_credentials(state, &source_id).await {
+            Ok(pair) => pair,
+            Err(resp) => return resp,
+        };
+        *client_id = saved_id;
+        initial_secrets.client_secret = Some(saved_secret);
+    }
     if let Err(err) = config.validate() {
         return registry_error(RegistryError::Validation(err));
     }
@@ -601,6 +677,13 @@ async fn create_integration(state: &AppState, request: Request) -> Response {
     state.integrations.clear_cancel_warning(&created.id);
     let view = build_view(created, stored_secrets.as_ref(), None);
     json_response(StatusCode::CREATED, json!({"integration": view}))
+}
+
+fn manual_client_id(auth: &AuthConfig) -> Option<&str> {
+    match auth {
+        AuthConfig::OAuthManualClient { client_id, .. } => Some(client_id.as_str()),
+        _ => None,
+    }
 }
 
 fn remote_url(transport: &Transport) -> Option<&str> {
@@ -743,6 +826,28 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         || existing.auth != candidate_config.auth;
     let should_invalidate =
         body.enabled == Some(false) || destination_changed || body.secrets.is_some();
+    // O segredo salvo pertence ao Client ID antigo: nem mantê-lo calado nem apagá-lo calado; quem troca o ID manda o segredo.
+    let client_id_changed = !remote_url_changed
+        && matches!(
+            (manual_client_id(&existing.auth), manual_client_id(&candidate_config.auth)),
+            (Some(old), Some(new)) if old != new
+        );
+    let sends_client_secret = match &body.secrets {
+        None => false,
+        Some(None) => true,
+        Some(Some(p)) => p.oauth_client_secret.is_some() || p.client_secret.is_some(),
+    };
+    let has_saved_secret = previous_secrets
+        .as_ref()
+        .is_some_and(|saved| saved.client_secret.is_some());
+    if client_id_changed && has_saved_secret && !sends_client_secret {
+        return detail(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "integration_client_secret_required",
+            "Ao trocar o Client ID, informe também o Client Secret dele.",
+            json!({}),
+        );
+    }
 
     let candidate_secrets = match &body.secrets {
         None => {

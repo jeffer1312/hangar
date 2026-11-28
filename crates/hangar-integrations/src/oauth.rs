@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -13,11 +13,12 @@ use ring::digest::{SHA256, digest};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::time::Instant;
 use zeroize::Zeroizing;
 
 use hangar_core::net::http_client;
 
-use crate::catalog::find_preset;
+use crate::catalog::{find_preset, is_google_workspace_client};
 use crate::client::{ClientError, TokenRefresher};
 use crate::model::{
     AuthConfig, IntegrationConfig, IntegrationStatus, Transport, config_fingerprint,
@@ -35,6 +36,9 @@ const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_URL_BYTES: usize = 4096;
 const MAX_OAUTH_RESPONSE_BYTES: usize = 256 * 1024;
+const GOOGLE_ISSUER: &str = "https://accounts.google.com";
+const GOOGLE_AUTHORIZE_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
 /// Origem do cliente que iniciou o fluxo OAuth (define política de `redirect_uri` e handoff).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,7 +285,9 @@ impl OAuthManager {
         let config_fp = config_fingerprint(&config);
         let resource_uri = canonical_resource_uri(mcp_url, false)?;
         let redirect = resolve_redirect(&config, &input)?;
-        let metadata = self.discover_metadata(mcp_url).await?;
+        let metadata = self
+            .discover_metadata(mcp_url, is_google_workspace_client(&config))
+            .await?;
         let existing_secrets = self.secrets.get(integration_id).await?;
         let creds = self
             .resolve_client_credentials(
@@ -585,9 +591,15 @@ impl OAuthManager {
             ));
         };
 
+        let google = is_google_workspace_client(&config);
         let token_endpoint = match oauth.token_endpoint.as_deref() {
-            Some(ep) if parse_http_url(ep, mcp_is_https).is_ok() => ep.to_owned(),
-            _ => self.discover_metadata(mcp_url).await?.token_endpoint,
+            Some(ep)
+                if (!google || ep == GOOGLE_TOKEN_ENDPOINT)
+                    && parse_http_url(ep, mcp_is_https).is_ok() =>
+            {
+                ep.to_owned()
+            }
+            _ => self.discover_metadata(mcp_url, google).await?.token_endpoint,
         };
 
         let mut form_params: Vec<(&str, &str)> = vec![
@@ -745,7 +757,11 @@ impl OAuthManager {
         Ok(marked)
     }
 
-    async fn discover_metadata(&self, mcp_url: &str) -> Result<DiscoveredMetadata, OAuthError> {
+    async fn discover_metadata(
+        &self,
+        mcp_url: &str,
+        google: bool,
+    ) -> Result<DiscoveredMetadata, OAuthError> {
         let parsed_mcp = parse_http_url(mcp_url, false)?;
         let require_https = parsed_mcp.scheme == "https";
         let expected_prm_resource = parsed_mcp.exact_uri();
@@ -801,13 +817,17 @@ impl OAuthManager {
             }
         }
 
-        let expected_issuer = discovered_issuer.unwrap_or_else(|| parsed_mcp.origin.clone());
-        let parsed_issuer = validate_discovered_url("issuer", &expected_issuer, require_https)?;
+        let advertised_issuer = discovered_issuer.as_deref().unwrap_or(&parsed_mcp.origin);
+        let expected_issuer = discovery_issuer(advertised_issuer, google)?;
+        let parsed_issuer = validate_discovered_url("issuer", expected_issuer, require_https)?;
         let as_candidates = build_auth_server_metadata_urls(&parsed_issuer);
 
         for candidate in as_candidates {
             if let Some(as_meta) = self.fetch_auth_server_metadata(&candidate).await? {
-                validate_discovered_as_metadata(&as_meta, &expected_issuer, require_https)?;
+                validate_discovered_as_metadata(&as_meta, expected_issuer, require_https)?;
+                if google {
+                    validate_google_endpoints(&as_meta)?;
+                }
                 return Ok(DiscoveredMetadata {
                     authorization_endpoint: as_meta.authorization_endpoint,
                     token_endpoint: as_meta.token_endpoint,
@@ -1538,6 +1558,30 @@ fn validate_discovered_url(
         .map_err(|err| OAuthError::DiscoveryFailed(format!("{label} inválido: {err}")))
 }
 
+fn discovery_issuer(advertised: &str, google: bool) -> Result<&str, OAuthError> {
+    if !google {
+        return Ok(advertised);
+    }
+    // Os três serviços anunciam a raiz com barra, mas o Google publica o issuer sem ela.
+    match advertised {
+        GOOGLE_ISSUER | "https://accounts.google.com/" => Ok(GOOGLE_ISSUER),
+        _ => Err(OAuthError::DiscoveryFailed(
+            "serviço Google anuncia um emissor OAuth inesperado".into(),
+        )),
+    }
+}
+
+fn validate_google_endpoints(as_meta: &AuthorizationServerMetadata) -> Result<(), OAuthError> {
+    if as_meta.authorization_endpoint != GOOGLE_AUTHORIZE_ENDPOINT
+        || as_meta.token_endpoint != GOOGLE_TOKEN_ENDPOINT
+    {
+        return Err(OAuthError::DiscoveryFailed(
+            "metadados OAuth do Google anunciam endereços inesperados".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_discovered_as_metadata(
     as_meta: &AuthorizationServerMetadata,
     expected_issuer: &str,
@@ -1998,6 +2042,62 @@ mod tests {
     }
 
     #[test]
+    fn google_workspace_discovery_accepts_only_the_known_issuer_and_endpoints() {
+        let announced = "https://accounts.google.com/";
+        let meta = super::AuthorizationServerMetadata {
+            issuer: Some("https://accounts.google.com".to_owned()),
+            authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_owned(),
+            token_endpoint: "https://oauth2.googleapis.com/token".to_owned(),
+            registration_endpoint: None,
+            client_id_metadata_document_supported: None,
+            code_challenge_methods_supported: Some(vec!["S256".to_owned()]),
+        };
+        let mut cfg = sample_cfg(
+            true,
+            AuthConfig::OAuthManualClient {
+                client_id: "google-client".to_owned(),
+                scopes: vec![],
+            },
+        );
+        for (preset, url) in [
+            ("google-gmail", "https://gmailmcp.googleapis.com/mcp/v1self"),
+            ("google-drive", "https://drivemcp.googleapis.com/mcp/v1self"),
+            ("google-calendar", "https://calendarmcp.googleapis.com/mcp/v1self"),
+        ] {
+            cfg.preset = Some(preset.to_owned());
+            cfg.transport = Transport::RemoteHttp {
+                url: url.to_owned(),
+                header_names: vec![],
+            };
+            let google = crate::catalog::is_google_workspace_client(&cfg);
+            let expected = super::discovery_issuer(announced, google).unwrap();
+            validate_discovered_as_metadata(&meta, expected, true).unwrap();
+            super::validate_google_endpoints(&meta).unwrap();
+        }
+        for wrong in [
+            "https://accounts.google.com/other",
+            "https://accounts.google.com:443/",
+            "https://accounts.google.com.evil.example/",
+        ] {
+            assert!(super::discovery_issuer(wrong, true).is_err());
+        }
+        cfg.preset = None;
+        assert!(crate::catalog::is_google_workspace_client(&cfg), "sem preset, a URL oficial mantém as regras");
+        cfg.preset = Some("google-gmail".to_owned());
+        cfg.transport = Transport::RemoteHttp {
+            url: "https://gmailmcp.googleapis.com/mcp/v1".to_owned(),
+            header_names: vec![],
+        };
+        assert!(!crate::catalog::is_google_workspace_client(&cfg));
+        let unchanged = super::discovery_issuer(announced, false).unwrap();
+        assert!(validate_discovered_as_metadata(&meta, unchanged, true).is_err());
+
+        let mut wrong_endpoint = meta;
+        wrong_endpoint.token_endpoint = "https://oauth2.googleapis.com/alternate".to_owned();
+        assert!(super::validate_google_endpoints(&wrong_endpoint).is_err());
+    }
+
+    #[test]
     fn https_mcp_discovery_rejects_plaintext_http_oauth_endpoints() {
         let mcp_is_https = parse_http_url("https://mcp.example.com/mcp", false)
             .unwrap()
@@ -2180,12 +2280,12 @@ mod tests {
                 scopes: vec![],
                 persist_client_id: true,
                 is_dcr: true,
-                created_at: std::time::Instant::now(),
+                created_at: tokio::time::Instant::now(),
             },
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn cancel_pending_for_clears_only_target_integration_states() {
         let dir = tempfile::tempdir().expect("tempdir");
         let registry = std::sync::Arc::new(crate::registry::IntegrationRegistry::new(dir.path()));
@@ -2240,7 +2340,7 @@ mod tests {
         assert_eq!(err, OAuthError::InvalidState);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn handle_callback_after_delete_or_auth_change_rejects_without_writing_secret() {
         use axum::extract::State;
         use axum::http::StatusCode;
@@ -2341,6 +2441,7 @@ mod tests {
             &format!("http://{addr}/token"),
         );
 
+        tokio::time::resume();
         let err_race = oauth
             .handle_callback("state-race", Some("code-race"), None, None)
             .await
