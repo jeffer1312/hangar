@@ -6,7 +6,7 @@ import { Columns, DailyArea, Spark } from "@/components/charts";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { fieldsOf, recordKey, recordMarkdown, SAMPLE_TIME, SAMPLE_TRAIL, series, sparkNote, sparkSlots, type Derived } from "@/lib/derive";
+import { fieldsOf, recordKey, recordMarkdown, SAMPLE_TIME, SAMPLE_TRAIL, sparkNote, sparkSlots, type Derived } from "@/lib/derive";
 import { ago, compact, dayMonth, fmt, fullDay, when } from "@/lib/format";
 import { section } from "@/lib/sections";
 import type { FailureRecord, LogLine, Summary } from "@/lib/types";
@@ -62,8 +62,7 @@ function Detail({ r, days, skipToday }: { r: FailureRecord; days: number; skipTo
   const narrow = fields.filter(f => !wide(f));
   // Número ímpar de campos curtos: o último ocupa a linha toda, sem buraco na grade.
   const lone = narrow.length % 2 ? narrow.at(-1) : undefined;
-  const counts = new Map(r.daily.map(x => [x.day, x.count]));
-  const rows = series(days, day => counts.get(day) ?? 0, skipToday);
+  const slots = sparkSlots(r.daily, days, skipToday);
   const meta: [string, string][] = [["Versões", (r.versions ?? []).join(", ")], ["Sistemas", (r.os ?? []).join(", ")],
     ["Primeira vez no período", when(r.first) + " UTC"], ["Última no período", when(r.last) + " UTC"],
     ...(r.sample_at ? [[SAMPLE_TIME, when(r.sample_at) + " UTC"] as [string, string]] : [])];
@@ -75,9 +74,9 @@ function Detail({ r, days, skipToday }: { r: FailureRecord; days: number; skipTo
         </dl>
         <div>
           <h4 className="mb-1 text-[12.5px] font-medium text-muted-foreground">Vezes {sparkNote(days)}</h4>
-          {days < 32 ? <Columns rows={rows.map(x => ({ key: x.day, label: fullDay(x.day), value: x.value }))} unit={["vez", "vezes"]} height={120}
-              color={r.level === "error" ? "var(--destructive)" : "var(--warn)"} tick={k => (k === rows[0].day || k === rows.at(-1)!.day ? dayMonth(k) : "")} />
-            : <DailyArea rows={rows} unit={["vez", "vezes"]} color={r.level === "error" ? "#ff6b61" : "#ffab2e"} label={"Vezes por dia: " + r.event} height={130} />}
+          <Columns rows={slots.map(x => ({ key: x.label, label: x.label.startsWith("semana") ? "Semana até " + fullDay(x.label.slice(-10)) : fullDay(x.label), value: x.value }))}
+            unit={["vez", "vezes"]} height={120} color={r.level === "error" ? "var(--destructive)" : "var(--warn)"}
+            tick={k => (k === slots[0].label || k === slots.at(-1)!.label ? dayMonth(k.slice(-10)) : "")} />
         </div>
         <div>
           <h4 className="mb-2 text-[12.5px] font-medium text-muted-foreground">Campos da amostra</h4>

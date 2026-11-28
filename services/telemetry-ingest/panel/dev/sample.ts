@@ -203,6 +203,6 @@ export function trail(machine: string, day: string): Trail {
 
 export function bump() {
   const day = dayOf(0);
-  add(day, "message_sent", { provider: pick(["claude", "codex", "pi"]), surface: "terminal" }, int(3, 12), 3);
+  add(day, "message_sent", { provider: pick(["claude", "codex", "pi"]), surface: "terminal" }, int(1, 3), 2);
   daily[daily.length - 1].machines += rnd() > 0.7 ? 1 : 0;
 }
