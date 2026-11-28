@@ -420,6 +420,7 @@ mod tests {
         // Outras rodadas no mesmo banco somam junto: confere o mínimo destas duas máquinas.
         assert!(future["count"].as_i64().unwrap() >= 14 && future["machines"].as_i64().unwrap() >= 2, "{future}");
         assert!(data["active"]["machines_7d"].as_i64().unwrap() >= 2);
+        assert!(data["period"]["machines"].as_i64().unwrap() >= 2, "a contagem do período continua número");
         let label = &first["machine_id"].as_str().unwrap()[..8];
         let machine = data["machines"].as_array().unwrap().iter().find(|m| m["label"] == label).unwrap();
         assert_eq!((&machine["os"], &machine["version"], &machine["channel"]), (&json!("linux"), &json!("0.42.0"), &json!("latest")));
