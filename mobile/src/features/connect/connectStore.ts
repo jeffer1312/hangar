@@ -68,6 +68,7 @@ const CODES: Record<string, () => string> = {
   connect_device_revoked: m.connect_error_device_revoked,
   connect_device_required: m.connect_error_device_required,
   connect_vault_failed: m.connect_error_vault,
+  connect_machine_remove_unavailable: m.connect_error_machine_remove_unavailable,
   connect_device_denied: m.connect_error_denied,
   connect_approval_expired: m.connect_error_expired,
   connect_token_lost: m.connect_error_token_lost,
@@ -504,14 +505,14 @@ export const useConnect = create<ConnectState>((set, get) => {
     async removeMachine(machine) {
       const { account } = get();
       if (!account) throw new Error(m.connect_session_ended());
+      // Já fora da conta, o core devolve como feito: falta só a limpeza daqui.
       try { await removeAccountMachine(sessionOf(account), machine.machine_id); }
       catch (error) {
-        // 404: outro aparelho já o tirou da conta; falta só a limpeza daqui.
         if (statusOf(error) === 401) {
           if (get().account?.token === account.token) await dropAccount(m.connect_session_ended());
           throw new Error(m.connect_session_ended());
         }
-        if (statusOf(error) !== 404) throw new Error(failure(error, 'machine'));
+        throw new Error(failure(error, 'machine'));
       }
       // Fora da conta ele deixa de abrir pelo Connect: a entrada guardada só ficaria recusando.
       const servers = useServers.getState();

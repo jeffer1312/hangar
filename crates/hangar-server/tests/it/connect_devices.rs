@@ -319,8 +319,10 @@ async fn pending_device_has_no_access_until_approved() {
     let mut rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
     // O valor depende do peers.json desta máquina; o caso dele está em connect_machine_remove.rs.
     assert!(rows[0].as_object_mut().unwrap().remove("peers_checked").is_some_and(|checked| checked.is_boolean()), "{rows}");
-    let created_at = rows[0]["created_at"].clone();
-    assert_eq!(rows, json!([{"device_id": id, "name": "celular", "status": "pending", "last_seen": null, "created_at": created_at}]),
+    let (created_at, tracked_since) = (rows[0]["created_at"].clone(), rows[0]["tracked_since"].clone());
+    assert!(tracked_since.is_u64(), "{rows}");
+    assert_eq!(rows, json!([{"device_id": id, "name": "celular", "status": "pending", "last_seen": null, "created_at": created_at,
+        "tracked_since": tracked_since}]),
         "o nome é o assinado, não o do corpo");
     assert_eq!(get(e.connect, "/api/connect/devices").send().await.unwrap().status(), 401);
     // Recusado não recebe token, nem aprovado depois.

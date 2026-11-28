@@ -110,6 +110,9 @@ struct State {
     devices: Vec<Device>,
     /// Nonce gasto e até quando o bilhete dele valeria: depois disso a validade já o recusa.
     nonces: HashMap<String, u64>,
+    /// Desde quando o `last_seen` vai ao disco: antes disso, `last_seen` nulo não prova que a credencial nunca foi usada.
+    #[serde(default)]
+    tracked_since: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -160,6 +163,8 @@ pub struct Row {
     pub status: Status,
     pub last_seen: Option<u64>,
     pub created_at: u64,
+    /// O mesmo em toda linha: `last_seen` nulo só diz "sem uso" a partir daqui.
+    pub tracked_since: u64,
     /// Só no pedido esperando, e só de celular que mandou o `install_id`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_code: Option<String>,
@@ -181,14 +186,20 @@ pub struct Store {
     /// que eles aprovaram aqui, refeito a cada mudança no registro. Só memória: a próxima leitura boa desfaz.
     /// Sempre travado depois de `state`.
     suspended: Mutex<Option<HashSet<DeviceId>>>,
+    /// `tracked_since` saiu do relógio no carregamento, não do arquivo.
+    tracked_since_loaded: bool,
 }
 
 impl Store {
     pub fn new(dir: PathBuf, identity: Option<ServiceIdentity>) -> Self {
         let clock = system_clock();
         let path = dir.join("devices.json");
-        let (state, fault) = load(&path, clock());
-        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault, suspended: Mutex::new(None) }
+        let (mut state, fault) = load(&path, clock());
+        // Arquivo de antes do uso ir ao disco: a contagem começa agora. Só vai ao disco na próxima gravação; até lá,
+        // cada subida recomeça, o que só adia a limpeza.
+        let tracked_since_loaded = state.tracked_since.is_none();
+        state.tracked_since.get_or_insert_with(|| clock());
+        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault, suspended: Mutex::new(None), tracked_since_loaded }
     }
 
     /// Vai para `status().error`. shortcut: lido só na subida, a recusa fica até reiniciar o servidor; reler a cada pedido custaria disco no porteiro.
@@ -197,6 +208,10 @@ impl Store {
     }
 
     pub fn with_clock(mut self, clock: Clock) -> Self {
+        // O relógio chega depois do carregamento: o começo que saiu do relógio segue o novo.
+        if self.tracked_since_loaded {
+            self.state.get_mut().unwrap_or_else(|e| e.into_inner()).tracked_since = Some(clock());
+        }
         self.clock = clock;
         self
     }
@@ -402,6 +417,8 @@ impl Store {
             if let Some(device) = mine {
                 (device.name, device.token_hash, device.next_token_hash) = (display_name(name), hash, None);
                 device.unconfirmed_token_hashes.clear();
+                // O uso e a idade eram do token perdido: a entrada nova não pode parecer usada nem velha.
+                (device.last_seen, device.last_seen_saved, device.created_at) = (None, None, now);
                 return Ok((device.id.clone(), token));
             }
             let id = credentials::id();
@@ -443,9 +460,10 @@ impl Store {
         let now = (self.clock)();
         let mut state = self.lock();
         prune(&mut state, now);
+        let tracked_since = state.tracked_since.unwrap_or(now);
         state.devices.iter().map(|d| {
             let install = d.install_id.as_deref().filter(|_| d.status == Status::Pending);
-            Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, created_at: d.created_at,
+            Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, created_at: d.created_at, tracked_since,
                 install_code: install.map(install_code), install_group: install.map(install_group),
                 account_device: d.account_device.clone() }
         }).collect()
@@ -756,13 +774,22 @@ mod tests {
 
     #[test]
     fn the_same_install_enrolling_again_keeps_one_entry() {
+        use std::sync::atomic::{AtomicU64, Ordering};
         let dir = dir();
-        let store = store(&dir);
+        let now = Arc::new(AtomicU64::new(NOW));
+        let ticking = now.clone();
+        let store = store(&dir).with_clock(Arc::new(move || ticking.load(Ordering::Relaxed)));
         let (first, lost) = store.enroll_install("Pixel", Some("install-1")).unwrap();
+        assert_eq!(store.verify(lost.as_bytes()), Some(first.clone()));
+        now.store(NOW + 500, Ordering::Relaxed);
         let (again, token) = store.enroll_install("Pixel 8", Some("install-1")).unwrap();
         assert_eq!(again, first, "a mesma instalação fica na mesma entrada");
+        let row = |store: &Store| store.list().into_iter().find(|row| row.device_id == first).unwrap();
+        assert_eq!((row(&store).last_seen, row(&store).created_at), (None, NOW + 500), "não herda o uso nem a idade do token perdido");
+        assert_eq!(super::tests::store(&dir).list()[0].last_seen, None, "o uso zerado foi ao disco");
         assert_eq!(store.verify(lost.as_bytes()), None, "o token perdido deixa de valer");
         assert_eq!(store.verify(token.as_bytes()), Some(first.clone()));
+        assert_eq!(row(&store).last_seen, Some(NOW + 500));
         let (other, _) = store.enroll_install("Outro", Some("install-2")).unwrap();
         let (old_app, _) = store.enroll("App antigo").unwrap();
         assert!(other != first && old_app != first);
@@ -808,6 +835,24 @@ mod tests {
         now.store(later, Ordering::Relaxed);
         assert_eq!(store.verify(token.as_bytes()), Some(id.clone()));
         assert_eq!(on_disk(), Some(later), "passada a hora, grava de novo");
+    }
+
+    #[test]
+    fn a_file_without_tracked_since_starts_counting_at_the_load() {
+        let dir = dir();
+        store(&dir).enroll("App").unwrap();
+        let file = dir.0.join("devices.json");
+        let mut saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["tracked_since"], json!(NOW), "a gravação leva o começo da contagem");
+        saved.as_object_mut().unwrap().remove("tracked_since");
+        std::fs::write(&file, serde_json::to_vec(&saved).unwrap()).unwrap();
+
+        let old = store(&dir).with_clock(Arc::new(|| NOW + 500));
+        assert!(old.list().iter().all(|row| row.tracked_since == NOW + 500), "arquivo antigo conta do carregamento");
+        old.enroll("Outro").unwrap();
+
+        let reloaded = store(&dir).with_clock(Arc::new(|| NOW + 900));
+        assert!(reloaded.list().iter().all(|row| row.tracked_since == NOW + 500), "com o campo no arquivo, ele fica");
     }
 
     #[test]

@@ -561,6 +561,16 @@ describe('remover um computador da conta', () => {
     expect(connect().machines).toEqual([]);
   });
 
+  it('404 que não veio do serviço vira a frase da tela e não tira o servidor', async () => {
+    await seed([entry, other]);
+    network({ route: (call) => (call.method === 'DELETE' && call.url.pathname === '/v1/machines/pc1'
+      ? new Response('<html>not found</html>', { status: 404 }) : undefined) });
+
+    await expect(connect().removeMachine(online)).rejects.toThrow(m.connect_error_machine_remove_unavailable());
+
+    expect(servers().map((server) => server.id)).toEqual(['pc1', 'pc9']);
+  });
+
   it('sessão que o serviço recusou (401) derruba a conta e não tira o servidor', async () => {
     await seed([entry, other]);
     network({ route: (call) => (call.method === 'DELETE' && call.url.pathname === '/v1/machines/pc1' ? json({ error: 'sessão' }, 401) : undefined) });

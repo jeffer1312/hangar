@@ -149,8 +149,13 @@ async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<So
     if let Err(response) = owner_gate(&st, peer, &req).await {
         return with_cors(&headers, response);
     }
-    let issued = issued_to_peers(&st);
-    let rows: Vec<Value> = st.connect_devices.list().into_iter().map(|row| {
+    // O peers.json é lido do disco: fora do executor assíncrono, como a loja.
+    let state = st.clone();
+    let (issued, devices) = match blocking(&st, move |store| Ok((issued_to_peers(&state), store.list()))).await {
+        Ok(read) => read,
+        Err(refusal) => return refused(&headers, refusal),
+    };
+    let rows: Vec<Value> = devices.into_iter().map(|row| {
         let peer = issued.as_ref().and_then(|issued| issued.get(&row.device_id).cloned());
         let mut value = json!(row);
         value["peers_checked"] = json!(issued.is_some());

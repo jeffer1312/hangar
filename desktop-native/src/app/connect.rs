@@ -91,6 +91,8 @@ pub(super) struct LocalDevice {
     #[serde(default)] peer: Option<String>,
     /// O servidor leu o peers.json: só aí a falta de `peer` prova que é app. Servidor antigo não manda.
     #[serde(default)] peers_checked: bool,
+    /// Desde quando o servidor grava o uso; servidor antigo não manda.
+    #[serde(default)] tracked_since: Option<u64>,
 }
 
 /// Só os que não vieram pela conta; recusado só fica guardado para o aparelho ler a recusa. Pendente primeiro.
@@ -138,15 +140,16 @@ fn local_groups(devices: &[LocalDevice]) -> LocalGroups<'_> {
     groups
 }
 
-/// Um dia: antes disso o app que acabou de receber a chave pode só não ter aberto ainda.
-const UNUSED_AFTER: u64 = 24 * 60 * 60;
+const UNUSED_FOR: u64 = 30 * 24 * 60 * 60;
 
-/// Os apps que nunca entraram e nasceram há mais de um dia. Sem a data de criação, fica; sem `peers_checked` também,
-/// porque a chave pode ser de outro computador.
-fn never_used(apps: &[&LocalDevice], now: u64) -> Vec<String> {
-    apps.iter().filter(|device| device.peers_checked && device.last_seen.is_none()
-        && device.created_at.is_some_and(|at| now.saturating_sub(at) > UNUSED_AFTER))
-        .map(|device| device.device_id.clone()).collect()
+/// Os apps sem uso há 30 dias: do último uso ou, sem ele, da criação, nunca antes de o servidor gravar o uso
+/// (`tracked_since`): uso de antes disso não ficou no disco. Fica quem não tem a data de criação, quem veio de servidor
+/// antigo e quem não tem `peers_checked`, porque a chave pode ser de outro computador.
+fn unused_for_30_days(apps: &[&LocalDevice], now: u64) -> Vec<String> {
+    apps.iter().filter(|device| device.peers_checked && device.tracked_since.is_some_and(|tracked| {
+        let since = device.last_seen.or_else(|| device.created_at.map(|created| created.max(tracked)));
+        since.is_some_and(|since| now.saturating_sub(since) >= UNUSED_FOR)
+    })).map(|device| device.device_id.clone()).collect()
 }
 
 /// Sem prévia aberta o Parar não faria nada; com a leitura falhando, ele fica para a prévia que talvez esteja aberta.
@@ -263,6 +266,12 @@ pub(crate) fn computers_head(account: &str) -> Div {
 
 /// A grade dos blocos.
 pub(crate) fn computers_grid(columns: u16) -> Div { div().grid().grid_cols(columns).gap_3() }
+
+/// Os blocos da grade, `None` sendo este computador: ele vem sempre, primeiro, porque é onde mora o Desligar, e a
+/// lista da conta pode estar carregando ou ter falhado.
+fn computer_slots(list: Option<&AccountList>) -> Vec<Option<&AccountMachine>> {
+    std::iter::once(None).chain(list.into_iter().flat_map(|list| list.machines.iter().map(Some))).collect()
+}
 
 /// O erro de uma resposta fica junto de quem foi respondido: na faixa do pedido ou na linha da lista.
 fn error_of(error: &Option<(String, String)>, id: &str) -> Option<String> {
@@ -460,7 +469,7 @@ pub(in crate::app) struct Connect {
     local_error: Option<(String, String)>,
     /// "Acessos só deste computador" aberto; fechado de início, é a parte que pouca gente precisa.
     local_open: bool,
-    /// "Tirar os nunca usados" em voo, e da última vez quantos saíram e o primeiro erro.
+    /// "Tirar os sem uso há 30 dias" em voo, e da última vez quantos saíram e o primeiro erro.
     pruning: bool,
     prune_note: Option<(String, Option<String>)>,
     form: Option<LinkForm>,
@@ -576,7 +585,7 @@ pub(super) enum ConnectReply {
     PortLink(String, u16, Result<Value, Failure>),
     PreviewClosed(Result<Value, Failure>),
     PreviewState(Result<Value, Failure>),
-    /// "Tirar os nunca usados": quantos saíram, de quantos, e o primeiro erro.
+    /// "Tirar os sem uso há 30 dias": quantos saíram, de quantos, e o primeiro erro.
     Pruned { removed: usize, total: usize, failure: Option<Failure> },
     MachineRemoved(String, Result<Value, Failure>),
 }
@@ -1088,7 +1097,7 @@ impl Hangar {
         }
         let group_title = |key: &str| div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(tr(key));
         if !groups.apps.is_empty() {
-            let unused = never_used(&groups.apps, super::side::now_seconds() as u64);
+            let unused = unused_for_30_days(&groups.apps, super::side::now_seconds() as u64);
             let prune = (!unused.is_empty()).then(|| {
                 let count = unused.len();
                 Button::new("connect-local-prune").outline().xsmall().flex_shrink_0().label(tr("connect_local_prune").replace("{n}", &count.to_string()))
@@ -1234,21 +1243,22 @@ impl Hangar {
                 .text_xs().text_color(theme::muted()).whitespace_normal().child(error)))
             .children(loose_remove_error(&self.connect.remove_error, self.connect.machines.ok()).map(|error| div().id("connect-remove-error")
                 .role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error.to_owned())));
-        let list = match &self.connect.machines.value {
-            None => return section.child(div().text_sm().text_color(theme::muted()).child(tr("loading"))),
-            Some(Err(error)) => return section
+        let list = self.connect.machines.ok();
+        let this_name = identity_of(host).map(|(machine, _)| machine.to_owned())
+            .or_else(|| list.map(|list| list.this.machine_id.clone())).unwrap_or_default();
+        let mut blocks = Vec::new();
+        for machine in computer_slots(list) { blocks.push(self.render_account_computer(machine, &this_name, cx)); }
+        let section = section.child(computers_grid(columns).children(blocks));
+        match &self.connect.machines.value {
+            None => section.child(div().text_sm().text_color(theme::muted()).child(tr("loading"))),
+            Some(Err(error)) => section
                 .child(div().id("connect-machines-error").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error.clone()))
                 .child(div().child(Button::new("connect-machines-retry").outline().small().label(tr("server_retry"))
                     .on_click(cx.listener(|this, _, _, cx| this.load_account_machines(cx))))),
-            Some(Ok(list)) => list,
-        };
-        let this_name = identity_of(host).map_or_else(|| list.this.machine_id.clone(), |(machine, _)| machine.to_owned());
-        let mut blocks = vec![self.render_account_computer(None, &this_name, cx)];
-        for machine in &list.machines { blocks.push(self.render_account_computer(Some(machine), &this_name, cx)); }
-        section.child(computers_grid(columns).children(blocks))
-            .child(div().flex().items_start().gap_2()
+            Some(Ok(_)) => section.child(div().flex().items_start().gap_2()
                 .child(div().pt(px(2.)).child(chrome::small_icon(IconName::Info, 14., theme::faint())))
-                .child(div().flex_1().min_w_0().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_computers_tip"))))
+                .child(div().flex_1().min_w_0().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_computers_tip")))),
+        }
     }
 
     /// O site aberto por "Link de fora" na aba Contexto. Sem prévia aberta não há o que parar; com a leitura falhando,
@@ -1388,7 +1398,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{account_split, address_preview, device_view, identity_of, local_groups, machine_label, never_used, open_preview_port, page_layout, parse_account, parse_devices, parse_links, parse_local_devices, parse_port, parse_preview, parse_status, phase, row_actions, shows_stop, stats, take_password, Device, DeviceKind, DeviceStatus, DeviceView, InputState, Layout, LocalStatus, Phase, Remote, RowActions, Stats};
+    use super::{account_split, address_preview, computer_slots, device_view, identity_of, local_groups, machine_label, open_preview_port, page_layout, parse_account, parse_devices, parse_links, parse_local_devices, parse_port, parse_preview, parse_status, phase, row_actions, shows_stop, stats, take_password, unused_for_30_days, Device, DeviceKind, DeviceStatus, DeviceView, InputState, Layout, LocalStatus, Phase, Remote, RowActions, Stats};
     use crate::i18n::tr_shared;
     // O nome explícito vence qualquer `test` trazido por glob.
     use core::prelude::v1::test;
@@ -1427,34 +1437,51 @@ mod tests {
         assert_eq!(ids(&groups.peers), ["p1"], "servidor sem o campo peer deixa tudo em Apps");
     }
 
-    /// Nunca usado é sem last_seen e criado há mais de 24 h, pelo relógio que se passa; sem data de criação, fica.
+    /// Sem uso há 30 dias conta do último uso; sem ele, da criação, mas nunca antes de o servidor gravar o uso.
     #[test]
-    fn never_used_counts_only_apps_older_than_a_day() {
-        let now: u64 = 1_000_000;
+    fn unused_counts_thirty_days_from_the_last_use_or_from_when_use_was_tracked() {
         let day: u64 = 24 * 60 * 60;
+        let now = 100 * day;
+        let row = |id: &str, last_seen: Option<u64>, created_at: Option<u64>, tracked_since: Option<u64>| json!({"device_id": id, "name": id,
+            "status": "approved", "last_seen": last_seen, "created_at": created_at, "tracked_since": tracked_since, "peers_checked": true});
         let devices = parse_local_devices(json!([
-            {"device_id": "old", "name": "a", "status": "approved", "last_seen": null, "created_at": now - day - 1, "peers_checked": true},
-            {"device_id": "edge", "name": "b", "status": "approved", "last_seen": null, "created_at": now - day, "peers_checked": true},
-            {"device_id": "new", "name": "c", "status": "approved", "last_seen": null, "created_at": now - 60, "peers_checked": true},
-            {"device_id": "used", "name": "d", "status": "approved", "last_seen": now - 2 * day, "created_at": now - 3 * day, "peers_checked": true},
-            {"device_id": "undated", "name": "e", "status": "approved", "last_seen": null, "peers_checked": true},
-            {"device_id": "peer", "name": "f", "status": "approved", "last_seen": null, "created_at": 1, "peer": "casa", "peers_checked": true}])).unwrap();
+            row("seen-old", Some(now - 30 * day), Some(1), Some(1)),
+            row("seen-recent", Some(now - 29 * day), Some(1), Some(1)),
+            row("never-old", None, Some(now - 40 * day), Some(now - 40 * day)),
+            // Credencial de antes do uso ir ao disco: nulo não prova que nunca entrou.
+            row("tracked-late", None, Some(now - 60 * day), Some(now - 10 * day)),
+            row("never-new", None, Some(now - 10 * day), Some(now - 60 * day)),
+            row("old-server", None, Some(1), None),
+            row("undated", None, None, Some(1)),
+            json!({"device_id": "peer", "name": "f", "status": "approved", "last_seen": null, "created_at": 1, "tracked_since": 1,
+                "peer": "casa", "peers_checked": true})])).unwrap();
         let groups = local_groups(&devices);
-        assert_eq!(never_used(&groups.apps, now), ["old"], "exatamente 24 h ainda não conta");
-        assert_eq!(never_used(&groups.apps, now + day), ["old", "edge", "new"]);
-        assert!(never_used(&groups.apps, 0).is_empty(), "relógio atrás da criação não tira ninguém");
+        assert_eq!(unused_for_30_days(&groups.apps, now), ["seen-old", "never-old"], "exatamente 30 dias já conta");
+        assert_eq!(unused_for_30_days(&groups.apps, now + 20 * day), ["seen-old", "seen-recent", "never-old", "tracked-late", "never-new"],
+            "servidor antigo e linha sem criação nunca contam");
+        assert!(unused_for_30_days(&groups.apps, 0).is_empty(), "relógio atrás não tira ninguém");
     }
 
     /// Sem peers.json lido (ou servidor antigo), a chave sem `peer` pode ser de outro computador: o botão não a conta.
     #[test]
-    fn never_used_skips_rows_whose_peers_were_not_checked() {
+    fn unused_skips_rows_whose_peers_were_not_checked() {
         let devices = parse_local_devices(json!([
-            {"device_id": "unchecked", "name": "a", "status": "approved", "last_seen": null, "created_at": 1, "peers_checked": false},
-            {"device_id": "old-server", "name": "b", "status": "approved", "last_seen": null, "created_at": 1},
-            {"device_id": "checked", "name": "c", "status": "approved", "last_seen": null, "created_at": 1, "peers_checked": true}])).unwrap();
+            {"device_id": "unchecked", "name": "a", "status": "approved", "last_seen": null, "created_at": 1, "tracked_since": 1, "peers_checked": false},
+            {"device_id": "old-server", "name": "b", "status": "approved", "last_seen": null, "created_at": 1, "tracked_since": 1},
+            {"device_id": "checked", "name": "c", "status": "approved", "last_seen": null, "created_at": 1, "tracked_since": 1, "peers_checked": true}])).unwrap();
         let groups = local_groups(&devices);
         assert_eq!(groups.apps.len(), 3, "continuam na lista de apps");
-        assert_eq!(never_used(&groups.apps, 10 * 24 * 60 * 60), ["checked"]);
+        assert_eq!(unused_for_30_days(&groups.apps, 40 * 24 * 60 * 60), ["checked"]);
+    }
+
+    /// Este computador, com o Desligar, está na grade mesmo antes da lista da conta chegar ou com ela falhando.
+    #[test]
+    fn this_computer_is_always_the_first_block() {
+        assert_eq!(computer_slots(None), [None], "lista carregando ou com erro: só este computador");
+        let list = parse_account(json!({"this": {"machine_id": "a"}, "machines": [
+            {"machine_id": "b", "name": "Casa", "host": "b.j.hangar.dev.br", "online": true, "added": false}]})).unwrap();
+        let ids: Vec<Option<&str>> = computer_slots(Some(&list)).into_iter().map(|slot| slot.map(|m| m.machine_id.as_str())).collect();
+        assert_eq!(ids, [None, Some("b")]);
     }
 
     /// O erro fica no bloco enquanto o computador está na grade; saído dela, vai para o aviso da seção.

@@ -31,7 +31,7 @@ export interface AccountDevice {
   install_code?: string | null;
 }
 
-const fail = (code: string, status?: number) => Object.assign(new Error(code), { code, status });
+const fail = (code: string, status?: number, fromService = false) => Object.assign(new Error(code), { code, status }, fromService ? { fromService } : {});
 const record = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value)
   ? value as Record<string, unknown> : {});
 const filled = (value: unknown): value is string => typeof value === 'string' && !!value;
@@ -49,8 +49,10 @@ async function request(base: string, path: string, init: RequestInit): Promise<u
   });
   if (!response.ok) {
     // Do corpo do erro só sai o motivo conhecido, nunca o texto: ele pode ecoar o que recebeu.
-    const reason = await response.json().then((body: unknown) => record(body).reason, () => undefined);
-    throw fail(REASONS.includes(reason) ? `connect_${String(reason)}` : 'connect_request_failed', response.status);
+    const body = record(await response.json().catch(() => undefined));
+    // `fromService`: o corpo é o `{"error": …}` do serviço, não o de um proxy no caminho.
+    throw fail(REASONS.includes(body.reason) ? `connect_${String(body.reason)}` : 'connect_request_failed', response.status,
+      typeof body.error === 'string');
   }
   return response.status === 204 ? null : await response.json() as unknown;
 }
@@ -101,9 +103,17 @@ export async function revokeAccountDevice(session: AccountSession, id: string): 
   await request(session.serviceUrl, `/v1/devices/${encodeURIComponent(id)}`, { method: 'DELETE', headers: auth(session) });
 }
 
-/** Tira o computador da conta: a chave dele deixa de valer e ele some da lista de todos os aparelhos. */
+/** Tira o computador da conta: a chave dele deixa de valer e ele some da lista de todos os aparelhos. Já fora da conta
+ *  conta como feito; erro `connect_machine_remove_unavailable` quando o 404 não veio do serviço. */
 export async function removeAccountMachine(session: AccountSession, machineId: string): Promise<void> {
-  await request(session.serviceUrl, `/v1/machines/${encodeURIComponent(machineId)}`, { method: 'DELETE', headers: auth(session) });
+  try {
+    await request(session.serviceUrl, `/v1/machines/${encodeURIComponent(machineId)}`, { method: 'DELETE', headers: auth(session) });
+  } catch (error) {
+    // Só o 404 do próprio serviço diz que a máquina já saiu; o de quem está no caminho não diz nada sobre a conta.
+    const { status, fromService } = error as { status?: number; fromService?: boolean };
+    if (status !== 404) throw error;
+    if (!fromService) throw fail('connect_machine_remove_unavailable', 404);
+  }
 }
 
 async function accountSession(serviceUrl: string, path: string, name: string, password: string): Promise<AccountSession> {

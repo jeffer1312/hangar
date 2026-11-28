@@ -271,10 +271,23 @@ describe('aparelho da conta', () => {
   });
 
   it('recusa da remoção sai com o status e sem o texto do serviço', async () => {
-    network(() => json({ error: 'eco: senha' }, 404));
+    network(() => json({ error: 'eco: senha' }, 403));
     const error: unknown = await removeAccountMachine(released, 'outra').catch((e: unknown) => e);
-    expect(error).toMatchObject({ code: 'connect_request_failed', status: 404 });
+    expect(error).toMatchObject({ code: 'connect_request_failed', status: 403 });
     expect(String(error)).not.toContain('senha');
+  });
+
+  it('404 do serviço conta como já removido', async () => {
+    network(() => json({ error: 'não encontrado' }, 404));
+    await expect(removeAccountMachine(released, 'outra')).resolves.toBeUndefined();
+  });
+
+  it('404 que não veio do serviço não conta como removido', async () => {
+    for (const answer of [new Response('<html>not found</html>', { status: 404 }), json({ error: 5 }, 404), json(['error'], 404)]) {
+      network(() => answer);
+      const error: unknown = await removeAccountMachine(released, 'outra').catch((e: unknown) => e);
+      expect(error).toMatchObject({ code: 'connect_machine_remove_unavailable', status: 404 });
+    }
   });
 
   it('o código de conferência do pendente vem pronto do serviço e é o mesmo que o celular calcula', async () => {
