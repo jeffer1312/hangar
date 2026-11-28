@@ -1,5 +1,5 @@
 import { animate, useReducedMotion } from "motion/react";
-import { createContext, useContext, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Component, createContext, useContext, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AlertCircle, CircleCheck, RotateCw, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,7 +29,7 @@ export function Section({ id, title, explain, hue, icon: Icon, aside, children }
           </div>
           {aside}
         </header>
-        {children}
+        <Guard>{children}</Guard>
       </section>
     </QueryScope>
   );
@@ -71,19 +71,24 @@ export function Group({ title, children }: { title: string; children: ReactNode 
 }
 
 // Número que rola do valor anterior até o novo; na releitura ao vivo, o que mudou ganha um realce breve.
-export function Num({ value, format = (v: number) => fmt.format(Math.round(v)), className }: { value: number; format?: (v: number) => string; className?: string }) {
+const intFormat = (v: number) => fmt.format(Math.round(v));
+export function Num({ value, format = intFormat, className }: { value: number; format?: (v: number) => string; className?: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const last = useRef<number | null>(null);
+  // O formato vem novo a cada render do pai; só o valor reinicia a animação.
+  const formatRef = useRef(format);
+  formatRef.current = format;
   const reduce = useReducedMotion();
   useLayoutEffect(() => {
     const node = ref.current!;
     const from = last.current;
     last.current = value;
-    if (from === null || from === value || reduce) { node.textContent = format(value); return; }
+    const show = (v: number) => { node.textContent = formatRef.current(v); };
+    if (from === null || from === value || reduce) { show(value); return; }
     node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash");
-    const controls = animate(from, value, { duration: 0.7, ease: [0.23, 1, 0.32, 1], onUpdate: v => { node.textContent = format(v); } });
-    return () => controls.stop();
-  }, [value, format, reduce]);
+    const controls = animate(from, value, { duration: 0.7, ease: [0.23, 1, 0.32, 1], onUpdate: show });
+    return () => { controls.stop(); show(value); };
+  }, [value, reduce]);
   return <span ref={ref} className={cn("tabular", className)}>{format(value)}</span>;
 }
 
@@ -154,3 +159,18 @@ export function BlockSkeleton({ rows = 4, chart = false }: { rows?: number; char
 export const Mono = ({ children, className }: { children: ReactNode; className?: string }) => (
   <code className={cn("font-mono text-[12.5px] [overflow-wrap:anywhere]", className)}>{children}</code>
 );
+
+// Um dado em formato inesperado derruba só o bloco, com a causa na tela; o resto do painel segue.
+export class Guard extends Component<{ children: ReactNode; whole?: boolean }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    // Arquivo do app que sumiu (versão nova publicada com a página aberta): recarregar traz a versão atual.
+    const stale = /dynamically imported module|Importing a module script failed|Failed to fetch/i.test(error.message);
+    const box = <ErrorBox message={stale ? "O painel foi atualizado no servidor." : "Este bloco não conseguiu desenhar os dados."}
+      detail={stale ? "Recarregue para abrir a versão nova." : error.message} onRetry={() => (stale || this.props.whole ? location.reload() : this.setState({ error: null }))} />;
+    return this.props.whole ? <div className="mx-auto max-w-lg p-6 pt-24">{box}</div> : box;
+  }
+}

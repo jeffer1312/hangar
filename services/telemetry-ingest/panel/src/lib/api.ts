@@ -59,25 +59,35 @@ export function useMe() {
 }
 
 // Pacote novo no receptor: relê o resumo e o dia aberto do caminho, juntando avisos seguidos.
+// O servidor manda `ping` a cada 20 s; sem nada por este tempo, a conexão está meio aberta e é refeita.
+const SILENCE_MS = 50_000;
+
 export function useLive(enabled: boolean) {
   const client = useQueryClient();
   const [live, setLive] = useState(false);
+  const [round, setRound] = useState(0);
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") return;
     const source = new EventSource("/panel/events");
-    let timer = 0;
-    source.onopen = () => setLive(true);
+    let timer = 0, silence = 0, opened = round > 0;
+    const reread = () => {
+      // Página escondida só marca como velho: relê quando voltar à tela.
+      const refetchType = document.hidden ? "none" : "active";
+      client.invalidateQueries({ queryKey: ["data"], refetchType });
+      client.invalidateQueries({ queryKey: ["trail"], refetchType });
+    };
+    const heard = () => { clearTimeout(silence); silence = window.setTimeout(() => setRound(r => r + 1), SILENCE_MS); };
+    source.onopen = () => {
+      setLive(true);
+      heard();
+      // Reconectou: o que chegou enquanto estava fora não avisou ninguém.
+      if (opened) reread();
+      opened = true;
+    };
     source.onerror = () => setLive(source.readyState === EventSource.OPEN);
-    source.addEventListener("batch", () => {
-      clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        // Página escondida só marca como velho: relê quando voltar à tela.
-        const refetchType = document.hidden ? "none" : "active";
-        client.invalidateQueries({ queryKey: ["data"], refetchType });
-        client.invalidateQueries({ queryKey: ["trail"], refetchType });
-      }, 1200);
-    });
-    return () => { clearTimeout(timer); source.close(); setLive(false); };
-  }, [enabled, client]);
+    source.addEventListener("ping", heard);
+    source.addEventListener("batch", () => { heard(); clearTimeout(timer); timer = window.setTimeout(reread, 1200); });
+    return () => { clearTimeout(timer); clearTimeout(silence); source.close(); setLive(false); };
+  }, [enabled, client, round]);
   return live;
 }

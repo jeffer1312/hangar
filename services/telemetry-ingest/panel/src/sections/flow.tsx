@@ -58,7 +58,7 @@ function DayTrail({ days, total }: { days: TrailDay[]; total: number }) {
           <div className="flex flex-wrap items-end gap-2">
             <label className="min-w-0 flex-1 basis-64 text-[12px] text-muted-foreground">
               Máquina e dia
-              <Select value={pick} onValueChange={setPick}>
+              <Select value={key(chosen)} onValueChange={setPick}>
                 <SelectTrigger className="mt-1 h-11! w-full sm:h-9!"><SelectValue /></SelectTrigger>
                 <SelectContent className="max-h-80">
                   {days.map(t => (
@@ -81,6 +81,7 @@ function DayTrail({ days, total }: { days: TrailDay[]; total: number }) {
                 <p role="status" className="text-[12.5px] text-muted-foreground">
                   {shown!.length ? quantity(shown!.length, "passo", "passos") + "." : !steps.length ? "Nenhum passo recebido nesse dia." : "Nenhuma falha nem aviso nesse dia."}
                   {trail.data?.partial ? " Há pacotes parciais neste dia: os passos ainda podem mudar." : ""}
+                  {trail.isError ? <span className="text-destructive"> Não foi possível reler este dia; os passos podem estar velhos.</span> : null}
                 </p>
                 <ol className={cn("max-h-[460px] overflow-y-auto overscroll-contain rounded-lg border", trail.isFetching && "opacity-80")}>
                   {shown!.map((st, i) => (

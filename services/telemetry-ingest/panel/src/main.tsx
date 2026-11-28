@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { MotionConfig } from "motion/react";
 import { queryClient } from "@/lib/api";
 import { App } from "@/app";
+import { Guard } from "@/components/kit";
 import "./index.css";
 
 // Sem isto o painel não pode ser instalado; o service worker só repassa à rede.
@@ -13,7 +14,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <MotionConfig reducedMotion="user">
-        <App />
+        <Guard whole><App /></Guard>
       </MotionConfig>
     </QueryClientProvider>
   </StrictMode>,

@@ -1,6 +1,6 @@
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Rectangle, Tooltip, XAxis, YAxis, type TooltipContentProps } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { ChartContainer } from "@/components/ui/chart";
 import { compact, dayMonth, fmt, fullDay } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -34,7 +34,7 @@ const dayTicks = (days: string[], n: number) => {
 export function DailyArea({ rows, unit, color, height = 220, label }: {
   rows: { day: string; value: number }[]; unit: [string, string]; color: string; height?: number; label: string;
 }) {
-  const id = "g" + label.replace(/\W/g, "");
+  const id = "g" + useId().replace(/:/g, "");
   return (
     <ChartContainer config={{ value: { label, color } }} className="aspect-auto w-full" style={{ height }}
       role="img" aria-label={label + ". " + rows.map(r => dayMonth(r.day) + ": " + fmt.format(r.value)).join("; ")}>

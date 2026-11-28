@@ -51,10 +51,12 @@ function Invite({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boole
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!open) return;
+    let current = true;
     setState({}); setCopied(false);
     api<{ path: string; days: number }>("/panel/api/invites", { method: "POST" })
-      .then(b => setState({ link: location.origin + b.path, days: b.days }))
-      .catch(e => { if (isUnauthorized(e)) location.replace("/panel"); else setState({ error: (e as Error).message }); });
+      .then(b => { if (current) setState({ link: location.origin + b.path, days: b.days }); })
+      .catch(e => { if (isUnauthorized(e)) location.replace("/panel"); else if (current) setState({ error: (e as Error).message }); });
+    return () => { current = false; };
   }, [open]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -83,7 +85,7 @@ function Account({ email }: { email: string }) {
   const [logoutError, setLogoutError] = useState("");
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <button type="button" aria-label="Conta" className="grid size-10 shrink-0 place-items-center rounded-full bg-secondary text-[13px] font-semibold uppercase ring-1 ring-border-strong hover:bg-accent sm:size-8">
             {email[0] ?? "?"}
@@ -114,8 +116,11 @@ function SearchBox({ value, onChange, className }: { value: string; onChange: (v
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = document.activeElement?.tagName;
-      if (e.key === "/" && t !== "INPUT" && t !== "TEXTAREA") { e.preventDefault(); ref.current?.focus(); }
+      const a = document.activeElement as HTMLElement | null;
+      const typing = !!a && (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable);
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey || typing || document.querySelector("[role=dialog]")) return;
+      e.preventDefault();
+      ref.current?.focus();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

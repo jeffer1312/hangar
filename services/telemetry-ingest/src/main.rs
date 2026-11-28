@@ -137,7 +137,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = tokio::signal::ctrl_c() => {}
             _ = terminate.recv() => {}
         }
-        let _ = closing.stop.send(true);
+        // `send_replace` grava mesmo sem ninguém ouvindo: um canal que assina depois já nasce fechado.
+        closing.stop.send_replace(true);
     };
     axum::serve(listener, app_with_panel(pool, live)).with_graceful_shutdown(stop).await?;
     Ok(())
@@ -388,6 +389,8 @@ mod tests {
         let response = super::app_with_panel(pool.clone(), live.clone()).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CONTENT_TYPE], "text/event-stream");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response.headers()["x-accel-buffering"], "no", "proxy no meio não junta os avisos");
         let mut events = response.into_body().into_data_stream();
         let id = fresh_id();
         let batch = batch_body(&id, &utc_day(&pool, 0).await);

@@ -30,6 +30,7 @@ struct Dist;
 
 /// Arquivos da raiz do app, com endereço fixo: revalidados a cada uso.
 const ROOT_FILES: [&str; 6] = ["manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
+/// `ping` nomeado (e não comentário): o painel vê o silêncio e refaz a conexão meio aberta.
 /// Um canal ao vivo dura no máximo isto; o navegador reconecta sozinho e a sessão é conferida de novo.
 const EVENTS_MAX_LIFE: Duration = Duration::from_secs(15 * 60);
 const EVENTS_KEEP_ALIVE: Duration = Duration::from_secs(20);
@@ -207,7 +208,7 @@ async fn events(State(panel): State<Panel>, headers: HeaderMap) -> Response {
     }
     let stream = batch_events(&panel.live, EVENTS_MAX_LIFE);
     // Proxy no meio (Cloudflare, Traefik) não pode juntar os avisos esperando o corpo encher.
-    let mut response = Sse::new(stream).keep_alive(KeepAlive::new().interval(EVENTS_KEEP_ALIVE)).into_response();
+    let mut response = Sse::new(stream).keep_alive(KeepAlive::new().interval(EVENTS_KEEP_ALIVE).event(Event::default().event("ping"))).into_response();
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
