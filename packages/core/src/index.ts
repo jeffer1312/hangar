@@ -78,6 +78,7 @@ export * from './linkedChildren';
 export * from './externalPairs';
 export * from './configSync';
 export * from './sessionOptions';
+export * from './tour';
 export * from './firstConversation';
 export * from './backgroundEffect';
 export * from './conversationList';
