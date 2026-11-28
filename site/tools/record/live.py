@@ -452,11 +452,13 @@ class L(FX["H"]):
     def do_POST(self):
         path = urlparse(self.path).path
         parts = path.split("/")
-        # resposta à folha da cena phone só confirma: quem segue a conversa é a linha do tempo da cena
-        if path.startswith("/api/sessions/") and parts[-1] == "answer" and len(parts) > 3 and live(parts[3])["ask"] is not None:
-            self.send_json({"ok": True}); return
-        # o app do celular assina push ao entrar; o fixture não manda push
-        if path.startswith("/api/push/"):
+        shortcut = (path.startswith("/api/sessions/") and parts[-1] == "answer" and len(parts) > 3 and live(parts[3])["ask"] is not None) \
+            or path.startswith("/api/push/expo/")
+        # resposta à folha da cena phone só confirma (a conversa segue pela linha do tempo da cena);
+        # a assinatura de push que o app faz ao entrar também, porque o fixture não manda push
+        if shortcut:
+            # conexão HTTP/1.1 reaproveitada: o corpo não lido viraria o começo do pedido seguinte
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
             self.send_json({"ok": True}); return
         super().do_POST()
 

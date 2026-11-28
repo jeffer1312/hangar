@@ -87,7 +87,7 @@ a{color:var(--text);text-decoration:none}
 .sc-window{width:min(100%,calc(var(--sw)*.78));border-radius:16px;border:1px solid var(--line-strong);overflow:hidden;box-shadow:0 -1px 0 rgba(255,248,244,.08),0 32px 80px rgba(0,0,0,.6)}
 .sc-frame{background:var(--surface);aspect-ratio:5/3}
 .sc-video{display:block;width:100%;height:100%;object-fit:contain;background:var(--deep)}
-.sc-tabs{align-self:center;max-width:100%;display:flex;gap:4px;padding:4px;border-radius:12px;border:1px solid var(--line)}
+.sc-tabs{align-self:center;max-width:100%;display:flex;flex-wrap:wrap;justify-content:center;gap:4px;padding:4px;border-radius:12px;border:1px solid var(--line)}
 .sc-tab{position:relative;flex:none;height:36px;padding:0 12px;border:0;border-radius:8px;font:inherit;font-size:14px;cursor:pointer;overflow:hidden;transition:background-color .15s var(--ease),color .15s var(--ease)}
 .sc-tab[aria-selected=true]{background:var(--line);color:var(--text)}
 .sc-tab[aria-selected=false]{background:transparent;color:var(--secondary)}
@@ -275,7 +275,7 @@ a{color:var(--text);text-decoration:none}
 }
 @media (min-width: 761px) and (max-height: 800px){
 .hero{--copy:284px;--peek:24px}
-.hero-copy{height:240px;padding-top:20px;gap:12px}
+.hero-copy{height:calc(var(--copy) - 12px);padding-top:20px;gap:12px}
 .hg .hero-copy h1{font-size:44px;line-height:48px}
 .hero-copy .lead{font-size:16px;line-height:24px}
 .scene{margin-top:12px}
@@ -292,6 +292,7 @@ a{color:var(--text);text-decoration:none}
 .flags span{display:none}
 .sc-window{width:100%}
 .sc-tabs{display:grid;grid-template-columns:1fr 1fr;align-self:stretch}
+.sc-tab:last-child:nth-child(odd){grid-column:1/-1}
 .sc-tab{padding:0 8px}
 .card-text{padding:24px 20px 20px}
 .card-media{margin-left:20px}
@@ -300,7 +301,8 @@ a{color:var(--text);text-decoration:none}
 }
 
 .hero-copy>.pain{max-width:none}
-.pain{display:inline-flex;align-items:center;gap:10px;font-size:15px;line-height:22px;color:var(--secondary);text-wrap:balance}
+.pain .state{vertical-align:middle;margin-right:8px}
+.pain{display:block;font-size:15px;line-height:22px;color:var(--secondary);text-wrap:balance}
 .compat{display:flex;flex-direction:column;align-items:center;gap:20px;text-align:center}
 .compat-list{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;justify-content:center;gap:12px}
 .compat-list li{display:flex;align-items:center;gap:10px;padding:10px 16px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font:500 15px/20px var(--display)}
