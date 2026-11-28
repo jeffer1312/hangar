@@ -4462,12 +4462,16 @@ ninguém.
     ou tirado da fila antes de entregar, não a grava: o pai que não leu a pergunta não ouve como acabou.
   - O fim só vale com o resultado da chamada no transcript da filha: resposta (até 1 000 caracteres),
     "resposta omitida" com item `isSecret` (ou a chamada fora da janela lida), e "encerrada sem resposta"
-    para recusa, Esc ou interrupção (`is_error`, "doesn't want to proceed", "[Request interrupted").
+    para recusa, Esc ou interrupção (`is_error`, ou o envelope da CLI no começo do resultado: "The user
+    doesn't want to proceed with this tool use", "[Request interrupted by user").
     Sem resultado não houve fim: a vigia espera 10 min e solta o registro calada. Outra pergunta aberta no
     lugar da avisada resolve a avisada antes do aviso novo.
-  - O `child_answer` grava `parent_answer` antes da rota (falhou a gravação, não responde) e o confirma
-    quando a resposta saiu ou pode ter saído; recusada (`erro_interacao_desatualizada` = o dono respondeu
-    antes), a marca sai e o fim é contado. Marca à espera da rota segura a decisão por até 120 s.
+  - O `child_answer` grava uma marca em `parent_answers` antes da rota (falhou a gravação, não responde),
+    uma por tentativa, com o `interaction_id` e a chamada quando o aviso já está gravado; a conclusão da
+    tentativa confirma ou tira só a marca dela. Confirma quando a resposta saiu ou pode ter saído (inclusive
+    a reserva por texto sem confirmação); recusada (`erro_interacao_desatualizada` = o dono respondeu
+    antes), a marca sai e o fim é contado. Marca à espera da rota segura a decisão por até 120 s. O aviso
+    entregue que o registro não gravou fica na memória da vigia, que repete só a gravação.
   - Com pergunta de repasse aberta no pai, o servidor a responde pelo `/answer` com o `interaction_id`
     publicado, em texto livre, e grava a mesma marca no registro do pai como filha: o avô não ouve isso como
     resposta do dono. Múltipla escolha pelas teclas do terminal não tem prova de que o texto livre entra e

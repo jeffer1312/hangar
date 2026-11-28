@@ -1,6 +1,6 @@
 //! `~/.hangar/link-returns.json`: quando cada filha foi ligada ao criador e quando a resposta dela
 //! voltou a ele (`{"<filha>": {"linked_at": f64, "returned_at": f64|null, "returned_key": str|null}}`), mais a última
-//! pergunta da filha avisada ao pai (`asked_key`, `asked_queue_id`, `asked_call`) e quem a respondeu (`parent_answer`), só quando houve.
+//! pergunta da filha avisada ao pai (`asked_key`, `asked_queue_id`, `asked_call`) e quem a respondeu (`parent_answers`), só quando houve.
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -31,9 +31,10 @@ pub struct LinkReturn {
     /// no transcript da filha. Ausente em menu, permissão e aviso recusado.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_call: Option<String>,
-    /// A resposta que saiu do pai (`child_answer`) ou do servidor (repasse): a pergunta fechada com ela não é do dono.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_answer: Option<ParentAnswer>,
+    /// Respostas que saíram do pai (`child_answer`) ou do servidor (repasse), uma por tentativa: a pergunta fechada
+    /// com uma delas não é do dono.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parent_answers: Vec<ParentAnswer>,
     /// Criada por `ensure_linked`, sem a ligação gravada: `linked_at` é a hora da recuperação, e resposta de antes
     /// dela não volta.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -42,8 +43,13 @@ pub struct LinkReturn {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ParentAnswer {
-    /// `tool_use_id` da pergunta respondida (o `interaction_id` quando não se conhece a chamada).
-    pub call: String,
+    /// Qual chamada à rota gravou a marca: só a conclusão dela a confirma ou tira.
+    pub attempt: String,
+    /// `interaction_id` respondido.
+    pub id: String,
+    /// `tool_use_id` da pergunta, quando o aviso dela já estava gravado.
+    #[serde(default)]
+    pub call: Option<String>,
     /// Quando a marca foi gravada, antes da rota.
     pub at: f64,
     /// A rota respondeu e a resposta saiu (ou pode ter saído); sem isto, a rota ainda não respondeu.

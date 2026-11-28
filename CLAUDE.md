@@ -1145,7 +1145,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   (`AskUserQuestion`) da filha desta máquina chega ao pai uma vez por `interaction_id` e é respondida
   por `child_answer`; menu e permissão só avisam. Respondida pelo dono na filha, o pai sabe pela chamada
   (`tool_use_id`), com o resultado dela no transcript: a pergunta de repasse dele com `metadata.source`
-  `hangar-child:<chamada>` é respondida pelo servidor, senão vai um recado. Parar (botão e tool `interrupt`) para só a sessão,
+  `hangar-child:<chamada>` é respondida pelo servidor quando a rota aceita texto livre (sem terminal ou pelo
+  plugin); múltipla escolha pelas teclas do terminal, ou sem a marca, recebe um recado. Parar (botão e tool `interrupt`) para só a sessão,
   nunca as filhas. Fechar o pai com filhas abertas pergunta antes se fecha também as filhas; fechar só
   o pai, pelo dono e com a morte confirmada, interrompe as filhas (pelo convidado, não) e as mantém
   abertas; toda saída do grupo grava `orphaned_from` nelas. Pai com filha ligada noutra máquina não
