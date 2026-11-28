@@ -3,6 +3,7 @@
 //! Não lê IP nem cabeçalho de origem; o limite de pedidos fica com a Cloudflare.
 mod accounts;
 mod panel;
+mod releases;
 mod store;
 
 use std::sync::Arc;
@@ -24,15 +25,17 @@ const MAX_BODY: usize = 2 * 1024 * 1024;
 /// O aviso de recusa são quatro campos curtos.
 const MAX_REFUSAL_BODY: usize = 1024;
 
-/// Aviso em processo de pacote gravado, para o painel aberto reler; e o sinal de desligar, que fecha esses canais.
+/// Aviso em processo de pacote gravado, para o painel aberto reler; o sinal de desligar, que fecha esses canais;
+/// e as versões publicadas que o painel compara com as das máquinas.
 pub struct Live {
     notify: tokio::sync::broadcast::Sender<()>,
     stop: tokio::sync::watch::Sender<bool>,
+    releases: Arc<releases::Releases>,
 }
 
 impl Live {
     fn new() -> Live {
-        Live { notify: tokio::sync::broadcast::channel(16).0, stop: tokio::sync::watch::channel(false).0 }
+        Live { notify: tokio::sync::broadcast::channel(16).0, stop: tokio::sync::watch::channel(false).0, releases: Arc::default() }
     }
 }
 
@@ -158,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("telemetry-ingest: listening on {listen}");
     // O pedido em curso termina de gravar antes de o processo sair.
     let live = Arc::new(Live::new());
+    tokio::spawn(releases::watch(live.releases.clone()));
     let closing = live.clone();
     // Os canais ao vivo do painel ficariam abertos para sempre: o desligamento os fecha antes de esperar os pedidos.
     let stop = async move {
@@ -416,6 +420,11 @@ mod tests {
         // Outras rodadas no mesmo banco somam junto: confere o mínimo destas duas máquinas.
         assert!(future["count"].as_i64().unwrap() >= 14 && future["machines"].as_i64().unwrap() >= 2, "{future}");
         assert!(data["active"]["machines_7d"].as_i64().unwrap() >= 2);
+        let label = &first["machine_id"].as_str().unwrap()[..8];
+        let machine = data["machines"].as_array().unwrap().iter().find(|m| m["label"] == label).unwrap();
+        assert_eq!((&machine["os"], &machine["version"], &machine["channel"]), (&json!("linux"), &json!("0.42.0"), &json!("latest")));
+        assert!(machine["last"].as_str().unwrap().ends_with('Z'), "{machine}");
+        assert!(data["published"]["channels"].is_object(), "as versões publicadas vão junto, mesmo antes da primeira leitura");
     }
 
     #[tokio::test]
