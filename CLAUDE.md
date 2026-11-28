@@ -1019,9 +1019,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   "negado por você".
 - **Abrir, reabrir, retomar e restaurar sessão é do Rust, por um lançador só.** Toda origem (telas,
   voz, `hangar-send`, MCP, `orq`, outro servidor, `claude`/`codex`/`pi`/`omp`/`kimi` digitados no
-  terminal) manda um `SessionOpenRequest`; `resolve_open()` decide conta, modo, modelo, plugin e
-  com/sem terminal (os padrões que as telas preenchiam moram aqui) e grava o `SessionSpec` da sessão
-  em `~/.hangar/session-specs/<chave>.json`. Modelo, esforço e permissão omitidos vêm do padrão
+  terminal) manda um `SessionOpenRequest`; `resolve_open()`, em `hangar-session-open-policy`,
+  decide conta, modo, modelo, plugin e com/sem terminal. O servidor fornece os fatos, reserva
+  o nome e grava o `SessionSpec` em `~/.hangar/session-specs/<chave>.json`. Modelo, esforço e
+  permissão omitidos vêm do padrão
   salvo no servidor (`~/.hangar/session-defaults.json`), que vence a criadora; `inherit: true` traz
   a permissão dela; convidado não recebe. Reabrir é `reopen_session(spec ⊕ SessionChange)`;
   retomar do Arquivo e `/resume` passam pelas mesmas guardas da criação. Com o servidor fora, o
@@ -1143,7 +1144,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `[de: <id B>::filha]`, pela rede, com a mesma fila de 2 h; só Claude e Codex), por uma assinatura
   interna da lista que não conta como app aberto; sem esperar bloqueante. A pergunta
   (`AskUserQuestion`) da filha desta máquina chega ao pai uma vez por `interaction_id` e é respondida
-  por `child_answer`; menu e permissão só avisam. Parar (botão e tool `interrupt`) para só a sessão,
+  por `child_answer`; menu e permissão só avisam. Respondida pelo dono na filha, o pai sabe pela chamada
+  (`tool_use_id`), com o resultado dela no transcript: a pergunta de repasse dele com `metadata.source`
+  `hangar-child:<chamada>` é respondida pelo servidor quando a rota aceita texto livre (sem terminal ou pelo
+  plugin); múltipla escolha pelas teclas do terminal, ou sem a marca, recebe um recado. Parar (botão e tool `interrupt`) para só a sessão,
   nunca as filhas. Fechar o pai com filhas abertas pergunta antes se fecha também as filhas; fechar só
   o pai, pelo dono e com a morte confirmada, interrompe as filhas (pelo convidado, não) e as mantém
   abertas; toda saída do grupo grava `orphaned_from` nelas. Pai com filha ligada noutra máquina não

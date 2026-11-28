@@ -408,7 +408,18 @@ impl ListBridge {
             row.options = state.options;
             row.interaction_id = state.interaction_id;
             // A pergunta que o plugin segura vai inteira, com o ID do formulário: o card a responde pelo `/answer`.
-            if let Some(form) = state.codex_question { row.ask_form = Some(Value::Object(form)); }
+            if let Some(mut form) = state.codex_question {
+                // O plugin guarda só o ID do pedido (`ask:<chamada>`) e as perguntas: a chamada e a marca de repasse, que o
+                // retorno da filha procura, saem dele e do registro do hook da mesma chamada.
+                if let Some(call) = form.get("request_id").and_then(Value::as_str).and_then(|id| id.strip_prefix("ask:"))
+                    .filter(|call| !call.is_empty()).map(str::to_owned) {
+                    if let Some(source) = row.jsonl.as_deref().and_then(|jsonl| crate::state::ask::source_of_call(std::path::Path::new(jsonl), &call)) {
+                        form.insert("source".into(), source.into());
+                    }
+                    form.insert("tool_use_id".into(), call.into());
+                }
+                row.ask_form = Some(Value::Object(form));
+            }
             if let Ok(local) = &reading.facts { row.pending_questions = row.pending_questions.max(local.questions.len().min(u32::MAX as usize) as u32); }
         }
     }

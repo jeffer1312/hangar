@@ -14,8 +14,7 @@ static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(HashMap::new(
 pub fn supports_fast(service: &AccountService, engine: &str, model: Option<&str>) -> bool {
     allows_fast(FastSupport::read(service, engine).as_ref(), model)
 }
-/// A recusa da criação, da reabertura e da troca quando [`supports_ultrafast`] diz não.
-pub const ULTRAFAST_REFUSED: &str = "Ultra Fast exige conta ChatGPT Pro ou Pro Max fixa no CLIProxyAPI local";
+pub use hangar_session_open_policy::ULTRAFAST_REFUSED;
 /// Ultra Fast: o modelo aceita Fast e a conta fixa da sessão pode pedir Ultra Fast. Sem conta fixa o proxy
 /// escolhe a conta, e uma Plus receberia o pedido.
 pub fn supports_ultrafast(service: &AccountService, engine: &str, model: Option<&str>, account: Option<&str>) -> bool {

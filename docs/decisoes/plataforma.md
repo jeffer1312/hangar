@@ -4447,6 +4447,44 @@ ninguém.
   `[painel: …]`: o painel diz "não responda".
 - **`child_answer` passa pela `/answer` com o `interaction_id` do aviso.** Codex com terminal não
   informa quem resolveu: a resposta sai "enviada, sem confirmação" e não se tenta de novo.
+- **Pergunta respondida na filha chega ao pai, pela chamada (28/11/2026).** Caso: o pai `x-respostas`
+  (Claude sem terminal) repassou ao dono, num `AskUserQuestion` próprio, a pergunta de
+  `site-hangar-atualizar`; o dono respondeu na filha e o cartão do pai ficou aberto (recado não entra
+  com pergunta aberta). Respondido depois no pai, o `child_answer` voltou `erro_interacao_desatualizada`,
+  o pai mandou a resposta por recado e a filha a leu como conflito e perguntou de novo.
+  - A pergunta é identificada pelo `tool_use_id` da chamada, não pelo `interaction_id`, que nasce outro
+    ao reabrir: a mesma chamada com ID novo é a mesma pergunta, avisada de novo com o ID novo. A chamada
+    vem do `control_request` (sem terminal) e do registro `.hangar-askq/` na revisão em que a pergunta foi
+    publicada (com terminal), e vai à linha em `ask_form.tool_use_id`, junto com `ask_form.source`. A
+    pergunta segurada pelo plugin traz a chamada no ID do pedido (`ask:<chamada>`), e a marca vem do registro
+    do hook só quando ele é da mesma chamada.
+  - O aviso pede, para repassar ao dono, `AskUserQuestion` com `metadata {source: "hangar-child:<chamada>"}`
+    (o dono não vê o campo), só a pai Claude, o único com essa ferramenta. Sem a chamada conhecida (Codex) a
+    linha não sai, e nada é contado ao pai.
+  - `asked_call` no `link-returns.json` guarda a chamada do aviso que chegou ao pai. Aviso recusado de vez,
+    ou tirado da fila antes de entregar, não a grava: o pai que não leu a pergunta não ouve como acabou.
+  - O fim só vale com o resultado da chamada no transcript da filha: resposta (até 1 000 caracteres),
+    "resposta omitida" com item `isSecret` (ou a chamada fora da janela lida), e "encerrada sem resposta"
+    para recusa, Esc ou interrupção (`is_error`, ou o envelope da CLI no começo do resultado: "The user
+    doesn't want to proceed with this tool use", "[Request interrupted by user").
+    Sem resultado não houve fim: a vigia espera 10 min e solta o registro calada. O fim lido fica guardado
+    na vigia até o pai ouvir: com o pai ocupado, a filha que segue trabalhando tira o resultado da janela
+    lida. Outra pergunta aberta (de chamada conhecida e diferente) no lugar da avisada tem `SETTLE` para a
+    avisada ser contada antes; depois o aviso novo sai, e a avisada segue sendo resolvida à parte.
+  - O `child_answer` grava uma marca em `parent_answers` antes da rota (falhou a gravação, não responde),
+    uma por tentativa, com o `interaction_id` e a chamada quando o aviso já está gravado; a conclusão da
+    tentativa confirma ou tira só a marca dela, numa tarefa própria que sobrevive ao cliente MCP que corta a
+    chamada. Só o que prova que nada chegou à pergunta tira a marca (`erro_interacao_desatualizada` = o dono
+    respondeu antes, ID sem identidade, corpo recusado, porta ocupada); o resto, falha depois da escrita
+    inclusive, confirma. Marca com a rota ainda rodando segura sem prazo; a de antes de um reinício, por
+    até 120 s. O aviso
+    entregue que o registro não gravou fica na memória da vigia, que repete só a gravação.
+  - Com pergunta de repasse aberta no pai, o servidor a responde pelo `/answer` com o `interaction_id`
+    publicado, em texto livre, e grava a mesma marca no registro do pai como filha: o avô não ouve isso como
+    resposta do dono. Múltipla escolha pelas teclas do terminal não tem prova de que o texto livre entra e
+    recebe o recado; sem terminal e pelo plugin, entra. Sem pergunta de repasse, vai
+    `[de: <filha>] a pergunta (interaction_id …) foi respondida pelo dono na filha: … Não responda nem
+    repita.` pela entrega normal. Nunca casar pela redação da pergunta.
 - **Parar para só a sessão.** O `/interrupt` não alcança filha ligada, e o `cascade=1` de cliente
   antigo é ignorado; a tool `interrupt` para só a filha nomeada, sem as netas. O dono não pediu o
   Parar em cascata e o tirou (27/11): a filha segue o trabalho dela quando o pai para; quem alcança as

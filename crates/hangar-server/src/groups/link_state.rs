@@ -1,6 +1,6 @@
 //! `~/.hangar/link-returns.json`: quando cada filha foi ligada ao criador e quando a resposta dela
 //! voltou a ele (`{"<filha>": {"linked_at": f64, "returned_at": f64|null, "returned_key": str|null}}`), mais a última
-//! pergunta da filha avisada ao pai (`asked_key`, `asked_queue_id`), só quando houve.
+//! pergunta da filha avisada ao pai (`asked_key`, `asked_queue_id`, `asked_call`) e quem a respondeu (`parent_answers`), só quando houve.
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -27,10 +27,34 @@ pub struct LinkReturn {
     /// Linha do aviso na fila do pai: some a pergunta, ela sai se ainda espera.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_queue_id: Option<String>,
+    /// `tool_use_id` da pergunta avisada que chegou ao pai (na fila ou entregue): é por ele que o fechamento se confere
+    /// no transcript da filha. Ausente em menu, permissão e aviso recusado.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_call: Option<String>,
+    /// Respostas que saíram do pai (`child_answer`) ou do servidor (repasse), uma por tentativa: a pergunta fechada
+    /// com uma delas não é do dono.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parent_answers: Vec<ParentAnswer>,
     /// Criada por `ensure_linked`, sem a ligação gravada: `linked_at` é a hora da recuperação, e resposta de antes
     /// dela não volta.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recovered: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ParentAnswer {
+    /// Qual chamada à rota gravou a marca: só a conclusão dela a confirma ou tira.
+    pub attempt: String,
+    /// `interaction_id` respondido.
+    pub id: String,
+    /// `tool_use_id` da pergunta, quando o aviso dela já estava gravado.
+    #[serde(default)]
+    pub call: Option<String>,
+    /// Quando a marca foi gravada, antes da rota.
+    pub at: f64,
+    /// A rota respondeu e a resposta saiu (ou pode ter saído); sem isto, a rota ainda não respondeu.
+    #[serde(default)]
+    pub confirmed: bool,
 }
 
 pub type LinkReturns = BTreeMap<String, LinkReturn>;

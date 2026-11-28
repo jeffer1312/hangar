@@ -343,6 +343,14 @@ fn cliproxy_base(home: &Path) -> Option<String> {
     config.base_url.ok()
 }
 
+pub(super) fn is_name_claimed(name: &str, take_reserved: bool) -> bool {
+    if take_reserved {
+        super::open::NameClaim::opening_without_reserves(name)
+    } else {
+        super::open::NameClaim::opening(name)
+    }
+}
+
 impl OpenFacts for LocalFacts {
     fn providers(&self) -> Result<ProviderCatalog, OpenError> {
         self.runtime.block_on(crate::engines::providers::read(&self.accounts))
@@ -532,6 +540,10 @@ impl OpenFacts for LocalFacts {
             Err(e) => return Err(super::open::mux_unavailable(e.code)),
         };
         Ok(panes.iter().any(|p| p.session == name))
+    }
+
+    fn name_claimed(&self, name: &str, take_reserved: bool) -> bool {
+        is_name_claimed(name, take_reserved)
     }
 
     fn name_has_leftovers(&self, name: &str) -> Result<bool, OpenError> {

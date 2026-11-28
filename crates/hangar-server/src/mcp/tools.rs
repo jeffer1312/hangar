@@ -961,8 +961,20 @@ impl Tools {
         if let Some(refusal) = child_caller_refusal(&me, voice, alvo) { return Err(refusal); }
         self.linked_child(&me, alvo, "erro_nao_ligada").await?;
         if let Some(refusal) = answer_refusal(self.interaction_kind(alvo, &a.interaction_id).await.as_ref(), alvo) { return Err(refusal); }
+        // Marcada antes da rota: a pergunta pode fechar já na resposta, e a que fecha sem a marca foi respondida na filha.
+        let Some(attempt) = link_return::parent_answering(&self.st, alvo, &a.interaction_id).await else {
+            return Err(format!("link_returns_write_failed: não gravei que a resposta é sua; nada foi enviado a '{alvo}'. Tente de novo."));
+        };
         let body = json!({"answers": a.answers, "interaction_id": a.interaction_id});
-        let (status, value) = self.route_from(Some(&me), Method::POST, &format!("/api/sessions/{}/answer", segment(alvo)), Some(body)).await;
+        let (api, token, st) = (self.api.clone(), self.st.cfg.auth_token.clone(), self.st.clone());
+        let (path, target) = (format!("/api/sessions/{}/answer", segment(alvo)), alvo.to_owned());
+        // Rota e conclusão numa tarefa própria: o cliente MCP que corta a chamada não deixa a marca à espera.
+        let answered = tokio::spawn(async move {
+            let (status, value) = call_route(api, &token, Some(&me), Method::POST, &path, Some(body)).await;
+            link_return::parent_answer_settled(&st, &target, &attempt, link_return::answer_maybe_sent(status, &value)).await;
+            (status, value)
+        });
+        let (status, value) = answered.await.map_err(|e| format!("child_answer_failed: a resposta não terminou ({e})"))?;
         answer_outcome(status, value)
     }
 
