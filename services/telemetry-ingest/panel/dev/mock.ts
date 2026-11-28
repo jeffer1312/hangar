@@ -3,7 +3,7 @@ import type { Plugin } from "vite";
 import type { ServerResponse } from "node:http";
 import { bump, summary, trail } from "./sample";
 
-type State = "normal" | "empty" | "error" | "slow" | "legacy";
+type State = "normal" | "empty" | "error" | "slow" | "legacy" | "noreleases" | "reading";
 
 export const mock = (): Plugin => ({
   name: "telemetry-mock",
@@ -57,13 +57,17 @@ export const mock = (): Plugin => ({
       if (state === "empty") {
         const s = summary(days);
         return json(res, 200, { ...s, records: [], records_total: 0, transitions: [], transitions_total: 0, trail_days: [], trail_days_total: 0, refusals: { declined: 0, revoked: 0 },
-          period: { batches: 0, machines: 0, partial_batches: 0 }, daily: [], env: [], per_owner: [], by_dims: [], by_bucket: [], speed: [], logs: [], trend: [], counters: [] });
+          period: { batches: 0, machines: 0, partial_batches: 0 }, daily: [], env: [], machines: [], per_owner: [], by_dims: [], by_bucket: [], speed: [], logs: [], trend: [], counters: [] });
       }
       // Receptor antigo: as falhas sem retrato, passos da última vez, desfecho e lote.
       if (state === "legacy") {
         const s = summary(days);
-        return json(res, 200, { ...s, records: s.records.map(({ trail_last: _t, ctx_first: _f, ctx_last: _l, after: _a, capped: _c, batch: _b, ...r }) => r) });
+        const { machines: _m, published: _p, ...old } = s;
+        return json(res, 200, { ...old, records: s.records.map(({ trail_last: _t, ctx_first: _f, ctx_last: _l, after: _a, capped: _c, batch: _b, ...r }) => r) });
       }
+      // Versões publicadas: a leitura no GitHub falhou desde a subida, ou a primeira ainda não terminou.
+      if (state === "noreleases") return json(res, 200, { ...summary(days), published: { channels: {}, error: "http status: 403" } });
+      if (state === "reading") return json(res, 200, { ...summary(days), published: { channels: {}, error: null } });
       return json(res, 200, summary(days));
     });
   },

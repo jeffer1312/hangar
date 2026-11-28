@@ -11,10 +11,23 @@ const DAYS = 90;
 const today = () => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; };
 const dayOf = (i: number) => new Date(today().getTime() - i * 86400000).toISOString().slice(0, 10);
 
-const MACHINES = Array.from({ length: 48 }, (_, i) => ({
-  id: hex(32), os: i % 5 === 0 ? "windows" : i % 7 === 0 ? "macos" : "linux",
-  version: i % 4 === 0 ? "0.44.1" : i % 3 === 0 ? "0.44.0" : "0.45.0", channel: i % 6 === 0 ? "beta" : "latest",
-}));
+// Mesma forma dos releases package-latest e package-beta: versões guardadas, da mais velha para a mais nova.
+const PUBLISHED: Record<string, Record<string, string[]>> = {
+  latest: { linux: ["12251", "12256", "12266", "12296", "12300"], windows: ["11980", "11989", "12029", "12238", "12251"] },
+  beta: { linux: ["11826", "11827", "11828", "11914", "12244"], windows: ["11342", "11826", "11827", "11828", "12244"] },
+};
+const v = (n: string) => "0.1.0." + n;
+const MACHINES = Array.from({ length: 48 }, (_, i) => {
+  const os = i % 5 === 0 ? "windows" : i % 7 === 0 ? "macos" : "linux";
+  const install = i === 43 ? "checkout" : "package";
+  const channel = i === 42 ? "other" : i % 6 === 0 ? "beta" : "latest";
+  const list = PUBLISHED[channel]?.[os] ?? PUBLISHED.latest.linux;
+  const version = install === "checkout" || channel === "other" ? v("12301") : channel === "latest" && os === "linux" && i % 9 === 4 ? v("12238") : v(list[[4, 4, 2, 3, 4, 1][i % 6]]);
+  return { id: hex(32), os, version, channel, install, last: new Date(Date.now() - ((i * 37) % 40) * 3600000 - ((i * 13) % 60) * 60000).toISOString().slice(0, 19) + "Z" };
+});
+const published = (): Summary["published"] => ({ error: null, channels: Object.fromEntries(Object.entries(PUBLISHED).map(([channel, byOs]) =>
+  [channel, Object.entries(byOs).flatMap(([os, list]) => list.map((n, k) => ({ version: v(n), os,
+    at: new Date(Date.now() - ((list.length - 1 - k) * 5 + (os === "windows" ? 4 : 0) + (channel === "beta" ? 30 : 0)) * 3600000).toISOString().slice(0, 19) + "Z" })))])) });
 
 type Row = { day: string; event: string; dims: Dims; bucket: string | null; count: number; machines: number };
 const rows: Row[] = [];
@@ -235,6 +248,7 @@ export function summary(days: number): Summary {
     refusals: { declined: days >= 30 ? 9 : 3, revoked: days >= 30 ? 2 : 1 }, days,
     active: { machines_7d: 37, machines_30d: 44, owners_7d: 26, owners_30d: 31 },
     period: { batches: p.reduce((s, d) => s + d.machines, 0), machines: Math.min(44, 20 + days), partial_batches: 6 },
+    machines: MACHINES.slice(0, 44).map(m => ({ label: m.id.slice(0, 8), os: m.os, version: m.version, channel: m.channel, install: m.install, last: m.last })), published: published(),
     daily: p, env, per_owner: [{ machines: 1, owners: 22 }, { machines: 2, owners: 6 }, { machines: 3, owners: 2 }, { machines: 4, owners: 1 }],
     by_dims, by_bucket, logs, trend, counters,
   };

@@ -285,7 +285,10 @@ async fn data(State(panel): State<Panel>, headers: HeaderMap, period: Result<Que
     let Ok(Query(period)) = period else { return error(StatusCode::BAD_REQUEST, "query") };
     let days = period.days.unwrap_or(DEFAULT_DAYS).clamp(1, 400);
     match store::summary(pool, days).await {
-        Ok(summary) => ([(header::CACHE_CONTROL, "no-store")], axum::Json(summary)).into_response(),
+        Ok(mut summary) => {
+            summary["published"] = panel.live.releases.snapshot();
+            ([(header::CACHE_CONTROL, "no-store")], axum::Json(summary)).into_response()
+        }
         Err(e) => unavailable("summary", &e),
     }
 }

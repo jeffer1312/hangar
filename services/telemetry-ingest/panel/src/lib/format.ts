@@ -6,6 +6,13 @@ export const quantity = (n: number, single: string, plural: string) => fmt.forma
 export const dayMonth = (day: string) => day.slice(8, 10) + "/" + day.slice(5, 7);
 export const fullDay = (day: string) => day.slice(0, 10).split("-").reverse().join("/");
 export const when = (s: string | null) => (s ? dayMonth(s) + " " + s.slice(11, 19) : "");
+// Horário UTC ISO no fuso de quem lê: "hoje 16:16" ou "28/11 16:16".
+export function localStamp(iso: string, now = new Date()) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const time = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  return (d.toDateString() === now.toDateString() ? "hoje" : d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })) + " " + time;
+}
 export const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // Tempo desde um horário UTC "AAAA-MM-DD HH:MM:SS".

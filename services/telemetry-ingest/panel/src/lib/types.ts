@@ -59,6 +59,13 @@ export interface TrailDay {
   problems: number;
 }
 
+// Versões publicadas por canal (`latest`, `beta`), lidas pelo receptor nos releases do GitHub.
+export interface Release { version: string; os: string; at: string }
+export interface Published { channels: Record<string, Release[]>; error: string | null }
+// O último pacote de cada máquina no período.
+// `install` "checkout" é cópia do repositório; pacote antigo manda null.
+export interface MachineLast { label: string; os: string; version: string; channel: string; install: string | null; last: string }
+
 export interface Summary {
   records: FailureRecord[];
   records_total: number;
@@ -73,6 +80,9 @@ export interface Summary {
   daily: { day: string; machines: number }[];
   env: { key: string; value: string; machines: number }[];
   per_owner: { machines: number; owners: number }[];
+  // Receptor antigo não manda.
+  machines?: MachineLast[];
+  published?: Published;
   by_dims: { event: string; dims: Dims; count: number; machines: number }[];
   by_bucket: { event: string; bucket: string; count: number; machines: number }[];
   // Faixas das medidas do bloco Velocidade com o sistema do pacote; receptor antigo não manda.

@@ -252,6 +252,15 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
+    // O último pacote de cada máquina, para o painel comparar a versão dela com as publicadas no canal.
+    let last_batches: Vec<(String, String, String, String, Option<String>, String)> = sqlx::query_as(concat!(
+        "SELECT DISTINCT ON (machine_id) left(machine_id, 8), os, version, channel, install,
+                to_char(received_at AT TIME ZONE 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
+         FROM batches WHERE ", in_period!("day"), " ORDER BY machine_id, day DESC, received_at DESC"
+    ))
+    .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
     let per_owner: Vec<(i64, i64)> =
         sqlx::query_as("SELECT machines, count(*) FROM v_machines_per_owner GROUP BY machines ORDER BY machines").fetch_all(&mut *pool).await?;
     let counters: Vec<(String, Json<serde_json::Value>, Option<String>, i64, i64)> = sqlx::query_as(concat!(
@@ -443,6 +452,8 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
         "period": {"batches": batches, "machines": machines, "partial_batches": partial_batches},
         "daily": daily.into_iter().map(|(day, machines)| json!({"day": day, "machines": machines})).collect::<Vec<_>>(),
         "env": env.into_iter().map(|(key, value, machines)| json!({"key": key, "value": value, "machines": machines})).collect::<Vec<_>>(),
+        "machines": last_batches.into_iter().map(|(label, os, version, channel, install, last)|
+            json!({"label": label, "os": os, "version": version, "channel": channel, "install": install, "last": last})).collect::<Vec<_>>(),
         "per_owner": per_owner.into_iter().map(|(machines, owners)| json!({"machines": machines, "owners": owners})).collect::<Vec<_>>(),
         "by_dims": by_dims.into_iter().map(|(event, dims, count, machines)|
             json!({"event": event, "dims": dims.0, "count": count, "machines": machines})).collect::<Vec<_>>(),
