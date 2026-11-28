@@ -159,8 +159,9 @@ export async function placementSuggestionFor(active: Server, machines: readonly 
 
 /** A escolha para a pasta escolhida aponta outra máquina: pela regra do projeto (`project`), a Nova conversa oferece abrir
  *  lá; pela carga (`project` nulo), já marca lá. `server`: o id que a máquina informa (vai no `machine` do pedido);
- *  `serverId`: a mesma máquina na lista do app; `cwd`: a pasta da oferta; `text`: o motivo da escolha. */
-export interface PlacementRuleOffer { server: string; serverId: string; project: string | null; text: string; cwd: string }
+ *  `serverId`: a mesma máquina na lista do app; `cwd`: a pasta da oferta; `text`: o motivo da escolha; `mark`: a tela marca a
+ *  máquina sem clique (carga, tela em "sugerir" e sem clone a fazer). */
+export interface PlacementRuleOffer { server: string; serverId: string; project: string | null; text: string; cwd: string; mark: boolean }
 
 /** A máquina da escolha e, pela regra de projeto, o projeto; só regra e carga apontam outra máquina para a pasta. */
 export function placementOfferOf(placement: Partial<Placement>): { server: string; project: string | null } | null {
@@ -183,7 +184,8 @@ export async function placementRuleOfferFor(marked: Server, machines: readonly S
   if (!found) return null;
   const names = new Map(others.flatMap(([s, id]) => id ? [[id, s.label] as const] : []));
   const text = placementReasonText(placement, (id) => names.get(id) ?? id);
-  return { server: offer.server, serverId: found.id, project: offer.project, text, cwd };
+  const mark = offer.project === null && config.ui_mode === 'suggest' && !placement.clone;
+  return { server: offer.server, serverId: found.id, project: offer.project, text, cwd, mark };
 }
 
 // Conta, motor, perfil e reserva são da máquina daqui: com eles o servidor recusa abrir noutra. Lá vale o padrão de lá.

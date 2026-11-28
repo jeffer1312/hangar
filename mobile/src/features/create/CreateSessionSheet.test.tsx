@@ -2332,7 +2332,7 @@ describe('CreateSessionSheet Codex', () => {
   it('conversa nova: a carga da pasta já marca a outra máquina, sem clique, e cria lá pelo servidor daqui', async () => {
     calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
     calls.ruleOffer.mockImplementation(async (_s: unknown, _m: unknown, cwd: string) =>
-      ({ server: 'vm', serverId: 'server-c', project: null, text: 'motivo-carga', cwd }));
+      ({ server: 'vm', serverId: 'server-c', project: null, text: 'motivo-carga', cwd, mark: true }));
     const { container, root } = await renderSheet(false, false);
     try {
       calls.scan.mockResolvedValue({ entries: [{ name: 'Child', path: '/repo/child', is_git: true, has_claude_md: false }] });

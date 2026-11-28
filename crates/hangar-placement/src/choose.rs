@@ -370,7 +370,6 @@ mod tests {
 
     #[test]
     fn many_open_sessions_take_the_local_out_even_with_few_working() {
-        // O caso do dono: 30 abertas e 2 trabalhando no notebook, poucas no PC.
         let nb = MachineFacts { open: Some(30), ..machine("pc", 2, 13) };
         let p = choose(&ctx(), &[nb, MachineFacts { open: Some(4), ..machine("srv", 3, 8) }], &PlacementConfig::default(), now());
         assert_eq!((p.server.as_str(), p.reason), ("srv", ReasonCode::LeastLoaded { local_out: Exclusion::Open }));

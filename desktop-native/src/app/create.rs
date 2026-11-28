@@ -1799,7 +1799,11 @@ impl NewSession {
                 match result {
                     Err(error) => eprintln!("[nova-conversa] máquina da pasta não lida: {}", error.detail),
                     // Máquina trocada à mão: a carga só oferece, como a regra.
-                    Ok(offer) => self.rule_offer = offer.map(|offer| super::placement::RuleOffer { taken: offer.taken && !self.machine_touched, ..offer }),
+                    Ok(offer) => {
+                        // Conta ou motor escolhidos aqui não vão a outra máquina: a carga só oferece.
+                        let local_choice = self.account_touched || !self.engine.is_empty();
+                        self.rule_offer = offer.map(|offer| super::placement::RuleOffer { taken: offer.taken && !self.machine_touched && !local_choice, ..offer });
+                    }
                 }
             }
             CreateReply::Repos(seq, result) => {

@@ -262,6 +262,9 @@ function CreateSessionForm({ active, machines, onPickMachine, machinePicked, sug
   const contaLabel = (path: string) => configs.find((c) => c.path === path)?.label ?? basename(path);
   const [motores, setMotores] = useState<Awaited<ReturnType<typeof getEnginesForServer>>['motores']>({});
   const [engine, setEngine] = useState('');
+  // Lido quando a oferta da pasta chega: o motor escolhido aqui não vai a outra máquina.
+  const engineRef = useRef(engine);
+  engineRef.current = engine;
   const [modelos, setModelos] = useState<ModelOption[]>([]);
   const [modelo, setModelo] = useState('');
   const [subagente, setSubagente] = useState('');
@@ -682,8 +685,8 @@ function CreateSessionForm({ active, machines, onPickMachine, machinePicked, sug
       placementRuleOfferFor(active, placementMachines(machinesRef.current), p).then((offer) => {
         if (!mounted.current || generation !== pickGeneration.current) return;
         setRuleOffer(offer);
-        // A carga já marca a outra máquina; a regra espera o clique, e máquina trocada à mão continua a da pessoa.
-        if (offer && offer.project === null && !machinePicked.current) setRuleTaken(true);
+        // A carga já marca a outra máquina; a regra espera o clique. Máquina, conta ou motor escolhidos aqui ficam.
+        if (offer?.mark && !machinePicked.current && !accountTouched.current && !engineRef.current) setRuleTaken(true);
       }, (cause: unknown) => console.warn('new_chat_project_rule_unread', cause));
     }
     try {
@@ -1259,7 +1262,7 @@ function CreateSessionForm({ active, machines, onPickMachine, machinePicked, sug
   const elsewhere = ruleTaken && ruleOffer && ruleServer ? { server: ruleOffer.server, at: ruleServer } : null;
   // Voltar a esta máquina depois do clique só desfaz a oferta; outra troca a máquina e descarta a oferta.
   const pickShownMachine = (id: string) => {
-    if (id === active.id) { machinePicked.current = true; setRuleTaken(false); } else if (id !== elsewhere?.at.id) onPickMachine(id);
+    if (id === active.id) { if (ruleTaken) machinePicked.current = true; setRuleTaken(false); } else if (id !== elsewhere?.at.id) onPickMachine(id);
   };
   // Escolha da pessoa: a sugestão de máquina que chega depois não desfaz o clique.
   const ruleLine = ruleServer && ruleOffer ? (

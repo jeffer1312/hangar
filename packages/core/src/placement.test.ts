@@ -95,7 +95,7 @@ it('a oferta da pasta é pedida à máquina marcada com a pasta e acha a máquin
     'https://nb.test/api/peers/identificador': { identificador: 'nb' },
   });
   expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toEqual({ server: 'nb', serverId: 'nb-app', project: 'github.com/a/b',
-    text: m.native_placement_reason_project_rule({ projeto: 'github.com/a/b', maquina: 'Notebook' }), cwd: '/h/hangar' });
+    text: m.native_placement_reason_project_rule({ projeto: 'github.com/a/b', maquina: 'Notebook' }), cwd: '/h/hangar', mark: false });
   const sent = vi.mocked(globalThis.fetch).mock.calls.find(([url]) => String(url).endsWith('/api/placement/suggest'));
   expect(JSON.parse(String(sent?.[1]?.body))).toEqual({ cwd: '/h/hangar', machine: 'auto' });
 });
@@ -109,7 +109,22 @@ it('a carga da pasta vira oferta sem projeto, com o motivo e o nome da máquina'
     'https://nb.test/api/peers/identificador': { identificador: 'nb' },
   });
   expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toEqual({ server: 'nb', serverId: 'nb-app', project: null,
-    text: m.native_placement_reason_least_loaded({ motivo: m.native_placement_exclusion_open(), maquina: 'Notebook' }), cwd: '/h/hangar' });
+    text: m.native_placement_reason_least_loaded({ motivo: m.native_placement_exclusion_open(), maquina: 'Notebook' }), cwd: '/h/hangar', mark: true });
+  // Tela em "perguntar" ou clone a fazer: a carga só oferece.
+  routes({
+    'https://pc.test/api/placement/config': { ...config, ui_mode: 'ask' },
+    'https://pc.test/api/placement/suggest': open,
+    'https://pc.test/api/peers/identificador': { identificador: 'pc' },
+    'https://nb.test/api/peers/identificador': { identificador: 'nb' },
+  });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toMatchObject({ project: null, mark: false });
+  routes({
+    'https://pc.test/api/placement/config': config,
+    'https://pc.test/api/placement/suggest': { ...open, clone: { dir: '/h/Projetos' } },
+    'https://pc.test/api/peers/identificador': { identificador: 'pc' },
+    'https://nb.test/api/peers/identificador': { identificador: 'nb' },
+  });
+  expect(await placementRuleOfferFor(pc, [pc, nb], '/h/hangar')).toMatchObject({ project: null, mark: false });
 });
 
 it('sem oferta: tela desligada não pergunta, nem escolha para a própria marcada ou fora da lista', async () => {

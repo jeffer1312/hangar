@@ -86,7 +86,7 @@ pub(crate) fn reason_text(placement: &Value) -> String {
 /// A escolha para a pasta escolhida aponta outra máquina: pela regra do projeto (`project`), a Nova conversa oferece abrir
 /// lá; pela carga (`project` vazio), já marca lá. `server`: o id que a máquina informa (vai no `machine` do pedido);
 /// `key`: a mesma máquina na lista deste aparelho; `cwd`: a pasta para a qual a oferta vale; `reason`: o motivo da escolha;
-/// `taken`: a máquina da oferta é a que vai abrir.
+/// `taken`: a máquina da oferta é a que vai abrir. A carga só vem marcada com a tela em "sugerir" e sem clone a fazer.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct RuleOffer {
     pub(super) server: String,
@@ -141,9 +141,13 @@ pub(super) async fn rule_offer(marked: Api, machines: Vec<ServerChoice>, cwd: St
     let placement = marked.server_send(reqwest::Method::POST, &["placement", "suggest"], Some(body), WAIT * 2).await?;
     let Some((server, project)) = offer_of(&placement) else { return Ok(None) };
     let here = super::servers::norm(&marked.identity());
-    let (reason, taken) = (reason_text(&placement), project.is_none());
-    Ok(key_of(&marked, machines, &server).await.filter(|key| *key != here)
-        .map(|key| RuleOffer { server, key, project, reason, cwd, taken }))
+    let taken = project.is_none() && config["ui_mode"].as_str() == Some("suggest") && placement.pointer("/clone/dir").is_none();
+    let labels = machines.iter().map(|m| (m.key.clone(), m.label.clone())).collect::<Vec<_>>();
+    let Some(key) = key_of(&marked, machines, &server).await.filter(|key| *key != here) else { return Ok(None) };
+    // O motivo leva o nome da máquina que a pessoa conhece, não o id que ela informa.
+    let mut named = placement;
+    if let Some((_, label)) = labels.iter().find(|(k, l)| *k == key && !l.is_empty()) { named["server"] = json!(label); }
+    Ok(Some(RuleOffer { server, key, project, reason: reason_text(&named), cwd, taken }))
 }
 
 /// A máquina da lista (`ServerChoice::key`) cujo id é `server`; quase sempre é a própria `active`, uma pergunta só.
