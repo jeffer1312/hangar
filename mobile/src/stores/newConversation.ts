@@ -193,7 +193,8 @@ async function runCreate(serverId: string, input: NewConversationInput, retried 
   const id = newId();
   // Nome automático já recusado não volta: sem a lista, o mesmo nome seria recusado a cada envio.
   // A reserva guarda o nome dela no servidor; a repetição por nome em uso volta ao automático.
-  const finalName = explicit || (!retried && input.reserveName)
+  // Encaminhada, a reserva (e o nome dela) é da máquina daqui, não da que cria.
+  const finalName = explicit || (!retried && !input.forward && input.reserveName)
     || (await autoSessionName(server, input.body.cwd, refusedNames.get(serverId) ?? [])).name;
   // A reserva só vai com o nome dela: outro nome (digitado ou da repetição) a deixaria adotada sob nome errado.
   const { prewarm, ...base } = input.body;

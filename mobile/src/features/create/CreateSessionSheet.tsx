@@ -123,7 +123,7 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
       if (!mounted.current || !found) return;
       setSuggestion(found);
       if (!chosen.current) setMachine(found.serverId);
-    }, (error: unknown) => console.warn('[nova-conversa] sugestão de máquina não lida', error));
+    }, (error: unknown) => console.warn('new_chat_placement_suggestion_unread', error));
   }, [servers, activeId, home?.mode]);
   // O motor é de uma máquina: trocar a pílula de máquina descarta o pedido.
   const initialEngine = initial?.engine && (!initial.server || initial.server === target?.id) ? initial.engine : undefined;
@@ -656,6 +656,9 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
     AccessibilityInfo.announceForAccessibility(m.new_chat_account_switched({ conta: contaLabel(from) }));
   }, [provider, engine, configs, cotas, selectedConfig, configsLoading]);
 
+  // A lista de máquinas muda de identidade a cada leitura: dependência dela refaria a varredura do seletor de pasta.
+  const machinesRef = useRef(machines);
+  machinesRef.current = machines;
   const handlePick = useCallback(async (p: string, root?: string) => {
     const generation = ++pickGeneration.current;
     setPicked(p);
@@ -672,9 +675,9 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
     setRuleOffer(null);
     setRuleTaken(false);
     if (p !== NO_PROJECT_CWD && isOwnMachine(active)) {
-      placementRuleOfferFor(active, placementMachines(machines), p).then((offer) => {
+      placementRuleOfferFor(active, placementMachines(machinesRef.current), p).then((offer) => {
         if (mounted.current && generation === pickGeneration.current) setRuleOffer(offer);
-      }, (cause: unknown) => console.warn('[nova-conversa] regra de projeto da pasta não lida', cause));
+      }, (cause: unknown) => console.warn('new_chat_project_rule_unread', cause));
     }
     try {
       const sessions = await fetchSessionsForServer(active);
@@ -684,7 +687,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
       if (!mounted.current || generation !== pickGeneration.current) return;
       setError(cause instanceof Error ? cause.message : m.criar_sessao_erro());
     }
-  }, [active, machines]);
+  }, [active]);
   // Escolha da pessoa, não a pasta que o seletor marca sozinho ao abrir: a sugestão de máquina que chega depois não a tira.
   const pickByHand = useCallback((p: string, root?: string) => { onTouched(); return handlePick(p, root); }, [handlePick, onTouched]);
 
