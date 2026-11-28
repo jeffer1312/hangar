@@ -591,17 +591,16 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     echoDeadlines.set(entry, setTimeout(() => { echoDeadlines.delete(entry); drop(false); }, ECHO_SETTLE_MS));
   }
 
-  // A conversa repete o comando digitado, menos o /clear (sai no reset) e o que o Claude Code só anuncia (/compact):
+  // A conversa repete o comando digitado, menos o /clear e o que o Claude Code só anuncia (/compact):
   // o eco que ela não confirmou sai um prazo inteiro depois de a sessão ser vista parada.
-  function settleCommandEcho(id: string, text: string, stopped = false): void {
-    if (text.trim() === '/clear') return;
+  function settleCommandEcho(id: string, stopped = false): void {
     setTimeout(() => {
       const { pending, stateEvent } = useChatStore.getState();
       if (!pending.some((p) => p.id === id)) return;
       // Sem a tela o estado não anda mais: o eco sai em vez de esperar um "parou" que não chega.
       const open = alive && foreground;
       const working = open && stateEvent?.state === 'working';
-      if (working || (open && !stopped)) settleCommandEcho(id, text, !working);
+      if (working || (open && !stopped)) settleCommandEcho(id, !working);
       else useChatStore.setState({ pending: pending.filter((p) => p.id !== id) });
     }, ECHO_SETTLE_MS);
   }
@@ -1222,7 +1221,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
             } else showDeliveryFeedback(sent);
           }
           else await sendInputForServer(target, name, trimmed);
-          if (command) settleCommandEcho(id, trimmed);
+          // O /clear aceito sai no reset da conversa.
+          if (command && trimmed.trim() !== '/clear') settleCommandEcho(id);
         } catch (err) {
           // O /steer também usa 409 quando escreveu sem confirmar: não presumir recusa.
           const steer = mode === 'steer' || (typeof mode === 'object' && mode.kind === 'direct' && !mode.terminalClaude);
@@ -1234,7 +1234,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           if (steer && status === 503) throw Object.assign(new Error((err as Error).message, { cause: err }), { status });
           // A linha local do painel sai em qualquer falha: se a mensagem entrou na fila mesmo assim, o servidor a lista.
           if (queue || isInputRefusal(err)) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
-          else if (command) settleCommandEcho(id, trimmed);
+          else if (command) settleCommandEcho(id);
           throw err;
         }
       }, draftRevision).catch((error: unknown) => {

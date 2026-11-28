@@ -809,6 +809,22 @@ test('comando de barra no Codex trabalhando vai para o painel "Na fila": lá o s
   chat.release();
 });
 
+test('/clear com a rede caindo no POST não fica para sempre: sem reset, o eco sai no prazo', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[]];
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed'); }));
+    await chat.send('/clear').catch(() => undefined);
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/clear']);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(chat.use.getState().pending).toEqual([]);
+    chat.release();
+  } finally { vi.useRealTimers(); }
+});
+
 test('comando de barra com a rede caindo no POST mantém o eco: o envio pode ter chegado', async () => {
   vi.useFakeTimers();
   try {
