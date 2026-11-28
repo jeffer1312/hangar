@@ -226,6 +226,175 @@ pub fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEv
     Ok(())
 }
 
+/// Bloco lido por vez na busca de limites de linha de trás para frente.
+const BACK_BLOCK: u64 = 1024 * 1024;
+/// Começo da linha que diz o tipo dela: linha maior que isso só é lida inteira se o começo puder ser pedido.
+const LINE_HEAD: usize = 16 * 1024;
+
+/// Provedores cuja linha de pedido a varredura de trás para frente reconhece.
+pub fn scans(provider: Provider) -> bool {
+    matches!(provider, Provider::Claude | Provider::ClaudeHeadless | Provider::Codex | Provider::Antigravity)
+}
+
+/// O último evento que `want` aceita nas linhas inteiras de `[floor, before)`, da última para a primeira. Só a
+/// linha que pode ser mensagem do usuário passa pelo parser; de resultado de ferramenta e imagem só o começo é
+/// lido. A memória é um bloco e a maior linha de pedido, nunca o arquivo. Provedor sem varredura: `None`.
+pub fn last_event_before(provider: Provider, jsonl: &Path, floor: u64, before: u64, want: impl Fn(&ChatEvent) -> bool) -> io::Result<Option<ChatEvent>> {
+    if !scans(provider) { return Ok(None); }
+    let mut f = match File::open(jsonl) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let before = before.min(f.metadata()?.len());
+    let floor = floor.min(before);
+    // A linha que começa exatamente no teto também conta.
+    let floor_starts_line = floor == 0 || { let mut prev = Vec::new(); read_at(&mut f, floor - 1, 1, &mut prev)?; prev == b"\n" };
+    let mut agy = super::AgyStream::for_transcript(Some(jsonl));
+    let (mut block, mut spill) = (Vec::new(), Vec::new());
+    let (mut pos, mut end) = (before, before);
+    loop {
+        let from = pos.saturating_sub(BACK_BLOCK).max(floor);
+        block.resize((pos - from) as usize, 0);
+        f.seek(SeekFrom::Start(from))?;
+        f.read_exact(&mut block)?;
+        let mut cut = block.len();
+        loop {
+            let nl = memchr::memrchr(b'\n', &block[..cut]);
+            let start = match nl {
+                Some(nl) => from + nl as u64 + 1,
+                None if from == floor && floor_starts_line => floor,
+                // A linha começa antes do bloco (ou antes do teto): o próximo bloco a fecha.
+                None => break,
+            };
+            if end > start {
+                let event = if end <= pos {
+                    event_of_line(provider, &block[(start - from) as usize..(end - from) as usize], &mut agy, &want)
+                } else {
+                    // A linha passa do bloco: o resto dela só é lido se o começo puder ser pedido.
+                    let len = end - start;
+                    read_at(&mut f, start, len.min(LINE_HEAD as u64), &mut spill)?;
+                    let big = len > LINE_HEAD as u64;
+                    if big && !sniff_head(provider, &spill) { None } else {
+                        if big { read_at(&mut f, start, len, &mut spill)?; }
+                        event_of_line(provider, &spill, &mut agy, &want)
+                    }
+                };
+                if let Some(mut event) = event {
+                    event.offset.get_or_insert(start);
+                    return Ok(Some(event));
+                }
+            }
+            match nl {
+                Some(nl) => { end = from + nl as u64; cut = nl; }
+                None => return Ok(None),
+            }
+        }
+        if from <= floor { return Ok(None); }
+        pos = from;
+    }
+}
+
+fn read_at(f: &mut File, at: u64, len: u64, buf: &mut Vec<u8>) -> io::Result<()> {
+    buf.resize(len as usize, 0);
+    f.seek(SeekFrom::Start(at))?;
+    f.read_exact(buf)
+}
+
+/// Pelo começo de uma linha grande: `false` só quando ele mostra que ela não é pedido (resposta, saída de ferramenta).
+fn sniff_head(provider: Provider, head: &[u8]) -> bool {
+    let has = |p: &str| memchr::memmem::find(head, p.as_bytes()).is_some();
+    match provider {
+        Provider::Claude | Provider::ClaudeHeadless => {
+            if has(r#""type":"user""#) {
+                return !has(r#""content":[{"tool_use_id""#) && !has(r#""content":[{"type":"tool_result""#);
+            }
+            if has(r#""type":"attachment""#) { return has(r#""queued_command""#) || !has(r#""attachment":{"type":""#); }
+            !has(r#""type":"assistant""#)
+        }
+        Provider::Codex => {
+            if has(r#""type":"response_item""#) {
+                return (has(r#""payload":{"type":"message""#) && has(r#""role":"user""#)) || !has(r#""payload":{"type":""#);
+            }
+            !has(r#""type":"event_msg""#)
+        }
+        Provider::Antigravity => has(r#""type":"USER_INPUT""#) || has(r#""type":"SYSTEM_MESSAGE""#) || !has(r#""type":""#),
+        _ => false,
+    }
+}
+
+fn event_of_line(provider: Provider, raw: &[u8], agy: &mut super::AgyStream, want: &impl Fn(&ChatEvent) -> bool) -> Option<ChatEvent> {
+    if raw.len() > LINE_HEAD && !sniff_head(provider, &raw[..LINE_HEAD]) { return None; }
+    let text = String::from_utf8_lossy(raw);
+    let text = text.trim_end_matches('\r');
+    if !maybe_user_line(provider, text) { return None; }
+    let value = pyjson::loads_lossless(text)?;
+    let events = match provider {
+        Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(value.as_object()?, peer::name_of_pid),
+        Provider::Codex => codex::parse_rollout_obj(&value),
+        // Só pedido e recado passam por aqui: os dois não usam o pareamento de ferramentas, que a ordem invertida quebraria.
+        Provider::Antigravity => agy.feed(&value),
+        _ => return None,
+    };
+    events.into_iter().rev().find(|ev| want(ev))
+}
+
+/// Só os campos que dizem o tipo da linha; o resto é pulado sem ser guardado.
+#[derive(serde::Deserialize)]
+struct LineHead<'a> {
+    #[serde(rename = "type", borrow, default)]
+    kind: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow, default)]
+    message: Option<MessageHead<'a>>,
+    #[serde(borrow, default)]
+    attachment: Option<KindHead<'a>>,
+    #[serde(borrow, default)]
+    payload: Option<PayloadHead<'a>>,
+}
+
+#[derive(serde::Deserialize)]
+struct MessageHead<'a> {
+    #[serde(borrow, default)]
+    content: Option<&'a serde_json::value::RawValue>,
+}
+
+#[derive(serde::Deserialize)]
+struct KindHead<'a> {
+    #[serde(rename = "type", borrow, default)]
+    kind: Option<std::borrow::Cow<'a, str>>,
+}
+
+#[derive(serde::Deserialize)]
+struct PayloadHead<'a> {
+    #[serde(rename = "type", borrow, default)]
+    kind: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow, default)]
+    role: Option<std::borrow::Cow<'a, str>>,
+}
+
+/// A linha pode virar mensagem do usuário no parser do provedor. Na dúvida (linha que a leitura leve não lê), sim.
+fn maybe_user_line(provider: Provider, text: &str) -> bool {
+    let Ok(head) = serde_json::from_str::<LineHead>(text) else { return true };
+    let kind = head.kind.as_deref();
+    match provider {
+        Provider::Claude | Provider::ClaudeHeadless => match kind {
+            Some("queue-operation" | "system") => true,
+            Some("attachment") => head.attachment.and_then(|a| a.kind).as_deref() == Some("queued_command"),
+            // Linha só de tool_result é saída de ferramenta: é ela que traz as imagens.
+            Some("user") => match head.message.and_then(|m| m.content) {
+                Some(raw) if !raw.get().trim_start().starts_with('"') => serde_json::from_str::<Vec<KindHead>>(raw.get())
+                    .map_or(true, |items| items.iter().any(|item| item.kind.as_deref() != Some("tool_result"))),
+                _ => true,
+            },
+            _ => false,
+        },
+        Provider::Codex => kind == Some("response_item")
+            && head.payload.is_some_and(|p| p.kind.as_deref() == Some("message") && p.role.as_deref() == Some("user")),
+        Provider::Antigravity => matches!(kind, Some("USER_INPUT" | "SYSTEM_MESSAGE")),
+        _ => false,
+    }
+}
+
 /// Até onde se volta procurando o começo do turno para as notas; turno maior que isso fica sem nota.
 const TURN_SEED_MAX: u64 = 4 * 1024 * 1024;
 
@@ -305,7 +474,7 @@ fn seed_notices(path: &Path, fold: &mut claude::NoticeFold, from: u64, to: u64) 
 }
 
 /// `_tail_offset` (pqueue.py:961): primeira linha completa dentro dos últimos `window` bytes.
-fn tail_offset(path: &Path, window: u64) -> u64 {
+pub fn tail_offset(path: &Path, window: u64) -> u64 {
     let read = || -> io::Result<u64> {
         let mut f = File::open(path)?;
         let size = f.metadata()?.len();

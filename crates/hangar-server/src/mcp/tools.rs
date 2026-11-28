@@ -527,6 +527,12 @@ fn returned_text(link: Option<&link_state::LinkReturn>, key: &str) -> bool {
     link.is_some_and(|l| l.returned_key.as_deref() == Some(key) && !l.returned_notice)
 }
 
+/// No lugar da resposta `key` o pai recebeu um aviso: sem resposta, laço ou turno longo demais para conferir
+/// (`unchecked`: a chave desse aviso, quando o pedido do turno não foi achado).
+fn notified_instead(link: Option<&link_state::LinkReturn>, key: &str, unchecked: Option<&str>) -> bool {
+    link.is_some_and(|l| l.returned_notice && l.returned_key.as_deref().is_some_and(|k| k == key || Some(k) == unchecked))
+}
+
 impl Tools {
     pub fn new(st: Arc<AppState>, api: Router) -> Self {
         let http = crate::http_client().no_proxy().build().expect("cliente http do MCP");
@@ -978,7 +984,21 @@ impl Tools {
         self.linked_child(&me, alvo, "erro_nao_ligada").await?;
         let produced = self.st.list.snapshot().await.map_err(|_| "child_status_list_failed: a lista de sessões não respondeu")?;
         let row = produced.rows.iter().find(|r| r.name == alvo);
-        let events = self.child_events(&me, alvo, row.is_some()).await?;
+        // A mesma leitura do retorno (cauda e varredura): `returned` e `notified` batem com a chave gravada por ele.
+        let local = row.and_then(|r| Some((crate::transcript::Provider::parse(&r.provider).filter(|p| crate::transcript::history::scans(*p))?,
+            PathBuf::from(r.jsonl.as_deref().filter(|j| !j.is_empty())?), r.last_reply_at)));
+        let read = match local {
+            Some((provider, jsonl, reply_at)) => {
+                let child = alvo.to_owned();
+                link_state::blocking(move || link_return::child_turn(&child, provider, &jsonl, reply_at)).await
+                    .map_err(|e| format!("child_status_history_failed: histórico de '{alvo}' ilegível ({:?})", e.kind()))?
+            }
+            None => None,
+        };
+        let (events, checked) = match read {
+            Some((mut events, checked)) => { events.retain(transcript_only); (events, checked) }
+            None => (self.child_events(&me, alvo, row.is_some()).await?, true),
+        };
         let busy = row.is_some_and(|r| matches!(r.state.as_str(), "working" | "awaiting_input"));
         let answer = if busy { None } else { link_return::final_answer(&events).map(|(e, _)| e.text.clone().unwrap_or_default()) };
         let key = link_return::reply_key(&events);
@@ -989,10 +1009,12 @@ impl Tools {
         let links = link_state::blocking(move || link_state::read(&dir)).await
             .map_err(|e| format!("child_status_returns_unreadable: link-returns.json ilegível ({:?})", e.kind()))?;
         let returned = returned_text(links.get(alvo), &key);
+        let unchecked = (!checked).then(|| link_return::unchecked_key(&events));
+        let notified = notified_instead(links.get(alvo), &key, unchecked.as_deref());
         Ok(dict(json!({
             "state": row.map(|r| r.state.clone()), "question": row.and_then(|r| r.question.clone()),
             "options": row.and_then(|r| r.options.clone()), "interaction_id": row.and_then(|r| link_return::open_interaction(r).or_else(|| r.interaction_id.clone())),
-            "last_reply_at": row.and_then(|r| r.last_reply_at), "returned": returned,
+            "last_reply_at": row.and_then(|r| r.last_reply_at), "returned": returned, "notified": notified,
             "answer": answer.map(|text| answer_page(&text, a.offset.unwrap_or(0), &key)),
         })))
     }
@@ -1813,6 +1835,12 @@ mod tests {
         assert!(!returned_text(Some(&link(true)), "k1"));
         assert!(!returned_text(Some(&link(false)), "k2"));
         assert!(!returned_text(None, "k1"));
+        assert!(notified_instead(Some(&link(true)), "k1", None));
+        assert!(!notified_instead(Some(&link(false)), "k1", None), "a resposta voltou inteira");
+        let unchecked = link_state::LinkReturn { returned_key: Some("sem-conferir:a9".into()), returned_notice: true, ..Default::default() };
+        assert!(notified_instead(Some(&unchecked), "a9", Some("sem-conferir:a9")), "o aviso de turno não conferido é visto");
+        assert!(!returned_text(Some(&unchecked), "a9"));
+        assert!(!notified_instead(Some(&unchecked), "a9", Some("sem-conferir:b1")), "aviso de outro turno");
     }
 
     /// O erro da rota do WhatsApp chega à tool com o código na frente e a frase dela.
