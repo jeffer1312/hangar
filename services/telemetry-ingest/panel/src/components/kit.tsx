@@ -8,6 +8,9 @@ import { fmt, pct0 } from "@/lib/format";
 
 // Busca: cada seção e cada cartão que casam pelo título mostram tudo o que têm dentro.
 const QueryContext = createContext("");
+// Muda a cada leitura dos dados: o bloco que quebrou tenta de novo com os dados novos.
+const VersionContext = createContext(0);
+export const DataVersion = VersionContext.Provider;
 export const useQ = () => useContext(QueryContext);
 export const QueryScope = QueryContext.Provider;
 export const matches = (q: string, text: string) => !q || text.toLowerCase().includes(q);
@@ -29,7 +32,7 @@ export function Section({ id, title, explain, hue, icon: Icon, aside, children }
           </div>
           {aside}
         </header>
-        <Guard>{children}</Guard>
+        <Guard version={useContext(VersionContext)}>{children}</Guard>
       </section>
     </QueryScope>
   );
@@ -161,9 +164,12 @@ export const Mono = ({ children, className }: { children: ReactNode; className?:
 );
 
 // Um dado em formato inesperado derruba só o bloco, com a causa na tela; o resto do painel segue.
-export class Guard extends Component<{ children: ReactNode; whole?: boolean }, { error: Error | null }> {
+export class Guard extends Component<{ children: ReactNode; whole?: boolean; version?: number }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
   static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidUpdate(prev: { version?: number }) {
+    if (this.state.error && prev.version !== this.props.version) this.setState({ error: null });
+  }
   render() {
     const { error } = this.state;
     if (!error) return this.props.children;

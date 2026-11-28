@@ -1,4 +1,4 @@
-import { keepPreviousData, QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, QueryCache, QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { Summary, Trail } from "./types";
 
@@ -29,7 +29,9 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
   return (res.status === 204 ? undefined : await res.json()) as T;
 }
 
-export const queryClient = new QueryClient({
+export const queryClient: QueryClient = new QueryClient({
+  // Sessão que acabou em qualquer leitura: `me` relê, recebe 401 e o app volta à entrada.
+  queryCache: new QueryCache({ onError: (e, query) => { if (isUnauthorized(e) && query.queryKey[0] !== "me") queryClient.invalidateQueries({ queryKey: ["me"] }); } }),
   defaultOptions: { queries: { retry: (n, e) => !isUnauthorized(e) && n < 1, retryDelay: 1500, staleTime: 15_000 } },
 });
 

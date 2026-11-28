@@ -1,7 +1,6 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, Search, UserPlus, X, Copy, Check } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { BlockSkeleton, ErrorBox, QueryScope } from "@/components/kit";
+import { BlockSkeleton, DataVersion, ErrorBox, QueryScope } from "@/components/kit";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -150,7 +149,6 @@ export function Dashboard({ email }: { email: string }) {
   const [q, setQ] = useState("");
   const live = useLive(true);
   const query = useSummary(days, live);
-  const client = useQueryClient();
   const data = query.data;
   const d = useMemo(() => (data ? derive(data) : null), [data]);
   const needle = q.trim().toLowerCase();
@@ -159,7 +157,6 @@ export function Dashboard({ email }: { email: string }) {
   const main = useRef<HTMLElement>(null);
 
   useEffect(() => { history.replaceState(null, "", "?days=" + days + location.hash); }, [days]);
-  useEffect(() => { if (isUnauthorized(query.error)) client.invalidateQueries({ queryKey: ["me"] }); }, [query.error, client]);
 
   // Depois de desenhar: quais seções têm resultado e quantos achados a busca deu.
   useLayoutEffect(() => {
@@ -278,7 +275,7 @@ export function Dashboard({ email }: { email: string }) {
               </div>
             )
           ) : (
-            <QueryScope value={needle}>
+            <DataVersion value={query.dataUpdatedAt}><QueryScope value={needle}>
               {!needle ? <Overview data={data} d={d!} /> : null}
               {data.period.batches ? (
                 <>
@@ -295,7 +292,7 @@ export function Dashboard({ email }: { email: string }) {
                   <Raw data={data} />
                 </>
               ) : null}
-            </QueryScope>
+            </QueryScope></DataVersion>
           )}
         </main>
       </div>

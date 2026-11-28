@@ -26,13 +26,15 @@ use crate::{Live, accounts, store};
 /// O build do Vite: `index.html`, os arquivos de `public/` e `assets/` com o hash do conteúdo no nome.
 #[derive(RustEmbed)]
 #[folder = "panel/dist"]
+// Na depuração a pasta pode faltar, e o teste da página diz como montar; no release (imagem) ela é obrigatória.
+#[cfg_attr(debug_assertions, allow_missing = true)]
 struct Dist;
 
 /// Arquivos da raiz do app, com endereço fixo: revalidados a cada uso.
 const ROOT_FILES: [&str; 6] = ["manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
-/// `ping` nomeado (e não comentário): o painel vê o silêncio e refaz a conexão meio aberta.
 /// Um canal ao vivo dura no máximo isto; o navegador reconecta sozinho e a sessão é conferida de novo.
 const EVENTS_MAX_LIFE: Duration = Duration::from_secs(15 * 60);
+/// Intervalo do `ping` nomeado (e não comentário): o painel vê o silêncio e refaz a conexão meio aberta.
 const EVENTS_KEEP_ALIVE: Duration = Duration::from_secs(20);
 const COOKIE: &str = "__Host-panel";
 const DEFAULT_DAYS: i32 = 30;

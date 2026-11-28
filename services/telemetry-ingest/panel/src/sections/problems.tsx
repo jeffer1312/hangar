@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { AlertCircle, Check, ChevronRight, Copy, TriangleAlert } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { BarList, Block, Empty, Mono, Section, useQ } from "@/components/kit";
 import { Columns, DailyArea, Spark } from "@/components/charts";
 import { Button } from "@/components/ui/button";
@@ -117,11 +117,10 @@ function Detail({ r, days, skipToday }: { r: FailureRecord; days: number; skipTo
   );
 }
 
-function Issue({ r, days, skipToday, open, onToggle }: { r: FailureRecord; days: number; skipToday: boolean; open: boolean; onToggle: () => void }) {
+function Issue({ id, r, days, skipToday, open, onToggle }: { id: string; r: FailureRecord; days: number; skipToday: boolean; open: boolean; onToggle: () => void }) {
   const codeLine = [r.action, r.codigo, r.etapa, r.erro_tipo].filter(Boolean).join(" · ");
   const detail = typeof r.fields?.detalhe === "string" ? r.fields.detalhe : null;
   const slots = sparkSlots(r.daily, days, skipToday);
-  const id = "rec-" + recordKey(r).replace(/[^a-z0-9]/gi, "").slice(0, 60);
   return (
     <li className={cn("border-b last:border-b-0", open && "bg-[color-mix(in_srgb,var(--foreground)_2.5%,transparent)]")}>
       <button type="button" onClick={onToggle} aria-expanded={open} aria-controls={id}
@@ -166,17 +165,18 @@ function Issues({ records, total, days, skipToday }: { records: FailureRecord[];
   const [all, setAll] = useState(false);
   const q = useQ();
   const errors = records.filter(r => r.level === "error").length;
-  const sorted = useMemo(() => {
-    const xs = records.filter(r => !level || r.level === level);
-    if (sort === "count") return [...xs].sort((a, b) => b.count - a.count);
-    if (sort === "recent") return [...xs].sort((a, b) => b.last.localeCompare(a.last));
-    return xs;
-  }, [records, level, sort]);
+  // A busca escolhe o que existe; o nível e a ordem ficam dentro do cartão, que não some ao filtrar.
+  const arrange = (xs: FailureRecord[]) => {
+    const kept = xs.filter(r => !level || r.level === level);
+    if (sort === "count") return [...kept].sort((a, b) => b.count - a.count);
+    if (sort === "recent") return [...kept].sort((a, b) => b.last.localeCompare(a.last));
+    return kept;
+  };
   return (
-    <Block id="failure-details" title="Falhas com detalhe" items={sorted} text={recordText} flush
+    <Block id="failure-details" title="Falhas com detalhe" items={records} text={recordText} flush
       explain={"A mesma falha de todas as máquinas numa linha; a minibarra mostra as vezes " + sparkNote(days) + ". Abra para ver os campos e os passos da amostra ou copiar o contexto para um agente."}
       action={null}>
-      {shown => (
+      {found => { const shown = arrange(found); return (
         <>
           <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2.5 sm:px-5">
             <ToggleGroup type="single" value={level || "all"} onValueChange={v => v && setLevel(v === "all" ? "" : (v as "error" | "warn"))} variant="outline" size="sm" aria-label="Nível">
@@ -198,7 +198,7 @@ function Issues({ records, total, days, skipToday }: { records: FailureRecord[];
             <ul className="border-t">
               {(all || q ? shown : shown.slice(0, 20)).map(r => {
                 const k = recordKey(r);
-                return <Issue key={k} r={r} days={days} skipToday={skipToday} open={open.has(k)}
+                return <Issue key={k} id={"rec-" + records.indexOf(r)} r={r} days={days} skipToday={skipToday} open={open.has(k)}
                   onToggle={() => setOpen(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; })} />;
               })}
             </ul>
@@ -207,7 +207,7 @@ function Issues({ records, total, days, skipToday }: { records: FailureRecord[];
             <div className="border-t px-3 py-2"><Button variant="ghost" className="h-10 text-muted-foreground" onClick={() => setAll(a => !a)}>{all ? "Mostrar só as 20" : "Mostrar todas as " + shown.length}</Button></div>
           ) : null}
         </>
-      )}
+      ); }}
     </Block>
   );
 }
@@ -248,13 +248,12 @@ export function Log({ data }: { data: Summary }) {
   const [level, setLevel] = useState<"" | "error" | "warn">("");
   const logs = data.logs;
   const errors = logs.filter(l => l.level === "error").length;
-  const filtered = logs.filter(l => !level || l.level === level);
   return (
     <Section id={s.id} title={s.name} explain={s.explain} hue={s.hue} icon={s.icon} aside={<Big value={logs.length} note="linhas distintas" />}>
       {!logs.length ? <Block title="Log de erros"><Empty tone="ok">Nenhuma linha de erro no período.</Empty></Block> : (
-        <Block title="Linhas do período" flush items={filtered} text={logText}
+        <Block title="Linhas do período" flush items={logs} text={logText}
           explain="Cada linha distinta, somada entre as máquinas. Mais máquinas primeiro.">
-          {shown => (
+          {found => { const shown = found.filter(l => !level || l.level === level); return (
             <>
               <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2.5 sm:px-5">
                 <ToggleGroup type="single" value={level || "all"} onValueChange={v => v && setLevel(v === "all" ? "" : (v as "error" | "warn"))} variant="outline" size="sm" aria-label="Nível">
@@ -284,7 +283,7 @@ export function Log({ data }: { data: Summary }) {
                 </ul>
               ) : <div className="border-t p-4"><Empty>Nenhuma linha com esse filtro.</Empty></div>}
             </>
-          )}
+          ); }}
         </Block>
       )}
     </Section>
