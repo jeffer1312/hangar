@@ -127,11 +127,16 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  ligada a ESTA sessão fez, pelo mesmo caminho da tool child_answer
                                  (para a sessão aberta antes de a tool existir). Uma resposta por
                                  item da pergunta, na ordem: N (opção N, contada de 1), N,M (várias,
-                                 se o item aceita) ou o texto livre entre aspas. interaction_id é o
-                                 do aviso mais recente da filha. Só filha desta máquina. Saída 0
-                                 respondida (ou "enviada, sem confirmação": não repita), 1 recusa,
-                                 2 uso errado ou servidor fora, 4 sem resposta no prazo (pode ter
-                                 saído: confira antes de repetir).
+                                 se o item aceita) ou "texto:resposta livre" (o prefixo manda como
+                                 texto mesmo o que parece número; texto sem número dispensa o
+                                 prefixo). interaction_id é o do aviso mais recente da filha. Só
+                                 filha desta máquina; quem responde é esta sessão, pela identidade
+                                 dela (nunca o cliente tmux anexado). Pergunta de senha ou token
+                                 não se responde por aqui: fica com o dono, na filha. Saída 0
+                                 respondida (ou "enviada, sem confirmação": não repita), 1 recusa
+                                 em que nada saiu, 2 uso errado ou servidor fora, 4 pode ter saído
+                                 (sem resposta no prazo, erro depois do envio): não repita,
+                                 confira a filha antes.
   hangar-send --whoami               imprime o nome desta sessão (a identidade que assina os recados)
   hangar-send --help                esta ajuda (o cabeçalho deste arquivo).
 

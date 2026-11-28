@@ -656,7 +656,7 @@ impl Tools {
     }
 
     /// `(nome, é a voz)`.
-    async fn caller(&self, headers: &HeaderMap) -> Result<(String, bool), String> {
+    pub(super) async fn caller(&self, headers: &HeaderMap) -> Result<(String, bool), String> {
         self.resolve(headers).await.map(|(name, origin)| (name, origin == Origin::Voice))
     }
 
@@ -978,7 +978,7 @@ impl Tools {
     /// Manda `answers` à pergunta `interaction_id` da filha `alvo`, já conferida por `answerable_child`: o `(status,
     /// corpo)` da `/answer`, ou a recusa de antes de qualquer envio.
     pub(super) async fn answer_child(&self, me: &str, alvo: &str, interaction_id: &str, answers: Vec<Value>) -> Result<(u16, Value), String> {
-        if let Some(refusal) = answer_refusal(self.interaction_kind(alvo, interaction_id).await.as_ref(), alvo) { return Err(refusal); }
+        if let Some(refusal) = self.kind_refusal(alvo, interaction_id).await { return Err(refusal); }
         // Marcada antes da rota: a pergunta pode fechar já na resposta, e a que fecha sem a marca foi respondida na filha.
         let Some(attempt) = link_return::parent_answering(&self.st, alvo, interaction_id).await else {
             return Err(format!("link_returns_write_failed: não gravei que a resposta é sua; nada foi enviado a '{alvo}'. Tente de novo."));
@@ -993,6 +993,11 @@ impl Tools {
             (status, value)
         });
         answered.await.map_err(|e| format!("child_answer_failed: a resposta não terminou ({e})"))
+    }
+
+    /// Menu e permissão são do dono: recusados antes de montar ou mandar qualquer resposta.
+    pub(super) async fn kind_refusal(&self, alvo: &str, interaction_id: &str) -> Option<String> {
+        answer_refusal(self.interaction_kind(alvo, interaction_id).await.as_ref(), alvo)
     }
 
     /// A linha da filha na lista, com a pergunta aberta e o formulário dela.

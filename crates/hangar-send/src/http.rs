@@ -49,6 +49,11 @@ pub(crate) fn seconds(raw: Option<&str>, default: f64) -> f64 {
 }
 
 pub(crate) async fn fetch(endpoint: &Endpoint, method: &str, path: &str, body: Option<&str>) -> Fetched {
+    fetch_with(endpoint, method, path, body, &[]).await
+}
+
+/// `fetch` com cabeçalhos a mais (a identidade da sessão que chama).
+pub(crate) async fn fetch_with(endpoint: &Endpoint, method: &str, path: &str, body: Option<&str>, headers: &[(&str, String)]) -> Fetched {
     let invalid = |detail: String| Err(Failure::Invalid(detail));
     let address = format!("{}{path}", endpoint.base);
     let Ok(url) = reqwest::Url::parse(&address) else {
@@ -68,6 +73,12 @@ pub(crate) async fn fetch(endpoint: &Endpoint, method: &str, path: &str, body: O
         Err(error) => return invalid(format!("não consegui preparar o cliente HTTP: {error}")),
     };
     let mut request = client.request(method, url).timeout(Duration::from_secs_f64(endpoint.total)).header(AUTHORIZATION, auth);
+    for (name, value) in headers {
+        let Ok(value) = HeaderValue::from_str(value) else {
+            return invalid(format!("o valor de {name} não cabe num cabeçalho HTTP"));
+        };
+        request = request.header(*name, value);
+    }
     if let Some(body) = body {
         request = request.header(CONTENT_TYPE, "application/json").body(body.to_owned());
     }

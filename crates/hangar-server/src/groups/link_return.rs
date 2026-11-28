@@ -53,6 +53,8 @@ const ANSWER_WINDOW: usize = 200;
 const RELAY_SOURCE: &str = "hangar-child:";
 /// Comando do `hangar-send` que responde a pergunta da filha, para o pai sem a tool `child_answer` no catálogo.
 pub(crate) const ANSWER_COMMAND: &str = "hangar-send --responder";
+/// Prefixo da resposta do comando que manda o resto como texto livre, mesmo que pareça número de opção.
+pub(crate) const ANSWER_TEXT_PREFIX: &str = "texto:";
 /// Chave de aviso de menu e permissão; a de pergunta é o `interaction_id`.
 const NOTICE_KEY: &str = "notice:";
 /// Tipo da interação ainda ilegível (vínculo da conversa por ligar): espera isto além do `SETTLE` antes de
@@ -734,7 +736,8 @@ fn question_message(child: &str, id: &str, row: &SessionRow, kind: Option<&Inter
         for (i, option) in options.iter().enumerate() { text.push_str(&format!("\n{}. {}", i + 1, cut(option, ASK_CHARS))); }
     }
     text.push_str(&format!("\nResponda com child_answer (alvo {child}, interaction_id {id})."));
-    text.push_str(&format!("\nSem a tool child_answer: {ANSWER_COMMAND} {child} {id} <n.º da opção | \"texto\">."));
+    text.push_str(&format!("\nSem a tool child_answer: {ANSWER_COMMAND} {child} {id} <n.º da opção | \"{ANSWER_TEXT_PREFIX}resposta livre\">."));
+    text.push_str("\nPergunta de senha ou token não se responde por child_answer nem pelo comando: fica com o dono, na filha.");
     if let Some(call) = question_call(row).filter(|_| relay) {
         text.push_str(&format!("\nSe for perguntar ao dono, use AskUserQuestion com metadata {{source: \"{RELAY_SOURCE}{call}\"}}."));
     }
@@ -1695,7 +1698,8 @@ mod tests {
         assert_eq!(w.question_step(&row, &linked(), question, t0 + SETTLE - Duration::from_secs(1)), QuestionStep::Wait);
         let QuestionStep::Send(text) = w.question_step(&row, &linked(), question, t0 + SETTLE) else { panic!("esperava Send") };
         assert_eq!(text, "[de: f] pergunta (interaction_id q1): Qual pasta?\n1. src\n2. docs\nResponda com child_answer (alvo f, interaction_id q1).\n\
-            Sem a tool child_answer: hangar-send --responder f q1 <n.º da opção | \"texto\">.");
+            Sem a tool child_answer: hangar-send --responder f q1 <n.º da opção | \"texto:resposta livre\">.\n\
+            Pergunta de senha ou token não se responde por child_answer nem pelo comando: fica com o dono, na filha.");
         // Avisada (o mesmo ID gravado como `asked_key`): não vai de novo.
         let asked = LinkReturn { asked_key: Some("q1".into()), ..linked() };
         assert_eq!(w.question_step(&row, &asked, question, t0 + SETTLE * 2), QuestionStep::Skip);

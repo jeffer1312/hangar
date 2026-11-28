@@ -9,4 +9,5 @@ destrutivo: false
 
 O trecho "Sessões-irmãs" do seu `~/.claude/CLAUDE.md` passa a dizer que a sessão aberta antes da tool
 `child_answer` responde a pergunta da filha por `hangar-send --responder`, e que o aviso "a mesma
-pergunta já avisada" não pede uma segunda resposta.
+pergunta já avisada" não pede uma segunda resposta. Texto livre vai com `texto:`, saída 4 quer dizer que a
+resposta pode ter saído, e pergunta de senha ou token fica com o dono, na filha.

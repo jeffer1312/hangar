@@ -4494,14 +4494,19 @@ ninguém.
     já avisada, ainda aberta, agora com interaction_id …" e que não responda de novo se já respondeu. Aviso gravado
     sem a chamada (servidor de antes do `asked_call`) não tem como ser reconhecido e sai como pergunta nova.
   - `hangar-send --responder <filha> <interaction_id> <resposta...>` responde pela rota
-    `POST /api/sessions/{name}/child-answer` (`{parent, interaction_id, replies}`), montada no roteador do MCP: a
-    rota chama as mesmas `answerable_child` e `answer_child` da tool (recusas, marca em `parent_answers`, `/answer`
-    numa tarefa própria). O pai é o que o CLI resolve como identidade, com o token do dono, como o `linked-interrupt`.
+    `POST /api/sessions/{name}/child-answer` (`{interaction_id, replies}`), montada no roteador do MCP: a
+    rota resolve quem chama pelos mesmos cabeçalhos da tool (`X-Hangar-Key`, `X-Hangar-Pane`, `X-Hangar-Session`,
+    pelo `Tools::caller`), nunca por campo do corpo, e chama as mesmas `answerable_child`, `kind_refusal` e
+    `answer_child` (recusas, menu e permissão do dono antes de montar respostas, marca em `parent_answers`,
+    `/answer` numa tarefa própria). O CLI recusa a identidade que só sai do cliente tmux anexado.
     A rota monta as respostas pelo formulário da linha (`ask_form`, ou as opções da linha): `N`/`N,M` escolhe
-    opções contadas de 1, o resto é texto livre no campo depois das opções; item sem opções só aceita texto.
-    ID diferente da pergunta aberta na linha volta `erro_interacao_desatualizada` antes de qualquer envio. Sem
-    resposta no prazo sai 4: a escrita pode ter saído.
-  - Todo aviso de pergunta leva a linha `Sem a tool child_answer: hangar-send --responder …`.
+    opções contadas de 1, `texto:…` e o resto são texto livre no campo depois das opções; item sem opções só
+    aceita texto. ID diferente da pergunta aberta na linha volta `erro_interacao_desatualizada` antes de qualquer
+    envio. Toda resposta leva `maybe_sent` (`answer_maybe_sent` para o que a `/answer` devolveu): o CLI sai 1 só
+    quando nada saiu, 0 só com `ok` ou "enviada, sem confirmação", e 4 ("pode ter saído, não repita") no resto,
+    inclusive sem resposta no prazo.
+  - Todo aviso de pergunta leva a linha `Sem a tool child_answer: hangar-send --responder …` e diz que pergunta de
+    senha ou token fica com o dono, na filha.
 - **Parar para só a sessão.** O `/interrupt` não alcança filha ligada, e o `cascade=1` de cliente
   antigo é ignorado; a tool `interrupt` para só a filha nomeada, sem as netas. O dono não pediu o
   Parar em cascata e o tirou (27/11): a filha segue o trabalho dela quando o pai para; quem alcança as

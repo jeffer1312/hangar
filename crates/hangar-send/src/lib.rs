@@ -149,6 +149,10 @@ impl Ctx<'_> {
         self.runtime.block_on(http::fetch(endpoint, method, path, body))
     }
 
+    pub fn fetch_with(&self, endpoint: &Endpoint, method: &str, path: &str, body: Option<&str>, headers: &[(&str, String)]) -> http::Fetched {
+        self.runtime.block_on(http::fetch_with(endpoint, method, path, body, headers))
+    }
+
     pub fn api(&self, endpoint: &Endpoint, method: &str, path: &str, body: Option<&str>, err: &mut dyn Write) -> Result<Vec<u8>, u8> {
         http::report(endpoint, self.fetch(endpoint, method, path, body), err)
     }
