@@ -841,7 +841,7 @@ mod tests {
 
     /// A cota do `agy` sai do arquivo que a statusline dele gravou, sem rodar o `agy`; a idade é a da última statusline.
     #[tokio::test]
-    async fn antigravity_quota_comes_from_the_statusline_file() {
+    async fn agy_quota_comes_from_the_statusline_file() {
         let (temp, service) = service_with_engine("http://127.0.0.1:9/v1");
         let data = temp.path().join(".gemini/antigravity-cli");
         std::fs::create_dir_all(&data).unwrap();
