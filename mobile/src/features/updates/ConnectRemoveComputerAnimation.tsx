@@ -10,7 +10,7 @@ import { SectionCard } from '../config/SectionCard';
 import { useSettingsColors } from '../config/colors';
 import { MachineRow } from '../machines/MachineRows';
 import { MachineSheetHeading } from '../machines/parts';
-import { ComputerDetail } from '../connect/ConnectMachines';
+import { ComputerDetail } from '../connect/ComputerDetail';
 import { useScriptStep } from './scriptStep';
 import * as m from '../../paraglide/messages';
 
