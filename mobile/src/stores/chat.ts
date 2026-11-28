@@ -592,14 +592,16 @@ function criarChatStore(serverId: string, name: string): ChatApi {
   }
 
   // A conversa repete o comando digitado, menos o /clear (sai no reset) e o que o Claude Code só anuncia (/compact):
-  // o eco que ela não confirmou sai depois de a sessão parar.
-  function settleCommandEcho(id: string, text: string): void {
+  // o eco que ela não confirmou sai um prazo inteiro depois de a sessão ser vista parada.
+  function settleCommandEcho(id: string, text: string, stopped = false): void {
     if (text.trim() === '/clear') return;
     setTimeout(() => {
       const { pending, stateEvent } = useChatStore.getState();
       if (!pending.some((p) => p.id === id)) return;
       // Sem a tela o estado não anda mais: o eco sai em vez de esperar um "parou" que não chega.
-      if (alive && foreground && stateEvent?.state === 'working') settleCommandEcho(id, text);
+      const open = alive && foreground;
+      const working = open && stateEvent?.state === 'working';
+      if (working || (open && !stopped)) settleCommandEcho(id, text, !working);
       else useChatStore.setState({ pending: pending.filter((p) => p.id !== id) });
     }, ECHO_SETTLE_MS);
   }

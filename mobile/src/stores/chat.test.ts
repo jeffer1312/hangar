@@ -786,7 +786,9 @@ test('comando que a conversa não repete (/compact) sai do eco depois de a sess�
     await vi.advanceTimersByTimeAsync(30_000);
     expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/compact']);
     created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'idle' }));
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/compact']);
+    await vi.advanceTimersByTimeAsync(11_000);
     expect(chat.use.getState().pending).toEqual([]);
     chat.release();
   } finally { vi.useRealTimers(); }
@@ -818,7 +820,7 @@ test('comando de barra com a rede caindo no POST mantém o eco: o envio pode ter
     await chat.send('/compact').catch(() => undefined);
     expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/compact']);
     expect(readDraft('srv1', 'sess')?.submission?.status).toBe('unknown');
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(15_000);
     expect(chat.use.getState().pending).toEqual([]);
     chat.release();
   } finally { vi.useRealTimers(); }
