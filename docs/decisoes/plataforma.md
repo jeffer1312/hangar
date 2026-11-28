@@ -5961,8 +5961,11 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   fora do ar ou sem a rota não muda nada. O anúncio entre máquinas não serve: só sai na troca de
   identificador. Limite aceito: registrar a máquina de outra pessoa no `peers.json` junta os dois
   donos.
-- **Dia em UTC, um envio por dia.** Hora a hora entregaria rotina e fuso. Fila de até 14 dias em
-  `~/.hangar/telemetry-v3/queue/`, espera aleatória de até 1 h depois que o dia fecha.
+- **Dia em UTC: o final uma vez por dia; na opção B, também o parcial de hora em hora.** O pacote
+  final do dia sai depois que ele fecha em UTC, com espera aleatória de até 1 h; fila de até 14 dias em
+  `~/.hangar/telemetry-v3/queue/`. Antes da opção B só saía o final, porque hora a hora entregaria
+  rotina e fuso. Na opção B o dia aberto sai a cada hora como parcial do mesmo `batch_id`, que o
+  receptor troca até chegar o final (ver "Opção B, escopo 3").
 - **Revisão da spec.** `problem_shown` conta uma vez por problema, na passagem de esperando para
   mostrado no portão da lista: o `admit` devolve `Show` a cada tique, e contar ali repetiria o
   mesmo aviso a cada 1,5 s. `feature_used` sai de uma camada depois do handler, pelo modelo de rota
