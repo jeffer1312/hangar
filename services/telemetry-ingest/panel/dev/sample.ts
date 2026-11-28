@@ -175,8 +175,32 @@ export function summary(days: number): Summary {
     for (const m of MACHINES.slice(0, 44)) c.set((m as Record<string, string>)[k], (c.get((m as Record<string, string>)[k]) ?? 0) + 1);
     return [...c].sort((a, b) => b[1] - a[1]).map(([value, machines]) => ({ key: k, value, machines }));
   });
+  // Velocidade: faixas por sistema, com a forma de cada medida (abrir conversa mais lento no Windows).
+  const speed: Summary["speed"] = [];
+  const speedRow = (event: string, dims: Dims, os: string, total: number, peak: number) => BUCKETS.forEach((bucket, j) => {
+    const count = Math.round(total * Math.exp(-((j - peak) ** 2) / 1.4) / 2) * Math.ceil(days / 7);
+    if (count) speed.push({ event, dims, bucket, os, count, machines: Math.min(44, 3 + count) });
+  });
+  for (const [os, slow] of [["linux", 0], ["windows", 1], ["macos", 0]] as [string, number][]) {
+    speedRow("session_ready", { provider: "claude", surface: "terminal", opened_by: "person" }, os, os === "linux" ? 40 : 14, 3 + slow);
+    speedRow("session_ready", { provider: "claude", surface: "terminal", opened_by: "agent" }, os, 10, 3);
+    speedRow("server_startup", {}, os, os === "macos" ? 0 : 6, 2 + slow);
+    for (const [p, peak] of [["claude", 3.6], ["codex", 3.2], ["kimi", 4.2]] as [string, number][])
+      speedRow("session_first_send", { provider: p, surface: "headless" }, os, os === "linux" ? 9 : 3, peak + slow * 0.4);
+    for (const [p, peak] of [["claude", 3], ["codex", 3.2], ["pi", 2.6]] as [string, number][])
+      speedRow("first_reply", { provider: p, surface: "terminal" }, os, os === "linux" ? 120 : 40, peak);
+    for (const [c, peak] of [["native", 1.6], ["ios", 2.1], ["android", 2.7]] as [string, number][]) {
+      speedRow("app_ready", { client: c }, os, c === "native" ? 30 : 0, peak + slow * 0.5);
+      speedRow("chat_open", { client: c }, os, c === "native" ? 60 : 0, peak - 0.8);
+    }
+  }
+  for (const [c, peak] of [["ios", 2.1], ["android", 2.7]] as [string, number][]) {
+    speedRow("app_ready", { client: c }, "linux", 25, peak);
+    speedRow("chat_open", { client: c }, "linux", 40, peak - 0.6);
+  }
   const p = daily.filter(d => d.day >= from);
   return {
+    speed,
     records, records_total: records.length, transitions, transitions_total: transitions.length + 18, trail_days, trail_days_total: trail_days.length,
     refusals: { declined: days >= 30 ? 9 : 3, revoked: days >= 30 ? 2 : 1 }, days,
     active: { machines_7d: 37, machines_30d: 44, owners_7d: 26, owners_30d: 31 },

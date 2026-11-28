@@ -14,7 +14,8 @@ import { cn } from "@/lib/utils";
 import { Overview } from "@/sections/overview";
 import { Log, Problems } from "@/sections/problems";
 import { Agents, Effort, Places, Top } from "@/sections/usage";
-import { Speed, Trail } from "@/sections/flow";
+import { Trail } from "@/sections/flow";
+import { Speed } from "@/sections/speed";
 import { Machines, Raw, Settings } from "@/sections/machines";
 
 const PERIODS = [7, 30, 90];
@@ -54,7 +55,7 @@ function Invite({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boole
     setState({}); setCopied(false);
     api<{ path: string; days: number }>("/panel/api/invites", { method: "POST" })
       .then(b => { if (current) setState({ link: location.origin + b.path, days: b.days }); })
-      .catch(e => { if (isUnauthorized(e)) location.replace("/panel"); else if (current) setState({ error: (e as Error).message }); });
+      .catch(e => { if (isUnauthorized(e)) location.replace("/"); else if (current) setState({ error: (e as Error).message }); });
     return () => { current = false; };
   }, [open]);
   return (
@@ -98,10 +99,10 @@ function Account({ email }: { email: string }) {
             e.preventDefault();
             try {
               await api("/panel/api/logout", { method: "POST" });
-              location.replace("/panel");
+              location.replace("/");
             } catch (err) {
               // 401: a sessão já tinha acabado, o que também é ter saído.
-              if (isUnauthorized(err)) location.replace("/panel"); else setLogoutError((err as Error).message);
+              if (isUnauthorized(err)) location.replace("/"); else setLogoutError((err as Error).message);
             }
           }}><LogOut />{logoutError ? "Não saiu (" + logoutError + "), tentar de novo" : "Sair"}</DropdownMenuItem>
         </DropdownMenuContent>
@@ -285,7 +286,7 @@ export function Dashboard({ email }: { email: string }) {
                   <Top d={d!} />
                   <Effort d={d!} />
                   <Places d={d!} />
-                  <Speed d={d!} />
+                  <Speed data={data} d={d!} />
                   <Trail data={data} />
                   <Machines data={data} d={d!} />
                   <Settings d={d!} />

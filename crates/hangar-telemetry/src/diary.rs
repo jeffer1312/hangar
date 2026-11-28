@@ -12,7 +12,7 @@ use crate::state::Collection;
 use crate::wire::{MAX_COUNT, MAX_RECORD_TRAIL, MAX_RECORDS, MAX_TRAIL_STEPS, Record, Step};
 
 const SCREEN_EVENTS: &[&str] = &[
-    "app.abriu", "app.crash", "app.oculto", "app.visivel", "api.sem_rede", "api.voltou", "chat.opened", "chat.sincronia_falhou",
+    "app.abriu", "app.crash", "app.oculto", "app.visivel", "api.sem_rede", "api.voltou", "app.pronto", "chat.opened", "chat.sincronia_falhou",
     "dictation.recording_failed", "dictation.upload_failed", "js.fatal", "lista.falhou", "lista.retentativa", "lista.voltou",
     "login.falhou", "machines.request_failed", "rota.escolhida", "rota.falhou", "servidor.parado", "servidor.voltou",
     "sse.abrir", "sse.caiu", "sse.reconectando", "sse.retentativa", "sse.voltou", "tela.ver", "update.arrived_failed",

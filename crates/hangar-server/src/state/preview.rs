@@ -343,7 +343,10 @@ pub async fn tick<S: Sources>(src: &S, slot: &mut Slot, frame: Option<&Frame>, e
                 chars = t.text.chars().count(), "prévia com texto em sessão parada");
             src.publish_preview(PreviewEvent { session: src.name().to_owned(), text: t.text, md: t.md, full: t.full, vivo: false }).await
         }
-        Some(t) => src.publish_preview(PreviewEvent { session: src.name().to_owned(), text: t.text, md: t.md, full: t.full, vivo: false }).await,
+        Some(t) => {
+            if slot.state.as_deref() == Some("working") && !t.text.trim().is_empty() { crate::telemetry_hooks::speed_replied_seen(src.name()); }
+            src.publish_preview(PreviewEvent { session: src.name().to_owned(), text: t.text, md: t.md, full: t.full, vivo: false }).await
+        }
         None => true,
     }
 }

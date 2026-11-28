@@ -58,6 +58,8 @@ export interface Summary {
   per_owner: { machines: number; owners: number }[];
   by_dims: { event: string; dims: Dims; count: number; machines: number }[];
   by_bucket: { event: string; bucket: string; count: number; machines: number }[];
+  // Faixas das medidas do bloco Velocidade com o sistema do pacote; receptor antigo não manda.
+  speed?: { event: string; dims: Dims; bucket: string; os: string; count: number; machines: number }[];
   logs: LogLine[];
   trend: { day: string; event: string; dims: Dims; count: number }[];
   counters: { event: string; dims: Dims; bucket: string | null; count: number; machines: number }[];

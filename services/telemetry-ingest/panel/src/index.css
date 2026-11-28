@@ -114,9 +114,13 @@
 @keyframes grow-x { from { transform: scaleX(0); } }
 @keyframes flash { 0% { background: rgb(124 135 232 / 0.28); } 100% { background: transparent; } }
 .grow-x { transform-origin: left; animation: grow-x 0.6s var(--ease-out) both; animation-delay: calc(var(--i, 0) * 25ms); }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+@keyframes reveal { from { clip-path: inset(0 100% 0 0); } }
+.speed-card { animation: rise 0.4s var(--ease-out) both; animation-delay: calc(var(--i, 0) * 45ms); }
+.speed-bar { animation: reveal 0.6s 0.15s var(--ease-out) both; }
 .flash { animation: flash 1.4s var(--ease-out); border-radius: 6px; }
 @media (prefers-reduced-motion: reduce) {
-  .grow-x, .flash { animation: none; }
+  .grow-x, .flash, .speed-card, .speed-bar { animation: none; }
 }
 .recharts-surface:focus, .recharts-wrapper:focus, .recharts-wrapper *:focus { outline: none; }
 

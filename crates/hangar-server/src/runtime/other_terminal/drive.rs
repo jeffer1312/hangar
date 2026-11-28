@@ -179,7 +179,7 @@ fn blocked(target: &OtherTarget, frame: &OtherFrame) -> bool {
 fn codex(target: &OtherTarget) -> bool {
     target.provider == hangar_transcript::Provider::Codex
 }
-fn ready(target: &OtherTarget, frame: &OtherFrame) -> bool {
+pub(super) fn ready(target: &OtherTarget, frame: &OtherFrame) -> bool {
     if codex(target) {
         // No pane inteiro a marca casaria com o texto da conversa.
         return frame

@@ -8,6 +8,7 @@ import { checkPeer } from '../features/machines/api';
 import { parseNoticeIgnores } from '../features/notices/notices';
 import { clearWorkReviewSummaries, setWorkReviewSummaries } from '../features/workReview/summaries';
 import * as m from '../paraglide/messages';
+import { appStartedAt } from '../net/appStart';
 
 // Store vivo da lista de sessões — porte de frontend/src/lib/sessionsStore.svelte.ts
 // para zustand. Um EventSource por servidor, refcount compartilhado, agregação via
@@ -101,6 +102,7 @@ let unsubServers: (() => void) | null = null;
 let unsubRecovered: (() => void) | null = null;
 let activeId: string | null = null;
 let initialKickPending = true;
+let appReadySettled = false;
 let aggCache: Aggregate = { rows: [], byServer: [], loading: false };
 // O aviso de tela vem de fora: o store não carrega o toast (e com ele o nativo) nos testes.
 let pairNotice: (text: string) => void = () => {};
@@ -302,6 +304,21 @@ function recompute(set: (p: Partial<SessionsState>) => void) {
     servers: serversCache,
   });
   pairsMaybeChanged();
+  reportAppReady();
+}
+
+// Uma vez por execução, com a primeira lista do servidor ativo; se ela falhou, a execução não conta.
+function reportAppReady() {
+  if (appReadySettled) return;
+  const saved = useServers.getState();
+  if (!saved.ready) return;
+  // Sem servidor salvo a espera é o pareamento, não a abertura do app.
+  if (!saved.activeId) { appReadySettled = true; return; }
+  const server = serversCache.find((s) => s.id === saved.activeId);
+  const slot = server && slots.get(server.id);
+  if (!server || !slot || (!slot.error && !slot.sessions)) return;
+  appReadySettled = true;
+  if (!slot.error) registrarDiag({ evento: 'app.pronto', ms: Date.now() - appStartedAt }, server.baseUrl);
 }
 
 // Os pares nas linhas próprias dizem quando reler `/api/external-pairs`; o laço é o do core.
@@ -899,6 +916,7 @@ export function _resetSessionsForTests() {
   refs = 0;
   activeId = null;
   initialKickPending = true;
+  appReadySettled = false;
   unsubServers?.();
   unsubServers = null;
   unsubRecovered?.();

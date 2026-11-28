@@ -65,7 +65,7 @@ const JOIN_ERRORS: Record<string, string> = {
   email: "Esse e-mail não parece válido.",
   password: "A senha precisa de pelo menos 10 caracteres.",
   invite: "Este convite já foi usado ou venceu. Peça um novo a quem te convidou.",
-  email_taken: "Já existe uma conta com esse e-mail. Entre por /panel.",
+  email_taken: "Já existe uma conta com esse e-mail. Entre pela página inicial do painel.",
 };
 
 export function Join({ onDone }: { onDone: () => void }) {
@@ -83,7 +83,7 @@ export function Join({ onDone }: { onDone: () => void }) {
       setBusy(true);
       try {
         await api("/panel/api/join", { method: "POST", json: { invite, email: f.email.value, password: f.password.value } });
-        history.replaceState(null, "", "/panel");
+        history.replaceState(null, "", "/");
         onDone();
       } catch (err) {
         setMsg(err instanceof HttpError ? JOIN_ERRORS[err.code ?? ""] ?? "Não deu para criar a conta agora (" + err.status + ")." : (err as Error).message);

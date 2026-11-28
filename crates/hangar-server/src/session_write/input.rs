@@ -419,7 +419,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         tracing::info!(target: "delivery_timing", session=%ctx.name, outcome, "decisão de entrega aplicada");
         result.1["timing_note"] = json!(outcome);
     }
-    count_input(st.counting().filter(|_| counted), &ctx.target.provider, ctx.target.terminal, &text, steer, &result);
+    count_input(st.counting().filter(|_| counted), &ctx.name, &ctx.target.provider, ctx.target.terminal, &text, steer, &result);
     if owner && result.0.is_success() { crate::auto_continue::owner_wrote(&st, &ctx.name, &text); }
     crate::diag::record(crate::diag::diary_dir(), vec![received_line(&ctx.name, ctx.headers(), peer, &text, steer, &result)], "mensagem recebida");
     answer(&ctx, result)
@@ -429,7 +429,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 const SEND_REFUSALS: &[&str] = &["erro_envio_falhou", "erro_aguarde_clear", "erro_comando_nao_executado"];
 
 /// `message_sent` ou `send_failed` do `/input`; `telemetry` só vem com o dono.
-fn count_input(telemetry: Option<&hangar_telemetry::Telemetry>, provider: &str, terminal: bool, text: &str, steer: bool, result: &(StatusCode, Value)) {
+fn count_input(telemetry: Option<&hangar_telemetry::Telemetry>, name: &str, provider: &str, terminal: bool, text: &str, steer: bool, result: &(StatusCode, Value)) {
     use hangar_telemetry::events::{Code, Dims, Event, Provider, SenderOrigin, Surface};
     let Some(telemetry) = telemetry else { return };
     let (status, body) = result;
@@ -439,10 +439,10 @@ fn count_input(telemetry: Option<&hangar_telemetry::Telemetry>, provider: &str, 
         return;
     }
     let origin = if FROM.is_match(text) { SenderOrigin::Session } else { SenderOrigin::Person };
-    let dims = Dims::new().with("provider", Provider::parse(provider).unwrap_or(Provider::Other))
-        .with("surface", if terminal { Surface::Terminal } else { Surface::Headless })
-        .with("steer", steer).with("origin", origin);
+    let (provider, surface) = (Provider::parse(provider).unwrap_or(Provider::Other), if terminal { Surface::Terminal } else { Surface::Headless });
+    let dims = Dims::new().with("provider", provider).with("surface", surface).with("steer", steer).with("origin", origin);
     telemetry.count(Event::MessageSent, dims, 1);
+    crate::telemetry_hooks::speed_touch(name, provider, surface, text);
 }
 
 static COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^/[a-z][a-z0-9:_-]{0,30}$").unwrap());
@@ -853,14 +853,14 @@ mod broadcast_tests {
         let home = tempfile::tempdir().unwrap();
         let telemetry = crate::telemetry_hooks::test_telemetry(home.path(), true);
         let ok = (StatusCode::OK, json!({"ok": true}));
-        count_input(Some(&*telemetry), "claude", true, "oi, segredo", false, &ok);
-        count_input(Some(&*telemetry), "claude", true, "[grupo: par-1] terminei", false, &ok);
-        count_input(Some(&*telemetry), "codex", false, "  [de: outra] olha", true, &ok);
+        count_input(Some(&*telemetry), "s", "claude", true, "oi, segredo", false, &ok);
+        count_input(Some(&*telemetry), "s", "claude", true, "[grupo: par-1] terminei", false, &ok);
+        count_input(Some(&*telemetry), "s", "codex", false, "  [de: outra] olha", true, &ok);
         // O convidado chega sem o motor: o `input` só o passa com o dono.
-        count_input(None, "claude", true, "do convidado", false, &ok);
+        count_input(None, "s", "claude", true, "do convidado", false, &ok);
         let refused = (StatusCode::BAD_REQUEST, detail_body("erro_envio_falhou", "x", json!({})));
-        count_input(Some(&*telemetry), "claude", true, "oi", false, &refused);
-        count_input(Some(&*telemetry), "claude", true, "oi", false, &(StatusCode::CONFLICT, detail_body("Erro Livre", "x", json!({}))));
+        count_input(Some(&*telemetry), "s", "claude", true, "oi", false, &refused);
+        count_input(Some(&*telemetry), "s", "claude", true, "oi", false, &(StatusCode::CONFLICT, detail_body("Erro Livre", "x", json!({}))));
         assert_eq!(crate::telemetry_hooks::counted(&telemetry, Event::MessageSent, "origin"),
             [("person".to_owned(), 1), ("session".to_owned(), 1), ("session".to_owned(), 1)]);
         let sent: u64 = telemetry.counters().iter().filter(|c| c.event == "message_sent").map(|c| c.count).sum();

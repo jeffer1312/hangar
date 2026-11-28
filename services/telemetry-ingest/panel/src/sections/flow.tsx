@@ -1,44 +1,14 @@
 import { useState } from "react";
 import { BarList, Block, Empty, ErrorBox, Mono, Section, useQ, matches } from "@/components/kit";
-import { Columns } from "@/components/charts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useTrail } from "@/lib/api";
-import { quantileBucket, type Derived } from "@/lib/derive";
 import { fmt, fullDay, quantity } from "@/lib/format";
 import { section } from "@/lib/sections";
 import type { Summary, TrailDay } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Big, LevelBadge } from "./problems";
-
-const SHORT: Record<string, string> = { lt100ms: "<0,1s", lt300ms: "<0,3s", lt1s: "<1s", lt3s: "<3s", lt10s: "<10s", lt30s: "<30s", ge30s: "30s+" };
-
-export function Speed({ d }: { d: Derived }) {
-  const s = section("speed");
-  if (!d.speed.length) return null;
-  return (
-    <Section id={s.id} title={s.name} explain={s.explain} hue={s.hue} icon={s.icon}>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {d.speed.map(c => {
-          const median = quantileBucket(new Map(c.bars.map(b => [b.key, b.value])), 0.5);
-          return (
-            <Block key={c.event} title={c.title} explain={c.explain} items={c.bars} text={b => b.label}>
-              {() => (
-                <>
-                  <p className="text-[13.5px] font-medium text-pretty">{c.sentence}</p>
-                  <Columns rows={c.bars.map(b => ({ key: b.key, label: b.label, value: b.value }))} color={s.hue} highlight={median}
-                    unit={["vez", "vezes"]} tick={k => SHORT[k] ?? k} height={140} />
-                  <p className="text-[12px] text-muted-foreground">{quantity(c.total, "medida", "medidas")} no período.</p>
-                </>
-              )}
-            </Block>
-          );
-        })}
-      </div>
-    </Section>
-  );
-}
 
 function DayTrail({ days, total }: { days: TrailDay[]; total: number }) {
   const key = (t: TrailDay) => t.machine + "|" + t.day;

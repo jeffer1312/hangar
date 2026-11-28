@@ -263,7 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn without_a_session_the_panel_serves_the_app_and_hides_the_data() {
-        let (status, _, page) = call(app_with_panel(offline()), "GET", "/panel", None, None).await;
+        let (status, _, page) = call(app_with_panel(offline()), "GET", "/", None, None).await;
         assert_eq!(status, StatusCode::OK);
         // O app pergunta a sessão em /panel/api/me e mostra a entrada; a página em si não traz dado nenhum.
         assert!(page.contains(r#"<div id="root">"#) && !page.contains("/panel/data"), "{page}");
@@ -283,7 +283,9 @@ mod tests {
         assert_eq!(headers[header::CONTENT_TYPE], "application/manifest+json");
         assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
         let manifest: Value = serde_json::from_str(&body).unwrap();
-        assert_eq!((manifest["start_url"].as_str(), manifest["display"].as_str()), (Some("/panel"), Some("standalone")));
+        assert_eq!((manifest["start_url"].as_str(), manifest["scope"].as_str(), manifest["display"].as_str()), (Some("/"), Some("/"), Some("standalone")));
+        // O id antigo mantém o app já instalado como o mesmo app.
+        assert_eq!(manifest["id"].as_str(), Some("/panel"));
         let icons = manifest["icons"].as_array().unwrap();
         for size in ["192x192", "512x512"] {
             for purpose in ["any", "maskable"] {
@@ -299,10 +301,10 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CONTENT_TYPE], "text/javascript; charset=utf-8");
         assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
-        assert_eq!(headers["service-worker-allowed"], "/panel");
+        assert_eq!(headers["service-worker-allowed"], "/");
         assert!(body.contains("fetch(e.request)"), "{body}");
 
-        for path in ["/panel", "/panel/", "/panel/join"] {
+        for path in ["/", "/join"] {
             let (status, headers, page) = call(app_with_panel(offline()), "GET", path, None, None).await;
             assert_eq!(status, StatusCode::OK, "{path}");
             assert_eq!(headers[header::CACHE_CONTROL], "no-store", "a página nunca fica guardada: {path}");
@@ -313,9 +315,19 @@ mod tests {
         }
     }
 
+    /// Link e app instalados com o endereço antigo abrem o painel na raiz.
+    #[tokio::test]
+    async fn old_panel_addresses_go_to_the_root() {
+        for (from, to) in [("/panel", "/"), ("/panel/", "/"), ("/panel/join", "/join"), ("/panel/join?invite=abc", "/join?invite=abc")] {
+            let (status, headers, _) = call(app_with_panel(offline()), "GET", from, None, None).await;
+            assert_eq!(status, StatusCode::PERMANENT_REDIRECT, "{from}");
+            assert_eq!(headers[header::LOCATION], to, "{from}");
+        }
+    }
+
     #[tokio::test]
     async fn hashed_assets_stay_cached_and_unknown_files_are_404() {
-        let (_, _, page) = call(app_with_panel(offline()), "GET", "/panel", None, None).await;
+        let (_, _, page) = call(app_with_panel(offline()), "GET", "/", None, None).await;
         let script = page.split(r#"src=""#).nth(1).and_then(|rest| rest.split('"').next()).unwrap().to_owned();
         assert!(script.starts_with("/panel/assets/") && script.ends_with(".js"), "{script}");
         let (status, headers, body) = call(app_with_panel(offline()), "GET", &script, None, None).await;
@@ -404,6 +416,32 @@ mod tests {
         // Outras rodadas no mesmo banco somam junto: confere o mínimo destas duas máquinas.
         assert!(future["count"].as_i64().unwrap() >= 14 && future["machines"].as_i64().unwrap() >= 2, "{future}");
         assert!(data["active"]["machines_7d"].as_i64().unwrap() >= 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn panel_data_gives_the_speed_buckets_by_system() {
+        let pool = online().await;
+        let today = utc_day(&pool, 0).await;
+        let mut body = batch_body(&fresh_id(), &today);
+        body["env"]["os"] = json!("windows");
+        let dims = json!({"provider": "claude", "surface": "terminal", "opened_by": "person"});
+        body["counters"] = json!([
+            {"event": "session_ready", "dims": dims, "bucket": "lt3s", "count": 3},
+            {"event": "session_opened", "dims": dims, "bucket": "lt3s", "count": 3},
+        ]);
+        assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
+        let email = format!("velocidade-{}@example.test", fresh_id());
+        accounts::set_user(&pool, &email, &accounts::hash_password("senha-da-velocidade")).await.unwrap();
+        let login = json!({"email": email, "password": "senha-da-velocidade"});
+        let (_, headers, _) = call(app_with_panel(pool.clone()), "POST", "/panel/api/login", None, Some(login)).await;
+        let (status, _, text) = call(app_with_panel(pool), "GET", "/panel/data?days=7", Some(&session_of(&headers)), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let data: Value = serde_json::from_str(&text).unwrap();
+        let speed = data["speed"].as_array().unwrap();
+        let ready = speed.iter().find(|c| c["event"] == "session_ready" && c["os"] == "windows" && c["dims"] == dims && c["bucket"] == "lt3s").unwrap();
+        assert!(ready["count"].as_i64().unwrap() >= 3, "{ready}");
+        assert!(speed.iter().all(|c| c["event"] != "session_opened"), "só as medidas do bloco Velocidade");
     }
 
     async fn declined(pool: PgPool, body: &Value) -> (StatusCode, String) {

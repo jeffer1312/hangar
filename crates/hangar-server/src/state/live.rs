@@ -252,6 +252,8 @@ pub struct LiveSources {
 impl LiveSources {
     pub fn new(env: Arc<StateEnv>, hub: &Arc<Hub>) -> Self {
         let name = hub.name.clone();
+        let owner = next_owner();
+        crate::telemetry_hooks::speed_watch(&name, owner);
         let wake = env.facts().watch(&name);
         let (runtime_wake, runtime_view) = (Arc::new(Notify::new()), Arc::new(Mutex::new(RuntimeView::default())));
         let runtime_task = env.runtime.get().map(|registry| {
@@ -259,7 +261,7 @@ impl LiveSources {
         });
         Self { hub_wake: hub.wake(), hub: Arc::downgrade(hub), name, wake, runtime_wake, runtime_view, runtime_task, env,
             capture: tokio::sync::Mutex::new(None), last_frame: Mutex::default(), hook_files: Arc::default(),
-            owner: next_owner() }
+            owner }
     }
 
     fn publish_raw(&self, event: &str, data: &str) -> bool { self.hub.upgrade().is_some_and(|h| h.publish_own(event, data)) }
@@ -304,6 +306,7 @@ impl Drop for LiveSources {
             t.abort();
         }
         self.env.facts().forget_watcher(&self.name, &self.wake);
+        crate::telemetry_hooks::speed_unwatch(&self.name, self.owner);
         // Sem `Monitor`, a lista volta a classificar sozinha: estado dele parado aqui mentiria.
         self.env.list.published.clear(self.owner, &self.name);
         let slot = self.capture.get_mut().take();
@@ -520,6 +523,7 @@ impl Sources for LiveSources {
     }
 
     fn deliverable(&self) {
+        crate::telemetry_hooks::speed_ready_seen(&self.name);
         let Some(registry) = self.env.runtime.get().cloned() else {
             self.report("rust.state_deliver_failed", "state_runtime_unbound", "a entrega não tem runtime ligado");
             return;

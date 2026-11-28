@@ -424,6 +424,7 @@ fn screen_event(telemetry: &Telemetry, epoch: u64, item: &Value) {
             telemetry.count_in(epoch, Event::ClientRoute, dims.with("failed", true).with("code", code), 1);
         }
         "chat.opened" => if let Some(ms) = took { telemetry.duration_in(epoch, Event::ChatOpen, dims, Duration::from_millis(ms)); },
+        "app.pronto" => if let Some(ms) = took { telemetry.duration_in(epoch, Event::AppReady, dims, Duration::from_millis(ms)); },
         "app.crash" => {
             let code = Code::known(&text("codigo").to_ascii_lowercase(), FATAL_CODES);
             telemetry.count_in(epoch, Event::ClientFatal, dims.with("code", code), 1);
@@ -776,20 +777,22 @@ mod tests {
             {"evento": "rota.falhou", "codigo": "TimeoutError", "cliente": "android"},
             {"evento": "rota.falhou", "codigo": "https://casa.exemplo", "cliente": "android"},
             {"evento": "chat.opened", "ms": 1_200, "cliente": "native"},
+            {"evento": "app.pronto", "ms": 650, "cliente": "ios"},
             {"evento": "app.crash", "codigo": "TypeError", "cliente": "celular-do-jeff"},
             {"evento": "sse.conectou", "ms": 10, "cliente": "ios"},
             // Fora das linhas que o diário gravou: a tela reenvia, e aqui não conta.
             {"evento": "app.visible_time", "ms": 900_000, "cliente": "ios"},
         ]}).to_string();
-        count_screen(&telemetry, body.as_bytes(), 7, now);
+        count_screen(&telemetry, body.as_bytes(), 8, now);
         let android = || Dims::new().with("client", ClientKind::Android);
         assert!(has(&telemetry, Event::AppVisibleMinutes, Dims::new().with("client", ClientKind::Ios), None, 5), "teto de 5 min");
         assert!(has(&telemetry, Event::ClientRoute, android().with("failed", false).with("route", Code::known("tailscale", ROUTES)), Some(Bucket::Lt300ms), 1));
         assert!(has(&telemetry, Event::ClientRoute, android().with("failed", true).with("code", Code::known("timeouterror", ROUTE_FAILURES)), None, 1));
         assert!(has(&telemetry, Event::ClientRoute, android().with("failed", true).with("code", Code::OTHER), None, 1));
         assert!(has(&telemetry, Event::ChatOpen, Dims::new().with("client", ClientKind::Native), Some(Bucket::Lt3s), 1));
+        assert!(has(&telemetry, Event::AppReady, Dims::new().with("client", ClientKind::Ios), Some(Bucket::Lt1s), 1));
         assert!(has(&telemetry, Event::ClientFatal, Dims::new().with("client", ClientKind::Other).with("code", Code::known("typeerror", FATAL_CODES)), None, 1));
-        assert_eq!(telemetry.counters().len(), 6);
+        assert_eq!(telemetry.counters().len(), 7);
         let wire = serde_json::to_string(&telemetry.counters()).unwrap();
         assert!(!wire.contains("exemplo") && !wire.contains("celular"), "{wire}");
     }

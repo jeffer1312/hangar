@@ -1198,7 +1198,7 @@ fn show_system_notification(title: &str, body: &str) {
 impl Hangar {
     pub fn new(runtime: Arc<Runtime>, appearance_error: Option<String>, crash: Option<String>, links: async_channel::Receiver<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.set_global(links::Owner(cx.entity().downgrade()));
-        let client_telemetry = device::ClientTelemetry::new(crash.as_deref());
+        let mut client_telemetry = device::ClientTelemetry::new(crash.as_deref());
         if let Some(error) = crash {
             cx.defer_in(window, move |_, window, cx| {
                 let desc = tr("crash_desc").replace("{error}", &error);
@@ -1284,6 +1284,8 @@ impl Hangar {
         let address = cx.new(|cx| InputState::new(window, cx).default_value(saved_address).placeholder(tr("server")));
         let token = cx.new(|cx| InputState::new(window, cx).masked(true).default_value(saved_token).placeholder(tr("token")));
         if saved.is_some() { cx.defer_in(window, |this: &mut Self, window, cx| this.connect(window, cx)); }
+        // Sem conexão salva, a primeira lista espera a pessoa digitar: não é tempo do app.
+        else { client_telemetry.take_app_ready(false); }
         // A imagem escolhida abre sem depender de conexão; o papel de parede em Vidro vem ao conectar.
         cx.defer_in(window, |this: &mut Self, window, cx| this.refresh_backdrop(window, cx));
         let connection_focus = cx.focus_handle();
@@ -2353,6 +2355,7 @@ impl Hangar {
             Payload::Sessions(Ok(sessions)) => {
                 self.list_error = None;
                 self.list_down_since = None;
+                self.first_list_arrived(true, window);
                 if let Some((address, token)) = self.unsaved_connection.take() {
                     let known = self.servers.iter().any(|s| servers::norm(&s.address) == servers::norm(&address));
                     let label = if known { String::new() } else { servers::default_label(&address) };
@@ -2375,6 +2378,7 @@ impl Hangar {
             }
             Payload::Sessions(Err(error)) => {
                 self.pending_open = None;
+                self.first_list_arrived(false, window);
                 if self.auth_lost(&error) {
                     let key = self.active_key();
                     if self.set_integration_requests(&key, None, cx) {

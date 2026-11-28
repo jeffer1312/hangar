@@ -8,10 +8,10 @@ use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use futures_util::Stream;
 use rust_embed::RustEmbed;
@@ -116,9 +116,11 @@ pub fn router(pool: PgPool, live: Arc<Live>) -> Router {
     accounts::warm();
     let state = Panel { pool, limiter: Arc::new(Limiter::new()), live };
     let mut router = Router::new()
-        .route("/panel", get(page))
-        .route("/panel/", get(page))
-        .route("/panel/join", get(page))
+        .route("/", get(page))
+        .route("/join", get(page))
+        .route("/panel", get(to_root))
+        .route("/panel/", get(to_root))
+        .route("/panel/join", get(to_join))
         .route("/panel/assets/{*file}", get(hashed_asset));
     for name in ROOT_FILES {
         router = router.route(&format!("/panel/{name}"), get(move || std::future::ready(root_file(name))));
@@ -157,7 +159,7 @@ fn embedded(path: &str, cache: &'static str) -> Response {
     }
 }
 
-/// O app para `/panel` e `/panel/join`, com ou sem sessão: quem decide a tela é `/panel/api/me`, e os dados
+/// O app para `/` e `/join`, com ou sem sessão: quem decide a tela é `/panel/api/me`, e os dados
 /// continuam atrás da sessão. Nunca guardado, para a versão nova entrar no recarregar.
 async fn page() -> Response {
     let mut response = embedded("index.html", "no-store");
@@ -167,6 +169,14 @@ async fn page() -> Response {
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     response
+}
+
+/// Endereço antigo (link guardado, app instalado com `start_url` /panel): o painel mora na raiz.
+async fn to_root() -> Redirect { Redirect::permanent("/") }
+
+/// O convite leva o token no fragmento, que o navegador mantém no redirecionamento; a consulta vai junto.
+async fn to_join(RawQuery(query): RawQuery) -> Redirect {
+    Redirect::permanent(&query.map_or_else(|| "/join".to_owned(), |q| format!("/join?{q}")))
 }
 
 /// Nome com o hash do conteúdo: o mesmo endereço nunca muda, então fica guardado de vez.
@@ -180,9 +190,9 @@ async fn hashed_asset(Path(file): Path<String>) -> Response {
 
 fn root_file(name: &'static str) -> Response {
     let mut response = embedded(name, "no-cache");
-    // O escopo `/panel` cobre a própria página de entrada, que fica fora do diretório do script.
+    // O painel mora na raiz, fora do diretório do script.
     if name == "sw.js" {
-        response.headers_mut().insert("service-worker-allowed", HeaderValue::from_static("/panel"));
+        response.headers_mut().insert("service-worker-allowed", HeaderValue::from_static("/"));
     }
     response
 }
@@ -359,7 +369,7 @@ async fn invite(State(panel): State<Panel>, headers: HeaderMap) -> Response {
         Err(response) => return response,
     };
     match accounts::create_invite(&panel.pool, id).await {
-        Ok(token) => axum::Json(json!({"path": format!("/panel/join#{token}"), "days": accounts::INVITE_DAYS})).into_response(),
+        Ok(token) => axum::Json(json!({"path": format!("/join#{token}"), "days": accounts::INVITE_DAYS})).into_response(),
         Err(e) => unavailable("invite", &e),
     }
 }
