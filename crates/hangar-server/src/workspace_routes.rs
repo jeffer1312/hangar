@@ -681,7 +681,13 @@ async fn folder_operation(
     if tail == "/api/fs/branches" {
         let mut info = execute(st, Operation::ListBranches { cwd: cwd.clone() }, ingress)
             .await
-            .map_err(session_error)?;
+            .map_err(|e| {
+                // Pasta sem Git não é falha: os apps leem 404 como "sem Git", e o 409 ia como erro às falhas recentes.
+                let missing = e.status == 409
+                    && e.detail.as_str().is_some_and(|d| d.contains("not a git repository"));
+                let e = session_error(e);
+                if missing { hangar_workspace::WorkspaceError { status: 404, ..e } } else { e }
+            })?;
         // Onde a worktree nova vai nascer, para a tela de criação mostrar; fora da operação, que o Python também atende.
         let (root, home) = (root.to_owned(), st.origins_home.clone());
         let parent = tokio::task::spawn_blocking(move || {
