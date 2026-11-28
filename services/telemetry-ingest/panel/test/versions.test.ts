@@ -5,13 +5,14 @@ import { compareVersions, standing, standingText, versionView } from "../src/lib
 import type { MachineLast, Published } from "../src/lib/types.ts";
 
 const rel = (version: string, os = "linux") => ({ version, os, at: "2026-11-28T19:16:19Z" });
-// Releases reais de 28/11: Linux com 5 versões guardadas, Windows com 5.
+// Linux e Windows com 5 versões guardadas cada, como nos releases reais.
 const published: Published = { error: null, channels: {
   latest: ["12251", "12256", "12266", "12296", "12300"].map(v => rel("0.1.0." + v))
     .concat(["11980", "11989", "12029", "12238", "12251"].map(v => rel("0.1.0." + v, "windows"))),
   beta: [rel("0.1.0.12244")],
 } };
-const m = (version: string, os = "linux", channel = "latest", label = "m"): MachineLast => ({ label, os, version, channel, last: "2026-11-28T15:00:00Z" });
+const m = (version: string, os = "linux", channel = "latest", label = "m", install: string | null = "package"): MachineLast =>
+  ({ label, os, version, channel, install, last: "2026-11-28T15:00:00Z" });
 
 test("versão compara por número, não por texto", () => {
   assert.equal(compareVersions("0.1.0.9", "0.1.0.10"), -1);
@@ -34,14 +35,22 @@ test("mais velha que todas as guardadas é N ou mais", () => {
   assert.equal(standingText(standing(m("0.1.0.11000", "linux", "beta"), published)), "1 ou mais versões atrás");
 });
 
-test("checkout fica fora da conta; sistema sem publicação também", () => {
-  assert.deepEqual(standing(m("0.1.0.1", "linux", "other"), published), { kind: "checkout" });
+test("checkout vem do install, não do canal; outro canal e sistema sem publicação ficam fora", () => {
+  assert.deepEqual(standing(m("0.1.0.12238", "linux", "latest", "m", "checkout"), published), { kind: "checkout" });
+  assert.deepEqual(standing(m("0.1.0.1", "linux", "other"), published), { kind: "other" });
+  assert.equal(standingText(standing(m("0.1.0.1", "linux", "other"), published)), "outro canal");
   assert.deepEqual(standing(m("0.1.0.1", "macos"), published), { kind: "unknown" });
+});
+
+test("canal que o receptor ainda não leu não vira sem versão publicada", () => {
+  const onlyLatest: Published = { channels: { latest: published.channels.latest }, error: "beta: http status: 403" };
+  assert.deepEqual(standing(m("0.1.0.12244", "linux", "beta"), onlyLatest), { kind: "unread" });
+  assert.equal(standingText({ kind: "unread" }), "canal não lido");
 });
 
 test("as mais atrasadas primeiro e a contagem por faixa", () => {
   const v = versionView([m("0.1.0.12300", "linux", "latest", "a"), m("0.1.0.12266", "linux", "latest", "b"),
-    m("0.1.0.12238", "linux", "latest", "c"), m("0.1.0.11980", "windows", "latest", "d"), m("dev", "linux", "other", "e")], published);
+    m("0.1.0.12238", "linux", "latest", "c"), m("0.1.0.11980", "windows", "latest", "d"), m("0.1.0.1", "linux", "latest", "e", "checkout")], published);
   assert.deepEqual(v.rows.map(r => r.machine.label), ["c", "d", "b", "a", "e"]);
   assert.deepEqual([v.ok, v.near, v.far, v.outside], [1, 1, 2, 1]);
   assert.deepEqual(v.latest.map(l => [l.channel, l.os, l.version]), [["latest", "linux", "0.1.0.12300"], ["latest", "windows", "0.1.0.12251"]]);

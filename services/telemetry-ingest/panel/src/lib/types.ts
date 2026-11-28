@@ -63,7 +63,8 @@ export interface TrailDay {
 export interface Release { version: string; os: string; at: string }
 export interface Published { channels: Record<string, Release[]>; error: string | null }
 // O último pacote de cada máquina no período.
-export interface MachineLast { label: string; os: string; version: string; channel: string; last: string }
+// `install` "checkout" é cópia do repositório; pacote antigo manda null.
+export interface MachineLast { label: string; os: string; version: string; channel: string; install: string | null; last: string }
 
 export interface Summary {
   records: FailureRecord[];

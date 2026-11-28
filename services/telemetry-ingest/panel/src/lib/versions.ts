@@ -16,12 +16,17 @@ export type Standing =
   | { kind: "current" }
   | { kind: "behind"; behind: number; orMore: boolean }
   | { kind: "checkout" }
+  | { kind: "other" }
+  | { kind: "unread" }
   | { kind: "unknown" };
 
 const releasesOf = (m: MachineLast, published: Published) => (published.channels[m.channel] ?? []).filter(r => r.os === m.os);
 
 export function standing(m: MachineLast, published: Published): Standing {
-  if (m.channel === "other") return { kind: "checkout" };
+  if (m.install === "checkout") return { kind: "checkout" };
+  // `other` é pacote de um branch fora de latest/beta: não há release para comparar.
+  if (m.channel === "other") return { kind: "other" };
+  if (!(m.channel in published.channels)) return { kind: "unread" };
   const releases = releasesOf(m, published);
   if (!releases.length) return { kind: "unknown" };
   const behind = releases.filter(r => compareVersions(r.version, m.version) > 0).length;
@@ -35,6 +40,8 @@ export const tierOf = (s: Standing): Tier => s.kind === "current" ? "ok" : s.kin
 export function standingText(s: Standing) {
   if (s.kind === "current") return "Na mais atual";
   if (s.kind === "checkout") return "checkout";
+  if (s.kind === "other") return "outro canal";
+  if (s.kind === "unread") return "canal não lido";
   if (s.kind === "unknown") return "sem versão publicada";
   return s.behind + (s.orMore ? " ou mais" : "") + (s.behind === 1 && !s.orMore ? " versão atrás" : " versões atrás");
 }

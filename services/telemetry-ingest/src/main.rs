@@ -425,6 +425,7 @@ mod tests {
         let machine = data["machines"].as_array().unwrap().iter().find(|m| m["label"] == label).unwrap();
         assert_eq!((&machine["os"], &machine["version"], &machine["channel"]), (&json!("linux"), &json!("0.42.0"), &json!("latest")));
         assert!(machine["last"].as_str().unwrap().ends_with('Z'), "{machine}");
+        assert!(machine["install"].is_null(), "pacote sem install chega como null: {machine}");
         assert!(data["published"]["channels"].is_object(), "as versões publicadas vão junto, mesmo antes da primeira leitura");
     }
 

@@ -98,7 +98,7 @@ function Versions({ data }: { data: Summary }) {
           {TIERS.map(([t, label, bg]) => (
             <span key={t} className="inline-flex items-center gap-1.5"><span className={cn("size-2.5 rounded-[3px]", bg)} />{label} <b className="font-semibold text-foreground tabular">{v[t]}</b></span>
           ))}
-          {v.outside ? <span>Fora da conta (checkout ou sem versão publicada) <b className="font-semibold text-foreground tabular">{v.outside}</b></span> : null}
+          {v.outside ? <span>Fora da conta (checkout, outro canal ou sem versão publicada) <b className="font-semibold text-foreground tabular">{v.outside}</b></span> : null}
         </div>
         <div className="grid grid-cols-2 gap-2.5">
           {v.latest.map(l => (
@@ -109,7 +109,7 @@ function Versions({ data }: { data: Summary }) {
             </div>
           ))}
         </div>
-        {published.error ? <p className="text-[12px] text-muted-foreground">A última leitura no GitHub falhou ({published.error}); a conta usa a leitura anterior.</p> : null}
+        {published.error ? <p className="text-[12px] text-muted-foreground">A última leitura no GitHub falhou ({published.error}); os canais já lidos usam a leitura anterior.</p> : null}
       </Block>
       <Block title="Cada máquina" explain="As máquinas são anônimas: o código é o começo do identificador dela." items={rows} text={r => r.text}>
         {shown => (

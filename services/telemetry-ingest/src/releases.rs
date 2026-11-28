@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 /// Dois pedidos a cada 10 min cabem no teto da API sem token (60 por hora por IP).
 const EVERY: Duration = Duration::from_secs(10 * 60);
-const TIMEOUT: Duration = Duration::from_secs(20);
+/// Curto: o desligamento espera a leitura em curso, e o `docker stop` dá 10 s antes do SIGKILL.
+const TIMEOUT: Duration = Duration::from_secs(4);
 /// O canal gravado no pacote da máquina e a tag do release que o publica.
 const CHANNELS: [(&str, &str); 2] = [("latest", "package-latest"), ("beta", "package-beta")];
 const API: &str = "https://api.github.com/repos/jeffer1312/hangar/releases/tags/";
