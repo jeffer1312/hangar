@@ -648,9 +648,10 @@ fn map_operation(
     operation(op, json!(a))
 }
 
-/// A recusa do git para pasta fora de qualquer repositório; a de worktree quebrada
-/// (`not a git repository: <gitdir>`) é repositório com defeito.
-fn without_git(detail: &str) -> bool { detail.contains("not a git repository (or any") }
+/// Pasta fora de repositório; worktree quebrada é repositório com defeito (409).
+fn without_git(detail: &str) -> bool {
+    detail.strip_prefix("fatal: ").unwrap_or(detail).starts_with("not a git repository (or any")
+}
 
 async fn folder_operation(
     st: &Arc<AppState>,
@@ -859,6 +860,7 @@ mod tests {
         // Worktree quebrada é repositório com defeito: continua 409.
         assert!(!without_git("fatal: not a git repository: /repo/.git/worktrees/x"));
         assert!(!without_git("fatal: gitfile does not point to a valid repository: /repo-x/.git"));
+        assert!(!without_git("fatal: not a git repository: /tmp/not a git repository (or any/.git"));
     }
 
     #[test]

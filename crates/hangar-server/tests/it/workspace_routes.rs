@@ -720,8 +720,18 @@ async fn folder_git_refusal_keeps_the_python_error_shape() {
 
 #[tokio::test]
 async fn folder_branches_of_a_folder_without_git_answers_404() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = hangar_workspace::real(dir.path());
+    const TEST: &str = "workspace_routes::folder_branches_of_a_folder_without_git_answers_404";
+    // O git do servidor herda o ambiente: o limite de descoberta vai num processo filho, sem mexer no deste.
+    let Some(root) = std::env::var_os("HANGAR_NO_GIT_ROOT") else {
+        let dir = tempfile::tempdir().unwrap();
+        let root = hangar_workspace::real(dir.path());
+        let child = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", TEST, "--nocapture"])
+            .env("HANGAR_NO_GIT_ROOT", &root).env("GIT_CEILING_DIRECTORIES", &root).output().unwrap();
+        let out = String::from_utf8_lossy(&child.stdout);
+        assert!(child.status.success() && out.contains("1 passed"), "{out}\n{}", String::from_utf8_lossy(&child.stderr));
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
     let (plain, repo, broken) = (root.join("sem-git"), root.join("repo"), root.join("worktree-quebrada"));
     for path in [&plain, &repo, &broken] { std::fs::create_dir_all(path).unwrap(); }
     // Worktree cuja pasta em .git/worktrees sumiu.

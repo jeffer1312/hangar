@@ -322,9 +322,7 @@ pub enum StartError {
 /// O servidor no ar não saiu de um pacote: o lançador prefere o `CP_RUST_SERVER_BIN` ao `bin/` da versão.
 pub(crate) const TEST_SERVER: &str = "servidor no ar fora de pacote (binário de teste, CP_RUST_SERVER_BIN)";
 
-/// O `CP_RUST_SERVER_BIN` que o lançador usa no lugar do `bin/` da versão, com a leitura de
-/// `install_root::server_binary`. Só ele prende a atualização: o binário de reserva (versão sem `bin/`)
-/// é trocado pelo do pacote novo.
+/// Só o CP_RUST_SERVER_BIN prende a atualização; o binário de reserva é trocado pelo do pacote novo.
 pub(crate) fn test_server_bin() -> bool { std::env::var_os("CP_RUST_SERVER_BIN").is_some_and(|bin| !bin.is_empty()) }
 
 /// O motivo da recusa, na rota e no botão da tela.
