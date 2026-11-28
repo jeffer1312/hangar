@@ -77,4 +77,22 @@ mod tests {
         assert_eq!(settings["statusLine"]["stack_with_default"], true);
         assert_eq!(sync(home.path()).unwrap(), Vec::<String>::new(), "segunda vez não regrava");
     }
+
+    #[test]
+    fn sync_replaces_an_old_hangar_status_line_and_keeps_the_one_of_the_person() {
+        let home = tempfile::tempdir().unwrap();
+        let data = home.path().join(".gemini/antigravity-cli");
+        std::fs::create_dir_all(&data).unwrap();
+        let settings = data.join("settings.json");
+        let old = r#"{"statusLine":{"type":"command","command":"\"/velho/bin/hangar-server\" agy-statusline"}}"#;
+        std::fs::write(&settings, old).unwrap();
+        assert!(sync(home.path()).unwrap().contains(&settings.display().to_string()), "comando antigo do Hangar é trocado");
+        let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        let command = doc["statusLine"]["command"].as_str().unwrap();
+        assert!(!command.contains("/velho/") && command.ends_with(STATUSLINE_MODE), "{command}");
+        let own = r#"{"statusLine":{"type":"command","command":"echo agy-statusline"}}"#;
+        std::fs::write(&settings, own).unwrap();
+        assert!(!sync(home.path()).unwrap().contains(&settings.display().to_string()));
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), own, "a barra da pessoa fica");
+    }
 }

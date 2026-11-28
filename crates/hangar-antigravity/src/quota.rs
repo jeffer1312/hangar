@@ -21,7 +21,8 @@ pub fn record(payload: &Value, path: &Path, now: f64) -> io::Result<bool> {
             "reset_time": bucket["reset_time"], "disabled": bucket["disabled"]})))
         .collect();
     let buckets = Value::Object(buckets);
-    if let Some(saved) = read(path)
+    // Arquivo ilegível é regravado com a cota nova.
+    if let Ok(Some(saved)) = read(path)
         && saved["buckets"] == buckets
         && saved["seen"].as_f64().is_some_and(|seen| seen <= now && now - seen < SEEN_REFRESH_S)
     {
@@ -33,10 +34,24 @@ pub fn record(payload: &Value, path: &Path, now: f64) -> io::Result<bool> {
     Ok(true)
 }
 
-/// A última cota guardada; `None` sem arquivo ou com arquivo fora do formato.
-pub fn read(path: &Path) -> Option<Value> {
-    let value: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    (value["seen"].as_f64().is_some_and(f64::is_finite) && value["buckets"].is_object()).then_some(value)
+/// Por que a cota guardada não pôde ser lida.
+#[derive(Debug)]
+pub enum ReadError {
+    Io(io::Error),
+    /// O arquivo existe e não tem o formato que o Hangar grava.
+    Format,
+}
+
+/// A última cota guardada; `Ok(None)` só sem arquivo (a statusline ainda não rodou).
+pub fn read(path: &Path) -> Result<Option<Value>, ReadError> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(ReadError::Io(error)),
+    };
+    let value: Value = serde_json::from_slice(&bytes).map_err(|_| ReadError::Format)?;
+    if !(value["seen"].as_f64().is_some_and(f64::is_finite) && value["buckets"].is_object()) { return Err(ReadError::Format) }
+    Ok(Some(value))
 }
 
 /// As janelas no formato da cota do Hangar: o grupo do Gemini como as gerais (`5h`, `7d`) e os outros como janelas
@@ -106,7 +121,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE);
         assert!(record(&payload(), &path, NOW).unwrap());
-        let saved = read(&path).unwrap();
+        let saved = read(&path).unwrap().unwrap();
         assert_eq!(saved["seen"], NOW);
         let windows = windows(&saved, NOW);
         let labels: Vec<&str> = windows.iter().map(|w| w["rotulo"].as_str().unwrap()).collect();
@@ -127,7 +142,7 @@ mod tests {
         record(&payload(), &path, NOW).unwrap();
         // Depois de 2026-11-28T22:19:46Z a janela de 5h do Gemini já renovou.
         let later = 1_795_905_000.0;
-        let windows = windows(&read(&path).unwrap(), later);
+        let windows = windows(&read(&path).unwrap().unwrap(), later);
         assert_eq!(windows[0]["rotulo"], "5h");
         assert_eq!(windows[0]["pct"], 0.0);
         assert_eq!(windows[0]["reset_ts"], Value::Null);
@@ -144,7 +159,7 @@ mod tests {
         let mut changed = payload();
         changed["quota"]["gemini-5h"]["remaining_fraction"] = json!(0.5);
         assert!(record(&changed, &path, NOW + 62.0).unwrap(), "cota nova grava na hora");
-        assert_eq!(windows(&read(&path).unwrap(), NOW + 62.0)[0]["pct"], 50.0);
+        assert_eq!(windows(&read(&path).unwrap().unwrap(), NOW + 62.0)[0]["pct"], 50.0);
     }
 
     #[test]
@@ -154,18 +169,21 @@ mod tests {
         record(&payload(), &path, NOW).unwrap();
         assert!(!record(&json!({"quota": {}}), &path, NOW + 120.0).unwrap());
         assert!(!record(&json!({"cwd": "/x"}), &path, NOW + 120.0).unwrap());
-        assert_eq!(read(&path).unwrap()["seen"], NOW);
+        assert_eq!(read(&path).unwrap().unwrap()["seen"], NOW);
     }
 
     #[test]
-    fn a_missing_or_broken_file_is_no_reading() {
+    fn a_missing_file_is_no_reading_and_a_broken_one_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE);
-        assert!(read(&path).is_none());
+        assert!(read(&path).unwrap().is_none());
         std::fs::write(&path, "{ quebrado").unwrap();
-        assert!(read(&path).is_none());
+        assert!(matches!(read(&path), Err(ReadError::Format)));
         std::fs::write(&path, r#"{"seen":"ontem","buckets":{}}"#).unwrap();
-        assert!(read(&path).is_none());
+        assert!(matches!(read(&path), Err(ReadError::Format)));
+        // Arquivo quebrado é regravado pela próxima statusline.
+        assert!(record(&payload(), &path, NOW).unwrap());
+        assert!(read(&path).unwrap().is_some());
     }
 
     #[test]

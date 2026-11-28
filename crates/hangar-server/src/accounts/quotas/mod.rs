@@ -278,7 +278,14 @@ impl AccountService {
     /// lido a cada pedido e fora do cache das cotas; sem leitura ainda, a conta fica sem cota.
     fn agy_quota(&self) -> Option<Value> {
         let path = hangar_antigravity::Account::default().quota_path(&self.env.home);
-        let saved = hangar_antigravity::quota::read(&path)?;
+        let saved = match hangar_antigravity::quota::read(&path) {
+            Ok(saved) => saved?,
+            Err(error) => {
+                tracing::warn!(code = "agy_quota_unreadable", ?error, "cota do Antigravity gravada não lida");
+                let reason = if matches!(error, hangar_antigravity::quota::ReadError::Format) { "formato-desconhecido" } else { "leitura-falhou" };
+                return Some(reading("indisponivel", vec![], Some(reason)));
+            }
+        };
         let windows = hangar_antigravity::quota::windows(&saved, now());
         // Cota gravada sem nenhuma janela legível: o agy mudou o formato, não é cota cheia.
         if windows.is_empty() {
@@ -864,6 +871,10 @@ mod tests {
         assert_eq!(agy["janelas"][0]["rotulo"], "5h");
         assert_eq!(agy["janelas"][0]["pct"], 75.0);
         assert!(agy["idade_s"].as_f64().is_some_and(|age| (590.0..660.0).contains(&age)), "{agy}");
+        // Arquivo corrompido não some da lista: sai indisponível.
+        std::fs::write(data.join(hangar_antigravity::quota::FILE), "{ quebrado").unwrap();
+        let rows = service.quotas(None, false, true).await.unwrap();
+        assert_eq!(row(&rows, &id).unwrap()["motivo"], "formato-desconhecido");
         // Formato que o Hangar não entende não vira cota lida e vazia.
         std::fs::write(data.join(hangar_antigravity::quota::FILE), json!({"seen": now(), "buckets": {
             "gemini-5h": {"remaining_amount": 3}}}).to_string()).unwrap();

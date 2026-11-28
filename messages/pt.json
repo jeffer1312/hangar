@@ -12679,7 +12679,7 @@
   "native_accounts_agy_signed_in": "logado",
   "native_accounts_agy_signed_out": "não logado",
   "native_accounts_agy_terms_server_changed": "A sessão dos Termos foi criada no servidor anterior; ela não foi aberta neste.",
-  "native_accounts_agy_no_quota": "A cota aparece quando o Antigravity estiver aberto numa sessão com terminal: ela vem da barra de status do próprio agy.",
+  "native_accounts_agy_no_quota": "A cota aparece com o Antigravity aberto numa sessão com terminal, pela barra de status que o Hangar configura no agy. Uma barra de status sua no lugar dela impede a leitura.",
   "native_accounts_remove_desc_antigravity": "Apaga a pasta desta conta do Google neste servidor, com o login e as conversas do agy que estão nela.",
   "native_create_agy_account": "Conta do Google",
   "native_create_agy_default": "Google (padrão)",
