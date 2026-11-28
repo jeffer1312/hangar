@@ -369,10 +369,16 @@ async fn send_with_entry(st: &AppState, name: &str, target: &WriteTarget, text: 
     (answer, operation_id)
 }
 
+/// Quem escreveu e se a escrita conta na telemetria. O `admit` só deixa passar o dono ou um convidado:
+/// fora as marcas de convidado, é o dono, também pelo MCP, que zera a continuação automática como
+/// antes. A telemetria só conta o que prova a autoria, e o bearer sintético do MCP não prova.
+fn writer(req: &Request) -> (bool, bool) {
+    (!crate::telemetry_routes::guest(req), crate::telemetry_hooks::eligible_request(req))
+}
+
 /// No Claude, o ator terminal conduz o `/clear`; no Codex, ele é controle de conversa nova.
 pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    // O `admit` só deixa passar o dono ou um convidado: fora as marcas de convidado, é o dono.
-    let owner = crate::telemetry_hooks::eligible_request(&req);
+    let (owner, counted) = writer(&req);
     let (ctx, bytes) = match admit(&st, peer, req, WriteRoute::Input).await {
         Ok(admitted) => admitted,
         Err(response) => return response,
@@ -407,7 +413,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         tracing::info!(target: "delivery_timing", session=%ctx.name, outcome, "decisão de entrega aplicada");
         result.1["timing_note"] = json!(outcome);
     }
-    count_input(st.counting().filter(|_| owner), &ctx.target.provider, ctx.target.terminal, &text, steer, &result);
+    count_input(st.counting().filter(|_| counted), &ctx.target.provider, ctx.target.terminal, &text, steer, &result);
     if owner && result.0.is_success() { crate::auto_continue::owner_wrote(&st, &ctx.name, &text); }
     crate::diag::record(crate::diag::diary_dir(), vec![received_line(&ctx.name, ctx.headers(), peer, &text, steer, &result)], "mensagem recebida");
     answer(&ctx, result)
@@ -863,6 +869,18 @@ mod broadcast_tests {
         let mut signed = plain();
         signed.headers_mut().insert("x-hangar-guest", "1".parse().unwrap());
         assert!(crate::telemetry_routes::guest(&signed));
+    }
+
+    #[test]
+    fn mcp_input_is_the_owner_for_auto_continue_but_not_counted() {
+        let plain = || axum::http::Request::builder().uri("/api/sessions/s/input").body(axum::body::Body::empty()).unwrap();
+        assert_eq!(writer(&plain()), (true, true));
+        let mut mcp = plain();
+        mcp.extensions_mut().insert(crate::telemetry_hooks::NoTelemetry);
+        assert_eq!(writer(&mcp), (true, false));
+        let mut guest = plain();
+        guest.headers_mut().insert("x-hangar-guest", "1".parse().unwrap());
+        assert_eq!(writer(&guest), (false, false));
     }
 
     #[test]
