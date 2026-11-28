@@ -382,8 +382,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     }
     let (steer, note, expected_turn) = if let Some((task, message)) = task.filter(|_| !text.trim_start().starts_with('/')) {
         let before = ctx.target.handle.snapshot().await.ok();
-        let (direct, note) = super::delivery_timing::decide(&ctx.st, &ctx.name, &message, &task).await;
-        let (mut direct, mut note) = (direct, note);
+        let (mut direct, mut note) = super::delivery_timing::decide(&ctx.st, &ctx.name, &message, &task).await;
         if direct {
             let after = ctx.target.handle.snapshot().await.ok();
             if !super::delivery_timing::same_work(before.as_ref(), after.as_ref()) { direct = false; note = "work_changed"; }

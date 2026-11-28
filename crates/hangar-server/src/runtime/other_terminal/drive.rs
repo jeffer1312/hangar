@@ -155,22 +155,21 @@ pub(crate) fn screen(provider: hangar_transcript::Provider, pane: &str) -> crate
         hangar_transcript::Provider::Kimi => {
             let mut analysis = crate::terminal_state::analyze(pane);
             if analysis.state == "awaiting_input" {
-                analysis.state.clear();
                 analysis.question = None;
                 analysis.options = None;
+                analysis.label = analysis.spinner.as_deref().map(|spinner| spinner.chars().skip(2).collect::<String>().trim().to_owned());
+                analysis.state = if analysis.spinner.is_some() { "working".into() } else { String::new() };
             }
+            // O painel de aprovação ou de escolha (rodapé `↵ confirm`, `↵ choose`…) ocupa a caixa: nada se digita sobre ele.
+            analysis.overlay |= kimi_approval_open(pane) || kimi_picker_open(pane);
             analysis
         }
         _ => crate::terminal_state::analyze(pane),
     }
 }
-/// O painel de aprovação ou de escolha do Kimi (rodapé `↵ confirm`, `↵ choose`…) ocupa a tela mesmo sem pergunta lida dela.
-fn kimi_panel(provider: hangar_transcript::Provider, pane: &str) -> bool {
-    provider == hangar_transcript::Provider::Kimi && (kimi_approval_open(pane) || kimi_picker_open(pane))
-}
 fn blocked(target: &OtherTarget, frame: &OtherFrame) -> bool {
     let analysis = screen(target.provider, &frame.text);
-    analysis.overlay || analysis.state == "awaiting_input" || kimi_panel(target.provider, &frame.text)
+    analysis.overlay || analysis.state == "awaiting_input"
 }
 fn codex(target: &OtherTarget) -> bool {
     target.provider == hangar_transcript::Provider::Codex
@@ -1799,9 +1798,9 @@ async fn open_kimi_permissions(context: &mut Control<'_>) -> Result<KimiPermissi
             // Sem o seletor, nada do comando fica para quem digitar depois: tela aberta ou o texto na caixa.
             // Escape num turno em voo o interromperia, e numa aprovação aberta a recusaria. A limpeza não
             // troca o motivo da falha.
-            let state = screen(context.target.provider, &frame.text).state;
-            let frame = if composer(context.target, &frame).is_none() && !matches!(state.as_str(), "working" | "awaiting_input")
-                && !kimi_panel(context.target.provider, &frame.text) {
+            let analysis = screen(context.target.provider, &frame.text);
+            let frame = if composer(context.target, &frame).is_none() && !matches!(analysis.state.as_str(), "working" | "awaiting_input")
+                && !analysis.overlay {
                 let escaped = context.write("Escape", false, false).await.is_ok() && context.pause(SETTLE, false).await.is_ok();
                 if escaped { context.frame(false, false).await.ok() } else { None }
             } else { Some(frame) };
@@ -2031,34 +2030,6 @@ pub async fn control(
             &error.code
         })),
         Err(error) => Err(error),
-    }
-}
-
-#[cfg(test)]
-mod kimi_screens {
-    use super::*;
-
-    /// A fila da TUI do Kimi com uma mensagem numerada esperando o fim do turno.
-    const QUEUED: &str = "  ⠋ Working for 6s\n   ❯ 1. corrige o parser\n   2. roda os testes\n   ↑ to edit · ctrl-s to steer immediately\n ╭──╮\n │ > │\n ╰──╯\n";
-
-    #[test]
-    fn a_numbered_message_of_the_person_is_not_a_question() {
-        let analysis = screen(hangar_transcript::Provider::Kimi, QUEUED);
-        assert_ne!(analysis.state, "awaiting_input");
-        assert_eq!(analysis.options, None);
-        assert_eq!(analysis.question, None);
-    }
-
-    #[test]
-    fn the_approval_panel_of_kimi_still_occupies_the_box() {
-        let approval = "  ▶ Run this command?\n\n  ▶ 1. Approve once\n    2. Reject\n\n  ↑/↓ select · 1/2 choose · ↵ confirm\n";
-        assert!(kimi_panel(hangar_transcript::Provider::Kimi, approval));
-        assert!(!kimi_panel(hangar_transcript::Provider::Kimi, QUEUED));
-    }
-
-    #[test]
-    fn the_same_screen_is_still_a_menu_for_claude_code() {
-        assert_eq!(screen(hangar_transcript::Provider::Claude, QUEUED).state, "awaiting_input");
     }
 }
 

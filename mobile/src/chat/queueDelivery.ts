@@ -41,8 +41,9 @@ export function queueSendMode(mode: DeliveryMode, ready: boolean, state: string,
   headless: boolean, message: string, events: ChatEvent[], ask: AskQuestionPayload | null): QueueSendMode | undefined {
   if (state !== 'working' || !deliveryProvider(provider) || message.trimStart().startsWith('/')) return;
   // O Ctrl+S do Kimi entra no turno sem cortá-lo: lá "Na conversa" é o mesmo envio direto.
-  if (mode === 'direct' || (mode === 'conversation' && provider === 'kimi')) return { kind: 'direct', terminalClaude: provider === 'claude' && !headless };
-  if (mode === 'conversation') return { kind: 'conversation' };
+  const effective = provider === 'kimi' && mode === 'conversation' ? 'direct' : mode;
+  if (effective === 'direct') return { kind: 'direct', terminalClaude: provider === 'claude' && !headless };
+  if (effective === 'conversation') return { kind: 'conversation' };
   if (mode !== 'jev' || !ready) return;
   let latest = -1;
   for (let i = events.length - 1; i >= 0; i--) {

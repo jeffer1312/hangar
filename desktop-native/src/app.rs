@@ -3285,7 +3285,7 @@ impl Hangar {
             }
             // Com "Na conversa" escolhido, o Ctrl+Enter é a saída para a Fila; nos outros modos ele segue sem ação.
             InputEvent::PressEnter { secondary: true, shift: false } if !self.connection_dialog
-                && appearance::get().delivery_mode() == appearance::DeliveryMode::Conversation => {
+                && self.queue_mode() == appearance::DeliveryMode::Conversation => {
                 self.submit_as(false, false, true, window, cx);
             }
             // A lista de comandos acompanha o que se digita.
@@ -6283,9 +6283,8 @@ impl Hangar {
         let draft_hint = beta_draft.then(|| {
             // O mesmo critério do `queue_timing`: sem como entrar no turno, Na conversa e Jev caem na fila.
             let joins = queue::sends_direct(true, &self.chat.state.state, self.provider().0);
-            let key = match appearance::get().delivery_mode() {
+            let key = match self.queue_mode() {
                 appearance::DeliveryMode::Direct => "beta_draft_direct",
-                appearance::DeliveryMode::Conversation if joins && self.provider().0 == "kimi" => "beta_draft_direct",
                 appearance::DeliveryMode::Conversation if joins => "beta_draft_conversation",
                 appearance::DeliveryMode::Jev if joins && self.queue_jev_ready() => "beta_draft_jev",
                 _ => "beta_draft_queue",

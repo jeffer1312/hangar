@@ -170,6 +170,25 @@ async fn run_kimi(io: &Screens, kind: &str, payload: Value) -> RuntimeReply {
     assert!(result.is_ok(), "o controle do Kimi precisa atender {kind}: {:?}", result.as_ref().err());
     result.unwrap().reply }
 }
+/// O painel de aprovação do Kimi e a fila da TUI com uma mensagem numerada da pessoa esperando o fim do turno.
+const KIMI_APPROVAL: &str = "  ▶ Run this command?\n\n  ▶ 1. Approve once\n    2. Reject\n\n  ↑/↓ select · 1/2 choose · ↵ confirm\n";
+const KIMI_QUEUED: &str = "  ⠋ Working for 6s\n   ❯ 1. corrige o parser\n   2. roda os testes\n   ↑ to edit · ctrl-s to steer immediately\n ╭──╮\n │ > │\n ╰──╯\n";
+
+#[test]
+fn kimi_numbered_message_of_the_person_is_not_a_question() {
+    let analysis = super::drive::screen(hangar_transcript::Provider::Kimi, KIMI_QUEUED);
+    assert_ne!(analysis.state, "awaiting_input");
+    assert_eq!((analysis.question, analysis.options, analysis.overlay), (None, None, false));
+    assert_eq!(super::drive::screen(hangar_transcript::Provider::Claude, KIMI_QUEUED).state, "awaiting_input", "no Claude Code é menu");
+}
+
+#[test]
+fn kimi_open_panel_occupies_the_box_without_becoming_a_question() {
+    let analysis = super::drive::screen(hangar_transcript::Provider::Kimi, KIMI_APPROVAL);
+    assert!(analysis.overlay);
+    assert_ne!(analysis.state, "awaiting_input", "a aprovação é publicada pelo arquivo da conversa");
+}
+
 const KIMI_IDLE: &str = "╭────────────────────────────────────╮\n│ >                                  │\n╰────────────────────────────────────╯\n Never Ask  K3.1 Pro thinking: high  /help: show commands\n context: 6% (60k/1M)";
 const KIMI_MENU: &str = " ────────────────────────────────────\nSelect permission mode\n   Always Ask\n   Auto-read only; everything else needs your approval first.\n ❯ Ask When Needed ← current\n   Routine edits and commands run automatically.\n   Never Ask\n   Everything runs and is decided automatically.\n ↑/↓ navigate · ↵ choose · esc cancel\n ────────────────────────────────────";
 
@@ -255,7 +274,7 @@ async fn kimi_permissions_answer_the_current_mode_without_checking_the_screen() 
 #[tokio::test(start_paused = true)]
 async fn kimi_permissions_clean_up_when_the_selector_never_opens() {
     let typed = KIMI_IDLE.replace("│ > ", "│ > /permission ");
-    let approval = "  ▶ Run this command?\n\n  ▶ 1. Approve once\n    2. Reject\n\n  ↑/↓ select · 1/2 choose · ↵ confirm\n";
+    let approval = KIMI_APPROVAL;
     for (after, cleanup) in [(typed.as_str(), Some("C-u")), ("  Something else entirely\n", Some("Escape")), (approval, None)] {
         let io = Screens::texts(&[KIMI_IDLE, after]);
         let reply = run_kimi(&io, "set_permission_mode", json!({"mode":"manual"})).await;
