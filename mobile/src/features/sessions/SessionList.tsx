@@ -403,9 +403,8 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   const hiddenOpen = useHiddenSectionOpen();
   const sections = useMemo(() => buildSessionSections(rows, hiddenOpen ? 'expanded' : 'collapsed', modo, busca, recolhidos, undefined, pairGroups),
     [rows, hiddenOpen, busca, modo, recolhidos, pairGroups]);
-  // O tour conta as linhas que esta lista desenha: sessão oculta ou dentro de grupo recolhido não tem peça para o balão.
-  const drawnRows = useMemo(() => sections.reduce((n, section) =>
-    n + section.data.filter((item) => !section.heads.get(pickKey(item.serverId, item.name))?.collapsed).length, 0), [sections]);
+  // O tour conta as linhas que esta lista desenha: as seções já trazem só o que aparece (grupo recolhido é a cabeça dele).
+  const drawnRows = useMemo(() => sections.reduce((n, section) => n + section.data.length, 0), [sections]);
   useEffect(() => {
     if (!home) return;
     setHomeRows(drawnRows);

@@ -160,9 +160,13 @@ describe('balão da vez', () => {
     expect(tourTarget(run, tips, new Set(['session-row', 'chat-more']), {}, false)).toEqual({ kind: 'step', step: steps[0], n: 1, total: 5 });
   });
 
-  it('passo sem a peça espera e segura as dicas só até travar', () => {
-    expect(tourTarget(run, tips, new Set(['chat-more']), {}, false)).toBeNull();
-    expect(tourTarget(run, tips, new Set(['chat-more']), {}, true)).toEqual({ kind: 'tip', step: tips[0] });
+  it('na tela do passo sem a peça dele, ele segura as dicas até travar', () => {
+    expect(tourTarget(run, tips, new Set(['list-search', 'chat-more']), {}, false)).toBeNull();
+    expect(tourTarget(run, tips, new Set(['list-search', 'chat-more']), {}, true)).toEqual({ kind: 'tip', step: tips[0] });
+  });
+
+  it('noutra tela, as dicas dela aparecem enquanto o passo espera', () => {
+    expect(tourTarget(run, tips, new Set(['chat-more']), {}, false)).toEqual({ kind: 'tip', step: tips[0] });
   });
 
   it('sem volta em curso, a dica da peça na tela', () => {

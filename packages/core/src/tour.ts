@@ -139,8 +139,12 @@ export const runStep = (run: TourRun): TourStep | null => (run.index === null ? 
  */
 export function stepStalled(step: TourStep, onScreen: ReadonlySet<string>): boolean {
   if (onScreen.has(step.anchor)) return false;
-  return [...MOBILE_TOUR, ...MOBILE_TIPS].some((other) => other.screen === step.screen && other.anchor !== step.anchor && onScreen.has(other.anchor));
+  return screenVisible(step, onScreen);
 }
+
+/** Alguma outra peça da tela do passo está à vista: a pessoa está na tela dele. */
+const screenVisible = (step: TourStep, onScreen: ReadonlySet<string>) =>
+  [...MOBILE_TOUR, ...MOBILE_TIPS].some((other) => other.screen === step.screen && other.anchor !== step.anchor && onScreen.has(other.anchor));
 
 /**
  * Passo travado na própria tela (`stepStalled`): sai da volta e vira dica que espera a peça; a volta
@@ -172,7 +176,8 @@ export function tourTarget(run: TourRun | null, tips: readonly TourStep[], onScr
   const step = run ? runStep(run) : null;
   if (step && run?.index != null) {
     if (onScreen.has(step.anchor)) return { kind: 'step', step, n: run.index + 1, total: run.steps.length };
-    if (!stalled) return null;
+    // Na tela do passo ele segura as dicas até virar dica; noutra tela, as dicas dela aparecem enquanto ele espera.
+    if (!stalled && screenVisible(step, onScreen)) return null;
   }
   const tip = nextTip(tips, onScreen, progress);
   return tip ? { kind: 'tip', step: tip } : null;
