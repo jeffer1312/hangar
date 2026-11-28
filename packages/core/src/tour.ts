@@ -131,6 +131,19 @@ export function runChoice(run: TourRun, choice: TourChoice): RunStep {
 
 export const runStep = (run: TourRun): TourStep | null => (run.index === null ? null : run.steps[run.index] ?? null);
 
+/**
+ * Passo cuja peça não apareceu a tempo (sessões ocultas, grupo recolhido, linha fora da rolagem):
+ * sai da volta e vira dica que espera a peça; a volta segue no próximo passo, sem ficar presa.
+ */
+export function runDropStep(run: TourRun): RunStep & { tip: TourStep | null } {
+  const step = runStep(run);
+  if (!step || run.index === null) return { run, outcome: null, tip: null };
+  const steps = run.steps.filter((_, i) => i !== run.index);
+  const index = run.index < steps.length ? run.index : null;
+  const outcome: TourOutcome | null = index === null ? (run.doneAny ? 'done' : 'skipped') : null;
+  return { run: { steps, index, doneAny: run.doneAny }, outcome, tip: { ...step, id: stepTipId(step) } };
+}
+
 /** A dica a oferecer agora: a primeira cuja peça está na tela e que ainda não foi vista. */
 export function nextTip(tips: readonly TourStep[], onScreen: ReadonlySet<string>, progress: TourProgress): TourStep | null {
   if (tourTipsOff(progress)) return null;
@@ -157,6 +170,8 @@ export function tourTarget(run: TourRun | null, tips: readonly TourStep[], onScr
 /** Lista de cada máquina do dono: só conta sessões quando todas responderam, fora as que estão em queda. */
 export function tourListsReady(buckets: readonly { loaded: boolean; error: string | null; server: { invite?: unknown } }[]): boolean {
   const own = buckets.filter((b) => !b.server.invite);
+  // Só convites: não há máquina própria para esperar; a primeira lista lida basta.
+  if (own.length === 0) return buckets.some((b) => b.loaded);
   return own.some((b) => b.loaded) && own.every((b) => b.loaded || b.error !== null);
 }
 
