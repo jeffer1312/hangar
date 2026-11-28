@@ -1352,7 +1352,7 @@ window.addEventListener("resize", () => {
 });
 // Releitura sozinha a cada minuto com a página na tela; parada com ela escondida e feita na volta.
 const REFRESH_MS = 60000;
-let lastBody = "", lastRead = 0, readFailed = false, loading = false, refreshTimer = 0;
+let lastBody = "", lastRead = 0, lastTry = 0, readFailed = false, loading = false, refreshTimer = 0;
 async function load(days, quiet = false) {
   if (!quiet) {
     current = days;
@@ -1368,6 +1368,7 @@ async function load(days, quiet = false) {
   }
   const mine = ++request;
   loading = true;
+  lastTry = Date.now();
   fresh.classList.add("busy");
   try {
     const res = await fetch("/panel/data?days=" + days, { cache: "no-store" });
@@ -1376,19 +1377,20 @@ async function load(days, quiet = false) {
     if (!res.ok) throw new Error("HTTP " + res.status);
     const body = await res.text();
     if (mine !== request) return;
-    lastRead = Date.now(); readFailed = false;
     if (body !== lastBody) {
-      lastBody = body;
       const data = JSON.parse(body);
       if (quiet) rerender(data); else render(data);
+      // Só depois de desenhar: um corpo que quebra o desenho é tentado de novo na próxima leitura.
+      lastBody = body;
       const m = data.active.machines_30d, p = data.active.owners_30d;
       document.getElementById("sub").textContent = m + (m === 1 ? " máquina · " : " máquinas · ") + p + (p === 1 ? " pessoa" : " pessoas") + " · dados anônimos";
     }
+    lastRead = Date.now(); readFailed = false; fresh.title = "";
     panelStatus.textContent = "";
   } catch (err) {
     if (mine !== request) return;
     // Releitura que falha deixa os dados na tela e diz no indicador desde quando não atualiza.
-    if (quiet && lastBody) { readFailed = true; return; }
+    if (quiet && lastBody) { readFailed = true; fresh.title = err.message; return; }
     panelStatus.textContent = "Não foi possível ler os dados do painel.";
     const retry = el("button", { class: "btn", type: "button", text: "Tentar de novo" });
     retry.addEventListener("click", () => {
@@ -1408,11 +1410,20 @@ async function load(days, quiet = false) {
 }
 
 // Redesenha mantendo o que a pessoa abriu e o ponto da tela em que estava.
+// Cartão achado pela seção, pelo título e pela ordem entre os de mesmo título: a posição mudaria quando um cartão surge ou some.
+const cardKey = c => (c.closest(".sec")?.id || "") + "|" + (c.dataset.title || "");
+function cardRef(c) {
+  const key = cardKey(c);
+  return { key, n: [...document.querySelectorAll("#content .card")].filter(x => cardKey(x) === key).indexOf(c) };
+}
+const findCard = ref => ref && [...document.querySelectorAll("#content .card")].filter(x => cardKey(x) === ref.key)[ref.n];
 function rerender(data) {
-  const cards = [...document.querySelectorAll("#content .card")];
   const barBottom = document.getElementById("bar").getBoundingClientRect().bottom;
-  const anchorAt = cards.findIndex(c => !c.hidden && c.getBoundingClientRect().bottom > barBottom);
-  const anchorTop = anchorAt >= 0 ? cards[anchorAt].getBoundingClientRect().top : 0;
+  const first = [...document.querySelectorAll("#content .card")].find(c => !c.hidden && c.getBoundingClientRect().bottom > barBottom);
+  const anchor = first && cardRef(first), anchorTop = first ? first.getBoundingClientRect().top : 0;
+  const active = panelContent.contains(document.activeElement) ? document.activeElement : null;
+  const activeCard = active?.closest(".card");
+  const focusRef = activeCard && !active.closest(".rec") && { card: cardRef(activeCard), tag: active.tagName, text: active.textContent };
   const expanded = [...document.querySelectorAll('#content .more-btn[aria-expanded="true"]')].map(b => b.getAttribute("aria-controls"));
   const opened = [...document.querySelectorAll("#content details[open]")].map(d => d.dataset.title);
   const focusKey = document.activeElement?.closest?.(".rec")?.dataset.key;
@@ -1423,9 +1434,10 @@ function rerender(data) {
   expanded.forEach(id => document.querySelector('.more-btn[aria-controls="' + id + '"]')?.click());
   opened.forEach(t => document.querySelector('#content details[data-title="' + CSS.escape(t) + '"]')?.setAttribute("open", ""));
   if (focusKey) [...document.querySelectorAll("#content .rec")].find(r => r.dataset.key === focusKey)?.querySelector(".rec-head")?.focus({ preventScroll: true });
+  if (focusRef) [...(findCard(focusRef.card)?.querySelectorAll(focusRef.tag) || [])].find(e => e.textContent === focusRef.text)?.focus({ preventScroll: true });
   for (const n of document.querySelectorAll(".sec-head .big b, .chip em")) if (before.has(where(n)) && before.get(where(n)) !== n.textContent) flash(n);
-  const anchor = anchorAt >= 0 && document.querySelectorAll("#content .card")[anchorAt];
-  if (anchor) scrollBy(0, anchor.getBoundingClientRect().top - anchorTop);
+  const again = findCard(anchor);
+  if (again) scrollBy(0, again.getBoundingClientRect().top - anchorTop);
 }
 
 const fresh = document.getElementById("fresh"), freshText = document.getElementById("fresh-text");
@@ -1448,7 +1460,8 @@ function refreshNow() {
 }
 function schedule() {
   clearTimeout(refreshTimer);
-  if (!document.hidden) refreshTimer = setTimeout(refreshNow, Math.max(0, lastRead + REFRESH_MS - Date.now()));
+  // Da última tentativa, não da última leitura boa: com o servidor fora, a próxima espera o minuto inteiro.
+  if (!document.hidden) refreshTimer = setTimeout(refreshNow, Math.max(0, Math.max(lastRead, lastTry) + REFRESH_MS - Date.now()));
 }
 document.addEventListener("visibilitychange", () => { if (document.hidden) clearTimeout(refreshTimer); else { freshTick(); schedule(); } });
 fresh.addEventListener("click", () => { if (!loading) load(current, true); });
