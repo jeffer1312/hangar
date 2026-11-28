@@ -30,6 +30,8 @@ import {
 import { HomeIntroMark, HomeQuietMark } from './HomeAmbient';
 import { useHomeDictation } from './useHomeDictation';
 import * as m from '../../paraglide/messages';
+import { useTourAnchor } from '../tour/TourAnchor';
+import { reportTourAction } from '../tour/anchors';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const RISE_SPRING = { damping: 18, stiffness: 210, mass: 1 };
@@ -115,6 +117,7 @@ export function NewConversation({
   commandSource = null, forward = null,
 }: Props) {
   const collapsed = home?.mode === 'sessions';
+  const launcherAnchor = useTourAnchor(home && collapsed ? 'home-new' : null);
   const input = useRef<TextInput>(null);
   const focusedRequest = useRef(0);
   const router = useRouter();
@@ -454,8 +457,9 @@ export function NewConversation({
         onLayout={(event) => { launcherHeight.value = event.nativeEvent.layout.height; }}>
         <Glass variant="chrome" style={styles.launcher}>
           <View style={styles.launcherRow}>
-            <Pressable style={styles.launcherText} accessibilityRole="button" accessibilityLabel={m.home_new_conversation()}
-              onPress={() => home.onNewConversation(true)}>
+            <Pressable ref={launcherAnchor.ref} onLayout={launcherAnchor.onLayout} collapsable={false} style={styles.launcherText}
+              accessibilityRole="button" accessibilityLabel={m.home_new_conversation()}
+              onPress={() => { reportTourAction('new'); home.onNewConversation(true); }}>
               <Icon name="SquarePen" size={18} color={theme.tokens.text.secondary} />
               <Text style={styles.hint} numberOfLines={1}>{m.home_new_conversation()}</Text>
             </Pressable>

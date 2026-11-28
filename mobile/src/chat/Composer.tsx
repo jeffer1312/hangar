@@ -9,6 +9,7 @@ import { ComposerActions, ComposerBox, ComposerInput } from './ComposerField';
 import { DraftSaveError, uploadAttachment, type UploadedFields } from '../stores/attachmentUpload';
 import { Icon } from '../ui/Icon';
 import * as m from '../paraglide/messages';
+import { TourAnchor } from '../features/tour/TourAnchor';
 import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting, settleDelivered } from '../stores/chat';
 import { abandonUnknownAttempt, attachInsert, confirmFirstInput, firstInputMessage, readFirstInput, sendFirstInput, useNewConversation, withAttach } from '../stores/newConversation';
 import { useSessions } from '../stores/sessions';
@@ -1699,10 +1700,11 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   // fecham a linha. Com o Orientar, o chip encolhe o nome do modelo mas nada sai, como no PWA.
   const actions = (
     <ComposerActions
+      tour
       attach={{ onPress: () => setAttachMenuOpen(true), disabled: attachBlocked, busy: uploading }}
       mic={{ onPress: () => void handleMicPress(), disabled: micBlocked, busy: busyVoice, recording: gravando,
         styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
-      settings={<SessionSettingsButton serverId={serverId} name={name} provider={provider} headless={headless} openRequest={selectorRequest} />}
+      settings={<TourAnchor id="composer-model" step="model"><SessionSettingsButton serverId={serverId} name={name} provider={provider} headless={headless} openRequest={selectorRequest} /></TourAnchor>}
       afterSettings={<>
         {/* Parar: só o quadrado vermelho, sem círculo em volta, como no PC. */}
         {showStop ? (

@@ -18,6 +18,7 @@ import { isTabletLandscape, useTabletLandscape } from '../src/features/tablet/la
 import { TabletShell } from '../src/features/tablet/TabletShell';
 import { aplicarMaterial } from '../src/theme/aplicarMaterial';
 import { Toaster, toast } from '../src/ui/Toast';
+import { TourHost } from '../src/features/tour/TourHost';
 import { LiveVoiceRoot } from '../src/features/voice/LiveVoiceRoot';
 import { VaultRequestSheet } from '../src/features/vault/VaultRequests';
 import { IntegrationRequestSheet } from '../src/features/integrations/IntegrationRequests';
@@ -237,6 +238,7 @@ export default function Layout() {
         <VaultRequestSheet />
         <IntegrationRequestSheet />
         <OutboxRequestSheet />
+        <TourHost enabled={!withoutServer} />
         <Toaster position="top-center" />
       </GestureHandlerRootView>
     </KeyboardProvider>
