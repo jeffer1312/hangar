@@ -14,7 +14,7 @@ const MODEL_AT = 2.6;
 const CYCLE = 5.2;
 const STEPS = [MODEL_AT];
 const WIDTH = 390;
-const HEIGHT = 300;
+const HEIGHT = 320;
 const noop = () => {};
 const none = async () => {};
 
@@ -29,7 +29,7 @@ export function TourAnimation({ width }: { width: number }) {
     accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
     <View style={[styles.surface, { width: WIDTH, height: HEIGHT, transform: [{ scale }] }]}>
       <Animated.View key={step} entering={reduced ? undefined : FadeIn.duration(200)} style={styles.balloon}>
-        <TourBalloon tag={m.native_tour_progress({ n: model ? 6 : 4, total: 6 })} title={title} body={body} waiting
+        <TourBalloon tag={m.native_tour_progress({ n: model ? 5 : 3, total: 5 })} title={title} body={body} waiting
           arrow="down" arrowX={model ? 214 : 18}
           actions={[{ label: model ? m.mobile_tour_done() : m.native_tour_skip(), primary: true, onPress: noop },
             { label: m.native_tour_skip_all(), onPress: noop }, { label: m.native_tour_later(), onPress: noop }]} />
