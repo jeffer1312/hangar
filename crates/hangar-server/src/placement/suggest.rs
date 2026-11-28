@@ -30,7 +30,7 @@ pub enum Step {
     /// Abre em `server` com este corpo (`forward::open`); `placement` é `None` com máquina explícita.
     /// `cloned`: o repositório foi clonado lá agora (o aviso vai aos `avisos` da resposta). `reserve`: a raiz daqui e o
     /// id de lá, reservados só quando lá confirmar a abertura.
-    There { server: String, body: Value, placement: Option<Value>, cloned: bool, reserve: Option<(String, String)> },
+    There { server: String, body: Value, placement: Option<Value>, cloned: bool, reserve: Option<(String, String)>, warnings: Vec<String> },
     Refused(OpenError),
 }
 
@@ -149,7 +149,7 @@ async fn choose_step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &
             if cloned {
                 body["initial_prompt"] = json!(crate::session_open::baton::fresh_clone_prompt(body["initial_prompt"].as_str()));
             }
-            Step::There { server, body, placement: placement.as_ref().map(wire), cloned, reserve }
+            Step::There { server, body, placement: placement.as_ref().map(wire), cloned, reserve, warnings: inherited.warnings.clone() }
         }
         None => Step::Refused(clone_unavailable(&server, placement.as_ref())),
     }
@@ -407,7 +407,10 @@ pub(super) async fn load_config(st: &AppState) -> Result<PlacementConfig, &'stat
 async fn inherited(st: &Arc<AppState>, request: &SessionOpenRequest) -> Result<forward::Inherited, OpenError> {
     let Some(name) = request.creator.as_deref().filter(|_| request.inherit != Some(false)) else { return Ok(forward::Inherited::default()) };
     let creator = crate::session_open::server::creator_here(st, name).await?;
-    Ok(creator.map(|creator| from_creator(request, &creator)).unwrap_or_default())
+    Ok(match creator {
+        Some(creator) => from_creator(request, &creator),
+        None => forward::Inherited { warnings: vec![format!("sessão criadora '{name}' não encontrada; nada foi herdado")], ..Default::default() },
+    })
 }
 
 fn from_creator(request: &SessionOpenRequest, creator: &CreatorFacts) -> forward::Inherited {
@@ -427,7 +430,16 @@ fn from_creator(request: &SessionOpenRequest, creator: &CreatorFacts) -> forward
         Some(AgentProvider::Codex) if asked && request.headless.or(headless) == Some(true) => creator_codex_mode(creator),
         _ => None,
     };
+    let wanted = asked && match provider {
+        Some(AgentProvider::Claude) => true,
+        Some(AgentProvider::Codex) => request.headless.or(headless) == Some(true),
+        _ => false,
+    };
+    let warnings = if wanted && permission_mode.is_none() {
+        vec![format!("não consegui ler o modo de permissão de '{}'; vale o padrão de lá", request.creator.as_deref().unwrap_or_default())]
+    } else { Vec::new() };
     forward::Inherited {
+        warnings,
         provider: (request.provider.is_none() && request.subagent_model.is_none()).then(|| creator.provider.name().to_owned()),
         permission_mode: permission_mode.map(|mode| mode.name().to_owned()),
         headless,
@@ -563,8 +575,13 @@ mod tests {
         // Codex com terminal: lá fica com o modo de lá; sem terminal, o modo Codex da criadora.
         let terminal = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked.clone() }, &creator(AgentProvider::Codex, false, "Full Access"));
         assert_eq!((terminal.permission_mode, terminal.headless), (None, Some(false)));
-        let headless = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked }, &creator(AgentProvider::Codex, true, "Full Access"));
+        let headless = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked.clone() }, &creator(AgentProvider::Codex, true, "Full Access"));
         assert_eq!(headless.permission_mode.as_deref(), Some("Full Access"));
+        assert!(headless.warnings.is_empty());
+        // Modo pedido que não deu para ler: a resposta diz, e lá vale o padrão de lá.
+        let unread = from_creator(&SessionOpenRequest { inherit: Some(true), ..asked }, &creator(AgentProvider::Claude, true, "modo-que-nao-existe"));
+        assert_eq!(unread.permission_mode, None);
+        assert_eq!(unread.warnings, ["não consegui ler o modo de permissão de 'pai'; vale o padrão de lá"]);
     }
 
     #[test]
@@ -656,7 +673,7 @@ mod tests {
         assert!(telemetry.counters().is_empty(), "convidado não conta");
         count_placed(Some(&telemetry), &OpenCaller::Owner, None, &Step::Here(None));
         count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&ReasonCode::NotBalanced { why: "orq".into() }), &Step::Here(None));
-        let there = Step::There { server: "notebook".into(), body: json!({}), placement: None, cloned: true, reserve: None };
+        let there = Step::There { server: "notebook".into(), body: json!({}), placement: None, cloned: true, reserve: None, warnings: Vec::new() };
         count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&ReasonCode::LeastLoaded { local_out: Exclusion::Working }), &there);
         count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&rule), &Step::Refused(ask(&Placement { server: "nb".into(),
             reason: rule.clone(), clone: None, warnings: Vec::new() })));

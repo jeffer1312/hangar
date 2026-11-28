@@ -568,7 +568,7 @@ pub(crate) async fn creator_here(st: &Arc<AppState>, name: &str) -> Result<Optio
 /// `link`, a ligação feita daqui (a criadora é daqui; lá a filha nasce sem ela). A pasta só fica reservada para
 /// lá (`reserve`) quando lá confirmou: abertura recusada ou incerta não prende a próxima.
 async fn forwarded(st: &Arc<AppState>, server: &str, body: &Value, placement: Option<Value>, cloned: bool, reserve: Option<(String, String)>,
-    link: super::LinkPlan) -> Response {
+    mut warnings: Vec<String>, link: super::LinkPlan) -> Response {
     use crate::groups::peers::PeerError;
     let opened = crate::placement::forward::open(&st.peers, server, body, true).await
         .and_then(|info| if info["name"].is_string() { Ok(info) } else { Err(PeerError::Transport(format!("{server}: resposta da abertura sem o nome"))) });
@@ -582,7 +582,7 @@ async fn forwarded(st: &Arc<AppState>, server: &str, body: &Value, placement: Op
                 fields.insert("target".into(), json!(target));
                 if let Some(placement) = placement { fields.insert("placement".into(), placement); }
             }
-            let warnings = if cloned { vec![super::baton::FRESH_CLONE_NOTE.to_owned()] } else { Vec::new() };
+            if cloned { warnings.push(super::baton::FRESH_CLONE_NOTE.to_owned()); }
             crate::placement::forward::add_avisos(&mut info, warnings);
             crate::session_write::json_response(StatusCode::OK, info)
         }
@@ -637,7 +637,7 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let placement = match crate::placement::suggest::step(&st, &request, &caller).await {
         Step::Here(placement) => placement,
         Step::Refused(error) => return done(reply(&error)),
-        Step::There { server, body, placement, cloned, reserve } => return done(forwarded(&st, &server, &body, placement, cloned, reserve, link).await),
+        Step::There { server, body, placement, cloned, reserve, warnings } => return done(forwarded(&st, &server, &body, placement, cloned, reserve, warnings, link).await),
     };
     match decide_detached(&st, request, caller, guest, None).await {
         Decision::Opened(mut opened) => {

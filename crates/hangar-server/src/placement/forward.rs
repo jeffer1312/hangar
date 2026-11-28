@@ -21,6 +21,8 @@ pub struct Inherited {
     pub provider: Option<String>,
     pub permission_mode: Option<String>,
     pub headless: Option<bool>,
+    /// O que não deu para herdar, para a resposta dizer: lá a sessão abre com o padrão de lá.
+    pub warnings: Vec<String>,
 }
 
 /// O corpo do `POST /api/sessions` em `dest`. A pasta vira a raiz do mesmo projeto lá, na branch da
@@ -171,7 +173,7 @@ mod tests {
 
     #[test]
     fn what_comes_from_the_creator_goes_explicit_and_the_asked_value_wins() {
-        let inherited = Inherited { provider: Some("claude".into()), permission_mode: Some("bypassPermissions".into()), headless: Some(true) };
+        let inherited = Inherited { provider: Some("claude".into()), permission_mode: Some("bypassPermissions".into()), headless: Some(true), warnings: Vec::new() };
         let asked = SessionOpenRequest { permission_mode: Some("acceptEdits".into()), headless: Some(false), ..request("/home/j") };
         let home = OpenContext { local_id: "pc".into(), ..Default::default() };
         let body = body(&asked, &home, &nb(), &inherited).unwrap();
