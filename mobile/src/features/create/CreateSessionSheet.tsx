@@ -262,9 +262,6 @@ function CreateSessionForm({ active, machines, onPickMachine, machinePicked, sug
   const contaLabel = (path: string) => configs.find((c) => c.path === path)?.label ?? basename(path);
   const [motores, setMotores] = useState<Awaited<ReturnType<typeof getEnginesForServer>>['motores']>({});
   const [engine, setEngine] = useState('');
-  // Lido quando a oferta da pasta chega: o motor escolhido aqui não vai a outra máquina.
-  const engineRef = useRef(engine);
-  engineRef.current = engine;
   const [modelos, setModelos] = useState<ModelOption[]>([]);
   const [modelo, setModelo] = useState('');
   const [subagente, setSubagente] = useState('');
@@ -686,7 +683,7 @@ function CreateSessionForm({ active, machines, onPickMachine, machinePicked, sug
         if (!mounted.current || generation !== pickGeneration.current) return;
         setRuleOffer(offer);
         // A carga já marca a outra máquina; a regra espera o clique. Máquina, conta ou motor escolhidos aqui ficam.
-        if (offer?.mark && !machinePicked.current && !accountTouched.current && !engineRef.current) setRuleTaken(true);
+        if (offer?.mark && !machinePicked.current) setRuleTaken(true);
       }, (cause: unknown) => console.warn('new_chat_project_rule_unread', cause));
     }
     try {
@@ -1259,7 +1256,9 @@ function CreateSessionForm({ active, machines, onPickMachine, machinePicked, sug
   // A oferta vale para a pasta escolhida agora e para uma máquina que segue na lista do app.
   const ruleServer = ruleOffer && ruleOffer.cwd === picked ? machines.find((sv) => sv.id === ruleOffer.serverId) ?? null : null;
   const ruleLabel = ruleServer ? machineView(ruleServer, machines.indexOf(ruleServer)).label : '';
-  const elsewhere = ruleTaken && ruleOffer && ruleServer ? { server: ruleOffer.server, at: ruleServer } : null;
+  // A carga marcada vale só sem conta ou motor escolhidos aqui, que não vão a outra máquina: escolhê-los volta para esta.
+  const localChoice = accountTouched.current || !!engine;
+  const elsewhere = ruleTaken && ruleOffer && ruleServer && (ruleOffer.project !== null || !localChoice) ? { server: ruleOffer.server, at: ruleServer } : null;
   // Voltar a esta máquina depois do clique só desfaz a oferta; outra troca a máquina e descarta a oferta.
   const pickShownMachine = (id: string) => {
     if (id === active.id) { if (ruleTaken) machinePicked.current = true; setRuleTaken(false); } else if (id !== elsewhere?.at.id) onPickMachine(id);

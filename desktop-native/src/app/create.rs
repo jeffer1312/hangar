@@ -1134,7 +1134,11 @@ impl NewSession {
         self.rule_offer.as_ref().filter(|offer| self.picked.as_deref() == Some(offer.cwd.as_str()))
     }
 
-    fn taken_offer(&self) -> Option<&super::placement::RuleOffer> { self.offer().filter(|offer| offer.taken) }
+    /// A carga marcada vale só sem conta ou motor escolhidos aqui, que não vão a outra máquina: escolhê-los volta a pílula para esta.
+    fn taken_offer(&self) -> Option<&super::placement::RuleOffer> {
+        let local_choice = self.account_touched || !self.engine.is_empty();
+        self.offer().filter(|offer| offer.taken && (offer.project.is_some() || !local_choice))
+    }
 
     /// A máquina que a pílula mostra: a da regra depois do clique, senão a desta tela.
     fn shown_key(&self) -> String {
@@ -1799,11 +1803,7 @@ impl NewSession {
                 match result {
                     Err(error) => eprintln!("[nova-conversa] máquina da pasta não lida: {}", error.detail),
                     // Máquina trocada à mão: a carga só oferece, como a regra.
-                    Ok(offer) => {
-                        // Conta ou motor escolhidos aqui não vão a outra máquina: a carga só oferece.
-                        let local_choice = self.account_touched || !self.engine.is_empty();
-                        self.rule_offer = offer.map(|offer| super::placement::RuleOffer { taken: offer.taken && !self.machine_touched && !local_choice, ..offer });
-                    }
+                    Ok(offer) => self.rule_offer = offer.map(|offer| super::placement::RuleOffer { taken: offer.taken && !self.machine_touched, ..offer }),
                 }
             }
             CreateReply::Repos(seq, result) => {
