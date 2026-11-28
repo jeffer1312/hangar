@@ -33,6 +33,8 @@ pub struct Error {
     code: Code,
     status: Option<u16>,
     cause: Option<String>,
+    /// O corpo do erro era o do serviço do Connect (`{"error": …}`), não o de um proxy no caminho.
+    service_body: bool,
 }
 
 impl Code {
@@ -62,12 +64,17 @@ impl Code {
 
 impl Error {
     pub fn new(code: Code, status: Option<u16>) -> Self {
-        Self { code, status, cause: None }
+        Self { code, status, cause: None, service_body: false }
     }
 
     /// O que o transporte devolve quando o pedido não teve resposta; `cause` fica só para o log.
     pub fn network(cause: impl Into<String>) -> Self {
-        Self { code: Code::NetworkFailed, status: None, cause: Some(cause.into()) }
+        Self { code: Code::NetworkFailed, status: None, cause: Some(cause.into()), service_body: false }
+    }
+
+    pub(crate) fn with_service_body(mut self, service_body: bool) -> Self {
+        self.service_body = service_body;
+        self
     }
 
     pub fn code(&self) -> Code {
@@ -76,6 +83,12 @@ impl Error {
 
     pub fn status(&self) -> Option<u16> {
         self.status
+    }
+
+    /// A resposta de erro veio do serviço do Connect, com o corpo JSON dele. Um 404 sem isso é de quem está
+    /// no caminho (proxy, rota que não existe), não um "não existe" do serviço.
+    pub fn from_service(&self) -> bool {
+        self.service_body
     }
 
     /// Sem URL nem corpo: pode ir ao log.

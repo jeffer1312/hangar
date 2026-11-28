@@ -1,4 +1,5 @@
 import { baseOf, configureApi, configureLocale, definirArmazem } from '@hangar/core';
+import Constants from 'expo-constants';
 import { getLocales } from 'expo-localization';
 import { overwriteGetLocale } from '../paraglide/runtime';
 import { useServers } from '../stores/servers';
@@ -45,6 +46,7 @@ export function configureCore() {
     origin: null,
     createEventSource: (url, opts) => (isDemoUrl(url) ? openDemoEventSource(url) : createEventSource(url, opts)),
     deviceIdentity,
+    deviceName: () => Constants.deviceName ?? null,
     deviceReady,
     secureRandom,
   });

@@ -123,16 +123,18 @@ function peers(value: unknown): Peer[] {
 /** A regra do `install_id` no servidor (`redeem_from` em `hangar-connect`). */
 export const validInstallField = (value: string) => /^[A-Za-z0-9_-]{1,64}$/.test(value);
 
-/** Aparelho no `devices.json` da máquina. `account_device`: liberado pela conta do Connect (servidor antigo não manda). */
+/** Aparelho no `devices.json` da máquina. `account_device`: liberado pela conta do Connect (servidor antigo não manda).
+ *  `peer`: o computador a quem esta máquina deu a chave ao adicioná-lo; sem ele, é um app. */
 export type LocalDevice = { device_id: string; name: string; status: 'pending' | 'approved' | 'denied'; created_at?: number;
-  last_seen?: number | null; install_code?: string; account_device?: string };
+  last_seen?: number | null; install_code?: string; account_device?: string; peer?: string | null };
 const optionalNumber = (value: unknown) => value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value));
 export async function readDevices(s: Server, signal: AbortSignal): Promise<LocalDevice[]> {
   const value = await request(s, '/api/connect/devices', signal);
   if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.device_id === 'string' && typeof d.name === 'string'
     && ['pending', 'approved', 'denied'].includes(String(d.status)) && optionalNumber(d.created_at) && optionalNumber(d.last_seen)
     && (d.install_code === undefined || typeof d.install_code === 'string')
-    && (d.account_device === undefined || d.account_device === null || typeof d.account_device === 'string'))) throw invalid();
+    && (d.account_device === undefined || d.account_device === null || typeof d.account_device === 'string')
+    && (d.peer === undefined || d.peer === null || typeof d.peer === 'string'))) throw invalid();
   return value as LocalDevice[];
 }
 export async function approveDevice(s: Server, id: string, signal: AbortSignal): Promise<void> {

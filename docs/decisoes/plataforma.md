@@ -5981,3 +5981,38 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   linha; o excesso só soma `log_dropped`. O campo `logs` é opcional no `schema: 1`, e o receptor
   passou a aceitar 256 KB por pacote: as 100 linhas junto dos contadores passariam dos 64 KB, e o 413
   apagaria o dia inteiro na máquina.
+
+## Servidor tmux antigo vivo não ganha outro por cima (27/11/2026)
+
+Uma máquina passou a mostrar sessões pulando entre "trabalhando" e "parada" a cada 1,5–3 s na lista
+de todos os clientes. Cada conversa afetada tinha dois processos Claude vivos: o da sessão e um
+antigo, preso num servidor tmux que ninguém mais alcançava.
+
+- **Como os dois nasceram.** Minutos depois de uma atualização automática, o servidor tmux deixou de
+  atender pelo socket, mas seguiu vivo com as sessões e os agentes. O cliente do tmux responde
+  `no server running` tanto para o socket ausente quanto para a conexão recusada, e o restore leu
+  isso como servidor morto (`multiplexador.perdido`, `mux_died_machine_up`). O `new-session` da
+  restauração, ao encontrar o socket recusando, apaga o arquivo e sobe outro servidor; cada sessão
+  voltou com `--resume`, e os agentes antigos seguiram rodando nas mesmas conversas. A prova com um
+  socket sem ouvinte reproduz as duas mensagens; apagar o socket de um servidor vivo e mandar
+  `SIGUSR1` faz o mesmo servidor voltar a atender, com as sessões dele.
+- **Por que a lista pulava.** O registro nativo do Claude (`<conta>/sessions/<pid>.json`) era lido
+  para um mapa por id de conversa; com dois arquivos do mesmo id, valia o último da iteração de um
+  `HashMap` novo a cada tique. Um dizia `busy`, o outro `idle`.
+- **Regras.** A lista guarda todos os registros da conversa e só usa o nativo quando há um vivo; com
+  dois vivos, vale o marcador do hook. A fotografia guarda o pid do servidor tmux (`mux_pid`); a
+  antiga, sem ele, o acha pelo nascimento perto do `#{start_time}`, nunca contando o servidor de
+  agora. Antigo vivo e nada no socket: `SIGUSR1` (até 3 vezes), sem reabrir nada. Antigo vivo com
+  outro no socket, ou dúvida sobre qual é: nada reaberto por cima, e o servidor de agora passa a ser o
+  da fotografia, para as sessões novas seguirem guardadas; as do antigo ficam à parte (`stranded`),
+  seguras para a varredura de grupos e fora da contagem de ausência, e voltam a ser restauradas quando
+  ele acabar. Com o pid gravado, o antigo só conta se não nasceu depois do servidor da fotografia
+  (o pid reaproveitado depois do reboot nasceu depois; o relógio ajustado pelo NTP desloca o
+  nascimento lido, por isso não se exige o mesmo segundo). Antes de cada `--resume`, só sai o agente
+  `claude` da conversa cujo servidor tmux (a variável `TMUX` dele) já acabou e cujo pai é o init
+  ou o `systemd` do usuário (a `TMUX` é herdada por um terminal aberto de dentro do pane), junto
+  com os processos abaixo dele, com `SIGTERM` e, passado o prazo, `SIGKILL`; o registro nativo que
+  o `SIGKILL` deixa é apagado. Já aberta no servidor de agora, a restauração é pulada
+  (`restore_already_open`); fora do tmux, ela recua (`restore_conversation_open`). Pid reaproveitado por outro programa não conta.
+- **Não confirmado:** por que o servidor tmux parou de atender naquela janela. A memória da máquina
+  estava sob pressão, e os comandos ao tmux já falhavam por tempo antes da restauração.

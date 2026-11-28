@@ -29,7 +29,22 @@ pub struct Snapshot {
     /// Quando o servidor do multiplexador subiu (segundos desde a época), na última vez que o Rust olhou.
     #[serde(default)]
     pub mux_started: Option<u64>,
+    /// O pid desse servidor: acha o antigo vivo sem confundir com o de agora nem depender do relógio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mux_pid: Option<u32>,
     /// Pela chave do spec.
+    pub sessions: BTreeMap<String, Entry>,
+    /// Servidores antigos vivos fora do alcance, com outro já no socket: as sessões deles ficam à parte, fora
+    /// da contagem de ausência, e voltam a ser restauradas quando ele acabar (`unstrand`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stranded: Vec<Stranded>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Stranded {
+    pub mux_started: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mux_pid: Option<u32>,
     pub sessions: BTreeMap<String, Entry>,
 }
 
@@ -98,7 +113,36 @@ pub fn observe(prev: &Snapshot, alive: &BTreeMap<String, Entry>, now: f64, mux_s
         let since = entry.missing_since.unwrap_or(now);
         if now - since < ABSENT { sessions.insert(key.clone(), Entry { missing_since: Some(since), ..entry.clone() }); }
     }
-    Snapshot { mux_started, sessions }
+    // A que voltou viva no servidor de agora (pela chave ou pelo nome) deixa de esperar pelo antigo.
+    let stranded = prev.stranded.iter().map(|old| Stranded {
+        mux_started: old.mux_started, mux_pid: old.mux_pid,
+        sessions: old.sessions.iter().filter(|(key, e)| !alive.contains_key(*key) && !alive.values().any(|a| a.name == e.name))
+            .map(|(key, e)| (key.clone(), e.clone())).collect(),
+    }).filter(|old| !old.sessions.is_empty()).collect();
+    Snapshot { mux_started, mux_pid: prev.mux_pid, sessions, stranded }
+}
+
+/// Outro servidor já atende e o da fotografia segue vivo: o de agora passa a ser o da fotografia, para as
+/// sessões novas seguirem guardadas, e as do antigo ficam à parte até ele acabar.
+fn strand(snap: &mut Snapshot, previous_pid: Option<u32>, at: u64, now_pid: Option<u32>) {
+    // As já ausentes estavam de saída: não voltam quando ele acabar.
+    let sessions: BTreeMap<String, Entry> = std::mem::take(&mut snap.sessions).into_iter().filter(|(_, e)| e.missing_since.is_none()).collect();
+    if let Some(started) = snap.mux_started && !sessions.is_empty() {
+        snap.stranded.push(Stranded { mux_started: started, mux_pid: previous_pid, sessions });
+    }
+    (snap.mux_started, snap.mux_pid) = (Some(at), now_pid);
+}
+
+/// O primeiro servidor antigo que acabou (`gone`, na ordem de `stranded`) volta a ser o da fotografia com as
+/// sessões dele, e o caminho de sempre as restaura diante do de agora. As ausentes do de agora saem: já
+/// estavam de saída, e o restore as reabriria.
+fn unstrand(snap: &mut Snapshot, gone: &[bool]) -> bool {
+    let Some(at) = gone.iter().position(|g| *g).filter(|at| *at < snap.stranded.len()) else { return false };
+    let old = snap.stranded.remove(at);
+    snap.sessions.retain(|_, e| e.missing_since.is_none());
+    for (key, entry) in old.sessions { snap.sessions.entry(key).or_insert(entry); }
+    (snap.mux_started, snap.mux_pid) = (Some(old.mux_started), old.mux_pid);
+    true
 }
 
 /// O servidor do multiplexador agora: nenhum (as sessões morreram com ele), o horário em que subiu, ou
@@ -115,6 +159,94 @@ pub fn to_restore(snap: &Snapshot, current: MuxStart, live: &HashSet<String>) ->
         _ => {}
     }
     Some(snap.sessions.iter().filter(|(_, e)| !live.contains(&e.name)).map(|(k, e)| (k.clone(), e.clone())).collect())
+}
+
+/// O que fazer quando o servidor do multiplexador não é o da fotografia.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lost {
+    /// O servidor da fotografia acabou (ou o de agora não respondeu): segue o caminho de sempre.
+    Restore,
+    /// Ele vive e o socket sumiu ou recusa: o tmux recria o socket com `SIGUSR1`.
+    Revive(u32),
+    /// Ele vive, ou não dá para saber, e reabrir por cima duplicaria os agentes dele.
+    Leave,
+}
+
+/// O servidor da fotografia, procurado entre os processos.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Previous { Gone, Alive(u32), Unsure }
+
+/// O cliente do tmux diz "no server running" também quando a conexão é recusada, e um `new-session`
+/// nessa hora apaga o socket e sobe outro servidor: os agentes do antigo seguem vivos, fora do alcance, e
+/// a conversa fica com dois processos. Na dúvida sobre o antigo, nada é reaberto por cima.
+pub fn on_lost(current: MuxStart, previous: Previous) -> Lost {
+    match (previous, current) {
+        (_, MuxStart::Unknown) | (Previous::Gone, _) => Lost::Restore,
+        (Previous::Alive(pid), MuxStart::NoServer) => Lost::Revive(pid),
+        _ => Lost::Leave,
+    }
+}
+
+/// O servidor da fotografia vivo entre os processos tmux (pid, nascimento).
+#[cfg(unix)]
+fn previous_server(started: u64, recorded: Option<u32>, current: Option<u32>) -> Previous {
+    let mut system = sysinfo::System::new();
+    system.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::nothing());
+    let servers: Vec<(u32, u64)> = system.processes().iter()
+        .filter(|(_, p)| p.thread_kind().is_none() && p.name().to_string_lossy().starts_with("tmux") && !p.name().to_string_lossy().contains("client"))
+        .map(|(pid, p)| (pid.as_u32(), p.start_time())).collect();
+    classify_previous(started, recorded, current, &servers)
+}
+
+/// Com o pid gravado, só ele, e não o reaproveitado depois de um reboot; fotografia antiga, sem pid, pelo
+/// nascimento perto do `#{start_time}` (o do tmux e o do processo diferem por arredondamento). O servidor de
+/// agora nunca conta.
+fn classify_previous(started: u64, recorded: Option<u32>, current: Option<u32>, servers: &[(u32, u64)]) -> Previous {
+    // Com o pid gravado basta não ter nascido depois do servidor da fotografia: o relógio ajustado pelo NTP
+    // desloca o nascimento lido, e o pid reaproveitado nasceu depois.
+    let born_then = |born: u64| match recorded { Some(_) => born <= started.saturating_add(BOOT_SLACK_S), None => born.abs_diff(started) <= 2 };
+    let found: Vec<u32> = servers.iter()
+        .filter(|(pid, born)| Some(*pid) != current && born_then(*born) && recorded.is_none_or(|r| r == *pid))
+        .map(|(pid, _)| *pid).collect();
+    match found.as_slice() {
+        [] => Previous::Gone,
+        [pid] => Previous::Alive(*pid),
+        _ => Previous::Unsure,
+    }
+}
+
+#[cfg(not(unix))]
+fn previous_server(_started: u64, _recorded: Option<u32>, _current: Option<u32>) -> Previous { Previous::Gone }
+
+/// Pede ao servidor vivo que recrie o socket (`SIGUSR1`, o caminho que o próprio tmux documenta).
+#[cfg(unix)]
+fn revive(pid: u32) -> bool {
+    i32::try_from(pid).is_ok_and(|pid| unsafe { libc::kill(pid, libc::SIGUSR1) } == 0)
+}
+
+#[cfg(not(unix))]
+fn revive(_pid: u32) -> bool { false }
+
+/// Pedidos de `SIGUSR1` antes de desistir: o servidor que recria o socket noutro caminho (`-L`, `-S`)
+/// nunca volta para o do Hangar.
+const REVIVE_TRIES: u32 = 3;
+
+/// O pid do servidor que responde agora.
+async fn server_pid(program: &std::ffi::OsStr) -> Option<u32> {
+    mux_format(program, "#{pid}").await.ok().flatten().and_then(|pid| pid.trim().parse().ok())
+}
+
+/// Uma linha no diário quando a restauração recua diante do servidor antigo vivo.
+fn note_previous_alive(lost: Lost, signaled: bool, sessions: usize) {
+    let (code, detail) = match lost {
+        Lost::Revive(_) if signaled => ("mux_socket_revived", "o servidor do multiplexador seguia vivo sem socket; pedido para recriá-lo em vez de subir outro"),
+        Lost::Revive(_) => ("mux_socket_revive_failed", "o servidor do multiplexador seguia vivo sem socket, e o pedido para recriá-lo não foi entregue"),
+        _ => ("mux_previous_alive", "o servidor antigo do multiplexador segue vivo (ou não dá para saber); as sessões dele não são reabertas por cima"),
+    };
+    tracing::warn!(code, sessions, "{detail}");
+    crate::diag::record_blocking(crate::diag::diary_dir().as_deref(),
+        &[json!({"evento": "mux.previous_alive", "nivel": "aviso", "codigo": code, "signaled": signaled, "sessions": sessions, "detalhe": detail})],
+        "multiplexador antigo vivo");
 }
 
 /// O psmux sobe um servidor por sessão (o `#{start_time}` é o da mais nova e `#{server_sessions}` vem
@@ -218,9 +350,9 @@ pub fn forget(home: &Path, name: &str) {
     let mut closed = CLOSED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     closed.push(name.to_owned());
     let mut snap = read(home);
-    let before = snap.sessions.len();
-    snap.sessions.retain(|_, entry| entry.name != name);
-    if snap.sessions.len() != before && let Err(error) = write(home, &snap) {
+    let before = snap.clone();
+    drop_names(&mut snap, &[name.to_owned()]);
+    if snap != before && let Err(error) = write(home, &snap) {
         tracing::warn!(code = "session_restore_unwritten", kind = ?error.kind(), "a sessão fechada ficou na fotografia até o próximo tique");
     }
     drop(closed);
@@ -267,8 +399,14 @@ async fn confirm_fallen(home: PathBuf, program: std::ffi::OsString, key: String,
 
 /// Tira da fotografia os nomes fechados desde a última; chamar com `CLOSED` travada.
 fn drop_closed(snap: &mut Snapshot, closed: &mut Vec<String>) {
-    snap.sessions.retain(|_, entry| !closed.contains(&entry.name));
+    drop_names(snap, closed);
     closed.clear();
+}
+
+fn drop_names(snap: &mut Snapshot, names: &[String]) {
+    snap.sessions.retain(|_, entry| !names.contains(&entry.name));
+    for old in &mut snap.stranded { old.sessions.retain(|_, entry| !names.contains(&entry.name)); }
+    snap.stranded.retain(|old| !old.sessions.is_empty());
 }
 
 /// Os nomes que o restore ainda pode reabrir: a varredura de grupos os conta como vivos, senão tiraria os
@@ -276,9 +414,15 @@ fn drop_closed(snap: &mut Snapshot, closed: &mut Vec<String>) {
 static HELD: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 /// Segura os nomes da fotografia enquanto o servidor dela não é o de agora; solta quando é.
+/// As do servidor antigo vivo ficam seguras sempre: os agentes delas seguem rodando.
 fn hold(snap: &Snapshot, settled: bool) {
-    let mut held = HELD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    *held = if settled { Vec::new() } else { snap.sessions.values().map(|e| e.name.clone()).collect() };
+    *HELD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = held_names(snap, settled);
+}
+
+fn held_names(snap: &Snapshot, settled: bool) -> Vec<String> {
+    let stranded = snap.stranded.iter().flat_map(|old| old.sessions.values());
+    if settled { stranded.map(|e| e.name.clone()).collect() }
+    else { snap.sessions.values().chain(stranded).map(|e| e.name.clone()).collect() }
 }
 
 /// Os nomes à espera do restore.
@@ -519,7 +663,7 @@ const TRIES: u32 = 3;
 /// mais a tentar, e o servidor novo pode virar o da fotografia.
 fn settle(results: &[(String, Result<(), String>)], attempts: &mut std::collections::HashMap<String, u32>, done: &mut HashSet<String>) -> bool {
     let passing = |code: &str| matches!(code, "account_busy" | "erro_mux_indisponivel" | "erro_lista_indisponivel" | "restore_spec_job"
-        | "erro_grupo_limpeza_falhou");
+        | "erro_grupo_limpeza_falhou" | "restore_procs_unreadable" | "restore_conversation_running");
     let mut left = false;
     for (key, result) in results {
         match result {
@@ -752,10 +896,150 @@ fn agent_problem(st: &crate::routes::AppState, name: &str, shown: bool) {
     else { crate::runtime::terminal_status::clear_problem(&sender, AGENT_MISSING); }
 }
 
+/// Onde está um agente vivo da conversa que a restauração vai retomar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Seat {
+    /// Dentro do servidor de agora: a conversa já está aberta por outro caminho.
+    Inside,
+    /// Pane de um servidor tmux que já acabou: ninguém o alcança.
+    DeadServer,
+    /// Fora do tmux, ou noutro servidor vivo (`-L`, `-S`): pode ser o trabalho de alguém.
+    Elsewhere,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Holders {
+    /// Ninguém: o `--resume` é o único processo nela.
+    Free,
+    /// Já aberta no servidor de agora: não há o que restaurar.
+    AlreadyOpen,
+    /// Algum agente de fora do Hangar: a restauração recua sem encerrar nada.
+    Open,
+    /// Só agentes de servidor tmux acabado: saem antes do `--resume`.
+    Orphans(Vec<i64>),
+}
+
+fn verdict(holders: &[(i64, Seat)]) -> Holders {
+    if holders.is_empty() { return Holders::Free; }
+    if holders.iter().any(|(_, seat)| *seat == Seat::Elsewhere) { return Holders::Open; }
+    if holders.iter().any(|(_, seat)| *seat == Seat::Inside) { return Holders::AlreadyOpen; }
+    Holders::Orphans(holders.iter().map(|(pid, _)| *pid).collect())
+}
+
+/// O pid do servidor na variável `TMUX` de um pane (`<socket>,<pid do servidor>,<sessão>`).
+fn tmux_server_of(value: &str) -> Option<i64> {
+    value.split(',').nth(1)?.trim().parse().ok()
+}
+
+/// Quem herda o órfão cujo pai saiu: o init ou o gerenciador de serviços do usuário. O agente com pai vivo
+/// noutro lugar (um terminal aberto de dentro do pane, com a `TMUX` herdada) não é órfão.
+fn is_reaper(pid: i64, argv0: Option<&str>) -> bool {
+    pid == 1 || argv0.is_some_and(|arg| Path::new(arg).file_name().is_some_and(|name| name == "systemd"))
+}
+
+/// Os processos abaixo de `root`.
+fn descendants(children: &crate::list::procs::ChildrenMap, root: i64) -> HashSet<i64> {
+    let mut seen = HashSet::new();
+    let mut queue: Vec<i64> = children.get(&root).cloned().unwrap_or_default();
+    while let Some(pid) = queue.pop() {
+        if seen.insert(pid) { queue.extend(children.get(&pid).into_iter().flatten().copied()); }
+    }
+    seen
+}
+
+/// Prazo para o agente órfão sair depois do `SIGTERM`, e depois do `SIGKILL`.
+const ORPHAN_EXIT: Duration = Duration::from_secs(5);
+const ORPHAN_KILL: Duration = Duration::from_secs(2);
+
+/// Encerra os processos (pid, nascimento) e espera saírem; `false` se algum seguiu vivo. Só recebe sinal quem
+/// ainda tem o nascimento lido antes: o pid que saiu no meio e foi reaproveitado não é dele.
+#[cfg(unix)]
+async fn end_orphans(targets: &[(i64, f64)], born: impl Fn(i64) -> Option<f64>) -> bool {
+    let alive = |(pid, at): (i64, f64)| born(pid).is_some_and(|now| (now - at).abs() < 1.0);
+    let send = |signal: i32| for &target in targets {
+        if alive(target) && let Ok(pid) = i32::try_from(target.0) { unsafe { libc::kill(pid, signal); } }
+    };
+    for (signal, wait) in [(libc::SIGTERM, ORPHAN_EXIT), (libc::SIGKILL, ORPHAN_KILL)] {
+        send(signal);
+        let deadline = tokio::time::Instant::now() + wait;
+        while targets.iter().any(|&t| alive(t)) && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if !targets.iter().any(|&t| alive(t)) { return true; }
+    }
+    false
+}
+
+#[cfg(not(unix))]
+async fn end_orphans(_targets: &[(i64, f64)], _born: impl Fn(i64) -> Option<f64>) -> bool { false }
+
+/// Antes do `--resume`: a conversa presa num agente vivo não ganha um segundo processo. Só o agente cujo
+/// servidor tmux já acabou sai; dentro do servidor de agora, ou fora do tmux, a restauração recua.
+async fn release_conversation(st: &crate::routes::AppState, program: &std::ffi::OsStr, entry: &Entry) -> Result<(), String> {
+    if entry.provider != AgentProvider::Claude || cfg!(windows) { return Ok(()); }
+    let Some(sid) = entry.conversation.clone() else { return Ok(()) };
+    let server = server_pid(program).await.map(i64::from);
+    let list = st.list.clone();
+    let looked_sid = sid.clone();
+    let looked = tokio::task::spawn_blocking(move || {
+        let (dirs, _) = list.state_dirs_blocking().map_err(|e| e.code.to_owned())?;
+        let procs = list.env().procs.clone();
+        // Pid reaproveitado por outro programa não é dono da conversa.
+        let claude = |argv: &[String]| argv.iter().any(|arg| Path::new(arg).file_name().is_some_and(|n| n.to_string_lossy().starts_with("claude")));
+        let pids: Vec<i64> = crate::list::facts_files::native_pids(&dirs, &looked_sid).into_iter()
+            .filter(|pid| procs.start_time(*pid).is_some() && claude(&procs.argv(*pid))).collect();
+        if pids.is_empty() { return Ok((dirs, Vec::new())); }
+        let children = procs.children(Duration::ZERO).map_err(|_| "restore_procs_unreadable".to_owned())?;
+        let inside = server.map(|pid| descendants(&children, pid)).unwrap_or_default();
+        let parent = |pid: i64| children.iter().find(|(_, kids)| kids.contains(&pid)).map(|(parent, _)| *parent);
+        let holders = pids.into_iter().map(|pid| {
+            let seat = if inside.contains(&pid) { Seat::Inside } else {
+                let dead = procs.env_var(pid, "TMUX").ok().flatten().and_then(|v| tmux_server_of(&v.to_string_lossy()))
+                    .is_some_and(|owner| procs.start_time(owner).is_none());
+                let reaped = parent(pid).is_some_and(|p| is_reaper(p, procs.argv(p).first().map(String::as_str)));
+                if dead && reaped { Seat::DeadServer } else { Seat::Elsewhere }
+            };
+            let below: Vec<(i64, f64)> = descendants(&children, pid).into_iter().filter_map(|p| Some((p, procs.start_time(p)?))).collect();
+            (pid, seat, procs.start_time(pid), below)
+        }).collect::<Vec<_>>();
+        Ok::<_, String>((dirs, holders))
+    }).await.map_err(|_| "restore_spec_job".to_owned())?;
+    let (dirs, holders) = looked?;
+    let seats: Vec<(i64, Seat)> = holders.iter().map(|(pid, seat, _, _)| (*pid, *seat)).collect();
+    match verdict(&seats) {
+        Holders::Free => Ok(()),
+        Holders::AlreadyOpen => Err(ALREADY_OPEN.into()),
+        Holders::Open => Err("restore_conversation_open".into()),
+        Holders::Orphans(pids) => {
+            // As ferramentas e os servidores MCP do órfão saem junto: seguiriam mexendo na pasta da sessão retomada.
+            let mut targets: Vec<(i64, f64)> = holders.iter().filter_map(|(pid, _, born, _)| Some((*pid, (*born)?))).collect();
+            let below: Vec<(i64, f64)> = holders.into_iter().flat_map(|(_, _, _, below)| below).filter(|(pid, _)| !pids.contains(pid)).collect();
+            targets.extend(below.iter().copied());
+            let procs = st.list.env().procs.clone();
+            let ended = end_orphans(&targets, |pid| procs.start_time(pid)).await;
+            if ended {
+                // O `SIGKILL` não deixa o agente apagar o registro nativo dele, e o pid reaproveitado o faria contar como vivo.
+                let (dirs, sid, agents) = (dirs, sid, pids.clone());
+                let _ = tokio::task::spawn_blocking(move || crate::list::facts_files::forget_native(&dirs, &sid, &agents)).await;
+            }
+            crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[json!({"evento": "session.restore_orphans_ended",
+                "nivel": if ended { "aviso" } else { "erro" }, "sessao": entry.name, "pids": pids, "descendants": below.len(), "ended": ended,
+                "detalhe": "agentes da conversa de um servidor tmux acabado, encerrados antes de retomá-la"})], "restore");
+            if ended { Ok(()) } else { Err("restore_conversation_running".into()) }
+        }
+    }
+}
+
+/// A conversa já está aberta no servidor de agora: a restauração é pulada, sem erro.
+pub(crate) const ALREADY_OPEN: &str = "restore_already_open";
+
 /// O agente que demora fica para a reconferência; a continuação do turno cortado é de quem chama (`continue_later`).
 pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry,
                                 orphan: Option<&super::fallen::Fallen>) -> Result<(), String> {
-    let mut result = reopen(host, key, entry, orphan).await;
+    let mut result = match release_conversation(st, program, entry).await {
+        Ok(()) => reopen(host, key, entry, orphan).await,
+        Err(code) => Err(code),
+    };
     // Restaurada é o agente de pé: o `new-session` volta antes de o shell soltar o comando.
     if result.is_ok() && entry.provider != AgentProvider::Codex {
         match agent_up(program, &entry.name, AGENT_WAIT).await {
@@ -767,7 +1051,12 @@ pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::ro
     }
     if result.is_ok() { super::fallen::remove(super::open::OpenHost::home(host), &entry.name); }
     let mut event = json!({"evento": "sessao.restaurada", "nivel": "ok", "sessao": entry.name, "provider": entry.provider.name()});
-    if let Err(code) = &result {
+    if let Err(code) = &result && code == ALREADY_OPEN {
+        event["evento"] = json!("sessao.restauro_pulada");
+        event["nivel"] = json!("aviso");
+        event["codigo"] = json!(code);
+        event["detalhe"] = json!("a conversa já está aberta no servidor de agora");
+    } else if let Err(code) = &result {
         tracing::warn!(session = %entry.name, code = %code, "sessão com terminal não restaurada");
         event["evento"] = json!("sessao.restauro_falhou");
         event["nivel"] = json!("erro");
@@ -796,6 +1085,9 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
     let mut legacy = false;
     // As que abriram sem o agente aparecer: reconferidas a cada passada, com o boot do turno a continuar.
     let mut waiting: Vec<LateAgent> = Vec::new();
+    // A última recusa por servidor antigo vivo que foi ao diário: uma linha por situação, não uma por passada.
+    let mut told: Option<Lost> = None;
+    let mut revives = 0;
     loop {
         waiting = recheck(&st, &program, std::mem::take(&mut waiting)).await;
         let (current, count) = mux_now(&program).await;
@@ -803,11 +1095,49 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
         if let Some(names) = &live { super::fallen::forget_live(&home, names); }
         super::orphans::scan(&home, &snap).await;
         if cfg!(windows) && windows.is_none() { windows = windows_startup(current, &snap); }
+        if !cfg!(windows) && !snap.stranded.is_empty() {
+            let now_pid = server_pid(&program).await;
+            let servers: Vec<(u64, Option<u32>)> = snap.stranded.iter().map(|old| (old.mux_started, old.mux_pid)).collect();
+            let gone = tokio::task::spawn_blocking(move || servers.into_iter()
+                .map(|(started, pid)| previous_server(started, pid, now_pid) == Previous::Gone).collect::<Vec<_>>()).await.unwrap_or_default();
+            if unstrand(&mut snap, &gone) {
+                // A contagem era do servidor de agora: não diz que a última sessão do antigo terminou sozinha.
+                last_count = None;
+                tracing::info!(code = "mux_stranded_gone", "o servidor antigo do multiplexador acabou; as sessões dele voltam a ser restauradas");
+                if let Err(error) = write(&home, &snap) {
+                    tracing::warn!(code = "session_restore_unwritten", kind = ?error.kind(), "fotografia das sessões não gravada");
+                }
+            }
+        }
         let discovered=live.is_some();
         let same = if cfg!(windows) { windows == Some(false) } else { matches!(current, MuxStart::Started(at) if snap.mux_started == Some(at)) };
         // Restaurando no Windows: volta tudo o que não está vivo, como na subida sem servidor.
         let current = if cfg!(windows) && windows == Some(true) { MuxStart::NoServer } else { current };
         hold(&snap, same);
+        // O servidor da fotografia vivo nunca ganha outro por cima: os agentes dele ficariam órfãos e em dobro.
+        if !same && !cfg!(windows) && let Some(started) = snap.mux_started {
+            let now_pid = if matches!(current, MuxStart::Started(_)) { server_pid(&program).await } else { None };
+            let recorded = snap.mux_pid;
+            let previous = tokio::task::spawn_blocking(move || previous_server(started, recorded, now_pid)).await.unwrap_or(Previous::Unsure);
+            let mut lost = on_lost(current, previous);
+            if matches!(lost, Lost::Revive(_)) && revives >= REVIVE_TRIES { lost = Lost::Leave; }
+            if lost != Lost::Restore {
+                let signaled = matches!(lost, Lost::Revive(pid) if revive(pid));
+                if matches!(lost, Lost::Revive(_)) { revives += 1; }
+                if told != Some(lost) { note_previous_alive(lost, signaled, snap.sessions.len()); told = Some(lost); }
+                readiness.finish();
+                if lost == Lost::Leave && let MuxStart::Started(at) = current {
+                    let old = match previous { Previous::Alive(pid) => Some(pid), _ => snap.mux_pid };
+                    strand(&mut snap, old, at, now_pid);
+                    if let Err(error) = write(&home, &snap) {
+                        tracing::warn!(code = "session_restore_unwritten", kind = ?error.kind(), "fotografia das sessões não gravada");
+                    }
+                }
+                tokio::time::sleep(if signaled { Duration::from_secs(1) } else { EVERY }).await;
+                continue;
+            }
+        }
+        (told, revives) = (None, 0);
         match (same, live.and_then(|live| to_restore(&snap, current, &live))) {
             (true, _) => {
                 if discovered && waiting.is_empty() {readiness.finish();}
@@ -839,7 +1169,7 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
             (false, Some(_)) if ended_by_itself(&mut snap, last_count.take(), stopping().await) => {
                 readiness.finish();
                 tracing::info!("a última sessão do multiplexador terminou sozinha; nada a restaurar");
-                if let MuxStart::Started(at) = current { snap.mux_started = Some(at); }
+                if let MuxStart::Started(at) = current { (snap.mux_started, snap.mux_pid) = (Some(at), server_pid(&program).await); }
                 if let Err(error) = write(&home, &snap) {
                     tracing::warn!(code = "session_restore_unwritten", kind = ?error.kind(), "fotografia das sessões não gravada");
                 }
@@ -879,7 +1209,7 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
                         attempts.clear();
                         done.clear();
                     } else if let MuxStart::Started(at) = mux_start(&program).await {
-                        snap.mux_started = Some(at);
+                        (snap.mux_started, snap.mux_pid) = (Some(at), server_pid(&program).await);
                         attempts.clear();
                         done.clear();
                     }
@@ -956,6 +1286,99 @@ mod tests {
             name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
             auto_continue_off: false };
         super::super::record::write(home, &spec).unwrap();
+    }
+
+    /// Servidor da fotografia vivo: nunca outro por cima. Sem servidor no socket, ele recria o socket; com
+    /// outro já lá, ou na dúvida sobre qual é, fica como está. Só o acabado (ou o tmux calado) segue o caminho de sempre.
+    #[test]
+    fn a_live_previous_server_is_revived_never_replaced() {
+        assert_eq!(on_lost(MuxStart::NoServer, Previous::Gone), Lost::Restore);
+        assert_eq!(on_lost(MuxStart::Started(50), Previous::Gone), Lost::Restore);
+        assert_eq!(on_lost(MuxStart::NoServer, Previous::Alive(1501)), Lost::Revive(1501));
+        assert_eq!(on_lost(MuxStart::Started(50), Previous::Alive(1501)), Lost::Leave);
+        assert_eq!(on_lost(MuxStart::NoServer, Previous::Unsure), Lost::Leave);
+        assert_eq!(on_lost(MuxStart::Unknown, Previous::Alive(1501)), Lost::Restore, "tmux calado: o restore só espera, como antes");
+    }
+
+    /// Só o agente de servidor tmux acabado sai antes do `--resume`; dentro do servidor de agora ou fora
+    /// do tmux, a restauração recua sem encerrar nada.
+    #[test]
+    fn the_conversation_is_resumed_only_when_no_reachable_agent_holds_it() {
+        assert_eq!(verdict(&[]), Holders::Free);
+        assert_eq!(verdict(&[(806_094, Seat::DeadServer)]), Holders::Orphans(vec![806_094]));
+        assert_eq!(verdict(&[(806_094, Seat::DeadServer), (11, Seat::Inside)]), Holders::AlreadyOpen);
+        assert_eq!(verdict(&[(11, Seat::Inside), (7, Seat::Elsewhere)]), Holders::Open);
+        assert_eq!(verdict(&[(806_094, Seat::DeadServer), (7, Seat::Elsewhere)]), Holders::Open);
+        assert_eq!(tmux_server_of("/tmp/tmux-1000/default,1501,6"), Some(1501));
+        assert_eq!(tmux_server_of("lixo"), None);
+        let children: crate::list::procs::ChildrenMap = [(1, vec![10]), (10, vec![11]), (2, vec![20])].into();
+        assert_eq!(descendants(&children, 1), [10, 11].into());
+        assert!(descendants(&children, 99).is_empty());
+        assert!(is_reaper(1, Some("/sbin/init")));
+        assert!(is_reaper(1500, Some("/usr/lib/systemd/systemd")));
+        assert!(!is_reaper(4321, Some("/usr/bin/fish")), "pai vivo noutro terminal: o agente não é órfão");
+        assert!(!is_reaper(4321, None));
+    }
+
+    /// Com o pid gravado, só ele e nascido perto da hora do servidor da fotografia; sem ele, pelo nascimento.
+    /// O servidor de agora nunca conta.
+    #[test]
+    fn the_previous_server_is_the_recorded_pid_born_at_the_snapshot_time() {
+        let servers = [(1501, 1000), (1502, 5000), (1503, 1001), (1504, 1030)];
+        assert_eq!(classify_previous(1000, Some(1501), Some(1502), &servers), Previous::Alive(1501));
+        assert_eq!(classify_previous(1000, Some(1504), None, &servers), Previous::Alive(1504), "o relógio andou depois que ele subiu");
+        assert_eq!(classify_previous(1000, Some(1502), None, &servers), Previous::Gone, "pid reaproveitado depois do reboot");
+        assert_eq!(classify_previous(1000, Some(1501), Some(1501), &servers), Previous::Gone, "o de agora");
+        assert_eq!(classify_previous(1000, Some(9), None, &servers), Previous::Gone);
+        assert_eq!(classify_previous(1000, None, None, &servers), Previous::Unsure);
+        assert_eq!(classify_previous(1030, None, None, &servers), Previous::Alive(1504));
+        assert_eq!(classify_previous(1000, None, Some(1503), &servers), Previous::Alive(1501));
+        assert_eq!(classify_previous(3000, None, None, &servers), Previous::Gone);
+    }
+
+    /// O servidor antigo vivo com outro no socket: as sessões dele ficam à parte, seguras e fora da ausência, e
+    /// voltam a ser restauradas quando ele acaba; a que reabriu no de agora deixa de esperar.
+    #[test]
+    fn the_sessions_of_a_live_previous_server_wait_for_it_to_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut snap = Snapshot { mux_started: Some(1000), mux_pid: Some(77), stranded: Vec::new(),
+            sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", Some("c2"))),
+                ("k0".into(), Entry { missing_since: Some(5.0), ..entry("z", Some("c0")) })].into() };
+        strand(&mut snap, Some(77), 2000, Some(88));
+        assert_eq!((snap.mux_started, snap.mux_pid), (Some(2000), Some(88)));
+        assert!(snap.sessions.is_empty());
+        let alive: BTreeMap<String, Entry> = [("k3".into(), entry("c", Some("c3")))].into();
+        let next = observe(&snap, &alive, 10.0, Some(2000));
+        let next = observe(&next, &alive, 10.0 + ABSENT * 2.0, Some(2000));
+        assert!(vanished(&snap, &next, &[]).is_empty());
+        assert_eq!(next.stranded[0].sessions.keys().collect::<Vec<_>>(), ["k1", "k2"]);
+        assert!(next.stranded[0].sessions.values().all(|e| e.missing_since.is_none()));
+        assert_eq!(held_names(&next, true), ["a", "b"]);
+        let reopened: BTreeMap<String, Entry> = [("k3".into(), entry("c", Some("c3"))), ("k9".into(), entry("a", Some("c1")))].into();
+        let mut next = observe(&next, &reopened, 20.0, Some(2000));
+        assert_eq!(next.stranded[0].sessions.keys().collect::<Vec<_>>(), ["k2"]);
+        write(dir.path(), &next).unwrap();
+        assert_eq!(read(dir.path()), next, "a fotografia guarda as que esperam");
+        assert!(!unstrand(&mut next, &[false]));
+        next.sessions.get_mut("k3").unwrap().missing_since = Some(15.0);
+        assert!(unstrand(&mut next, &[true]));
+        assert!(next.stranded.is_empty());
+        assert_eq!((next.mux_started, next.mux_pid), (Some(1000), Some(77)));
+        let live: HashSet<String> = ["a".to_owned()].into();
+        let keys = |p: Option<Vec<(String, Entry)>>| p.map(|v| v.into_iter().map(|(k, _)| k).collect::<Vec<_>>());
+        assert_eq!(keys(to_restore(&next, MuxStart::Started(2000), &live)), Some(vec!["k2".to_owned()]));
+    }
+
+    /// Fechada de propósito, sai também da espera pelo servidor antigo.
+    #[test]
+    fn forget_drops_a_waiting_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let stranded = vec![Stranded { mux_started: 1000, mux_pid: Some(77), sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", None))].into() }];
+        write(dir.path(), &Snapshot { mux_started: Some(2000), mux_pid: None, stranded, sessions: BTreeMap::new() }).unwrap();
+        forget(dir.path(), "a");
+        assert_eq!(read(dir.path()).stranded[0].sessions.keys().collect::<Vec<_>>(), ["k2"]);
+        forget(dir.path(), "b");
+        assert!(read(dir.path()).stranded.is_empty());
     }
 
     /// O arquivo gravado antes destes campos lê como turno fechado: nada continua depois do reboot.
@@ -1130,7 +1553,7 @@ mod tests {
     /// restaura; com servidor vivo nunca, e sem resposta do psmux a decisão espera.
     #[test]
     fn on_windows_only_a_start_without_any_psmux_server_restores() {
-        let full = Snapshot { mux_started: Some(10), sessions: BTreeMap::from([("k".repeat(32), entry("s1", Some("c1")))]) };
+        let full = Snapshot { mux_started: Some(10), mux_pid: None, stranded: Vec::new(), sessions: BTreeMap::from([("k".repeat(32), entry("s1", Some("c1")))]) };
         let empty = Snapshot::default();
         assert_eq!(windows_startup(MuxStart::NoServer, &full), Some(true));
         assert_eq!(windows_startup(MuxStart::NoServer, &empty), Some(false));
@@ -1143,7 +1566,7 @@ mod tests {
     /// volta; com mais sessões de uma vez, no desligamento ou sem a contagem vista nesta execução, é queda.
     #[test]
     fn a_server_that_ended_with_its_last_session_brings_nothing_back() {
-        let snap = Snapshot { mux_started: Some(10), sessions: BTreeMap::from([("k".repeat(32), entry("s1", Some("c1")))]) };
+        let snap = Snapshot { mux_started: Some(10), mux_pid: None, stranded: Vec::new(), sessions: BTreeMap::from([("k".repeat(32), entry("s1", Some("c1")))]) };
         for (count, stopping, ended) in [(Some(1), false, true), (Some(2), false, false), (Some(1), true, false), (None, false, false)] {
             let mut after = snap.clone();
             assert_eq!(ended_by_itself(&mut after, count, stopping), ended, "{count:?} {stopping}");
@@ -1188,7 +1611,7 @@ mod tests {
 
     #[test]
     fn only_another_multiplexer_server_restores_and_never_over_a_live_name() {
-        let snap = Snapshot { mux_started: Some(1000), sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", Some("c2")))].into() };
+        let snap = Snapshot { mux_started: Some(1000), mux_pid: None, stranded: Vec::new(), sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", Some("c2")))].into() };
         let keys = |p: Option<Vec<(String, Entry)>>| p.map(|v| v.into_iter().map(|(k, _)| k).collect::<Vec<_>>());
         assert_eq!(keys(to_restore(&snap, MuxStart::Started(1000), &HashSet::new())), Some(vec![]), "o mesmo servidor: só o Rust reiniciou");
         let live: HashSet<String> = ["a".to_owned()].into();
@@ -1211,7 +1634,7 @@ mod tests {
     /// A sessão que some do multiplexador sem o `DELETE` do dono vai ao diário uma vez, quando some.
     #[test]
     fn a_session_that_vanishes_without_a_close_is_named_once() {
-        let prev = Snapshot { mux_started: Some(1), sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", Some("c2"))),
+        let prev = Snapshot { mux_started: Some(1), mux_pid: None, stranded: Vec::new(), sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", Some("c2"))),
             ("k3".into(), Entry { missing_since: Some(5.0), ..entry("c", None) })].into() };
         let next = observe(&prev, &BTreeMap::new(), 10.0, Some(1));
         let gone: Vec<(String, String, Option<String>)> = vanished(&prev, &next, &["b".to_owned()]).into_iter()
@@ -1263,7 +1686,7 @@ mod tests {
     #[test]
     fn a_session_closed_on_purpose_leaves_the_snapshot_at_once() {
         let dir = tempfile::tempdir().unwrap();
-        let snap = Snapshot { mux_started: Some(1), sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", Some("c2")))].into() };
+        let snap = Snapshot { mux_started: Some(1), mux_pid: None, stranded: Vec::new(), sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", Some("c2")))].into() };
         write(dir.path(), &snap).unwrap();
         forget(dir.path(), "a");
         assert_eq!(read(dir.path()).sessions.keys().collect::<Vec<_>>(), ["k2"], "o arquivo, já");
@@ -1276,7 +1699,7 @@ mod tests {
 
     #[test]
     fn the_names_waiting_for_the_restore_count_as_alive_until_it_settles() {
-        let snap = Snapshot { mux_started: Some(1), sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", None))].into() };
+        let snap = Snapshot { mux_started: Some(1), mux_pid: None, stranded: Vec::new(), sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", None))].into() };
         hold(&snap, false);
         assert_eq!(held(), ["a", "b"]);
         hold(&snap, true);

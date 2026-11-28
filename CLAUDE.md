@@ -1021,6 +1021,9 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `--resume` explícito, subcomando e flag desconhecida seguem com o CLI cru. Depois de reboot ou
   queda do tmux o Rust restaura as sessões com terminal pelo spec (`~/.hangar/session-restore.json`,
   comando no `new-session`, nunca digitado no shell); o tmux-resurrect pula as sessões do Hangar.
+  Servidor tmux da fotografia ainda vivo nunca ganha outro por cima (sem socket, `SIGUSR1` o faz
+  recriá-lo), e a conversa presa num agente vivo não ganha um segundo processo pelo `--resume`;
+  a lista não escolhe entre dois registros nativos vivos da mesma conversa. [Motivo](docs/decisoes/plataforma.md#servidor-tmux-antigo-vivo-não-ganha-outro-por-cima-27112026).
   Sessão que bate o limite de uso troca de conta sozinha pela reabertura (só Claude). Login recusado
   segue o mesmo vigia: com login no disco reabre uma vez na mesma conta; recusou de novo ou o login
   sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. Não há lançador

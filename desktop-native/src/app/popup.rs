@@ -363,14 +363,18 @@ pub(super) fn install_kit_surface(cx: &mut App) {
 
 /// O mesmo cartão para confirmações e formulários; o kit continua cuidando do foco, da altura e da rolagem.
 pub(crate) fn dialog(surface: Dialog) -> Dialog {
-    let surface = surface.p(px(20.)).rounded(px(16.)).bg(theme::popup_fill(theme::raised()))
-        .border_color(theme::glass_border());
+    let surface = gpui_kit::component::StyledExt::refine_style(surface, &dialog_surface_look());
     if appearance::get().surface_material == appearance::SurfaceMaterial::Glass {
         surface.bg(transparent_black()).border_color(transparent_black()).background_painter(|bounds, window, _| {
             chrome::paint_glass(bounds, px(16.), window);
             window.paint_quad(quad(bounds, px(16.), theme::popup_fill(theme::raised()), px(1.), theme::glass_border(), BorderStyle::Solid));
         })
     } else { surface }
+}
+
+/// A superfície sólida do diálogo: a miniatura da novidade desenha o alerta num `div` com ela.
+pub(crate) fn dialog_surface_look() -> StyleRefinement {
+    StyleRefinement::default().p(px(20.)).rounded(px(16.)).bg(theme::popup_fill(theme::raised())).border_color(theme::glass_border())
 }
 
 /// Título de seção do popover, em caixa alta miúda; a tecla, quando há, fica à direita.
