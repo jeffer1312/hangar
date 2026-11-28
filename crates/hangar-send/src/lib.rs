@@ -91,10 +91,12 @@ pub fn run(invocation: &Invocation, host: &dyn Host, out: &mut dyn Write, err: &
         Some("--close") => group::close(&cx, &args[1..], out, err),
         Some("--contrato") => group::contract(&cx, &args[1..], out, err),
         Some("--group") => group::group(&cx, &args[1..], out, err),
+        Some("--responder") => answer::run(&cx, &args[1..], out, err),
         _ => message::run(&cx, args, out, err),
     }
 }
 
+mod answer;
 mod env;
 mod group;
 mod http;
@@ -145,6 +147,10 @@ impl Ctx<'_> {
 
     pub fn fetch(&self, endpoint: &Endpoint, method: &str, path: &str, body: Option<&str>) -> http::Fetched {
         self.runtime.block_on(http::fetch(endpoint, method, path, body))
+    }
+
+    pub fn fetch_with(&self, endpoint: &Endpoint, method: &str, path: &str, body: Option<&str>, headers: &[(&str, String)]) -> http::Fetched {
+        self.runtime.block_on(http::fetch_with(endpoint, method, path, body, headers))
     }
 
     pub fn api(&self, endpoint: &Endpoint, method: &str, path: &str, body: Option<&str>, err: &mut dyn Write) -> Result<Vec<u8>, u8> {

@@ -1,6 +1,7 @@
 //! Servidor MCP `hangar` em `/mcp/`: as operações do `hangar-send`/`hangar-preview` como tools.
 //! Cada tool chama a mesma rota pública que o CLI chama, por dentro do processo; rota que ainda é do
 //! Python segue a ele num sentido, pelo repasse do próprio roteador.
+mod child_answer;
 pub mod identity;
 mod integrations;
 mod nav;
@@ -200,8 +201,11 @@ fn integration_cancel_message(external_started: bool) -> &'static str {
 
 /// `/mcp` e `/mcp/` sobre `api`, o roteador público inteiro: é por ele que as tools chamam as rotas.
 pub fn router(st: Arc<AppState>, api: Router) -> Router {
-    let service = service(Handler { tools: Arc::new(tools::Tools::new(st.clone(), api)) });
+    let tools = Arc::new(tools::Tools::new(st.clone(), api));
+    let service = service(Handler { tools: tools.clone() });
+    // A resposta à filha pelo `hangar-send` mora aqui: é a mesma função da tool, sobre o mesmo roteador.
     Router::new().route_service("/mcp", service.clone()).route_service("/mcp/", service)
+        .merge(child_answer::router(tools))
         .layer(axum::middleware::from_fn_with_state(st, gate))
 }
 
