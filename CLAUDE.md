@@ -1143,9 +1143,9 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `[de: <id B>::filha]`, pela rede, com a mesma fila de 2 h; só Claude e Codex), por uma assinatura
   interna da lista que não conta como app aberto; sem esperar bloqueante. A pergunta
   (`AskUserQuestion`) da filha desta máquina chega ao pai uma vez por `interaction_id` e é respondida
-  por `child_answer`; menu e permissão só avisam. Respondida pelo dono na filha, o pai sabe pelo ID: a
-  pergunta de repasse dele com `metadata.source` `hangar-child:<id>` é respondida pelo servidor, senão
-  vai um recado. Parar (botão e tool `interrupt`) para só a sessão,
+  por `child_answer`; menu e permissão só avisam. Respondida pelo dono na filha, o pai sabe pela chamada
+  (`tool_use_id`), com o resultado dela no transcript: a pergunta de repasse dele com `metadata.source`
+  `hangar-child:<chamada>` é respondida pelo servidor, senão vai um recado. Parar (botão e tool `interrupt`) para só a sessão,
   nunca as filhas. Fechar o pai com filhas abertas pergunta antes se fecha também as filhas; fechar só
   o pai, pelo dono e com a morte confirmada, interrompe as filhas (pelo convidado, não) e as mantém
   abertas; toda saída do grupo grava `orphaned_from` nelas. Pai com filha ligada noutra máquina não

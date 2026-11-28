@@ -123,12 +123,27 @@ struct Sidecar { tool_input: ToolInput, #[serde(default)] tool_use_id: Option<St
 #[derive(Deserialize)]
 struct ToolInput { questions: Vec<AskQuestionItem> }
 
-/// `metadata.source` do AskUserQuestion no registro do hook, que o dono não vê; `hangar-child:<id>` marca o repasse
-/// da pergunta de uma filha ligada. Registro ausente, ilegível ou sem a marca é `None`.
-pub fn pending_source(jsonl: &Path) -> Option<String> {
-    let bytes = std::fs::read(sidecar_path(jsonl)?).ok()?;
+fn revision_of(stamp: &str, bytes: &[u8]) -> String {
+    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+    digest.update(stamp.as_bytes());
+    digest.update(bytes);
+    digest.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A chamada (`tool_use_id`) e a marca de repasse (`metadata.source`, que o dono não vê) da pergunta publicada.
+#[derive(Debug, Default, PartialEq)]
+pub struct Marks { pub tool_use_id: Option<String>, pub source: Option<String> }
+
+/// As marcas do registro do hook, só enquanto ele é a revisão em que a pergunta foi publicada: outra pergunta gravada
+/// por cima não empresta as dela.
+pub fn marks(jsonl: &Path, revision: &str) -> Option<Marks> {
+    let path = sidecar_path(jsonl)?;
+    let stamp = file_stamp(&std::fs::metadata(&path).ok()?).ok()?;
+    let bytes = std::fs::read(&path).ok()?;
+    if revision_of(&stamp, &bytes) != revision { return None; }
     let sidecar: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    sidecar["tool_input"]["metadata"]["source"].as_str().map(str::to_owned)
+    let text = |v: &serde_json::Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+    Some(Marks { tool_use_id: text(&sidecar["tool_use_id"]), source: text(&sidecar["tool_input"]["metadata"]["source"]) })
 }
 
 /// Pergunta pendente do sidecar. Ausente é o caso normal (`Ok(None)`); `Err` é o código de um
@@ -240,10 +255,7 @@ pub fn read_revision(jsonl: &Path) -> Result<Option<(AskQuestion, String)>, Stri
         Err(e) if e.kind() == ErrorKind::NotFound => { consumed.remove(&path); return Ok(None); },
         Err(e) => return Ok(unusable(&path, "askq_unreadable", Some(e.kind()))),
     };
-    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
-    digest.update(stamp.as_bytes());
-    digest.update(&bytes);
-    let revision: String = digest.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect();
+    let revision = revision_of(&stamp, &bytes);
     // A publicação nunca combina a leitura de A com a revisão de B.
     match std::fs::read(&path) {
         Ok(current) if current == bytes && std::fs::metadata(&path).ok().and_then(|m| file_stamp(&m).ok()).as_ref() == Some(&stamp) => {},
@@ -682,21 +694,25 @@ mod tests {
         assert_eq!(observe_screen_menu(&store, &binding, &jsonl, PLAN), Err("plan_notice_missing".to_owned()));
     }
 
-    /// A marca de repasse (`metadata.source`) do registro do hook vai à pergunta publicada; metadado torto não a derruba.
+    /// Chamada e marca de repasse saem da revisão publicada; metadado torto não derruba a pergunta.
     #[test]
     fn the_sidecar_source_reaches_the_question() {
         let dir = tempfile::tempdir().unwrap();
         let jsonl = dir.path().join("projects/p/sid-fonte.jsonl");
         let askq = sidecar_path(&jsonl).unwrap();
         std::fs::create_dir_all(askq.parent().unwrap()).unwrap();
-        let sidecar = |metadata: &str| format!(r#"{{"tool_input":{{"questions":[{{"question":"Cor?","header":"Cor","multiSelect":false,
+        let sidecar = |metadata: &str| format!(r#"{{"tool_use_id":"toolu_fonte_1","tool_input":{{"questions":[{{"question":"Cor?","header":"Cor","multiSelect":false,
             "options":[{{"label":"Azul"}}]}}],"metadata":{metadata}}}}}"#);
-        assert_eq!(pending_source(&jsonl), None, "sem registro");
-        std::fs::write(&askq, sidecar(r#"{"source":"hangar-child:q1"}"#)).unwrap();
-        assert_eq!(pending_source(&jsonl).as_deref(), Some("hangar-child:q1"));
+        assert_eq!(marks(&jsonl, "x"), None, "sem registro");
+        std::fs::write(&askq, sidecar(r#"{"source":"hangar-child:toolu_fonte_1"}"#)).unwrap();
+        let (_, revision) = read_revision(&jsonl).unwrap().unwrap();
+        assert_eq!(marks(&jsonl, &revision), Some(Marks { tool_use_id: Some("toolu_fonte_1".into()), source: Some("hangar-child:toolu_fonte_1".into()) }));
+        // Outra pergunta gravada por cima não empresta as marcas à publicada.
+        std::fs::write(&askq, sidecar(r#"{"source":"hangar-child:toolu_fonte_2"}"#).replace("toolu_fonte_1", "toolu_fonte_2")).unwrap();
+        assert_eq!(marks(&jsonl, &revision), None);
         std::fs::write(&askq, sidecar("5")).unwrap();
-        assert_eq!(pending_source(&jsonl), None);
-        assert_eq!(read_pending(&jsonl).unwrap().expect("a pergunta segue sem a marca").questions.len(), 1);
+        let (question, revision) = read_revision(&jsonl).unwrap().expect("a pergunta segue sem a marca");
+        assert_eq!((question.questions.len(), marks(&jsonl, &revision).unwrap().source), (1, None));
     }
 
     #[test]

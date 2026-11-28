@@ -4447,23 +4447,33 @@ ninguém.
   `[painel: …]`: o painel diz "não responda".
 - **`child_answer` passa pela `/answer` com o `interaction_id` do aviso.** Codex com terminal não
   informa quem resolveu: a resposta sai "enviada, sem confirmação" e não se tenta de novo.
-- **Pergunta respondida na filha chega ao pai, só pelo ID (28/11/2026).** Caso: o pai `x-respostas`
+- **Pergunta respondida na filha chega ao pai, pela chamada (28/11/2026).** Caso: o pai `x-respostas`
   (Claude sem terminal) repassou ao dono, num `AskUserQuestion` próprio, a pergunta de
   `site-hangar-atualizar`; o dono respondeu na filha e o cartão do pai ficou aberto (recado não entra
   com pergunta aberta). Respondido depois no pai, o `child_answer` voltou `erro_interacao_desatualizada`,
-  o pai mandou a resposta por recado e a filha a leu como conflito e perguntou de novo. Agora o aviso de
-  pergunta pede, para repassar ao dono, `AskUserQuestion` com `metadata {source: "hangar-child:<id>"}`:
-  o dono não vê o campo, ele chega ao registro `.hangar-askq/` (com terminal) e ao `control_request`
-  (sem terminal) e vai à linha em `ask_form.source`. O `child_answer` grava `parent_answered` no
-  `link-returns.json` antes da rota (a pergunta pode fechar já na resposta) e o tira só na recusa clara.
-  A pergunta avisada que fecha sem essa marca foi respondida na filha: a vigia lê a resposta na conversa
-  dela (o resultado do `AskUserQuestion` ou do `request_user_input`, até 1 000 caracteres, esperando
-  até 10 s pelo transcript) e, se o pai tem pergunta aberta com a marca, a responde pelo `/answer` com o
-  `interaction_id` publicado, em texto livre; senão manda `[de: <filha>] a pergunta (interaction_id …)
-  foi respondida pelo dono na filha: … Não responda nem repita.` pela entrega normal. Nunca casar pela
-  redação da pergunta: modelo que não pôs a marca recebe o recado. O aviso tirado da fila antes de
-  entregar não conta, porque o pai não o leu. O Codex não tem `request_user_input` no modo Default:
-  pergunta em texto, não fica parado, e recebe o recado.
+  o pai mandou a resposta por recado e a filha a leu como conflito e perguntou de novo.
+  - A pergunta é identificada pelo `tool_use_id` da chamada, não pelo `interaction_id`, que nasce outro
+    ao reabrir: a mesma chamada com ID novo é a mesma pergunta, avisada de novo com o ID novo. A chamada
+    vem do `control_request` (sem terminal) e do registro `.hangar-askq/` na revisão em que a pergunta foi
+    publicada (com terminal), e vai à linha em `ask_form.tool_use_id`, junto com `ask_form.source`.
+  - O aviso pede, para repassar ao dono, `AskUserQuestion` com `metadata {source: "hangar-child:<chamada>"}`
+    (o dono não vê o campo). Sem a chamada conhecida (Codex) a linha não sai, e nada é contado ao pai.
+  - `asked_call` no `link-returns.json` guarda a chamada do aviso que chegou ao pai. Aviso recusado de vez,
+    ou tirado da fila antes de entregar, não a grava: o pai que não leu a pergunta não ouve como acabou.
+  - O fim só vale com o resultado da chamada no transcript da filha: resposta (até 1 000 caracteres),
+    "resposta omitida" com item `isSecret` (ou a chamada fora da janela lida), e "encerrada sem resposta"
+    para recusa, Esc ou interrupção (`is_error`, "doesn't want to proceed", "[Request interrupted").
+    Sem resultado não houve fim: a vigia espera 10 min e solta o registro calada. Outra pergunta aberta no
+    lugar da avisada resolve a avisada antes do aviso novo.
+  - O `child_answer` grava `parent_answer` antes da rota (falhou a gravação, não responde) e o confirma
+    quando a resposta saiu ou pode ter saído; recusada (`erro_interacao_desatualizada` = o dono respondeu
+    antes), a marca sai e o fim é contado. Marca à espera da rota segura a decisão por até 120 s.
+  - Com pergunta de repasse aberta no pai, o servidor a responde pelo `/answer` com o `interaction_id`
+    publicado, em texto livre, e grava a mesma marca no registro do pai como filha: o avô não ouve isso como
+    resposta do dono. Múltipla escolha pelas teclas do terminal não tem prova de que o texto livre entra e
+    recebe o recado; sem terminal e pelo plugin, entra. Sem pergunta de repasse, vai
+    `[de: <filha>] a pergunta (interaction_id …) foi respondida pelo dono na filha: … Não responda nem
+    repita.` pela entrega normal. Nunca casar pela redação da pergunta.
 - **Parar para só a sessão.** O `/interrupt` não alcança filha ligada, e o `cascade=1` de cliente
   antigo é ignorado; a tool `interrupt` para só a filha nomeada, sem as netas. O dono não pediu o
   Parar em cascata e o tirou (27/11): a filha segue o trabalho dela quando o pai para; quem alcança as

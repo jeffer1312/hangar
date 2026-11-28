@@ -962,10 +962,12 @@ impl Tools {
         self.linked_child(&me, alvo, "erro_nao_ligada").await?;
         if let Some(refusal) = answer_refusal(self.interaction_kind(alvo, &a.interaction_id).await.as_ref(), alvo) { return Err(refusal); }
         // Marcada antes da rota: a pergunta pode fechar já na resposta, e a que fecha sem a marca foi respondida na filha.
-        link_return::parent_answering(&self.st, alvo, &a.interaction_id).await;
+        if !link_return::parent_answering(&self.st, alvo, &a.interaction_id).await {
+            return Err(format!("link_returns_write_failed: não gravei que a resposta é sua; nada foi enviado a '{alvo}'. Tente de novo."));
+        }
         let body = json!({"answers": a.answers, "interaction_id": a.interaction_id});
         let (status, value) = self.route_from(Some(&me), Method::POST, &format!("/api/sessions/{}/answer", segment(alvo)), Some(body)).await;
-        if !link_return::answer_maybe_sent(status, &value) { link_return::parent_answer_dropped(&self.st, alvo, &a.interaction_id).await; }
+        link_return::parent_answer_settled(&self.st, alvo, link_return::answer_maybe_sent(status, &value)).await;
         answer_outcome(status, value)
     }
 
