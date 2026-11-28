@@ -19,7 +19,7 @@ fn telemetry_lines_carry_the_binary_the_context_and_the_cause() {
     record_owner_action(dir.path(), OwnerAction::Http, "c1", now(), "session.rename", "request", None, 3, None, &ctx).unwrap();
     let at = DateTime::parse_from_rfc3339("2026-11-16T09:00:00-03:00").unwrap();
     record_health(dir.path(), "c1", now(), Some(at), "health.server_exit", "server_exit", "core_dump", Severity::Error, &ctx, Some("0.41.0-abc1234")).unwrap();
-    let body = json!([{"evento": "sse.caiu", "nivel": "aviso", "ts": "2026-11-16T12:59:00Z", "cliente": "ios", "cli": "a1"},
+    let body = json!([{"evento": "sse.caiu", "nivel": "aviso", "ts": "2026-11-16T12:59:45Z", "cliente": "ios", "cli": "a1"},
                       {"evento": "tela.ver", "nivel": "ok", "ts": "2026-11-16T12:59:01Z"},
                       {"evento": "api.sem_rede", "nivel": "erro", "ts": "2026-11-16T12:00:00Z"}]);
     let started = DateTime::parse_from_rfc3339("2026-11-16T09:30:00-03:00").unwrap();
@@ -37,5 +37,5 @@ fn telemetry_lines_carry_the_binary_the_context_and_the_cause() {
     assert_eq!(rows[3]["cliente"], "ios");
     assert_eq!(rows[3]["ctx"], json!({"mem_free": "lt10", "up": "lt1h"}));
     assert!(rows[4].get("ctx").is_none());
-    assert_eq!(rows[5]["ctx"]["up"], "down", "falha de antes da subida do servidor");
+    assert_eq!(rows[5]["ctx"], json!({"up": "down"}), "falha antiga: só se sabe que o servidor estava fora");
 }

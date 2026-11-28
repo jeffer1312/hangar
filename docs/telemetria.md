@@ -178,7 +178,8 @@ Lido na subida e uma vez por dia, vai em `machine` de cada pacote.
 
 ### Retrato da falha
 
-Na primeira e na última vez de cada falha. Só entram as chaves que se aplicam.
+Na primeira e na última vez de cada falha. Só entram as chaves que se aplicam. A falha que um app
+entrega mais de 30 s depois de acontecer leva só `up`: o resto já seria o estado de outra hora.
 
 | Chave | Valores |
 |---|---|

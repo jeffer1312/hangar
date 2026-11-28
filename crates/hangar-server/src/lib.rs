@@ -433,8 +433,10 @@ pub fn install_panic_hook() {
         let t = std::thread::current();
         tracing::error!("{}", panic_line(info.location(), t.name()));
         // Para a subida seguinte dizer onde a vida caiu: só o lugar, nunca a mensagem.
-        if let (Some(path), Some(at)) = (PANIC_MARKER.get(), info.location()) {
-            let _ = std::fs::write(path, serde_json::json!({"pid": std::process::id(), "at": panic_site(at.file(), at.line())}).to_string());
+        // Só o pânico da thread principal derruba o servidor; o de uma tarefa o runtime captura e a vida segue.
+        if t.name() == Some("main") && let (Some(path), Some(at)) = (PANIC_MARKER.get(), info.location())
+            && let Err(error) = std::fs::write(path, serde_json::json!({"pid": std::process::id(), "at": panic_site(at.file(), at.line())}).to_string()) {
+            tracing::warn!(code = "panic_marker_write_failed", kind = ?error.kind(), "lugar do pânico não gravado");
         }
     }));
 }

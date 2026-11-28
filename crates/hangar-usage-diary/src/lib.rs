@@ -99,8 +99,11 @@ pub fn record_screen_with_owner(base: &Path, body: &[u8], now: DateTime<FixedOff
             line.insert("telemetry_at".into(), json!(at.to_rfc3339()));
             if line.get("nivel").and_then(Value::as_str).is_some_and(|level| level != "ok") {
                 let (ctx, started) = owner.map_or((&[][..], at), |(_, ctx, started)| (ctx, started));
-                // O retrato é o do servidor na chegada: falha de antes da subida dele aconteceu com ele fora.
-                let ctx: Vec<_> = ctx.iter().map(|(key, value)| (*key, if *key == "up" && at < started { "down".to_owned() } else { value.clone() })).collect();
+                // O retrato é o do servidor na chegada: falha de antes da subida dele aconteceu com ele fora, e a de
+                // mais de meio minuto atrás leva só isso, porque memória e sessões já seriam as de outra hora.
+                let recent = now - at <= TimeDelta::seconds(30);
+                let ctx: Vec<_> = ctx.iter().filter(|(key, _)| recent || *key == "up")
+                    .map(|(key, value)| (*key, if *key == "up" && at < started { "down".to_owned() } else { value.clone() })).collect();
                 put_ctx(&mut line, &ctx);
             }
             mark_telemetry(&mut line, "owner_screen", collection);

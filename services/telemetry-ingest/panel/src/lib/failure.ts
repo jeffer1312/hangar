@@ -78,7 +78,7 @@ export function stateRows(r: FailureRecord) {
   const label = (k: string): [string, Record<string, string> | null] => {
     if (has(CONTEXT_LABEL, k)) return CONTEXT_LABEL[k];
     const [, p, surface] = k.split(".");
-    if (k.startsWith("sessions.") && p) return ["Sessões " + (has(AGENTS, p) ? AGENTS[p] : p) + " " + (VALUES.surface[surface] ?? surface), CONTEXT_LABEL.sessions[1]];
+    if (k.startsWith("sessions.") && p) return ["Sessões " + (has(AGENTS, p) ? AGENTS[p] : p) + " " + (surface && has(VALUES.surface, surface) ? VALUES.surface[surface] : (surface ?? "")), CONTEXT_LABEL.sessions[1]];
     return [k, null];
   };
   const order = (k: string) => { const i = CONTEXT_ORDER.indexOf(k.startsWith("sessions.") ? "sessions" : k); return i < 0 ? 99 : i; };

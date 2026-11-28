@@ -279,7 +279,11 @@ pub(crate) fn report_health(code: &'static str, cause: &str, severity: hangar_us
         }
     };
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => { handle.spawn_blocking(write); }
+        Ok(handle) => {
+            let task = handle.spawn_blocking(write);
+            // Pânico ao ler o retrato ou gravar não some calado: vai ao diário como a tarefa da telemetria que caiu.
+            handle.spawn(async move { if task.await.is_err() && let Some(st) = APP.get().and_then(std::sync::Weak::upgrade) { crate::telemetry_routes::task_failed(&st.diag); } });
+        }
         Err(_) => write(),
     }
 }

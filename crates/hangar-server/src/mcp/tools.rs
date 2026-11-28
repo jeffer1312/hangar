@@ -1010,6 +1010,8 @@ impl Tools {
             (status, value)
         });
         let (status, value) = answered.await.map_err(|e| format!("child_answer_failed: a resposta não terminou ({e})"))?;
+        // A rota rodou noutra tarefa, fora do marcador desta chamada: a causa entra aqui.
+        let _ = FAILURE.try_with(|marked| marked.set(route_failure(status, None, &value)));
         answer_outcome(status, value)
     }
 

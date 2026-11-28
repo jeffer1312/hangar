@@ -136,13 +136,15 @@ pub(crate) fn rotate(home: &Path, build: &str) -> io::Result<usize> {
             Err(e) => return Err(e),
         };
         if file.build == build { continue; }
-        remove_day(home, &stem)?;
         if file.build.is_empty() {
+            remove_day(home, &stem)?;
             removed += 1;
             continue;
         }
+        // Grava a cópia congelada antes de apagar: disco cheio não leva o dia junto.
         file.frozen = true;
         write_day(home, &file)?;
+        remove_day(home, &stem)?;
     }
     for stem in days(home)?.into_iter().filter(|stem| build_of(stem) == Some(build)) {
         let Some(mut file) = read_day(home, &stem)? else { continue };

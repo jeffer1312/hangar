@@ -217,7 +217,8 @@ export function recordMarkdown(r: FailureRecord) {
     else out.push("O diário não guardou passos antes desta falha.");
   };
   steps("Como reproduzir: " + SAMPLE_TRAIL.toLowerCase(), r.trail ?? []);
-  if (r.count > 1 && r.trail_last?.length) steps("Passos antes da última vez", r.trail_last);
+  const same = (r.trail_last ?? []).join("|") === (r.trail ?? []).join("|");
+  if (r.count > 1 && r.trail_last?.length && !same) steps("Passos antes da última vez", r.trail_last);
   const after = afterText(r.after);
   if (after) out.push("", "Depois da última vez: " + after);
   out.push("", "### Campos da amostra", "");
