@@ -71,6 +71,7 @@ export interface IntegrationView {
   status: IntegrationStatus;
   last_error?: string;
   brand?: IntegrationBrand | null;
+  can_reuse_google_credentials?: boolean;
 }
 
 export interface IntegrationToolSummary {
@@ -101,6 +102,7 @@ export interface CreateIntegrationInput {
   projects?: string[];
   allowed_tools?: string[];
   secrets?: IntegrationSecretsPatch;
+  reuse_google_credentials_from?: string;
 }
 
 export interface UpdateIntegrationInput {
@@ -414,6 +416,8 @@ const ERROR_TEXT: Record<string, () => string> = {
   integration_owner_only: m.integrations_err_owner_only,
   integration_disabled: m.integrations_err_disabled,
   integration_already_exists: m.integrations_err_already_exists,
+  integration_google_credentials_unavailable: m.integrations_google_credentials_unavailable,
+  integration_client_secret_required: m.integrations_client_secret_required,
   integration_secrets_key_lost: m.integrations_err_keyring,
   integration_secrets_unavailable: m.integrations_err_keyring,
   approval_stale: m.integrations_err_stale,

@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 const GUEST: &str = "convidado-ana";
 
 struct Server { addr: SocketAddr, python: Arc<fake::Fake>, groups: Arc<GroupService>, pair: PathBuf, runtime: Arc<RuntimeRegistry>,
-    share: Arc<hangar_server::share::ShareState>, sink: crate::sink::Sink, list: Arc<ListBridge> }
+    share: Arc<hangar_server::share::ShareState>, sink: crate::sink::Sink, list: Arc<ListBridge>, diag: hangar_server::diag::DiagClient }
 
 /// `n` sessões Claude (`s0`..) e o roteador de grupo montado na frente do principal.
 async fn server(root: &Path, n: usize) -> Server {
@@ -59,6 +59,7 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new()));
     let list = state.list.clone();
+    let diag = state.diag.clone();
     // Convidado com conta que vê as sessões sem dono: o fechamento dele é o mesmo do dono.
     let guests = hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings { guests: root.join("guests.json"),
         vault: root.join("vault.json"), runtime_config: root.join("runtime-config.json"), sync_enabled: false, bootstrap: String::new(),
@@ -86,7 +87,7 @@ async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Server { addr, python, groups, pair, runtime, share, sink, list }
+    Server { addr, python, groups, pair, runtime, share, sink, list, diag }
 }
 
 async fn call(addr: SocketAddr, method: &str, path: &str, body: Option<&Value>, token: &str) -> (u16, Value) {
@@ -96,6 +97,11 @@ async fn call(addr: SocketAddr, method: &str, path: &str, body: Option<&Value>, 
     let status = resp.status().as_u16();
     let text = resp.text().await.unwrap();
     (status, serde_json::from_str(&text).unwrap_or(Value::String(text)))
+}
+
+/// Espera as linhas de diário já pedidas; o teto só estoura se a gravação travar.
+async fn flushed(diag: &hangar_server::diag::DiagClient) {
+    tokio::time::timeout(Duration::from_secs(10), diag.flush()).await.expect("o diário não terminou de gravar");
 }
 
 fn input_hits(sink: &crate::sink::Sink, names: &[&str]) -> Vec<usize> {
@@ -112,7 +118,8 @@ fn orchestrators(srv: &Server, names: &Value) {
         std::fs::create_dir_all(&run).unwrap();
         std::fs::write(run.join("orq.json"), "{\"auto\":true}").unwrap();
         std::fs::write(run.join("eventos.jsonl"), json!({"tipo":"execucao_inicio","gid":gid}).to_string()+"\n").unwrap();
-        std::fs::write(run.join("vigia.json"), json!({"ts":chrono::Utc::now().to_rfc3339(),"pid":std::process::id()}).to_string()).unwrap();
+        // Batimento fixo com intervalo enorme: a lista o lê fresco contra o relógio dela, sem o teste ler o relógio.
+        std::fs::write(run.join("vigia.json"), json!({"ts":"2026-01-01T00:00:00+00:00","interval_s":1_000_000_000_i64,"pid":std::process::id()}).to_string()).unwrap();
     }
 }
 
@@ -225,9 +232,6 @@ async fn linked_pair_marks_the_child_records_linked_at_and_sends_no_protocol() {
     assert!(parent.get("linked_by").is_none());
     let returns = hangar_server::groups::link_state::read(&dir.path().join("hangar")).unwrap();
     assert!(returns["s1"].linked_at > 0.0 && returns["s1"].returned_at.is_none() && !returns.contains_key("s0"));
-    // Remoto não liga.
-    let (status, body) = call(srv.addr, "POST", "s2/pair", Some(&json!({"peer": "lab::x", "link": true})), OWNER).await;
-    assert_eq!((status, body["detail"]["code"].clone()), (400, json!("erro_link_remoto")));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -562,16 +566,12 @@ async fn delete_r1_11_an_unreadable_group_sidecar_still_closes_and_goes_to_the_d
     let (status, body) = call(srv.addr, "DELETE", "s0", None, OWNER).await;
     assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
     let journaled = |name: &str| srv.python.diag().iter().any(|l| l["evento"] == "rust.grupos_sidecar_ilegivel" && l["sessao"] == name);
-    for _ in 0..200 {
-        if journaled("s0") { break; }
-        // estavel: intervalo da espera pela linha do diário (gravada em segundo plano); a condição encerra antes do teto de 10 s.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    // A linha é pedida antes da resposta e gravada em segundo plano: `flush` espera as gravações pedidas.
+    flushed(&srv.diag).await;
     assert!(journaled("s0"), "{:?}", srv.python.diag());
     let (status, body) = call(srv.addr, "DELETE", "s1", None, OWNER).await;
     assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
-    // estavel: a linha indevida, se houvesse, seria gravada nesta janela, como a de `s0` acima.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    flushed(&srv.diag).await;
     assert!(!journaled("s1"), "sem grupo, nada de grupo no diário");
     assert!(!srv.pair.join("s1.json").exists(), "nenhum arquivo de grupo nasce");
     assert_eq!(list_support::calls(dir.path(), "kill-session"), 2, "as duas fecharam");

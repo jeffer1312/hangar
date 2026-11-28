@@ -80,7 +80,7 @@ fn file(mode: &str, content: &str) -> Value {
     json!({"type": "file", "mode": mode, "content": {"text": content}})
 }
 
-const MARKED_TAIL: &str = "tool_timeout_sec = 660\n";
+const MARKED_TAIL: &str = "tool_timeout_sec = 900\n";
 
 fn marked(token: &str) -> String {
     format!(

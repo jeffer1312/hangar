@@ -92,14 +92,14 @@ it('separa retrato do diário, repete após 503 e descarta leitura de máquina r
   } finally { estado.servidores = original; }
 });
 
-it('não relê o aceite no mesmo dia depois do retrato confirmado', async () => {
+it('não relê o aceite no mesmo dia depois do retrato confirmado (aceite do escopo 3)', async () => {
   vi.resetModules();
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-11-27T10:00:00Z'));
   const core = await import('@hangar/core');
   core.configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized: () => {}, origin: null, createEventSource: vi.fn() });
   const fresh = await import('./diag');
-  const accepted = { consent: true, consent_scope: 2, enabled: true, disabled_by: null, snapshot_period: 'a'.repeat(32) };
+  const accepted = { consent: true, consent_scope: 3, enabled: true, disabled_by: null, snapshot_period: 'a'.repeat(32) };
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
     if (String(url).endsWith('/api/telemetry')) {
       return new Response(JSON.stringify(init?.method === 'POST' ? { snapshot_period: accepted.snapshot_period } : accepted));

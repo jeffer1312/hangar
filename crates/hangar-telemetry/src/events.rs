@@ -60,8 +60,10 @@ named_enum!(Event {
     ClientRoute => "client_route",
     ServerStartup => "server_startup",
     ChatOpen => "chat_open",
+    SessionPlaced => "session_placed",
     LogDropped => "log_dropped",
     Settings => "settings",
+    DiaryDropped => "diary_dropped",
 });
 
 named_enum!(
@@ -172,6 +174,16 @@ impl UpdateStepName {
 }
 
 dim_enum!(UpdateOrigin { Manual => "manual", Auto => "auto", Other => "other" });
+
+dim_enum!(
+    /// Onde a abertura com `machine: "auto"` ficou: nesta máquina, em outra, ou recusada (Ask, máquina fora, clone).
+    PlacementOutcome { Here => "here", Elsewhere => "elsewhere", Refused => "refused" }
+);
+
+/// O `code` de cada `ReasonCode` do `hangar-placement`; motivo novo sai `other` até entrar aqui.
+pub const PLACEMENT_REASONS: &[&str] = &[
+    "same_folder", "unpublished", "plain_dir", "project_rule", "local_within_limits", "least_loaded", "no_candidate", "not_balanced",
+];
 
 dim_enum!(PeerKind {
     Lan => "lan", Tailscale => "tailscale", Connect => "connect", Public => "public", Disabled => "disabled",
@@ -360,6 +372,8 @@ mod tests {
         names.extend(UpdateStepName::ALL.iter().map(|v| v.as_str()));
         names.extend(UpdateOrigin::ALL.iter().map(|v| v.as_str()));
         names.extend(PeerKind::ALL.iter().map(|v| v.as_str()));
+        names.extend(PlacementOutcome::ALL.iter().map(|v| v.as_str()));
+        names.extend(PLACEMENT_REASONS);
         names.extend(LogLevel::ALL.iter().map(|v| v.as_str()));
         names.extend(FEATURE_ROUTES.iter().map(|(_, _, code)| *code));
         names.extend([CLAUDE_MODELS, CODEX_MODELS, KIMI_MODELS, ANTIGRAVITY_MODELS].concat());

@@ -3,6 +3,106 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## Balanceamento de sessões entre máquinas (27/11/2026)
+
+- **Caso que motivou.** O dono tem três máquinas sempre ligadas (PC e notebook em Linux, VM em
+  Windows) e cria sessões sem escolher onde: todas nasciam na máquina em uso. Em 27/11 o notebook
+  tinha mais de 20 sessões e o PC 6. Desenho completo em
+  `docs/superpowers/specs/2026-11-27-balanceamento-de-sessoes-design.md`.
+- **Decisões do dono.** (1) Projeto = repositório, pelo `origin` normalizado
+  (`ProjectId::from_origin`, que desceu do `hangar-dream` para o `hangar-core` e junta ssh e https).
+  (2) Máquina sem o repositório entra com clone na pasta onde fica a maioria dos repositórios dela,
+  trocável por máquina na tela. (3) A tela sugere; o agente abre direto e diz onde e por quê; modo
+  separado para tela (`off`/`suggest`/`ask`) e agente (`off`/`auto`/`ask`). (4) Filha ligada vale
+  entre máquinas. (5) Mesma pasta, mesma máquina. (6) Trabalho não publicado (commit não enviado,
+  mudança não commitada, branch sem upstream) fica onde está, sem push automático. (7) Limite, não
+  pontuação: sai da escolha a máquina com menos de 15% de memória livre, 6 ou mais sessões
+  trabalhando ou processador acima de 80% nos últimos 5 min. (8) Regras do dono (projeto → máquina,
+  horário → máquina a evitar) vencem a carga; máquina da regra fora ou acima do limite cai para a
+  próxima, com aviso; 5 e 6 vencem as regras, com aviso. (9) O agente clona; a sessão nasce com a
+  nota "clone novo: instale as dependências pelo README/CLAUDE.md do projeto; `.env` não veio". O
+  Hangar não instala nada.
+- **Onde a escolha roda.** Não no `resolve_open()`: ele é síncrono, só vê fatos locais e roda também
+  com o servidor fora (`hangar-server open`). A escolha é um passo assíncrono antes do `decide()` no
+  `POST /api/sessions` (`placement::suggest::step`), e o `choose` puro mora no crate
+  `hangar-placement` (fatos + regras + hora → máquina, motivo, clone e avisos). Só o pedido com
+  `machine: "auto"` é balanceado; omitido, abre aqui como antes; id de máquina abre nela. A tela pede
+  `POST /api/placement/suggest` (a mesma escolha, sem criar nada) e cria na máquina marcada; o MCP
+  `new_session` sem `machine` nem `servidor::nome` e o `hangar-send --new` sem `servidor::` nem
+  `--machine`, rodando dentro de uma sessão, mandam `auto`, e o modo do agente gravado no servidor
+  decide. O `hangar-send` sem sessão de origem (terminal fora de sessão, o vigia da orquestração)
+  abre local: não manda `machine`. `--machine`/`machine` aceitam a chave do `peers.json` ou o id
+  que a máquina informa (o `CP_SERVER_ID` de lá, achado nos fatos); valor que não é nenhum dos dois
+  recebe `placement_machine_unknown`.
+- **Quem nunca é balanceado.** O que não manda `machine` (terminal digitado, tarefa agendada,
+  reabrir, restaurar, retomar, `/conta`) e, com `auto`, o pedido de convidado (`guest`), a reserva
+  pré-aquecida (`prewarm`), o pedido com conta, motor ou perfil desta máquina (`local_field`:
+  `config_dir`, `engine`, `engine_account`, `codex_account`, `omp_profile`), o modo desligado
+  (`mode_off`) e a orquestração (`orq`). A resposta diz isso em `placement.reason`
+  (`not_balanced` com o `why`). Leitura que falha deixa a abertura aqui, com o código no `why`; a das
+  regras, da pasta e dos fatos daqui também vai ao diário (`rust.placement_skipped`), nunca à tela.
+- **Orquestração fica sempre aqui.** O grupo `orq` recusa membro de fora. Olhar só o grupo da
+  criadora não bastava: o árbitro abre executor e revisor antes de juntá-los ao grupo, e essas
+  aberturas iam a outra máquina. Quem conduz uma execução viva (o condutor `<gid>-orq` ou o
+  árbitro, pela mesma leitura de `groups::orq::is_orchestrator`) também fica aqui; leitura que falha
+  fica aqui (`orq_unreadable`).
+- **Id da máquina = o `CP_SERVER_ID` que ela informa.** Regras, reservas e o `machine` encaminhado
+  usam o `server_id` dos fatos de cada máquina; sem ele a máquina entra como incapaz e não é
+  candidata (a regra não teria por onde achá-la). A chave é o nome
+  que uma máquina dá à outra (ex.: chave `notebook`, id `nb`) e pode mudar de uma para outra; a
+  regra é gravada em todas e precisa de um nome que todas leiam igual.
+- **Fatos por máquina, só na hora.** `GET /api/placement/facts?project=<id>` (só do dono): memória
+  total e livre, sessões trabalhando, processador (Linux: carga média de 5 min dividida pelos
+  núcleos; Windows: uso na hora pelo sysinfo), repositórios conhecidos (worktrees, pastas recentes
+  de 30 dias e um nível da pasta de clone, com o `origin` normalizado) e a pasta de clone. Nada roda
+  em segundo plano: a consulta só sai quando a local está acima do limite ou uma regra aponta outra
+  máquina, em paralelo, 2 s cada; quem não responde ou está `enabled: false` sai. Rota inexistente
+  lá (404 sem código) é versão sem o balanceamento: entra como incapaz, e a tela diz isso.
+- **Mesma pasta.** A raiz git do pedido igual (comparação exata) ao `git_cwd` de uma sessão aberta;
+  a pasta pessoal não conta. Pasta sem git que não é a pessoal fica aqui. Uma reserva de 30 s
+  pasta → máquina, em memória, impede que duas aberturas seguidas na mesma pasta se separem antes
+  de a lista republicar. Ela é gravada na escolha que fica aqui e, para outra máquina, só quando lá
+  confirmou a abertura: recusada ou incerta não prende a próxima. A pasta reservada para outra
+  máquina lê só os fatos das outras; com a reservada fora deles (desligou), a reserva cai e a pasta
+  volta à escolha, nunca 503.
+- **Abrir lá.** O pedido vai pronto (`placement::forward`): `machine` fixada (lá não se escolhe de
+  novo nem volta para cá), sem criadora e sem `link` (a ligação é feita daqui) e com a pasta
+  traduzida para a raiz do mesmo projeto lá, na branch daqui. Lá a sessão abre numa worktree limpa
+  da branch, depois de buscar no remoto; a busca falha só como aviso. Sem resposta da abertura, o
+  texto é "incerto, confira em B", nunca reabertura aqui.
+- **Herança só da criadora.** Aqui só a criadora é lida (`facts.creator`), sem a resolução da
+  abertura: nome em uso, cota e conta são de lá, e o nome que só existe aqui não recusa a filha.
+  Vai explícito o provedor herdado e a superfície (com ou sem terminal); o modo só com
+  `inherit: true`, e modelo e esforço nunca vêm da criadora. Sem `inherit: true` valem os padrões salvos de lá, como numa abertura local valem os daqui. Mandar o padrão salvo
+  daqui explícito passaria por cima do de lá. Codex com terminal não leva modo, porque recusa modo
+  pedido.
+- **Clone em passo próprio.** `POST /api/placement/clone {origin, dir}` (só do dono) clona numa pasta
+  temporária e renomeia no fim; `origin` começando por `-` ou pasta relativa são recusados
+  (`placement_clone_invalid`). Clone que falha (inclusive repositório privado sem credencial lá) é
+  erro visível e a sessão não abre.
+- **Prazos.** Fatos: 2 s por máquina. Abertura lá: 150 s (`OPEN_TIMEOUT`), divididos com a busca no
+  remoto, que leva no máximo 60 s: preparar a conta, buscar e criar a worktree passa dos 30 s, e a
+  criação não manda nada antes de terminar. Clone: o `git clone` tem 600 s lá, e quem espera tem
+  660 s (`CLONE_TIMEOUT`), para não desistir com o clone ainda correndo. Cliente: o MCP passou a ser
+  registrado com 900 s (`TOOL_TIMEOUT_S` do `mcp-register`, antes 660 s, que o cofre ainda cabe) e
+  o `hangar-send --new` espera 900 s com máquina pedida (`auto` ou id) e 120 s sem ela. O pior
+  caso, 2 × 2 s + 660 s + 150 s = 814 s, fica abaixo do corte do cliente; um teste do servidor confere essa soma.
+- **Perguntar.** No agente, `ask` devolve 409 `placement_ask` com a sugestão, só quando ela sai desta
+  máquina (a que fica aqui abre direto); o agente pergunta à pessoa e abre de novo com a máquina escolhida. Na tela, `ask` ainda não tem desenho: a Nova
+  conversa abre sem máquina marcada.
+- **Resposta.** `placement: {server, reason, text}` e `target: "B::nome"`. A tool manda usar `target` em
+  `send`, `close_session` e `interrupt`, senão o nome cai numa homônima local. O `text` sai em
+  português; os clientes montam o motivo dos códigos no idioma do app.
+- **Regras num arquivo do servidor.** `~/.hangar/placement.json` (`GET`/`PUT /api/placement/config`,
+  só do dono). As telas do nativo e do Expo gravam em todas as máquinas ligadas e mostram a que
+  ficou com regras diferentes ou numa versão sem o balanceamento; a configuração compartilhada leva
+  o item `placement` dentro de `hangar_prefs`. Não sincroniza sozinho.
+- **Filha ligada entre máquinas.** Com `link`, a ligação é feita pela máquina do pai depois da
+  abertura lá; o vínculo, o retorno e o `interrupt` estão em
+  [Sessão filha ligada a quem a abriu](#sessão-filha-ligada-a-quem-a-abriu).
+- **Fora do escopo.** Mover sessão já aberta, favoritos de projeto e levar `.env`, dependências e
+  banco local junto.
+
 ## Portas da sessão, túnel e navegador emprestado (23/11/2026)
 
 O agente sobe um servidor na máquina da sessão (Next na 3000, Postgres na 5432), e o Hangar mostra a
@@ -434,10 +534,10 @@ Decisões:
 Do lado do Hangar (C6):
 
 - **Tool `whatsapp_draft(chat, text, file?, reply_to?)`.** Recusa em sessão compartilhada
-  (`whatsapp_shared_session`, a mesma conferência das leituras) e em sessão sem o prazo de 660 s,
+  (`whatsapp_shared_session`, a mesma conferência das leituras) e em sessão sem o prazo longo do MCP (600 s no mínimo),
   como `erro_cofre_sessao_sem_prazo`; binário com `api` menor que 2 dá `whatsapp_send_unsupported`.
   A origem é `servidor::sessao` e a pasta da sessão que chama. Ela espera o rascunho chegar ao fim,
-  com prazo próprio de 570 s desde o início da chamada, abaixo do corte do cliente MCP (660 s no Claude,
+  com prazo próprio de 570 s desde o início da chamada, abaixo do corte do cliente MCP (900 s no Claude,
   600 s no mínimo aceito): sem ele, o modelo recebia o corte sem o `id` e podia criar outro rascunho para
   uma mensagem já saindo. No prazo, rascunho ainda pendente é recusado (`expired`) e aprovado ainda
   saindo devolve `sending`. Devolve `sent`, `declined`, `expired`, `failed` ou `sending`; erro depois
@@ -1772,6 +1872,20 @@ tinha a TypeSafe fixa.
   Migração: o primeiro valor gravado em `jev_aux_*` e a subida do backend copiam o `jev_texto_*`, ou
   o `LLM_*` do MCP quando o primeiro não existe. Se o legado estiver ilegível, a gravação recusa em
   vez de perdê-lo. O `llm_*` do ditado continua separado, pela regra de capacidades separadas.
+- **27/11/2026: a ajuda pode ser a própria sessão (`jev_aux_mode`).** Vazio segue o de antes (o
+  auxiliar gravado, quando há um); `api` usa o auxiliar; `session` não manda a página nem a tela ao
+  auxiliar. O Jev continua recebendo o print pelo provedor dele (entrada "Jev vê o print"). Nesse modo a sessão recebe `JEV_AUX_MODE=session` e nenhum `JEV_AUX_*`, o
+  `objetivo` do hangar-preview para na dúvida e diz a quem chamou para olhar a página (menos na
+  parada por operação arriscada, que espera a ordem do usuário), e o MCP do Computer Use fica sem
+  `LLM_*`. O texto dos campos do formulário passa a sair do comando local (`jev_texto_cmd`, padrão
+  `claude -p` com o Haiku); sem ele instalado, o `objetivo` para no campo e a decisão volta à
+  sessão. A tela só marca "A própria sessão" com o valor `session`: vazio aparece como "Um modelo
+  por API", que é o que o servidor faz. Motivo: a sessão que chamou o Jev já é um modelo de texto e imagem
+  com o contexto do trabalho, e um auxiliar por API era uma segunda conta a manter. Em 27/11/2026 a
+  chave da Anthropic do auxiliar ficou sem crédito, e as sessões culpavam o Jev pelo
+  `Your credit balance is too low`. Limite: sem `LLM_*`, o binário do `hangar-computer-control`
+  ainda tenta o CLIProxy padrão e devolve "ajuda visual indisponível" por falta de chave, sem chamar
+  nada; a dúvida chega à sessão do mesmo jeito.
 - **12/10/2026: a busca de modelos é do auxiliar, e mora no Rust.** As rotas `GET
   /api/jev/aux/cliproxy` e `POST /api/jev/aux/models` ficam no `hangar-server` e só leem o
   runtime-config; quem grava continua sendo o Python. A Anthropic recebe `x-api-key` e
@@ -3314,6 +3428,33 @@ nas vagas de escrita). No Windows, os três arquivos focados tiveram 92 aprovado
 as mesmas 11 se reproduziram na base pura, incluindo diferenças nos campos `sessions` e
 `closed` anteriores à correção.
 
+### Worktree sem branch e busca de repositórios até o fim (27/11/2026)
+
+Worktree aberta direto na base do remoto (`worktree add --detach … origin/develop`), usada para
+correção que vai direto na develop, não tinha base: a base saía da branch, e sem branch o status
+vinha com `base: null`. A limpeza automática a descartava antes de qualquer regra (mesclada,
+sem alterações, parada), e a tela mostrava "Sem branch" para sempre. Em 27/11/2026 havia quatro
+assim num repositório, todas com os commits já na `origin/develop`. Agora a base dela é a
+branch principal do remoto (`refs/remotes/origin/HEAD`; sem `origin`, a do único remoto que
+tem HEAD). Não é a branch do checkout principal, que costuma estar numa branch de trabalho.
+Sem HEAD de remoto, com `origin` sem HEAD, ou sem `origin` e com mais de um remoto publicando
+HEAD, continua sem base. Worktree sem branch com commit fora da base nunca entra na limpeza
+automática: só ela alcança esse commit. A prova por PR fica
+de fora: ela precisa do nome da branch.
+
+A busca de repositórios percorria as raízes numa linha só, com teto de 20 mil pastas e 2 s. As
+raízes desta máquina somam cerca de 244 mil pastas (uma pasta de dados tem 108 mil), e o aviso
+"A busca não terminou" aparecia sempre. Respeitar o `.gitignore`, como o `fd`, foi medido e
+descartado: perdia 120 dos 239 repositórios, porque um repositório guarda-chuva ignora os clones
+que tem dentro. A busca agora roda no pool do `rayon`, lê o `.git` na listagem da própria pasta
+(sem stat extra por pasta), faz uma varredura por lista de raízes (quem chega durante ela espera o
+resultado, outra lista não espera) e tem teto de 1 milhão de pastas e 5 s. Cada raiz configurada,
+inclusive a pasta das worktrees dentro de outra raiz, parte já no começo, e a raiz de fora não a
+lê de novo. No Windows a pasta do OneDrive que ainda está só na nuvem fica de fora (listá-la
+busca o conteúdo pela rede); a já baixada é percorrida. Medido nas mesmas raízes, em release: antes, 0,16 a 0,54 s com 232 repositórios e
+busca incompleta; agora, 0,2 a 0,26 s com cache de disco quente e 1,2 s na primeira leitura, os
+mesmos 232, completa.
+
 ## Passagem ao Rust no boot com a fila Python ocupada
 
 (05/10/2026, DELPHI-02.) Nos dois reinícios do dia, a sessão terminal abriu no Python e
@@ -4223,9 +4364,21 @@ provedor, grupos e recados. Faltavam quatro coisas, que entraram assim.
   sozinho, o pai também recebia, e na filha o texto entrava na fila como segundo turno, depois do
   `initial_prompt`. Aí a última mensagem do usuário antes da resposta final era o protocolo, e o
   retorno nunca disparava. O hook do `SessionStart` (`pair_hook.py`) também pula a filha ligada.
-- **Só o dono liga, só local, nunca em `orq`.** Convidado mandando `creator=<sessão do dono>`
-  viraria filha dela e receberia recados do dono: 403 antes de abrir. Grupo é local: 400 para
-  `servidor::nome`.
+- **Só o dono liga, nunca em `orq`.** Convidado mandando `creator=<sessão do dono>`
+  viraria filha dela e receberia recados do dono: 403 antes de abrir. A criadora é sempre desta
+  máquina: criadora `servidor::nome` é 400 `erro_link_remoto`.
+- **Filha noutra máquina (27/11/2026, com o [balanceamento](#balanceamento-de-sessões-entre-máquinas-27112026)).**
+  A filha pode nascer noutra máquina (`servidor::nome`, `machine` ou a escolha automática). A
+  abertura lá vai sem criadora, e a máquina do pai faz a ligação depois, pela federação: o registro do
+  grupo leva `links` (filha → pai, os dois `srv::nome`), só para as máquinas de uma das pontas (a
+  versão antiga recusaria o campo), e a máquina da filha grava `linked_by = "<id A>::pai"` no
+  sidecar dela; a do pai grava `linked_children`. O retorno roda na máquina da filha e entrega pela
+  `/input` do pai lá, assinado `[de: <id B>::filha]`, com a mesma fila e o mesmo prazo de 2 h; o
+  homônimo daqui não passa por pai. O `interrupt` vai a `POST /api/sessions/{name}/linked-interrupt`
+  na máquina da filha, que confere `linked_parent` no arquivo de grupo de lá antes do `/interrupt`.
+  Desfazer (pai sai ou morre) passa pela fila em disco do grupo entre máquinas. Pai com filha ligada
+  noutra máquina não adormece (`session_sleep` só via as filhas daqui), e grupo ilegível também o
+  segura.
 - **`interrupt` em vez de controle livre.** Mapeia na rota `/interrupt` que já existe e só passa
   com `linked_by == quem chama` e quem chama entre os `peers` da filha.
 - **Sem "esperar" bloqueante.** No T3 o `delegate_task` pode travar até a filha acabar. Aqui a
@@ -4992,13 +5145,14 @@ na entrada `hangar` (`--strict-mcp-config`, sem variável), aprovação em 370 s
 total. A variável global foi recusada: baixaria o teto de relógio de todos os outros servidores MCP de
 ~28 h para 11 min. O campo por servidor cobre o temporizador de 60 s e a ociosidade (o Claude Code usa
 o maior entre os dois). Por isso o `scripts/registrar-mcp.py` grava `timeout` no `mcpServers.hangar`
-do `.claude.json` de cada conta e `tool_timeout_sec = 660` no `[mcp_servers.hangar]` do `config.toml`
+do `.claude.json` de cada conta e `tool_timeout_sec = 900` no `[mcp_servers.hangar]` do `config.toml`
 (o padrão do Codex também é 60 s), e `erro_cofre_sessao_sem_prazo` confere essa configuração da conta
 da sessão. No Codex não vai por `-c`: com o `config.toml` da conta sem `[mcp_servers.hangar]`, `-c
 mcp_servers.hangar.tool_timeout_sec=660` cria o servidor sem transporte e o Codex recusa subir
 ("invalid transport in mcp_servers.hangar"). O rmcp não larga o futuro da tool no
 `notifications/cancelled`, só cancela o token: o `call_tool` das tools do cofre corre contra ele, e
-largar a espera cancela o pedido na dona.
+largar a espera cancela o pedido na dona. Desde 27/11/2026 o prazo gravado é 900 s: o `new_session`
+noutra máquina espera o clone e a abertura lá ([Balanceamento](#balanceamento-de-sessões-entre-máquinas-27112026)).
 
 **O que sai da máquina e quando a cópia tenta de novo.** O aviso de pedido do cofre leva o nome da
 senha (ou o rótulo do cadastro) e o `servidor::sessao` de quem pede aos provedores de push (Expo e
@@ -5958,8 +6112,11 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   fora do ar ou sem a rota não muda nada. O anúncio entre máquinas não serve: só sai na troca de
   identificador. Limite aceito: registrar a máquina de outra pessoa no `peers.json` junta os dois
   donos.
-- **Dia em UTC, um envio por dia.** Hora a hora entregaria rotina e fuso. Fila de até 14 dias em
-  `~/.hangar/telemetry-scope-2/queue/`, espera aleatória de até 1 h depois que o dia fecha.
+- **Dia em UTC: o final uma vez por dia; na opção B, também o parcial de hora em hora.** O pacote
+  final do dia sai depois que ele fecha em UTC, com espera aleatória de até 1 h; fila de até 14 dias em
+  `~/.hangar/telemetry-v3/queue/`. Antes da opção B só saía o final, porque hora a hora entregaria
+  rotina e fuso. Na opção B o dia aberto sai a cada hora como parcial do mesmo `batch_id`, que o
+  receptor troca até chegar o final (ver "Opção B, escopo 3").
 - **Revisão da spec.** `problem_shown` conta uma vez por problema, na passagem de esperando para
   mostrado no portão da lista: o `admit` devolve `Show` a cada tique, e contar ali repetiria o
   mesmo aviso a cada 1,5 s. `feature_used` sai de uma camada depois do handler, pelo modelo de rota
@@ -5990,6 +6147,27 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   da atualização, guardado só como marca `settings:<cliente>:<aparelho>` em `snapshot_keys` do arquivo do
   dia, que nunca vai no pacote. O painel mostra máquinas, não vezes. O canal de
   atualização não entrou: já vai no `env` do pacote.
+- **Opção B, escopo 3 (27/11/2026).** O
+  `GET /api/telemetry` anuncia o escopo; o sim precisa citar exatamente o do aviso, e o não antigo
+  continua válido. A escolha de B é separada do booleano legado (gravado como `false`) e a pasta
+  `telemetry-v3` nunca é lida por uma versão revertida. Lotes antigos não são importados.
+  O servidor marca a linha de tela só depois de autenticar o dono, preservando o horário original;
+  HTTP usa rota registrada e autenticação verificada, MCP exige chave da sessão e confirmação de
+  propriedade e de que não está compartilhada. Campos saem de listas fechadas, não de texto raspado
+  dos logs. Parcial horário e final UTC substituem o mesmo lote no receptor; o servidor grava ID e
+  projeção antes de enviar, congela o final no disco e limita os bytes entregues a 2 MiB. A revogação
+  impede novos envios, não apaga os já recebidos (retenção atual: 400 dias). A opção B ainda não foi
+  publicada.
+- **Um aceite cobre tudo (27/11/2026, opção A).** Decisão do dono: no servidor com a opção B, o aceite
+  do escopo 3 também libera o retrato diário de preferências do servidor e dos apps do PC e do
+  celular, pela mesma rota `POST /api/telemetry` e pela mesma lista fechada de `events::SETTINGS`;
+  sem ele o painel perderia as preferências dos apps, e um segundo aviso pediria a mesma coisa duas
+  vezes. O texto do aviso do escopo 3 diz que as preferências dos apps vão junto. O app continua a
+  negociar pelo `consent_scope` do `GET`: escopo 3 recebe o aviso de B, escopo 2 o aviso de
+  preferências daquela versão, nenhum escopo o aviso antigo (sem retrato do app), e escopo
+  desconhecido só a revogação. Um sim gravado sem escopo ou com o escopo 2 sai do `telemetry.json`
+  na subida: o servidor com B pergunta de novo. A recusa apaga também as filas `telemetry/` e
+  `telemetry-scope-2/` das versões anteriores.
 
 ## Servidor tmux antigo vivo não ganha outro por cima (27/11/2026)
 

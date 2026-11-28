@@ -1,5 +1,4 @@
-//! A fila em disco: um arquivo por dia (UTC) em `~/.hangar/telemetry-scope-2/queue/<dia>.json`, e as marcas
-//! de `once`.
+//! Fila e marcas em disco exclusivas do escopo 3: um binário antigo não pode enviar lotes de B.
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -7,26 +6,28 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 // O resto da pasta (temporários da gravação atômica) não passa no formato de dia.
-use crate::wire::{Counter, LogLine, is_day};
+use crate::diary::DayDetail;
+use crate::wire::{Counter, is_day};
 
 /// Teto da fila: acima dele sai o dia mais antigo.
 pub(crate) const MAX_DAYS: usize = 14;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct DayFile {
     pub(crate) day: String,
+    pub(crate) collection: String,
     /// Gravado antes do primeiro envio: a repetição leva o mesmo, e o receptor não grava duas vezes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) batch_id: Option<String>,
     pub(crate) counters: Vec<Counter>,
+    pub(crate) detail: DayDetail,
+    pub(crate) sealed: bool,
     /// Marcas dos retratos do dia (servidor e apps), gravadas com os contadores e nunca copiadas ao pacote.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) snapshot_keys: BTreeSet<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) logs: Vec<LogLine>,
 }
 
-fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry-scope-2") }
+fn root(home: &Path) -> PathBuf { home.join(".hangar").join("telemetry-v3") }
 
 fn queue_dir(home: &Path) -> PathBuf { root(home).join("queue") }
 
@@ -84,11 +85,16 @@ pub(crate) fn cap(home: &Path) -> io::Result<usize> {
     Ok(excess.len())
 }
 
+/// A fila e as marcas do escopo 3.
 pub(crate) fn wipe(home: &Path) -> io::Result<()> { remove_tree(&root(home)) }
 
-/// A fila e as marcas da versão sem escopo (`~/.hangar/telemetry/`): só a recusa as apaga; o aceite as deixa
-/// para o binário revertido.
-pub(crate) fn wipe_legacy(home: &Path) -> io::Result<()> { remove_tree(&home.join(".hangar").join("telemetry")) }
+/// As filas das versões sem escopo (`~/.hangar/telemetry/`) e do escopo 2 (`telemetry-scope-2/`): a
+/// recusa e o desligamento (`HANGAR_TELEMETRY=0`, `DO_NOT_TRACK`, CI) as apagam, mesmo com o aceite
+/// gravado; o aceite ligado as deixa para o binário revertido, que não envia sem o próprio aceite.
+/// Tenta as duas antes de devolver o primeiro erro.
+pub(crate) fn wipe_legacy(home: &Path) -> io::Result<()> {
+    ["telemetry", "telemetry-scope-2"].map(|name| remove_tree(&home.join(".hangar").join(name))).into_iter().collect()
+}
 
 fn remove_tree(root: &Path) -> io::Result<()> {
     match std::fs::remove_dir_all(root) {
@@ -118,12 +124,22 @@ mod tests {
     fn fifteen_days_keep_fourteen() {
         let home = tempfile::tempdir().unwrap();
         for n in 1..=15 {
-            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), batch_id: None, counters: Vec::new(), snapshot_keys: Default::default(), logs: Vec::new() }).unwrap();
+            write_day(home.path(), &DayFile { day: format!("2026-11-{n:02}"), ..DayFile::default() }).unwrap();
         }
         assert_eq!(cap(home.path()).unwrap(), 1);
         let days = days(home.path()).unwrap();
         assert_eq!(days.len(), MAX_DAYS);
         assert_eq!(days.first().map(String::as_str), Some("2026-11-02"));
         assert_eq!(days.last().map(String::as_str), Some("2026-11-15"));
+    }
+
+    #[test]
+    fn legacy_wipe_tries_both_queues_before_failing() {
+        let home = tempfile::tempdir().unwrap();
+        let hangar = home.path().join(".hangar");
+        std::fs::create_dir_all(hangar.join("telemetry-scope-2/queue")).unwrap();
+        std::fs::write(hangar.join("telemetry"), "not a directory").unwrap();
+        assert!(wipe_legacy(home.path()).is_err());
+        assert!(!hangar.join("telemetry-scope-2").exists());
     }
 }

@@ -112,8 +112,7 @@ async fn run(st: Arc<AppState>, groups: Arc<GroupService>) {
             tokio::time::sleep(TICK).await;
             // Lista em erro: não dá para provar que a filha ficou parada o tempo todo.
             let Some(rows) = sub.rows() else { watcher.idle.clear(); continue };
-            let children: Vec<&SessionRow> = rows.iter()
-                .filter(|r| r.linked_by.as_deref().is_some_and(|p| !is_remote(p)) && returnable(&r.provider)).collect();
+            let children: Vec<&SessionRow> = rows.iter().filter(|r| r.linked_by.is_some() && returnable(&r.provider)).collect();
             if !children.is_empty() {
                 watcher.round(&st, &groups.server_id(), &children, &|| sub.rows()).await;
             }
@@ -279,7 +278,7 @@ impl Watcher {
             match blocking(move || link_state::ensure_linked(&dir, &names, at)).await {
                 Ok(created) => {
                     for child in created {
-                        report(st, &child, "link_returns_entry_missing", "filha ligada sem registro de ligação; só respostas de agora em diante voltam", "");
+                        report(st, &child, "link_returns_entry_missing", "filha ligada sem registro de ligação; só as respostas de agora em diante voltam", "");
                     }
                     self.known.extend(unseen);
                 }
@@ -403,7 +402,8 @@ impl Watcher {
         let parent = row.linked_by.as_deref().unwrap_or_default();
         let id = open_interaction(row);
         // Na espera da nova tentativa só o cancelamento da linha que perdeu o sentido segue.
-        if parent.is_empty() || (id.is_some() && self.question_retry_at.get(child).is_some_and(|t| now < *t)) { return; }
+        // Pai de outra máquina não recebe aviso de pergunta: o `child_answer` só alcança filha desta máquina.
+        if parent.is_empty() || is_remote(parent) || (id.is_some() && self.question_retry_at.get(child).is_some_and(|t| now < *t)) { return; }
         let kind = match id.as_deref() {
             Some(id) if self.notified.get(child).map(String::as_str) != Some(id) => interaction_kind(st, child, id).await,
             _ => None,
@@ -568,11 +568,24 @@ pub(crate) struct Check<'a> {
 }
 
 /// Critério 3 pela linha (parada há `SETTLE` e provedor devolvível já filtrados no `round`): resposta
-/// nova desde a ligação e o último retorno, com menos de `MAX_AGE`.
+/// nova desde o último retorno, com menos de `MAX_AGE`. Sem retorno ainda, a de antes da ligação também
+/// passa, e o `decide` só a aceita se for a do `initial_prompt`: a filha de outra máquina é ligada
+/// depois de abrir e pode responder antes. A entrada recuperada não sabe quando a ligação foi feita: só
+/// resposta posterior a ela.
 fn settled(c: &Check) -> bool {
     let (Some(at), Some(link)) = (c.last_reply_at, &c.link) else { return false };
-    let since = link.returned_at.map_or(link.linked_at, |r| r.max(link.linked_at));
-    at > since && c.now - at < MAX_AGE
+    let early = link.returned_at.is_none() && !link.recovered;
+    (early || at > link.returned_at.unwrap_or(f64::MIN).max(link.linked_at)) && c.now - at < MAX_AGE
+}
+
+/// A resposta lida é de antes da ligação.
+fn before_link(c: &Check) -> bool {
+    matches!((c.last_reply_at, &c.link), (Some(at), Some(link)) if at <= link.linked_at)
+}
+
+/// O turno é o primeiro da conversa (o do `initial_prompt`), lido desde o começo.
+fn first_turn(turn: &Turn) -> bool {
+    turn.whole && turn.events.iter().filter(|e| user_request(e)).count() == 1
 }
 
 /// Eventos do fim da conversa que chegam até a última mensagem do usuário; `whole` = desde o começo.
@@ -626,7 +639,7 @@ enum Refusal {
 
 /// Critérios 4 em diante, sobre o turno lido: devolve o texto e a identidade da resposta.
 fn decide<'a>(c: &Check, turn: &'a Turn) -> Result<(&'a str, String), Refusal> {
-    if !asked_by_parent(turn, c.parent, c.server) { return Err(Refusal::NotAsked); }
+    if !asked_by_parent(turn, c.parent, c.server) || (before_link(c) && !first_turn(turn)) { return Err(Refusal::NotAsked); }
     let returned = |key: &str| c.link.as_ref().and_then(|l| l.returned_key.as_deref()) == Some(key);
     let Some((answer, asked)) = final_answer(&turn.events) else {
         let key = unanswered_key(&turn.events);
@@ -789,14 +802,17 @@ async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at:
         Ok(_) | Err(Refusal::NoAnswer(_)) => {}
     }
     if !still_same(current().as_deref().map(Vec::as_slice), child, reply_at) { return Outcome::Moved; }
-    let Some(Reply { text, key, dropped }) = reply(child, found, || rate.allow(child, Instant::now())) else { return Outcome::Done };
+    let Some(Reply { text, key, dropped }) = reply(&signed(child, check), found, || rate.allow(child, Instant::now())) else { return Outcome::Done };
     if let Some((code, reason)) = dropped { report(st, child, code, reason, ""); }
     if dropped == Some(RATE_LIMITED) && !rate.notice_once(child, Instant::now()) { return Outcome::Done; }
-    let (status, answer) = crate::session_write::input::deliver_reply(st, check.parent, &text).await;
-    if !status.is_success() {
-        let code = answer["detail"]["code"].as_str().unwrap_or("erro_envio_falhou_desconhecida");
-        report(st, child, code, "entrega da resposta da filha ao pai falhou", &status.as_u16().to_string());
-        return if transient(status) { Outcome::Retry } else { Outcome::Done };
+    match deliver(st, check.parent, &text).await {
+        Sent::Yes => {}
+        Sent::Maybe => report(st, child, "link_return_maybe_delivered", "a resposta saiu para o pai e a confirmação não veio; talvez entregue, não repete", ""),
+        Sent::No(status, answer) => {
+            let code = answer["detail"]["code"].as_str().unwrap_or("erro_envio_falhou_desconhecida");
+            report(st, child, code, "entrega da resposta da filha ao pai falhou", &status.as_u16().to_string());
+            return if transient(status) { Outcome::Retry } else { Outcome::Done };
+        }
     }
     if dropped.is_none() { rate.record(child, Instant::now()); }
     let (dir, name, notice) = (st.hangar_dir.clone(), child.to_owned(), dropped.is_some());
@@ -809,6 +825,43 @@ async fn give_back(st: &AppState, row: &SessionRow, check: &Check<'_>, reply_at:
     // O aviso de resposta descartada já tem código próprio no diário.
     if dropped.is_none() { st.diag.record_line(delivered_line(child)); }
     Outcome::Done
+}
+
+/// Como o pai chama a filha: com a máquina daqui quando ele é de outra (`[de: srv::filha]`).
+fn signed(child: &str, check: &Check) -> String {
+    if is_remote(check.parent) && !check.server.is_empty() { format!("{}::{child}", check.server) } else { child.to_owned() }
+}
+
+/// Como terminou a entrega ao pai.
+#[derive(Debug, PartialEq)]
+enum Sent {
+    Yes,
+    /// Saiu daqui e a resposta não veio: pode ter chegado, e repetir daria o recado em dobro.
+    Maybe,
+    No(StatusCode, serde_json::Value),
+}
+
+/// O pai de outra máquina recebe pela API de lá, como o recado `servidor::sessao`. Lá fora do ar (a conexão
+/// nem abriu) é falha passageira: tenta de novo até a resposta passar de `MAX_AGE`.
+async fn deliver(st: &AppState, parent: &str, text: &str) -> Sent {
+    let Some((server, name)) = parent.split_once("::") else {
+        let (status, answer) = crate::session_write::input::deliver_reply(st, parent, text).await;
+        return if status.is_success() { Sent::Yes } else { Sent::No(status, answer) };
+    };
+    let path = format!("/api/sessions/{}/input", super::exit::segment(name));
+    remote_sent(st.peers.call_unsent(server, reqwest::Method::POST, &path, Some(&serde_json::json!({"text": text}))).await)
+}
+
+fn remote_sent(result: Result<Option<serde_json::Value>, (crate::groups::peers::PeerError, bool)>) -> Sent {
+    use crate::groups::peers::PeerError;
+    use serde_json::json;
+    match result {
+        Ok(_) => Sent::Yes,
+        Err((PeerError::Refused { status, detail }, _)) => Sent::No(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), json!({"detail": detail})),
+        Err((PeerError::Unknown, _)) => Sent::No(StatusCode::NOT_FOUND, json!({"detail": {"code": "link_return_parent_machine_unknown"}})),
+        Err((PeerError::Transport(_), false)) => Sent::Maybe,
+        Err(_) => Sent::No(StatusCode::SERVICE_UNAVAILABLE, json!({"detail": {"code": "link_return_parent_unreachable"}})),
+    }
 }
 
 /// Sucesso vai como `ok`: o `report` grava `erro`, e passado o teto do dia só `ok` é descartado.
@@ -871,6 +924,43 @@ mod tests {
     }
 
     #[test]
+    fn a_parent_on_another_machine_asks_and_reads_the_child_with_this_machine() {
+        let remote = Check { parent: "casa::pai", server: "lab", ..check() };
+        assert!(passes(&remote, asked("[de: casa::pai] faz isso")));
+        assert!(!passes(&remote, asked("[de: pai] faz isso")), "o homônimo daqui não é o pai");
+        assert_eq!(signed("f", &remote), "lab::f");
+        assert_eq!(signed("f", &check()), "f", "o pai daqui lê o nome cru");
+        let Reply { text, .. } = reply(&signed("f", &remote), Ok(("feito", "k".into())), || true).unwrap();
+        assert_eq!(text, "[de: lab::f] feito");
+    }
+
+    #[test]
+    fn the_initial_prompt_answered_before_the_link_returns() {
+        let early = Check { link: Some(LinkReturn { linked_at: NOW - 30.0, ..LinkReturn::default() }), ..check() };
+        assert!(settled(&early));
+        let first = vec![ev(ChatKind::UserMsg, "prompt inicial"), ev(ChatKind::AssistantMsg, "pronto")];
+        assert_eq!(decide(&early, &turn(first.clone(), true)).map(|(a, _)| a), Ok("pronto"));
+        assert_eq!(decide(&early, &turn(first, false)), Err(Refusal::NotAsked), "sem ler desde o começo, não é o prompt inicial");
+        assert_eq!(decide(&early, &turn(asked("[de: pai] x"), true)), Err(Refusal::NotAsked), "outro turno de antes da ligação não volta");
+        // A entrada recuperada (`ensure_linked`) não é a ligação: a resposta de antes dela não volta, nem a do prompt inicial.
+        let recovered = Check { link: Some(LinkReturn { linked_at: NOW - 30.0, recovered: true, ..LinkReturn::default() }), ..check() };
+        assert!(!settled(&recovered));
+        assert!(settled(&Check { last_reply_at: Some(NOW - 10.0), ..recovered }), "a de depois volta");
+    }
+
+    #[test]
+    fn only_a_request_that_never_left_is_sent_again() {
+        use crate::groups::peers::PeerError;
+        let no = |sent| match sent { Sent::No(status, _) => status, other => panic!("{other:?}") };
+        assert_eq!(remote_sent(Ok(None)), Sent::Yes);
+        assert_eq!(remote_sent(Err((PeerError::Transport("prazo de leitura".into()), false))), Sent::Maybe, "saiu: talvez entregue");
+        assert!(transient(no(remote_sent(Err((PeerError::Transport("recusada".into()), true))))), "nem conectou: repete");
+        let busy = PeerError::Refused { status: 409, detail: serde_json::json!({"code": "ocupado"}) };
+        assert!(transient(no(remote_sent(Err((busy, false))))));
+        assert!(!transient(no(remote_sent(Err((PeerError::Unknown, true))))));
+    }
+
+    #[test]
     fn the_child_line_keeps_the_first_message_returnable() {
         let first = format!("{} faz a busca", hangar_delegation::guidance::child_prefix("pai"));
         let whole = turn(vec![ev(ChatKind::UserMsg, &first), ev(ChatKind::AssistantMsg, "achei")], true);
@@ -911,7 +1001,8 @@ mod tests {
         let at = NOW - 60.0;
         let link = |linked_at, returned_at| Some(LinkReturn { linked_at, returned_at, ..LinkReturn::default() });
         assert!(!settled(&Check { link: None, ..check() }));
-        assert!(!settled(&Check { link: link(at + 1.0, None), ..check() }));
+        assert!(settled(&Check { link: link(at + 1.0, None), ..check() }), "antes da ligação, o decide confere");
+        assert!(!settled(&Check { link: link(at + 1.0, Some(0.0)), ..check() }), "depois de um retorno, só resposta posterior à ligação");
         assert!(!settled(&Check { link: link(0.0, Some(at)), ..check() }));
         assert!(settled(&Check { link: link(0.0, Some(at - 1.0)), ..check() }));
         assert!(!settled(&Check { last_reply_at: Some(NOW - MAX_AGE - 1.0), ..check() }));

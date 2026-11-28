@@ -9,7 +9,9 @@ import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount, getAn
   getEnginesForServer, getSessionDefaultsForServer, getConfigForServer, getMeForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
-  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory, getRootsForServer, pickFolderRoot } from '@hangar/core';
+  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory, getRootsForServer, pickFolderRoot,
+  isOwnMachine, ownUpdatableServers, placementSuggestionFor, placementRuleOfferFor, placementElsewhereBody,
+  type PlacementRuleOffer, type PlacementSuggestion } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
   CREATE_SESSION_PROVIDERS, KIMI_OPEN_PERMISSION_MODES, canChooseSurface, permissionModes, effortLevels, contextRefsPlainText, machineLabel, serverColor, tagHex } from '@hangar/core';
 import type { AccountBadge } from '@hangar/core';
@@ -43,6 +45,9 @@ import { readMachine, rememberMachine } from './choicesPrefs';
 import { superficie } from '../../theme/superficie';
 import { AnchoredPanel } from '../../ui/AnchoredPanel';
 import * as m from '../../paraglide/messages';
+
+/** As máquinas próprias, fora a demonstração, entre as quais o balanceamento escolhe. */
+const placementMachines = (list: readonly Server[]) => ownUpdatableServers(list).filter((s) => !isDemoUrl(`${s.baseUrl}/`));
 
 type ProviderProbe = Record<string, { disponivel: boolean; motivo: string | null; default?: boolean }>;
 type Choice = Omit<ComponentProps<typeof QuietPill>, 'ref'>;
@@ -87,6 +92,10 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
 }) {
   const servers = useServers((s) => s.servers);
   const activeId = useServers((s) => s.activeId);
+  // Máquina pedida por quem abriu, trocada à mão ou qualquer escolha na tela (nome, provedor, modelo, conta, modo, pasta):
+  // a troca remontaria o formulário e perderia essas escolhas, então a sugestão que chega depois só mostra o motivo.
+  const chosen = useRef(!!initial?.server);
+  const [suggestion, setSuggestion] = useState<PlacementSuggestion | null>(null);
   // A máquina escolhida na pílula vale só para onde a conversa nasce; o servidor ativo é das Configurações.
   const [machine, setMachine] = useState(() => {
     const remembered = readMachine();
@@ -97,18 +106,37 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
   // Fixa também o destino que apareceu após a carga das máquinas ou a remoção da escolhida.
   useEffect(() => { if (target && target.id !== machine) setMachine(target.id); }, [machine, target?.id]);
   const pickMachine = useCallback((id: string) => {
+    chosen.current = true;
     rememberMachine(id);
     setMachine(id);
   }, []);
+  const keepChoice = useCallback(() => { chosen.current = true; }, []);
+  // Uma pergunta por abertura ao servidor ativo; com a tela em "sugerir", a sugerida vence a última lembrada.
+  const asked = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    const active = servers.find((s) => s.id === activeId);
+    // Com a criação escondida atrás da lista, nada é pedido; a pergunta sai quando ela aparece.
+    if (asked.current || chosen.current || !active || !isOwnMachine(active) || home?.mode === 'sessions') return;
+    asked.current = true;
+    placementSuggestionFor(active, placementMachines(servers)).then((found) => {
+      if (!mounted.current || !found) return;
+      setSuggestion(found);
+      if (!chosen.current) setMachine(found.serverId);
+    }, (error: unknown) => console.warn('new_chat_placement_suggestion_unread', error));
+  }, [servers, activeId, home?.mode]);
   // O motor é de uma máquina: trocar a pílula de máquina descarta o pedido.
   const initialEngine = initial?.engine && (!initial.server || initial.server === target?.id) ? initial.engine : undefined;
-  return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} initialEngine={initialEngine} />
+  return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine}
+    suggestion={suggestion} onTouched={keepChoice} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} initialEngine={initialEngine} />
     : home?.mode === 'sessions' ? <View style={{ flex: 1 }}>{home.sessions}</View>
       : <Text accessibilityRole="alert">{m.servidor_nao_existe()}</Text>;
 }
 
-function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardOffset, home, layout, initialEngine }: {
-  active: Server; machines: Server[]; onPickMachine: (id: string) => void; onClose?: () => void; keyboardOffset?: number; home?: HomePresentation;
+function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouched, onClose, keyboardOffset, home, layout, initialEngine }: {
+  active: Server; machines: Server[]; onPickMachine: (id: string) => void; suggestion: PlacementSuggestion | null; onTouched: () => void;
+  onClose?: () => void; keyboardOffset?: number; home?: HomePresentation;
   layout: 'conversation' | 'form'; initialEngine?: string;
 }) {
   const router = useRouter();
@@ -160,6 +188,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const startAgyRetry = useCanceledLoadRetry(useCallback(() => setAgyTry((n) => n + 1), []));
   const [projectWarning, setProjectWarning] = useState('');
   const pickGeneration = useRef(0);
+  // A pasta escolhida tem regra de projeto para outra máquina; com o "Abrir na <máquina>", a sessão é pedida para lá.
+  const [ruleOffer, setRuleOffer] = useState<PlacementRuleOffer | null>(null);
+  const [ruleTaken, setRuleTaken] = useState(false);
 
   // O inicial vem da sonda de providers, que segue o último provedor que o servidor guardou.
   const [provider, setProvider] = useState<Provider>('claude');
@@ -626,6 +657,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     AccessibilityInfo.announceForAccessibility(m.new_chat_account_switched({ conta: contaLabel(from) }));
   }, [provider, engine, configs, cotas, selectedConfig, configsLoading]);
 
+  // A lista de máquinas muda de identidade a cada leitura: dependência dela refaria a varredura do seletor de pasta.
+  const machinesRef = useRef(machines);
+  machinesRef.current = machines;
   const handlePick = useCallback(async (p: string, root?: string) => {
     const generation = ++pickGeneration.current;
     setPicked(p);
@@ -639,6 +673,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       catch { setProjectWarning(m.criar_projeto_salvar_erro()); }
     }
     setHasSameFolder(false);
+    setRuleOffer(null);
+    setRuleTaken(false);
+    if (p !== NO_PROJECT_CWD && isOwnMachine(active)) {
+      placementRuleOfferFor(active, placementMachines(machinesRef.current), p).then((offer) => {
+        if (mounted.current && generation === pickGeneration.current) setRuleOffer(offer);
+      }, (cause: unknown) => console.warn('new_chat_project_rule_unread', cause));
+    }
     try {
       const sessions = await fetchSessionsForServer(active);
       if (!mounted.current || generation !== pickGeneration.current) return;
@@ -648,6 +689,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       setError(cause instanceof Error ? cause.message : m.criar_sessao_erro());
     }
   }, [active]);
+  // Escolha da pessoa, não a pasta que o seletor marca sozinho ao abrir: a sugestão de máquina que chega depois não a tira.
+  const pickByHand = useCallback((p: string, root?: string) => { onTouched(); return handlePick(p, root); }, [handlePick, onTouched]);
 
   // O formulário abre na última pasta usada nesta máquina, como a conversa nova. Uma vez por montagem:
   // o objeto do servidor muda de identidade (rede local, token) e não pode desfazer a escolha da pessoa.
@@ -738,6 +781,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
 
   // Nada daqui é guardado no aparelho: o padrão da próxima abertura é o do servidor.
   const chooseProvider = (p: Provider) => {
+    onTouched();
     providerTouched.current = true;
     seededEngine.current = '';
     setSeedPending(false);
@@ -748,6 +792,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setProvider(p);
   };
   const chooseModel = (v: string) => {
+    onTouched();
     choiceTouched.current = true;
     if (!v) setServiceTier(undefined);
     providerTouched.current = true;
@@ -759,18 +804,21 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setEsforco(effort);
   };
   const chooseEffort = (v: string) => {
+    onTouched();
     choiceTouched.current = true;
     providerTouched.current = true;
     setProvidersError('');
     desired.current = { ...desired.current, effort: v };
     setEsforco(v);
   };
-  const chooseHeadless = (v: boolean) => setHeadlessPick(v);
+  const chooseHeadless = (v: boolean) => { onTouched(); setHeadlessPick(v); };
   const choosePermission = (value: string) => {
+    onTouched();
     permissionTouched.current = true;
     setPermissao(value);
   };
   const chooseConfig = (v: string) => {
+    onTouched();
     providerTouched.current = true;
     setProvidersError('');
     accountTouched.current = true;
@@ -796,6 +844,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setSelectedConfig(target);
   };
   const chooseCodexAccount = (value: string) => {
+    onTouched();
     providerTouched.current = true;
     setProvidersError('');
     codexGeneration.current++;
@@ -1065,7 +1114,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       <TextInput
         style={styles.input}
         value={name}
-        onChangeText={setName}
+        onChangeText={(v) => { onTouched(); setName(v); }}
         placeholder={m.criar_nome_placeholder()}
         accessibilityLabel={m.comum_nome()}
         autoCapitalize="none"
@@ -1082,7 +1131,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       <PanelSelect
         value={engine}
         options={[{ value: '', label: m.criar_claude_sua_conta() }, ...Object.entries(motores).map(([k, v]) => ({ value: k, label: (v as any).label ?? k, hint: (v as any).model }))]}
-        onChange={(v) => { choiceTouched.current = false; seededEngine.current = ''; setSeedPending(false); setEngine(v); }}
+        onChange={(v) => { onTouched(); choiceTouched.current = false; seededEngine.current = ''; setSeedPending(false); setEngine(v); }}
       />
     </View>
   ) : null;
@@ -1174,7 +1223,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const branchPicker = picked && !noProject ? <BranchPicker server={active} cwd={pickedRepo ?? picked} worktreePath={pickedRepo && pickedRepo !== picked ? picked : undefined}
                               sessionName={name.trim() || basename(picked)}
                               value={worktree} onChange={onWorktree} basePicked={basePicked}
-                              onPickFolder={(path, keepOpen, repo) => { setFolderRepo(repo ? { path, repo } : null); void handlePick(path); if (!keepOpen) setBranchOpen(false); }}
+                              onPickFolder={(path, keepOpen, repo) => { setFolderRepo(repo ? { path, repo } : null); void pickByHand(path); if (!keepOpen) setBranchOpen(false); }}
                               onTakenChange={setBranchTaken} /> : null;
   const focusBranchAnchor = () => { if (branchRef.current) AccessibilityInfo.sendAccessibilityEvent(branchRef.current, 'focus'); };
   const branchPanel = (
@@ -1198,14 +1247,32 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       icon: tags?.machine ? MACHINE_ICON_NAME[tags.machine.icon] : 'Laptop' as const,
       accounts: tags?.accounts, demo: isDemoUrl(`${sv.baseUrl}/`), offline: machineOffline[i] ?? false };
   };
-  const activeMachine = machineView(active, machines.findIndex((sv) => sv.id === active.id));
+  // A oferta vale para a pasta escolhida agora e para uma máquina que segue na lista do app.
+  const ruleServer = ruleOffer && ruleOffer.cwd === picked ? machines.find((sv) => sv.id === ruleOffer.serverId) ?? null : null;
+  const ruleLabel = ruleServer ? machineView(ruleServer, machines.indexOf(ruleServer)).label : '';
+  const elsewhere = ruleTaken && ruleOffer && ruleServer ? { server: ruleOffer.server, at: ruleServer } : null;
+  // Voltar a esta máquina depois do clique só desfaz a oferta; outra troca a máquina e descarta a oferta.
+  const pickShownMachine = (id: string) => { if (id === active.id) setRuleTaken(false); else if (id !== elsewhere?.at.id) onPickMachine(id); };
+  // Escolha da pessoa: a sugestão de máquina que chega depois não desfaz o clique.
+  const ruleLine = ruleServer && ruleOffer ? (
+    <View style={styles.ruleLine}>
+      <Text style={styles.ruleText}>{m.native_placement_rule_offer({ projeto: ruleOffer.project, maquina: ruleLabel })}</Text>
+      {!ruleTaken ? (
+        <Pressable onPress={() => { onTouched(); setRuleTaken(true); }} disabled={creating} hitSlop={LINK_SLOP} accessibilityRole="button"
+          accessibilityState={{ disabled: creating }}>
+          <Text style={styles.headingLink}>{m.native_placement_rule_open({ maquina: ruleLabel })}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  ) : null;
+  const shownMachine = elsewhere ? machineView(elsewhere.at, machines.indexOf(elsewhere.at)) : machineView(active, machines.findIndex((sv) => sv.id === active.id));
   // A máquina fica sob o título da conversa nova ("em notebook"), com o menu das máquinas e as contas de cada uma.
   const machinePill = (
-    <QuietPill label={activeMachine.label} shown={m.native_new_chat_on_machine({ maquina: activeMachine.label })}
-      leading={<MachineTile icon={activeMachine.icon} color={activeMachine.color} size={22} />}
+    <QuietPill label={shownMachine.label} shown={m.native_new_chat_on_machine({ maquina: shownMachine.label })}
+      leading={<MachineTile icon={shownMachine.icon} color={shownMachine.color} size={22} />}
       aria={m.native_new_chat_machine()} menuTitle={m.native_new_chat_machine()}
-      menu={(close) => <MachineMenu machines={machines.map(machineView)} active={active.id}
-        onPick={(id) => { close(); if (id !== active.id) onPickMachine(id); }} />}
+      menu={(close) => <MachineMenu machines={machines.map(machineView)} active={shownMachine.id} suggested={suggestion}
+        onPick={(id) => { close(); pickShownMachine(id); }} />}
       size="lg" />
   );
 
@@ -1214,7 +1281,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const lastCwds = useSessions(useShallow((s) => recentCwds(s.byServerRecord?.[active.id], Infinity)));
   const recents = active.invite ? [] : recentProjects(lastCwds, repos, picked, 3);
   const pickRecent = (path: string) => {
-    void handlePick(path);
+    void pickByHand(path);
     const generation = pickGeneration.current;
     const current = () => mounted.current && generation === pickGeneration.current;
     // Como a escolha no painel, a pasta fica lembrada com a raiz dela; sem raiz conhecida vale só a escolha.
@@ -1250,6 +1317,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const attemptName = useRef<{ key: string; name: string; known: boolean } | null>(null);
   const createSession = async () => {
     if (!body || !canCreate || createInFlight.current) return;
+    // "Abrir na <máquina>": o servidor desta tela traduz a pasta e encaminha; nome livre, conversa e conferência são de lá.
+    const born = elsewhere?.at ?? active;
     createInFlight.current = true;
     setCreating(true);
     setError('');
@@ -1259,28 +1328,30 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     const retry = previous?.key === key;
     // Antes do POST: renovação atrasada subiria outra reserva depois da adoção. O nome da reserva já
     // está guardado para ela no servidor.
-    const ticket = takePrewarm();
+    // A reserva é desta máquina: encaminhada, a sessão nasce fria lá.
+    const ticket = elsewhere ? null : takePrewarm();
     let chosen = retry ? previous : typed ? { name: typed, known: true }
-      : ticket ? { name: ticket.name, known: true } : await autoSessionName(active, body.cwd);
+      : ticket ? { name: ticket.name, known: true } : await autoSessionName(born, body.cwd);
     // Quem cancelou já saiu: a sessão nasceu e fica na lista, sem puxar a pessoa de volta.
     const open = (session: string) => {
-      resetCreatedChat(active.id, session);
-      if (mounted.current) router.replace(`/s/${active.id}/${session}` as never);
+      resetCreatedChat(born.id, session);
+      if (mounted.current) router.replace(`/s/${born.id}/${session}` as never);
     };
     try {
       for (let first = true; ; first = false) {
         attemptName.current = { key, ...chosen };
         try {
-          const session = await createSessionForServer(active, { ...body, name: chosen.name,
+          const asked = { ...body, name: chosen.name,
             // Só com o nome da reserva: o digitado, a repetição ou o próximo automático vão sem ela.
             ...(ticket && ticket.name === chosen.name ? { prewarm: ticket.id } : {}),
-            ...(body.new_branch && !body.branch?.trim() ? { branch: sanitizeSessionName(chosen.name) } : {}) });
+            ...(body.new_branch && !body.branch?.trim() ? { branch: sanitizeSessionName(chosen.name) } : {}) };
+          const session = await createSessionForServer(active, elsewhere ? placementElsewhereBody(asked, elsewhere.server) : asked);
           open(session.name);
           return;
         } catch (cause: unknown) {
           // Nome automático em uso (lista fora do ar, ou outra tela criou no meio): uma tentativa com o próximo.
           if (!typed && !retry && first && (cause as { code?: unknown } | null)?.code === 'erro_nome_em_uso') {
-            chosen = await autoSessionName(active, body.cwd, [chosen.name]);
+            chosen = await autoSessionName(born, body.cwd, [chosen.name]);
             continue;
           }
           throw cause;
@@ -1295,9 +1366,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       const lost = typeof status !== 'number' || status >= 500 || status === 408 || (status === 409 && retry && chosen.known);
       // Recusa respondida encerra a tentativa: o próximo toque escolhe o nome de novo, sem contar como repetição.
       if (!lost) attemptName.current = null;
-      const exists = !lost ? false : await fetchSessionsForServer(active)
+      const exists = !lost ? false : await fetchSessionsForServer(born)
         .then((list) => list.some((session) => session.name === finalName), () => null);
-      const empty = exists && await getHistory(finalName, 1, undefined, 8_000, active)
+      const empty = exists && await getHistory(finalName, 1, undefined, 8_000, born)
         .then((events) => events.length === 0, () => false);
       if (empty) open(finalName);
       else if (mounted.current) {
@@ -1333,21 +1404,23 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         </View>
         {folderOpen ? (
           <View style={styles.folderScreen}>
-            <CwdPicker server={active} onPick={handlePick} selected={picked} autoSelect={false} onDone={() => setFolderOpen(false)} repos={repos} />
+            <CwdPicker server={active} onPick={pickByHand} selected={picked} autoSelect={false} onDone={() => setFolderOpen(false)} repos={repos} />
           </View>
         ) : (
           <ScrollView contentContainerStyle={styles.formScroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
             {/* No topo: o Criar fica no cabeçalho e a falha dele precisa aparecer sem rolar. */}
             {notices}
             <RowGroup>
-              <SettingRow icon="Monitor" label={m.native_new_chat_machine()} value={active.label}
-                actions={machines.map((sv) => ({ id: sv.id, title: sv.label, state: on(sv.id === active.id) }))}
-                onAction={(id) => { if (id !== active.id) onPickMachine(id); }} />
+              <SettingRow icon="Monitor" label={m.native_new_chat_machine()} value={elsewhere ? elsewhere.at.label : active.label}
+                actions={machines.map((sv) => ({ id: sv.id, title: sv.label, state: on(sv.id === (elsewhere?.at.id ?? active.id)),
+                  subtitle: sv.id === suggestion?.serverId ? m.native_new_chat_machine_suggested({ motivo: suggestion.text }) : undefined }))}
+                onAction={pickShownMachine} />
               <SettingRow ref={folderRef} icon="Folder" label={m.native_new_chat_folder()} detail={picked ?? undefined}
                 value={picked ? folderLabel : m.criar_escolher_pasta()} onPress={() => setFolderOpen(true)} />
               {picked && !noProject ? <SettingRow ref={branchRef} icon="GitBranch" label={m.native_create_checkout_branch()} value={branchLabel}
                 onPress={() => setBranchOpen(true)} /> : null}
             </RowGroup>
+            {ruleLine}
             {/* Os seis agentes à vista, como o seletor do PC: um menu preso à linha cortava os de baixo. */}
             <ProviderTrack value={provider} onChange={chooseProvider} probe={providerProbe} disabled={creating} />
             <RowGroup>
@@ -1411,7 +1484,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       destination={destination}
       destinationPending={!picked}
       providerLabel={providerName(provider)}
-      folderPanel={(close) => <CwdPicker server={active} onPick={handlePick} selected={picked} autoSelect={false} onDone={close} compact repos={repos} />}
+      folderPanel={(close) => <CwdPicker server={active} onPick={pickByHand} selected={picked} autoSelect={false} onDone={close} compact repos={repos} />}
       topPills={(openFolder) => {
         // A pasta mora no título, no meio da tela: "O que vamos fazer em [pasta]?", e a máquina logo abaixo.
         return noProject ? (
@@ -1443,8 +1516,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             {/* O aviso é sobre a pasta, então mora colado nela, discreto. */}
             {hasSameFolder ? <Text style={styles.heroNote}>{m.criar_ja_existe()}</Text> : null}
             <View style={styles.heroMachine}>{machinePill}</View>
+            {ruleLine ? <View style={styles.heroRule}>{ruleLine}</View> : null}
             {!active.invite ? (
-              <Pressable onPress={() => { void handlePick(NO_PROJECT_CWD); }} hitSlop={LINK_SLOP} accessibilityRole="button"
+              <Pressable onPress={() => { void pickByHand(NO_PROJECT_CWD); }} hitSlop={LINK_SLOP} accessibilityRole="button"
                 accessibilityHint={m.native_new_chat_no_project_hint()} style={styles.heroLinkRow}>
                 <Text style={[styles.headingLink, styles.heroLink]}>{m.native_new_chat_start_without_project()}</Text>
               </Pressable>
@@ -1502,6 +1576,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       takePrewarm={takePrewarm}
       resumePrewarm={resumePrewarm}
       blocked={blocked || branchBlocked}
+      forward={elsewhere ? { at: elsewhere.at, machine: elsewhere.server } : null}
       commandSource={provider === 'claude' ? {
         // A mesma conta que vai no corpo da criação; sem pasta, a lista traz o que é da conta.
         cwd: picked,
@@ -1517,6 +1592,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
 
 const styles = StyleSheet.create((theme) => ({
   form: { flex: 1 },
+  ruleLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: theme.base.space[2], rowGap: theme.base.space[1], paddingHorizontal: theme.base.space[2] },
+  ruleText: { flexShrink: 1, fontSize: theme.base.text.xs, color: theme.tokens.text.secondary },
   navbar: { minHeight: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: theme.base.space[3] },
   navSide: { minWidth: 72, minHeight: 44, justifyContent: 'center' },
   navRight: { alignItems: 'flex-end' },
@@ -1559,6 +1636,7 @@ const styles = StyleSheet.create((theme) => ({
   heroLink: { fontSize: theme.base.text.base },
   // Título, máquina e "sem projeto" em três partes, com o mesmo respiro entre elas.
   heroMachine: { marginTop: theme.base.space[3] },
+  heroRule: { marginTop: theme.base.space[2], alignItems: 'center' },
   heroLinkRow: { marginTop: theme.base.space[2] },
   heroNote: { fontSize: theme.base.text.xs, color: theme.tokens.text.muted, textAlign: 'center', marginTop: theme.base.space[1], paddingHorizontal: theme.base.space[4] },
   // Pastas recentes sob o título: atalhos em grade, ícone e nome, um toque troca a pasta.

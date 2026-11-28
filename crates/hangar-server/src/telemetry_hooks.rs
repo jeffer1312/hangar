@@ -7,14 +7,25 @@ use std::time::Duration;
 use axum::extract::{MatchedPath, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
-use hangar_telemetry::Telemetry;
+use hangar_telemetry::{Collection, Telemetry};
 use hangar_telemetry::events::{Dims, Event, Provider};
+use hangar_usage_diary::OwnerAction;
 
 use crate::list::bridge::ListBridge;
 use crate::push::watch::TurnEvent;
 use crate::routes::AppState;
 
 static INSTALLED: OnceLock<Arc<Telemetry>> = OnceLock::new();
+
+tokio::task_local! { pub(crate) static NO_TELEMETRY: (); }
+
+/// O bearer sintético do MCP mantém as permissões da rota, não prova a autoria da ação.
+#[derive(Clone, Copy)]
+pub(crate) struct NoTelemetry;
+
+pub(crate) fn eligible_request(req: &Request) -> bool {
+    req.extensions().get::<NoTelemetry>().is_none() && !crate::telemetry_routes::guest(req)
+}
 
 /// O motor desta vida, só contando, para os ganchos que não recebem o estado do servidor (lista, aviso
 /// tirado da conversa, sessão caída). Vazio até a subida ligar.
@@ -72,17 +83,46 @@ impl TurnClock {
 /// `feature_used`, decidido depois do handler: modelo de rota da lista, resposta 2xx e só o dono. O MCP
 /// chama o roteador interno, que não passa por esta camada.
 pub(crate) async fn count_feature(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
-    if st.counting().is_none() { return next.run(req).await; }
+    let Some(telemetry) = st.counting() else { return next.run(req).await };
+    let epoch = telemetry.consent_epoch();
     let feature = req.extensions().get::<MatchedPath>()
         .and_then(|path| hangar_telemetry::events::feature(req.method().as_str(), path.as_str()))
-        .filter(|_| !crate::telemetry_routes::guest(&req));
-    let Some(feature) = feature else { return next.run(req).await };
+        .filter(|_| eligible_request(&req));
+    let (Some(feature), Some(period)) = (feature, telemetry.collection()) else { return next.run(req).await };
+    let auth = req.extensions().get::<hangar_core::edge::RequestAuth>().cloned();
     let marker = req.extensions().get::<crate::routes::NotOwner>().cloned();
+    let start = std::time::Instant::now();
     let response = next.run(req).await;
-    if response.status().is_success() && !marker.is_some_and(|marker| marker.seen()) && let Some(telemetry) = st.counting() {
-        telemetry.count(Event::FeatureUsed, Dims::new().with("feature", feature), 1);
+    if marker.is_some_and(|marker| marker.seen()) || telemetry.consent_epoch() != epoch || !telemetry.enabled()
+        || period.since > chrono::Utc::now() { return response; }
+    if let Some(auth) = auth && auth.owner_verified().await {
+        let status = response.status();
+        if status.is_success() {
+            telemetry.count_in(epoch, Event::FeatureUsed, Dims::new().with("feature", feature), 1);
+            record_action(&st, period, OwnerAction::Http, feature.as_str(), "request", None, start.elapsed()).await;
+        } else if status.is_client_error() || status.is_server_error() {
+            let failure = response.extensions().get::<crate::diag::FailureCode>().map(|code| code.0)
+                .filter(|code| hangar_telemetry::diary::known_failure(code));
+            let fallback = format!("http_{}", status.as_u16());
+            record_action(&st, period, OwnerAction::Http, feature.as_str(), "request", Some(failure.unwrap_or(&fallback)), start.elapsed()).await;
+        }
     }
     response
+}
+
+pub(crate) async fn record_action(st: &AppState, period: Collection, origin: OwnerAction, action: &str,
+                                  stage: &'static str, code: Option<&str>, took: Duration) {
+    if st.counting().and_then(Telemetry::collection).is_none_or(|current| current.id != period.id) { return; }
+    let Some(base) = crate::diag::diary_base(st) else { return };
+    let now = chrono::Local::now().fixed_offset();
+    let (action, code) = (action.to_owned(), code.map(str::to_owned));
+    let ms = took.as_millis().min(3_600_000) as u64;
+    match tokio::task::spawn_blocking(move || hangar_usage_diary::record_owner_action(
+        &base, origin, &period.id, now, &action, stage, code.as_deref(), ms)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!(code = "telemetry_diary_write_failed", ?error, "falha ao gravar ação no diário da telemetria"),
+        Err(_) => crate::telemetry_routes::task_failed(&st.diag),
+    }
 }
 
 /// O motor dos testes do servidor; `consent` responde ao aviso, senão fica sem resposta.
@@ -133,7 +173,12 @@ mod tests {
 
     fn app(st: Arc<AppState>) -> axum::Router {
         axum::Router::new()
-            .route("/api/sessions/{name}/navegador", get(|| async { StatusCode::OK }))
+            .route("/api/sessions/{name}/navegador", get(|State(st): State<Arc<AppState>>, req: Request| async move {
+                let owner = crate::routes::gate(&st, "127.0.0.1:5000".parse().unwrap(), &req);
+                drop(req);
+                assert!(matches!(owner.await, Ok((_, true))));
+                StatusCode::OK
+            }))
             .route("/api/sessions/{name}/history", get(|| async { StatusCode::OK }))
             .route("/api/tags", put(|| async { StatusCode::FORBIDDEN }))
             .layer(axum::middleware::from_fn_with_state(st.clone(), count_feature))
@@ -141,7 +186,9 @@ mod tests {
     }
 
     fn request(method: &str, uri: &str) -> Request {
-        axum::http::Request::builder().method(method).uri(uri).body(Body::empty()).unwrap()
+        let mut req = axum::http::Request::builder().method(method).uri(uri).header("authorization", "Bearer owner").body(Body::empty()).unwrap();
+        req.extensions_mut().insert(hangar_core::edge::RequestAuth::default());
+        req
     }
 
     #[tokio::test]

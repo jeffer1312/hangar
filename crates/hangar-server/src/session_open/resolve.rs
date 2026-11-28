@@ -456,7 +456,8 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         permission_mode, subagent_model: request.subagent_model.clone(), customizations: request.claude_customizations.clone(),
         jev: request.jev.unwrap_or_else(|| facts.defaults().jev),
         code_mode, read_only: request.read_only,
-        worktree: request.branch.clone().map(|branch| WorktreeSpec { branch, new_branch: request.new_branch, base: request.base.clone(), path: None }),
+        worktree: request.branch.clone().map(|branch| WorktreeSpec { branch, new_branch: request.new_branch, base: request.base.clone(), path: None,
+            fresh: request.placed && !guest }),
         creator: request.creator.clone(), created_at: facts.now(), conversation: None,
         name_auto: Some(name_auto), rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
         hooks_off: request.disable_hooks, auto_continue_off: false,
@@ -481,7 +482,7 @@ pub fn choose_provider(catalog: &ProviderCatalog) -> AgentProvider {
 }
 
 /// `_creator_permission_mode` / `_codex_as_claude_mode`: o modo da criadora no nome do `--permission-mode`.
-fn creator_mode(info: &CreatorFacts) -> Option<PermissionMode> {
+pub(crate) fn creator_mode(info: &CreatorFacts) -> Option<PermissionMode> {
     let raw = info.permission_mode.as_deref()?;
     if info.provider == AgentProvider::Codex {
         // Chave exata do `PERMISSION_POLICIES`, sem a tolerância de maiúscula da abertura.
@@ -498,7 +499,7 @@ fn creator_mode(info: &CreatorFacts) -> Option<PermissionMode> {
 /// nome; do Claude, o inverso do `_codex_as_claude_mode` (bypass → Full Access, acceptEdits →
 /// Approve for me, manual → Ask for approval), e os modos sem imagem no Codex (auto, dontAsk, plan)
 /// vão para Ask for approval, o mais restrito.
-fn creator_codex_mode(info: &CreatorFacts) -> Option<PermissionMode> {
+pub(crate) fn creator_codex_mode(info: &CreatorFacts) -> Option<PermissionMode> {
     let raw = info.permission_mode.as_deref()?;
     if info.provider == AgentProvider::Codex {
         return PermissionMode::CODEX.into_iter().find(|m| m.name() == raw);

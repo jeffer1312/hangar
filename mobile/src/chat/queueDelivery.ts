@@ -1,6 +1,6 @@
 import {
   comTeto, splitContextRefs, failureWithCode, parseImageMessage, parsePeerMessage,
-  probeServerResponse, sendInputForServer, type AnswerItem, type AskQuestionPayload, type ChatEvent, type Server,
+  isSlashCommand, probeServerResponse, sendInputForServer, type AnswerItem, type AskQuestionPayload, type ChatEvent, type Server,
 } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
@@ -39,7 +39,7 @@ export const deliveryProvider = (provider: string | null | undefined) => provide
 
 export function queueSendMode(mode: DeliveryMode, ready: boolean, state: string, provider: string | null | undefined,
   headless: boolean, message: string, events: ChatEvent[], ask: AskQuestionPayload | null): QueueSendMode | undefined {
-  if (state !== 'working' || !deliveryProvider(provider) || message.trimStart().startsWith('/')) return;
+  if (state !== 'working' || !deliveryProvider(provider) || isSlashCommand(message)) return;
   // O Ctrl+S do Kimi entra no turno sem cortá-lo: lá "Na conversa" é o mesmo envio direto.
   const effective = provider === 'kimi' && mode === 'conversation' ? 'direct' : mode;
   if (effective === 'direct') return { kind: 'direct', terminalClaude: provider === 'claude' && !headless };

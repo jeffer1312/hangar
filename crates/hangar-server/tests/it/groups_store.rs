@@ -69,6 +69,7 @@ fn fed_round_trip_and_python_shape() {
         peers: vec!["b".into(), "lab::c".into()], task: Some("t".into()), gid: "ab12cd34".into(),
         harness: [("a".into(), "claude".into()), ("fora".into(), "pi".into())].into(),
         orq: false, fed: Some(Fed { owner: "casa".into(), local: true, version: 7 }), linked_by: Some("b".into()), lead: Some("a".into()),
+        linked_children: vec!["lab::c".into()],
     };
     dir.write_sidecar("a", &s).unwrap();
     let raw: Value = serde_json::from_str(&std::fs::read_to_string(tmp.path().join("a.json")).unwrap()).unwrap();
@@ -78,6 +79,8 @@ fn fed_round_trip_and_python_shape() {
     assert_eq!(raw["linked_by"], "b");
     assert_eq!(dir.sidecar("a").unwrap().unwrap().linked_by, s.linked_by, "linked_by volta igual da leitura");
     assert_eq!(raw["lead"], "a");
+    assert_eq!(raw["linked_children"], serde_json::json!(["lab::c"]));
+    assert_eq!(dir.sidecar("a").unwrap().unwrap().linked_children, s.linked_children, "linked_children volta igual da leitura");
     assert_eq!(dir.sidecar("a").unwrap().unwrap().lead, s.lead, "lead volta igual da leitura");
     assert!(!tmp.path().join("a.json.tmp").exists(), "o temporário não fica");
 }
@@ -159,14 +162,30 @@ fn write_waits_for_a_reader_holding_the_sidecar_on_windows() {
     let mut s = Sidecar { peers: vec!["b".into()], task: Some("um".into()), gid: "ab12cd34".into(), ..Default::default() };
     dir.write_sidecar("a", &s).unwrap();
     let reader = std::fs::OpenOptions::new().read(true).share_mode(0x1).open(tmp.path().join("a.json")).unwrap();
+    // Solta o leitor quando a troca já começou (o temporário existe), sem espera fixa.
+    let tmp_file = tmp.path().join("a.json.tmp");
     let release = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(60));
+        for _ in 0..10_000_000 { if tmp_file.exists() { break; } std::thread::yield_now(); }
         drop(reader);
     });
     s.task = Some("dois".into());
     dir.write_sidecar("a", &s).unwrap();
     release.join().unwrap();
     assert_eq!(dir.sidecar("a").unwrap().unwrap().task.as_deref(), Some("dois"));
+}
+
+/// O pai com filha ligada noutra máquina não adormece; quem sai do grupo leva o vínculo junto.
+#[test]
+fn remote_children_and_parents_hold_only_while_in_the_group() {
+    let mut s = Sidecar { peers: vec!["lab::f".into(), "g".into()], linked_children: vec!["lab::f".into(), "g".into()],
+        linked_by: Some("casa::pai".into()), ..Default::default() };
+    assert!(s.has_remote_child());
+    s.peers.retain(|p| p != "lab::f");
+    assert!(!s.has_remote_child(), "a filha que saiu não segura o pai");
+    s.drop_stale_links();
+    assert_eq!((s.linked_children.clone(), s.linked_by.clone()), (vec!["g".to_owned()], None));
+    let local = Sidecar { peers: vec!["g".into()], linked_children: vec!["g".into()], ..Default::default() };
+    assert!(!local.has_remote_child(), "a filha daqui aparece nas linhas");
 }
 
 #[test]
@@ -266,6 +285,7 @@ fn record(gid: &str, version: u64) -> GroupRecord {
         members: vec![Member { server: "casa".into(), name: "a".into(), provider: "claude".into() },
                       Member { server: "lab".into(), name: "a".into(), provider: String::new() }],
         outside: vec![OutsideRef { server: "casa".into(), address: "ana::x".into() }],
+        links: [("lab::a".to_owned(), "casa::a".to_owned())].into(),
     }
 }
 

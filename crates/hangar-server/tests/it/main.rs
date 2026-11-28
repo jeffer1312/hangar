@@ -32,6 +32,7 @@ mod delegation_guidance;
 mod session_defaults;
 mod notice_ignores;
 mod tags;
+mod placement_clone;
 mod machine_peers;
 mod update_process;
 mod tour_progress;
@@ -107,6 +108,19 @@ pub fn use_cano_bin() {
     if let Err(other) = hangar_server::runtime::process::use_cano_binary(bin) {
         panic!("o cano já tinha sido resolvido para {}", other.display());
     }
+    // Um `systemd-run` falso, que só executa o resto: nenhum escopo no systemd da máquina, e o relançamento,
+    // que recusa subir sem escopo, passa igual com ou sem o barramento do usuário (o `verificar-local` não tem).
+    #[cfg(unix)] {
+        static FAKE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        let fake = FAKE.get_or_init(|| {
+            let fake = exe.with_file_name("fake-systemd-run");
+            write_executable(&fake, "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done; shift\nexec \"$@\"\n");
+            fake
+        });
+        let prefix = std::iter::once(fake.clone().into_os_string()).chain(["--user", "--scope", "--collect", "-q", "--"].map(Into::into)).collect();
+        // Já sondado por quem subiu antes sem este passo: só fica gravado o escopo provado, que também serve.
+        let _ = hangar_server::runtime::process::use_scope_prefix(prefix);
+    }
 }
 
 /// No filho de um `fork` feito por teste: fecha o que herdou do processo de testes, menos `keep` e a
@@ -143,24 +157,21 @@ pub fn refused_address() -> std::net::SocketAddr {
 
 /// A porta fechou: conexão recusada dentro do prazo. Um filho de outro teste, entre o fork e o exec, pode
 /// carregar por instantes a cópia do socket que o servidor acabou de fechar.
+/// Espera pela condição; se a porta nunca fechar, o teste trava e o prazo do executor de testes aponta.
 pub async fn assert_closed(address: std::net::SocketAddr, what: &str) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while tokio::net::TcpStream::connect(address).await.is_ok() {
-        assert!(std::time::Instant::now() < deadline, "{what} continua aceitando conexão em {address}");
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        tracing::debug!("{what} ainda aceita conexão em {address}");
+        tokio::task::yield_now().await;
     }
 }
 
 /// O lease, esperando a cópia que um filho de outro teste carrega entre o fork e o exec: a trava do
 /// flock é da descrição aberta, e o exec a solta em instantes. Dono de verdade segura além do prazo.
 pub fn lease_when_free(path: &std::path::Path) -> std::sync::Arc<hangar_server::runtime::queue::Lease> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
         match hangar_server::runtime::queue::acquire_lease(path) {
             Ok(lease) => return lease,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(5))
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => std::thread::yield_now(),
             Err(error) => panic!("lease ocupado: {error}"),
         }
     }

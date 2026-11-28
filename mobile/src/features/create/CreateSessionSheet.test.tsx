@@ -37,6 +37,8 @@ const calls = vi.hoisted(() => ({
   branches: vi.fn(),
   commands: vi.fn(),
   agy: vi.fn(),
+  placement: vi.fn(),
+  ruleOffer: vi.fn(),
   // O que o aparelho "guardou" na chave pedida; undefined cai no localStorage do teste.
   saved: (_key: string): string | undefined => undefined,
 }));
@@ -193,6 +195,8 @@ vi.mock('@hangar/core', async (original) => ({
   getHistory: calls.history,
   getArchivePorCwd: calls.archives,
   resumeArchivedConversation: calls.resume,
+  placementSuggestionFor: calls.placement,
+  placementRuleOfferFor: calls.ruleOffer,
 }));
 vi.mock('../../paraglide/messages', () => ({
   codex_ui_account: () => 'codex_ui_account', codex_ui_login_error: () => 'codex_ui_login_error',
@@ -287,6 +291,7 @@ vi.mock('../../paraglide/messages', () => ({
     'native_new_chat_recents native_new_chat_hero native_new_chat_hero_in native_new_chat_no_project_line native_new_chat_choose_folder native_new_chat_start_without_project native_new_chat_on_machine ' +
     'native_new_chat_place_new native_new_chat_place_here ' +
     'native_new_chat_machine_menu_title native_new_chat_machine_demo native_new_chat_machine_demo_hint native_new_chat_machine_offline native_new_chat_machine_more ' +
+    'native_new_chat_machine_suggested native_placement_rule_offer native_placement_rule_open ' +
     'native_create_copies_1 native_create_copies native_create_use_named native_where_new native_where_existing ' +
     'composer_session_settings composer_session_settings_hint native_ctl_model_title native_ctl_search native_ctl_no_results ' +
     'comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_loading native_ctl_retry native_ctl_failed ' +
@@ -377,6 +382,9 @@ describe('CreateSessionSheet Codex', () => {
     calls.engines.mockReset().mockResolvedValue({ motores: {} });
     calls.accounts.mockReset().mockResolvedValue([connected]);
     calls.agy.mockReset().mockResolvedValue({ instalado: true, contas: [] });
+    // Sem sugestão por padrão: a pílula fica na máquina de sempre.
+    calls.placement.mockReset().mockResolvedValue(null);
+    calls.ruleOffer.mockReset().mockResolvedValue(null);
     calls.mutate.mockReset();
     calls.providers.mockReset().mockResolvedValue({});
     calls.defaults.mockReset().mockResolvedValue(null);
@@ -484,6 +492,50 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => Promise.resolve());
     return { container, root };
   }
+
+  it('a pílula vem na máquina sugerida pelo balanceamento, com o motivo no menu, sem virar escolha lembrada', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    calls.placement.mockResolvedValue({ serverId: 'server-c', text: 'motivo-fixture' });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      expect(calls.placement).toHaveBeenCalledTimes(1);
+      expect(calls.placement.mock.calls[0]?.[0]).toMatchObject({ id: 'server-b' });
+      expect(button(container, 'native_new_chat_machine: Servidor C')).toBeTruthy();
+      await act(async () => button(container, 'native_new_chat_machine: Servidor C')!.click());
+      expect(container.textContent).toContain('native_new_chat_machine_suggested');
+      expect(calls.save).not.toHaveBeenCalledWith('create.machine.v1', 'server-c');
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('máquina trocada à mão antes de a sugestão chegar continua a escolhida', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    const pending = deferred<{ serverId: string; text: string } | null>();
+    calls.placement.mockReturnValue(pending.promise);
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await act(async () => button(container, 'native_new_chat_machine: Servidor B')!.click());
+      await act(async () => button(container, 'Servidor C')!.click());
+      await act(async () => pending.resolve({ serverId: 'server-b', text: 'motivo-fixture' }));
+      expect(button(container, 'native_new_chat_machine: Servidor C')).toBeTruthy();
+      expect(calls.placement).toHaveBeenCalledTimes(1);
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('sugestão que chega depois de a pessoa mexer na tela só mostra o motivo, sem trocar a máquina', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    const pending = deferred<{ serverId: string; text: string } | null>();
+    calls.placement.mockReturnValue(pending.promise);
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await openSettings(container);
+      await act(async () => button(container, 'Codex')!.click());
+      await closePanel(container, 'composer_session_settings');
+      await act(async () => pending.resolve({ serverId: 'server-c', text: 'motivo-fixture' }));
+      expect(button(container, 'native_new_chat_machine: Servidor B')).toBeTruthy();
+      await act(async () => button(container, 'native_new_chat_machine: Servidor B')!.click());
+      expect(container.textContent).toContain('native_new_chat_machine_suggested');
+    } finally { await act(async () => root.unmount()); }
+  });
 
   it('aberta pelo assistente com um motor, só cria depois de o motor chegar', async () => {
     let deliver: (value: { motores: Record<string, { label: string; model: string }> }) => void = () => {};
@@ -2228,6 +2280,55 @@ describe('CreateSessionSheet Codex', () => {
     reopened.root.unmount();
   });
 
+  it('conversa nova: pasta com regra para outra máquina oferece "Abrir na"; com o clique, cria pelo servidor daqui e envia e abre lá', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    const late = deferred<{ serverId: string; text: string } | null>();
+    calls.placement.mockReturnValue(late.promise);
+    calls.ruleOffer.mockImplementation(async (_s: unknown, _m: unknown, cwd: string) => ({ server: 'vm', serverId: 'server-c', project: 'github.com/a/hangar', cwd }));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      calls.scan.mockResolvedValue({ entries: [{ name: 'Child', path: '/repo/child', is_git: true, has_claude_md: false }] });
+      await openFolder(container);
+      await act(async () => [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Child'))!.click());
+      await flushDismiss();
+      await settle();
+      expect(calls.ruleOffer).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'server-b' }), expect.anything(), '/repo/child');
+      expect(container.textContent).toContain('native_placement_rule_offer');
+      await act(async () => button(container, 'native_placement_rule_open')!.click());
+      expect(button(container, 'native_placement_rule_open')).toBeUndefined();
+      // A sugestão que chega depois do clique não troca a máquina.
+      await act(async () => late.resolve({ serverId: 'server-c', text: 'motivo-fixture' }));
+      await send(container);
+      expect(calls.create).toHaveBeenCalledTimes(1);
+      const [asked, body] = calls.create.mock.calls[0];
+      expect(asked).toMatchObject({ id: 'server-b' });
+      expect(body).toMatchObject({ cwd: '/repo/child', machine: 'vm' });
+      expect(body).not.toHaveProperty('config_dir');
+      expect(body).not.toHaveProperty('prewarm');
+      expect(calls.send).toHaveBeenCalledWith(calls.target, 'nova', 'oi');
+      expect(calls.replace).toHaveBeenCalledWith('/s/server-c/nova');
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('conversa nova: sem o clique na oferta, cria, envia e abre na máquina desta tela', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    calls.ruleOffer.mockImplementation(async (_s: unknown, _m: unknown, cwd: string) => ({ server: 'vm', serverId: 'server-c', project: 'github.com/a/hangar', cwd }));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      calls.scan.mockResolvedValue({ entries: [{ name: 'Child', path: '/repo/child', is_git: true, has_claude_md: false }] });
+      await openFolder(container);
+      await act(async () => [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Child'))!.click());
+      await flushDismiss();
+      await settle();
+      expect(container.textContent).toContain('native_placement_rule_offer');
+      await send(container);
+      expect(calls.create.mock.calls[0]?.[0]).toMatchObject({ id: 'server-b' });
+      expect(calls.create.mock.calls[0]?.[1]).not.toHaveProperty('machine');
+      expect(calls.send).toHaveBeenCalledWith(server, 'nova', 'oi');
+      expect(calls.replace).toHaveBeenCalledWith('/s/server-b/nova');
+    } finally { act(() => root.unmount()); }
+  });
+
   it('cria Claude no destino explícito do projeto', async () => {
     const { container, root } = await renderSheet();
     await openSettings(container);
@@ -2702,6 +2803,44 @@ describe('CreateSessionSheet Codex', () => {
         expect(body).toMatchObject({ cwd: '/repo/hangar', provider: 'claude' });
         expect(body.name).toBe('hangar');
         expect(calls.send).not.toHaveBeenCalled();
+        expect(calls.replace).toHaveBeenCalledWith('/s/server-b/nova');
+      } finally { act(() => root.unmount()); }
+    });
+
+    it('pasta com regra para outra máquina: sem clique fica aqui; com "Abrir na", o servidor daqui encaminha para lá', async () => {
+      calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+      calls.scan.mockResolvedValue({ entries: [folder] });
+      calls.ruleOffer.mockResolvedValue({ server: 'vm', serverId: 'server-c', project: 'github.com/a/hangar', cwd: '/repo/hangar' });
+      const { container, root } = await renderForm();
+      try {
+        await pickFolder(container);
+        expect(calls.ruleOffer).toHaveBeenCalledWith(expect.objectContaining({ id: 'server-b' }), expect.anything(), '/repo/hangar');
+        expect(container.textContent).toContain('native_placement_rule_offer');
+        expect(button(container, 'native_new_chat_machine: Servidor B')).toBeTruthy();
+        await act(async () => button(container, 'native_placement_rule_open')!.click());
+        expect(button(container, 'native_new_chat_machine: Servidor C')).toBeTruthy();
+        await act(async () => button(container, 'criar_criar')!.click());
+        await settle();
+        expect(calls.create).toHaveBeenCalledTimes(1);
+        const [asked, body] = calls.create.mock.calls[0];
+        // O pedido vai ao servidor desta tela, com a máquina da regra e sem a conta daqui.
+        expect(asked).toMatchObject({ id: 'server-b' });
+        expect(body).toMatchObject({ cwd: '/repo/hangar', machine: 'vm' });
+        expect(body).not.toHaveProperty('config_dir');
+        expect(calls.replace).toHaveBeenCalledWith('/s/server-c/nova');
+      } finally { act(() => root.unmount()); }
+    });
+
+    it('sem o clique na oferta, a sessão nasce na máquina desta tela', async () => {
+      calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+      calls.scan.mockResolvedValue({ entries: [folder] });
+      calls.ruleOffer.mockResolvedValue({ server: 'vm', serverId: 'server-c', project: 'github.com/a/hangar', cwd: '/repo/hangar' });
+      const { container, root } = await renderForm();
+      try {
+        await pickFolder(container);
+        await act(async () => button(container, 'criar_criar')!.click());
+        await settle();
+        expect(calls.create.mock.calls[0]?.[1]).not.toHaveProperty('machine');
         expect(calls.replace).toHaveBeenCalledWith('/s/server-b/nova');
       } finally { act(() => root.unmount()); }
     });

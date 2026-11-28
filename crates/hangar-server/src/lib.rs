@@ -65,6 +65,7 @@ pub mod search_context;
 pub mod session_open;
 pub mod session_rename;
 pub mod session_defaults;
+pub mod placement;
 pub mod session_sleep;
 pub mod session_visibility;
 pub mod notice_ignores;
@@ -88,9 +89,6 @@ pub mod stats;
 pub mod status;
 pub mod telemetry_routes;
 pub mod telemetry_hooks;
-pub(crate) mod telemetry_log;
-pub(crate) mod telemetry_names;
-pub(crate) mod telemetry_scrub;
 pub mod usage_cli;
 pub mod send_cli;
 pub mod subagents;
@@ -455,7 +453,7 @@ pub fn init_log(path: Option<&std::path::Path>) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     // O mesmo INFO que o `fmt()` sozinho aplicava.
-    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::INFO).with(telemetry_log::layer());
+    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::INFO);
     let fmt = tracing_subscriber::fmt::layer().with_target(false);
     let init = match file {
         Some(f) => registry.with(fmt.with_writer(std::sync::Mutex::new(f))).try_init(),

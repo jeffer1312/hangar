@@ -1255,6 +1255,16 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// Executável gravado por um `install` à parte: gravado aqui, um filho de outro teste nascido nesse
+    /// instante herdaria o descritor de escrita, e rodar o arquivo daria "Text file busy" (ETXTBSY).
+    #[cfg(unix)]
+    fn exec_script(path: &std::path::Path, body: &str) {
+        let source = path.with_extension("src");
+        std::fs::write(&source, body).unwrap();
+        let status = std::process::Command::new("install").arg("-m").arg("755").arg(&source).arg(path).status().unwrap();
+        assert!(status.success(), "install {}", path.display());
+    }
+
     #[test]
     fn program_and_data_live_in_separate_folders() {
         let paths = Paths::new(Path::new("/home/u"));
@@ -1344,9 +1354,8 @@ mod tests {
         let answer = |n: Option<u32>| n.map_or_else(|| "exit 2".to_owned(), |n| format!("echo {n}"));
         let (schema, data) = (answer(schema), answer(data));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, format!("#!/bin/sh\ncase \"$1\" in\n--version) echo 'hangar-whatsapp {version} (api 1)' ;;\n\
-            --schema-version) {schema} ;;\n--data-schema-version) {data} ;;\n*) exit 1 ;;\nesac\n")).unwrap();
-        std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        exec_script(path, &format!("#!/bin/sh\ncase \"$1\" in\n--version) echo 'hangar-whatsapp {version} (api 1)' ;;\n\
+            --schema-version) {schema} ;;\n--data-schema-version) {data} ;;\n*) exit 1 ;;\nesac\n"));
     }
 
     /// [`format_changes`] perguntando ao programa `binary` sobre os dados em `data`, como a troca faz.
@@ -1821,8 +1830,7 @@ mod tests {
             }
         }));
         let (_dir, ctx, binary, port) = installed_latest(status).await;
-        std::fs::write(&binary, "#!/bin/sh\necho 'hangar-whatsapp 0.1.0 (api 1)'\n").unwrap();
-        std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        exec_script(&binary, "#!/bin/sh\necho 'hangar-whatsapp 0.1.0 (api 1)'\n");
         std::fs::create_dir_all(&ctx.paths.data).unwrap();
         std::fs::write(ctx.paths.data.join("control.key"), hangar_managed_binary::hex::encode(&key)).unwrap();
         std::fs::write(ctx.paths.data.join("control.json"),

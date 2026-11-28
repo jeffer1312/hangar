@@ -380,6 +380,7 @@ impl Hangar {
             Page::Orchestration => self.orchestration_opened(cx),
             Page::Scheduled => self.scheduled_opened(cx),
             Page::Worktrees => self.worktree_settings_opened(cx),
+            Page::Placement => self.placement_opened(cx),
             Page::Sessions => self.auto_hide_opened(cx),
             Page::Updates => self.updates_opened(cx),
             Page::Manual => self.manual_opened(cx),
@@ -1381,6 +1382,10 @@ fn settings_values(a: &appearance::Appearance, seen: &crate::tour::state::Seen) 
 /// Um evento no lote do diário, com o tipo do cliente.
 fn telemetry_batch(mut event: Value) -> Value {
     event["cliente"] = Value::from("native");
+    // Sem `ts`, o servidor não marca a linha para a coleta do dono.
+    if matches!(event["evento"].as_str(), Some("settings.snapshot" | "chat.opened" | "app.crash")) {
+        event["ts"] = Value::from(chrono::Utc::now().to_rfc3339());
+    }
     serde_json::json!({"eventos": [event]})
 }
 
@@ -1520,7 +1525,8 @@ mod telemetry_tests {
         let mut telemetry = ClientTelemetry::new(None);
         let stamp = chrono::DateTime::parse_from_rfc3339("2026-11-28T01:59:59.125+02:00").unwrap().to_utc();
         for state in [json!({"consent": true}), json!({"consent": null, "consent_scope": 2, "enabled": false}),
-            json!({"consent": true, "consent_scope": 2, "enabled": true}), json!({"consent": true, "consent_scope": 3, "enabled": true})] {
+            json!({"consent": true, "consent_scope": 2, "enabled": true}), json!({"consent": true, "consent_scope": 3, "enabled": true}),
+            json!({"consent": true, "consent_scope": 4, "enabled": true, "snapshot_period": "a".repeat(32)})] {
             assert!(telemetry.capture_settings("a", stamp, &state, || panic!("leu antes do aceite"), || panic!("leu o id")).is_none());
         }
         let period = "a".repeat(32);
@@ -1540,13 +1546,18 @@ mod telemetry_tests {
         assert!(capture(&telemetry, "b", stamp).is_some());
         assert!(capture(&telemetry, "a", stamp).is_none(), "voltar à máquina A não envia de novo");
         assert!(capture(&telemetry, "a", stamp + chrono::TimeDelta::seconds(1)).is_some());
+        let scope_3 = json!({"consent": true, "consent_scope": 3, "enabled": true, "disabled_by": null, "snapshot_period": period});
+        assert!(telemetry.capture_settings("c", stamp, &scope_3, || json!({}), || None).is_some(), "o aceite da opção B cobre o retrato do app");
     }
 
     #[test]
     fn telemetry_crash_event_never_carries_the_panic_text() {
         let panic = "[2026-11-26 10:00:00] pânico na thread main (v1.2.3): called `Option::unwrap()` on a `None` value at src/app.rs:42";
         let mut telemetry = ClientTelemetry::new(Some(panic));
-        assert_eq!(telemetry.take_crash(), Some(serde_json::json!({"eventos": [{"evento": "app.crash", "codigo": "panic", "cliente": "native"}]})));
+        let mut crash = telemetry.take_crash().unwrap();
+        let ts = crash["eventos"][0].as_object_mut().unwrap().remove("ts").expect("o servidor só marca a linha com horário");
+        assert!(chrono::DateTime::parse_from_rfc3339(ts.as_str().unwrap()).is_ok());
+        assert_eq!(crash, serde_json::json!({"eventos": [{"evento": "app.crash", "codigo": "panic", "cliente": "native"}]}));
         assert_eq!(telemetry.take_crash(), None, "um por queda");
         assert_eq!(ClientTelemetry::new(None).take_crash(), None);
     }

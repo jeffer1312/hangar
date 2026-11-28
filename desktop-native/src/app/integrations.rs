@@ -190,6 +190,8 @@ pub(super) struct IntegrationItem {
     pub last_error: Option<String>,
     #[serde(default)]
     pub brand: Option<Brand>,
+    #[serde(default)]
+    can_reuse_google_credentials: bool,
 }
 
 #[derive(Deserialize)]
@@ -260,6 +262,7 @@ pub(super) struct FormDraft {
     pub auth_kind: AuthKindChoice,
     pub client_id: String,
     pub client_secret: String,
+    reuse_google_credentials_from: Option<String>,
     pub scopes_raw: String,
     pub bearer_token: String,
     pub policy: PermissionPolicy,
@@ -349,6 +352,8 @@ struct IntegrationForm {
     env_input: Entity<TextareaState>,
     client_id_input: Entity<InputState>,
     client_secret_input: Entity<InputState>,
+    google_credential_sources: Vec<(String, String)>,
+    reuse_google_credentials_from: Option<String>,
     scopes_input: Entity<InputState>,
     bearer_input: Entity<InputState>,
     projects_input: Entity<TextareaState>,
@@ -1785,6 +1790,10 @@ impl IntegrationForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let google_credential_sources = match &mode {
+            FormMode::Preset(preset) => google_credential_sources(preset, existing),
+            _ => Vec::new(),
+        };
         let initial = InitialFormValues::from_mode(mode, existing);
         let input = |val: String, hint: String, window: &mut Window, cx: &mut Context<Self>| {
             cx.new(|cx| InputState::new(window, cx).default_value(val).placeholder(hint))
@@ -1875,6 +1884,8 @@ impl IntegrationForm {
             env_input,
             client_id_input,
             client_secret_input,
+            google_credential_sources,
+            reuse_google_credentials_from: None,
             scopes_input,
             bearer_input,
             projects_input,
@@ -1914,6 +1925,7 @@ impl IntegrationForm {
             auth_kind: self.effective_auth(),
             client_id: self.client_id_input.read(cx).value().to_string(),
             client_secret: self.client_secret_input.read(cx).value().to_string(),
+            reuse_google_credentials_from: self.reuse_google_credentials_from.clone(),
             scopes_raw: self.scopes_input.read(cx).value().to_string(),
             bearer_token: self.bearer_input.read(cx).value().to_string(),
             policy: self.policy,
@@ -2399,40 +2411,79 @@ impl Render for IntegrationForm {
 
                 match self.effective_auth() {
                     AuthKindChoice::OAuthManualClient => {
-                        body = body
-                            .child(field(
-                                tr_shared("integrations_field_client_id", &[]),
+                        let manual = self.reuse_google_credentials_from.is_none();
+                        if !self.google_credential_sources.is_empty() {
+                            let choices = div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    Radio::new("integrations-google-manual")
+                                        .label(tr_shared("integrations_google_credential_manual", &[]))
+                                        .checked(manual)
+                                        .disabled(off)
+                                        .on_change(cx.listener(|this, _, _, cx| {
+                                            this.reuse_google_credentials_from = None;
+                                            this.error = None;
+                                            cx.notify();
+                                        })),
+                                )
+                                .children(self.google_credential_sources.iter().map(|(id, name)| {
+                                    let selected = self.reuse_google_credentials_from.as_ref() == Some(id);
+                                    let element_id = SharedString::from(format!("integrations-google-source-{id}"));
+                                    let label = format!("{name} ({id})");
+                                    let source = id.clone();
+                                    Radio::new(element_id)
+                                        .label(label)
+                                        .checked(selected)
+                                        .disabled(off)
+                                        .on_change(cx.listener(move |this, _, _, cx| {
+                                            this.reuse_google_credentials_from = Some(source.clone());
+                                            this.error = None;
+                                            cx.notify();
+                                        }))
+                                }));
+                            body = body.child(field(
+                                tr_shared("integrations_google_credential_source", &[]),
                                 None,
-                                Input::new(&self.client_id_input)
-                                    .small()
-                                    .disabled(off)
-                                    .aria_label(tr_shared("integrations_field_client_id", &[]))
-                                    .into_any_element(),
-                            ))
-                            .child(field(
-                                tr_shared("integrations_field_client_secret", &[]),
-                                self.is_edit
-                                    .then(|| tr_shared("integrations_secret_kept_hint", &[])),
-                                Input::new(&self.client_secret_input)
-                                    .small()
-                                    .mask_toggle()
-                                    .disabled(off)
-                                    .aria_label(tr_shared("integrations_field_client_secret", &[]))
-                                    .into_any_element(),
-                            ))
-                            .child(field(
-                                format!(
-                                    "{} ({})",
-                                    tr_shared("integrations_field_scopes", &[]),
-                                    tr_shared("integrations_optional", &[])
-                                ),
-                                None,
-                                Input::new(&self.scopes_input)
-                                    .small()
-                                    .disabled(off)
-                                    .aria_label(tr_shared("integrations_field_scopes", &[]))
-                                    .into_any_element(),
+                                choices.into_any_element(),
                             ));
+                        }
+                        if manual {
+                            body = body
+                                .child(field(
+                                    tr_shared("integrations_field_client_id", &[]),
+                                    None,
+                                    Input::new(&self.client_id_input)
+                                        .small()
+                                        .disabled(off)
+                                        .aria_label(tr_shared("integrations_field_client_id", &[]))
+                                        .into_any_element(),
+                                ))
+                                .child(field(
+                                    tr_shared("integrations_field_client_secret", &[]),
+                                    self.is_edit.then(|| tr_shared("integrations_secret_kept_hint", &[])),
+                                    Input::new(&self.client_secret_input)
+                                        .small()
+                                        .mask_toggle()
+                                        .disabled(off)
+                                        .aria_label(tr_shared("integrations_field_client_secret", &[]))
+                                        .into_any_element(),
+                                ));
+                        }
+                        body = body.child(field(
+                            format!(
+                                "{} ({})",
+                                tr_shared("integrations_field_scopes", &[]),
+                                tr_shared("integrations_optional", &[])
+                            ),
+                            None,
+                            Input::new(&self.scopes_input)
+                                .small()
+                                .disabled(off)
+                                .aria_label(tr_shared("integrations_field_scopes", &[]))
+                                .into_any_element(),
+                        ));
                     }
                     AuthKindChoice::Bearer => {
                         body = body.child(field(
@@ -2684,6 +2735,12 @@ pub(super) fn integrations_failure(error: &Failure) -> String {
         Some("integration_owner_only") => tr_shared("integrations_err_owner_only", &[]),
         Some("integration_disabled") => tr_shared("integrations_err_disabled", &[]),
         Some("integration_already_exists") => tr_shared("integrations_err_already_exists", &[]),
+        Some("integration_google_credentials_unavailable") => {
+            tr_shared("integrations_google_credentials_unavailable", &[])
+        }
+        Some("integration_client_secret_required") => {
+            tr_shared("integrations_client_secret_required", &[])
+        }
         Some("integration_secrets_key_lost" | "integration_secrets_unavailable") => {
             tr_shared("integrations_err_keyring", &[])
         }
@@ -2822,6 +2879,23 @@ pub(super) fn preset_auth_summary(kind: PresetAuthKind) -> String {
             tr_shared("integrations_auth_bearer", &[])
         ),
     }
+}
+
+fn google_credential_sources(
+    preset: &CatalogPreset,
+    existing: &[IntegrationItem],
+) -> Vec<(String, String)> {
+    if preset.url_editable
+        || preset.auth_kind != PresetAuthKind::OAuthManualClient
+        || !matches!(preset.id.as_str(), "google-gmail" | "google-drive" | "google-calendar")
+    {
+        return Vec::new();
+    }
+    existing
+        .iter()
+        .filter(|item| item.can_reuse_google_credentials)
+        .map(|item| (item.id.clone(), item.name.clone()))
+        .collect()
 }
 
 pub(super) fn suggest_preset_id(preset_id: &str, existing: &[IntegrationItem]) -> String {
@@ -3043,6 +3117,7 @@ pub(super) fn validate_draft(draft: &FormDraft) -> Result<(), String> {
     }
     if draft.transport == TransportKind::RemoteHttp
         && draft.auth_kind == AuthKindChoice::OAuthManualClient
+        && draft.reuse_google_credentials_from.is_none()
         && draft.client_id.trim().is_empty()
     {
         return Err(tr_shared("integrations_validation_client_id", &[]));
@@ -3065,6 +3140,9 @@ pub(super) fn build_create_body(draft: &FormDraft) -> Result<Value, String> {
         "pinned": draft.pinned,
         "projects": parse_projects(&draft.projects_raw),
     });
+    if let Some(source_id) = &draft.reuse_google_credentials_from {
+        body["reuse_google_credentials_from"] = json!(source_id);
+    }
     if !secrets.is_empty() {
         body["secrets"] = Value::Object(secrets);
     }
@@ -3371,7 +3449,10 @@ fn build_transport_and_secrets(
                 secrets.insert("bearer_token".into(), Value::String(tok.to_owned()));
             }
         }
-        AuthKindChoice::OAuthManualClient if draft.transport == TransportKind::RemoteHttp => {
+        AuthKindChoice::OAuthManualClient
+            if draft.transport == TransportKind::RemoteHttp
+                && draft.reuse_google_credentials_from.is_none() =>
+        {
             let sec = draft.client_secret.trim();
             if !sec.is_empty() {
                 secrets.insert("oauth_client_secret".into(), Value::String(sec.to_owned()));
@@ -3392,7 +3473,11 @@ fn build_auth_config(draft: &FormDraft) -> AuthConfig {
         AuthKindChoice::Bearer => AuthConfig::Bearer,
         AuthKindChoice::OAuthDcr => AuthConfig::OAuthDcr,
         AuthKindChoice::OAuthManualClient => AuthConfig::OAuthManualClient {
-            client_id: draft.client_id.trim().to_owned(),
+            client_id: if draft.reuse_google_credentials_from.is_some() {
+                String::new()
+            } else {
+                draft.client_id.trim().to_owned()
+            },
             scopes: parse_scopes(&draft.scopes_raw),
         },
     }
@@ -3423,6 +3508,7 @@ mod tests {
             auth_kind: AuthKindChoice::OAuthManualClient,
             client_id: "client-123.apps.googleusercontent.com".into(),
             client_secret: "super-secret-value".into(),
+            reuse_google_credentials_from: None,
             scopes_raw: "https://www.googleapis.com/auth/gmail.readonly".into(),
             bearer_token: String::new(),
             policy: PermissionPolicy::ReadFreeAskWrite,
@@ -3432,6 +3518,24 @@ mod tests {
             original_transport: None,
             original_policy: None,
         }
+    }
+
+    #[test]
+    fn google_reuse_sends_the_source_without_the_manually_entered_pair() {
+        let mut draft = sample_draft();
+        draft.url = "https://gmailmcp.googleapis.com/mcp/v1self".into();
+        draft.reuse_google_credentials_from = Some("agenda-pessoal".into());
+
+        let create = build_create_body(&draft).unwrap();
+        assert_eq!(create["reuse_google_credentials_from"], "agenda-pessoal");
+        assert_eq!(create["auth"]["client_id"], "");
+        assert_eq!(create["auth"]["scopes"], json!(["https://www.googleapis.com/auth/gmail.readonly"]));
+        assert!(create.get("secrets").is_none());
+
+        draft.reuse_google_credentials_from = None;
+        let manual = build_create_body(&draft).unwrap();
+        assert!(manual.get("reuse_google_credentials_from").is_none());
+        assert_eq!(manual["auth"]["client_id"], "client-123.apps.googleusercontent.com");
     }
 
     #[test]
@@ -3631,6 +3735,7 @@ mod tests {
             status: IntegrationStatus::Ready,
             last_error: None,
             brand: None,
+            can_reuse_google_credentials: false,
         };
         let initial = InitialFormValues::from_mode(FormMode::Edit(item, None), &[]);
         let base_draft = FormDraft {
@@ -3652,6 +3757,7 @@ mod tests {
             auth_kind: initial.auth_kind,
             client_id: initial.client_id,
             client_secret: String::new(),
+            reuse_google_credentials_from: None,
             scopes_raw: initial.scopes,
             bearer_token: String::new(),
             policy: initial.policy,
@@ -3736,6 +3842,7 @@ mod tests {
             status: IntegrationStatus::Ready,
             last_error: None,
             brand: None,
+            can_reuse_google_credentials: false,
         };
         assert_eq!(suggest_preset_id("google-gmail", &[]), "google-gmail");
         assert_eq!(suggest_preset_id("google-gmail", &[item("google-gmail")]), "google-gmail-2");
@@ -3743,6 +3850,19 @@ mod tests {
             suggest_preset_id("google-gmail", &[item("google-gmail"), item("google-gmail-2")]),
             "google-gmail-3"
         );
+
+        let preset: CatalogPreset = serde_json::from_value(json!({
+            "id": "google-drive", "name": "Google Drive", "auth_kind": "oauth_manual_client",
+            "url": "https://drivemcp.googleapis.com/mcp/v1self"
+        })).unwrap();
+        let sources = [
+            IntegrationItem { can_reuse_google_credentials: true, ..item("gmail-pessoal") },
+            item("cadastro-antigo"),
+            IntegrationItem { can_reuse_google_credentials: true, ..item("agenda-trabalho") },
+        ];
+        let ids: Vec<_> = google_credential_sources(&preset, &sources)
+            .into_iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, vec!["gmail-pessoal", "agenda-trabalho"]);
     }
 
     #[test]
@@ -3784,6 +3904,7 @@ mod tests {
             status: IntegrationStatus::AuthRequired,
             last_error: None,
             brand: None,
+            can_reuse_google_credentials: false,
         };
         let remote = Transport::RemoteHttp {
             url: "https://mcp.figma.com/mcp".into(),

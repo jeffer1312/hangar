@@ -260,6 +260,23 @@ fn his39_page_aux_model_feeds_the_mcp() {
     assert_eq!(env["LLM_PROXY_URL"], "http://x/v1/chat/completions");
 }
 
+/// Ajuda pela sessão: escolher `session` tira o `LLM_*` do MCP na hora, e voltar a `api` o devolve.
+#[test]
+fn the_session_itself_takes_the_mcp_off_the_auxiliary_model() {
+    let home = Home::new();
+    home.put(RUNTIME, &json!({"jev_aux_base_url": "http://x/v1", "jev_aux_modelo": "m1", "jev_aux_api_key": "chave-do-llm-123"}));
+    home.main(json!({"HCC_AGENT_CONFIG": "a", "LLM_PROXY_URL": "http://x/v1/chat/completions", "LLM_MODEL": "m1",
+        "LLM_PROXY_KEY": "chave-do-llm-123"}));
+    home.apply(json!({"jev_aux_mode": "session"}), &[]).unwrap();
+    let env = home.active_env(MAIN);
+    assert!(env.get("LLM_PROXY_URL").is_none() && env.get("LLM_PROXY_KEY").is_none(), "{env:?}");
+    assert_eq!(env["HCC_AGENT_CONFIG"], "a");
+    home.apply(json!({"jev_aux_mode": "api"}), &[]).unwrap();
+    assert_eq!(home.active_env(MAIN)["LLM_MODEL"], "m1");
+    let error = home.apply(json!({"jev_aux_mode": "proxy"}), &[]).unwrap_err();
+    assert!(error.starts_with("jev_aux_mode:"), "{error}");
+}
+
 /// JEV-12, HIS-50, HIS-42 (`test_same_choice_in_both_merges_and_a_replaced_model_is_kept`): a mesma
 /// escolha nas duas origens não guarda nada; a página trocar o modelo guarda o antigo do MCP por
 /// arquivo de origem, só o primeiro de cada um, e a guardada também é origem.

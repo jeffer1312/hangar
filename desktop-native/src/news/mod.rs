@@ -27,6 +27,7 @@ mod new_chat_mode;
 mod new_conversation;
 mod no_project;
 mod password_vault;
+mod placement_suggest;
 mod plugins;
 mod proxy_update;
 mod adopt_cliproxy;
@@ -131,6 +132,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "antigravity" => Some(antigravity::render),
         "termos-antigravity" => Some(agy_terms::render),
         "contagens-anonimas" => Some(telemetry_consent::render),
+        "maquina-sugerida" => Some(placement_suggest::render),
         "continuar-depois-da-queda" => Some(auto_continue::render),
         "filhas-ligadas" => Some(linked_children::render),
         _ => None,

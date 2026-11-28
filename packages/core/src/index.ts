@@ -98,3 +98,4 @@ export * from './dream';
 export * from './status';
 export * from './workReview';
 export * from './integrations';
+export * from './placement';

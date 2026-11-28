@@ -1,6 +1,7 @@
 //! Telemetria anônima no servidor: as rotas do dono, o envio diário e a convergência do dono comum
 //! entre as máquinas. Contagem, fila e envio são do crate `hangar-telemetry`.
 use std::collections::{BTreeMap, HashSet};
+use std::io::{self, BufRead, BufReader};
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
@@ -10,24 +11,23 @@ use axum::body::to_bytes;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::response::Response;
-use hangar_telemetry::events::{self, ClientKind, Code, Dims, Event, LogLevel, PeerKind};
-use hangar_telemetry::{Disabled, Failure, SETTINGS_CONSENT_SCOPE, Telemetry};
-use hangar_telemetry::wire::Counter;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::diag_report::Scrubber;
+use hangar_telemetry::diary::{self, DayDetail};
+use hangar_telemetry::events::{self, ClientKind, Code, Dims, Event, PeerKind};
+use hangar_telemetry::wire::Counter;
+use hangar_telemetry::{CONSENT_SCOPE, Collection, Disabled, Failure, Telemetry};
+
 use crate::groups::peers::PeerClient;
-use crate::telemetry_log::{ConsentGate, Line};
-use crate::telemetry_names::{NameBook, read_local};
-use crate::telemetry_scrub::Words;
 use crate::routes::AppState;
 use crate::session_write::{detail, json_response};
 
 const OWNER_ONLY: (&str, &str) = ("telemetry_owner_only", "só o dono pode ler ou mudar a telemetria");
 const OWNER_PATH: &str = "/api/telemetry/owner";
 const CONVERGE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
-/// O retrato de peers sai uma vez por dia (`once`); a hora só decide quando ele é tirado.
+/// O retrato de peers sai uma vez por dia (marca no arquivo do dia); a hora só decide quando ele é tirado.
 const SNAPSHOT_EVERY: Duration = Duration::from_secs(60 * 60);
 /// O cliente manda `app.visible_time` neste compasso: mais que isso num evento é relógio torto ou repetição.
 const VISIBLE_CAP_MS: u64 = 5 * 60 * 1000;
@@ -37,19 +37,12 @@ const ROUTES: &[&str] = &["principal", "rede_local", "tailscale", "connect"];
 const ROUTE_FAILURES: &[&str] = &["error", "timeouterror", "aborterror", "typeerror", "route_timeout", "erro"];
 /// `codigo` de `app.crash`, em minúsculas: nome do erro do JS, ou `panic` do nativo.
 const FATAL_CODES: &[&str] = &["error", "typeerror", "referenceerror", "rangeerror", "syntaxerror", "panic"];
-const LOG_BATCH: usize = 64;
 /// As CLIs da descoberta do provedor padrão; presas, o retrato do dia sai sem ele.
 const DISCOVER_TIMEOUT: Duration = Duration::from_secs(30);
-// ponytail: um lote por segundo, até 64 linhas; o resto espera no canal (256) ou é descartado e
-// contado. Aviso que a própria limpeza provoca não vira laço apertado.
-const LOG_EVERY: Duration = Duration::from_secs(1);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Choice {
-    consent: bool,
-    consent_scope: Option<Value>,
-}
+struct Choice { consent: bool, consent_scope: Option<u32> }
 
 /// O motor desta vida. `None` quando `telemetry.json` não se lê nem se grava: o servidor sobe sem
 /// telemetria, e as rotas respondem 503. Bloqueante.
@@ -77,6 +70,9 @@ pub fn open(home: &Path, diag: &crate::diag::DiagClient) -> Option<Arc<Telemetry
 pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
     let Some(telemetry) = st.telemetry.clone() else { return Vec::new() };
     let diag = st.diag.clone();
+    if let Some(base) = crate::diag::diary_base(st) {
+        telemetry.set_detail(Arc::new(move |day, period, now| diary_detail(&base, day, period, now)));
+    }
     let mut tasks = Vec::new();
     match telemetry.http_post() {
         Ok(post) => {
@@ -108,9 +104,6 @@ pub fn spawn(st: &Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
             tokio::time::sleep(SNAPSHOT_EVERY).await;
         }
     }));
-    if let Some(lines) = crate::telemetry_log::take_lines() {
-        tasks.push(tokio::spawn(log_lines(st.clone(), telemetry.clone(), lines)));
-    }
     let peers = st.peers.clone();
     tasks.push(tokio::spawn(async move {
         loop {
@@ -126,65 +119,28 @@ fn snapshot_due(done: Option<&(String, u64)>, today: &str, epoch: u64) -> bool {
     done.is_none_or(|(day, at)| day != today || *at != epoch)
 }
 
-/// As linhas de aviso e erro do log, limpas lote a lote. Sem conjunto bom de nomes o lote não sai e
-/// conta em `log_dropped`, como o que o canal cheio jogou fora.
-async fn log_lines(st: Arc<AppState>, telemetry: Arc<Telemetry>, mut lines: tokio::sync::mpsc::Receiver<Line>) {
-    let scrubber = Scrubber::for_env(&st.accounts.env);
-    let started = std::time::Instant::now();
-    let mut book = NameBook::default();
-    let mut gate = ConsentGate::new(telemetry.consent_epoch());
-    let mut batch = Vec::with_capacity(LOG_BATCH);
-    while lines.recv_many(&mut batch, LOG_BATCH).await > 0 {
-        let mut dropped = crate::telemetry_log::take_dropped();
-        if telemetry.enabled() {
-            gate.update(telemetry.consent_epoch(), crate::telemetry_log::next_seq());
-            batch.retain(|line| gate.admits(line));
-            refresh_names(&st, &mut book, started.elapsed()).await;
-            match book.words() {
-                Some(words) => record_lines(&telemetry, &scrubber, &words, &batch),
-                None => {
-                    tracing::debug!(lines = batch.len(), "telemetria: linhas de log descartadas, sem conjunto de nomes");
-                    dropped += batch.len() as u64;
-                }
-            }
-            if dropped > 0 {
-                telemetry.count(Event::LogDropped, Dims::new(), dropped);
-            }
+pub(crate) fn diary_detail(base: &Path, day: &str, period: &Collection, now: DateTime<Utc>) -> io::Result<DayDetail> {
+    match std::fs::symlink_metadata(base) {
+        Ok(meta) if meta.file_type().is_dir() => {}
+        Ok(_) => return Err(io::Error::other("pasta do diário inválida")),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(DayDetail::default()),
+        Err(e) => return Err(e),
+    }
+    // A data no nome é local; só o timestamp completo da linha decide o dia UTC.
+    let mut entries = Vec::new();
+    for (_, path) in hangar_usage_diary::dated_files(base) {
+        let file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        for line in BufReader::new(file).lines() {
+            let line = line?;
+            let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
+            if let Some(entry) = diary::project(&value, day, period, now, crate::mcp::tool_names()) { entries.push(entry); }
         }
-        batch.clear();
-        tokio::time::sleep(LOG_EVERY).await;
     }
-}
-
-/// O último retrato pronto da lista entra a cada lote, sem pedir outro; specs, contas e máquinas são
-/// relidos a cada 30 s. Sem retrato pronto, um pedido à lista na mesma cadência.
-async fn refresh_names(st: &AppState, book: &mut NameBook, now: Duration) {
-    let due = book.due(now);
-    let sessions: Option<Vec<String>> = match st.list.last_rows() {
-        Some(rows) => Some(rows.iter().map(|row| row.name.clone()).collect()),
-        None if due => st.list.snapshot().await.ok().map(|produced| produced.rows.iter().map(|row| row.name.clone()).collect()),
-        None => None,
-    };
-    if let Some(sessions) = sessions {
-        book.see(&chrono::Utc::now().format("%Y-%m-%d").to_string(), sessions);
-    }
-    if due {
-        let (home, peers, server_id) = local_inputs(st);
-        let read = tokio::task::spawn_blocking(move || read_local(&home, peers.ids(), &server_id, crate::pages::routes::machine_name())).await;
-        book.read(now, read.ok().and_then(Result::ok));
-    }
-}
-
-/// O que a releitura usa; o id é o atual, que muda sem reiniciar o servidor.
-fn local_inputs(st: &AppState) -> (std::path::PathBuf, Arc<PeerClient>, String) {
-    (st.accounts.env.home.clone(), st.peers.clone(), st.current_server_id())
-}
-
-pub(crate) fn record_lines(telemetry: &Telemetry, scrubber: &Scrubber, words: &Words, lines: &[Line]) {
-    for line in lines {
-        let level = if line.error { LogLevel::Error } else { LogLevel::Warn };
-        telemetry.log(level, &line.target, &crate::telemetry_scrub::clean(scrubber, &line.message, words));
-    }
+    Ok(diary::build(entries))
 }
 
 /// Marcas dos retratos do servidor no arquivo do dia, separadas das `settings:<cliente>:<aparelho>` dos apps.
@@ -418,14 +374,20 @@ fn ip_kind(ip: IpAddr) -> PeerKind {
     }
 }
 
-/// Conta as linhas da tela que a telemetria conhece, das `accepted` primeiras que o diário tratou.
-/// Campo fora da lista vira `other`; texto nunca sai.
-pub(crate) fn count_screen(telemetry: &Telemetry, epoch: u64, body: &[u8], accepted: usize) {
-    if !telemetry.enabled() || telemetry.consent_epoch() != epoch { return; }
+/// Conta as linhas da tela que a telemetria conhece, das `accepted` primeiras que o diário gravou
+/// (o resto a tela reenvia). Campo fora da lista vira `other`; texto nunca sai.
+pub(crate) fn count_screen_in_period(telemetry: &Telemetry, period: &Collection, epoch: u64, now: DateTime<Utc>, body: &[u8], accepted: usize) {
     let Ok(batch) = serde_json::from_slice::<Value>(body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body)) else { return };
     let items = match &batch { Value::Object(fields) => fields.get("eventos"), other => Some(other) };
     let Some(Value::Array(items)) = items else { return };
+    let day = now.format("%Y-%m-%d").to_string();
     for item in items.iter().take(accepted) {
+        let Some(at) = item["ts"].as_str().and_then(|ts| DateTime::parse_from_rfc3339(ts).ok()).map(|at| at.to_utc()) else { continue };
+        if at < period.since || at > now || at.date_naive() != now.date_naive() || telemetry.today() != day { continue; }
+        if item["evento"] == "app.visible_time" {
+            let started = item["started_at"].as_str().and_then(|ts| DateTime::parse_from_rfc3339(ts).ok()).map(|ts| ts.to_utc());
+            if started.is_none_or(|started| started < period.since || started > at || started.date_naive() != at.date_naive()) { continue; }
+        }
         screen_event(telemetry, epoch, item);
     }
 }
@@ -467,7 +429,10 @@ fn screen_event(telemetry: &Telemetry, epoch: u64, item: &Value) {
 /// O endereço do receptor nunca vai ao diário: só o status.
 pub(crate) fn report(diag: &crate::diag::DiagClient, failure: Failure) {
     match failure {
-        Failure::Refused(status) => diag.report("telemetry.rejected", "", &format!("http_{status}"), "pacote de telemetria recusado"),
+        Failure::Refused(status) => {
+            let message = if status == 413 { "pacote de telemetria recusado por tamanho; fica na fila" } else { "pacote de telemetria recusado" };
+            diag.report("telemetry.rejected", "", &format!("http_{status}"), message);
+        }
         Failure::Unreachable { status } => {
             let code = status.map_or_else(|| "telemetry_unreachable".to_owned(), |status| format!("telemetry_unreachable_http_{status}"));
             diag.report("telemetry.unreachable", "", &code, "receptor da telemetria sem resposta 2xx; o dia fica na fila");
@@ -541,13 +506,14 @@ fn private_view(value: Value) -> Response {
 
 fn view(telemetry: &Telemetry) -> Value {
     let period = telemetry.snapshot_period();
-    let mut view = json!({"consent": telemetry.consent(), "consent_scope": SETTINGS_CONSENT_SCOPE,
+    let mut view = json!({"consent": telemetry.consent(), "consent_scope": CONSENT_SCOPE,
         "disabled_by": telemetry.disabled_by().map(Disabled::as_str), "enabled": period.is_some()});
     if let Some(period) = period { view["snapshot_period"] = json!(period); }
     view
 }
 
-/// `GET` anuncia a versão do aviso. Só ela autoriza `PUT` com `true`; `false` apaga a fila em qualquer versão.
+/// `GET` anuncia o escopo e, ligada, o `snapshot_period` que os apps devolvem com o retrato. `PUT` só aceita o
+/// "sim" acompanhado desse escopo; `false` revoga em qualquer versão.
 pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     if let Err(response) = admit(&st, peer, &req).await { return response; }
     let Some(telemetry) = st.telemetry.clone() else { return unavailable() };
@@ -556,9 +522,8 @@ pub async fn setting(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         let Some(choice) = parsed else {
             return detail(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", "esperado {\"consent\": true ou false}", json!({}));
         };
-        if choice.consent && choice.consent_scope.and_then(|scope| scope.as_u64()) != Some(SETTINGS_CONSENT_SCOPE) {
-            return detail(StatusCode::CONFLICT, "telemetry_consent_scope_mismatch",
-                "a versão do aviso de telemetria mudou", json!({"consent_scope": SETTINGS_CONSENT_SCOPE}));
+        if choice.consent && choice.consent_scope != Some(CONSENT_SCOPE) {
+            return detail(StatusCode::UNPROCESSABLE_ENTITY, "telemetry_consent_scope_required", "confirme o aviso de telemetria deste servidor", json!({"consent_scope": CONSENT_SCOPE}));
         }
         Some(choice.consent)
     } else {
@@ -621,33 +586,32 @@ mod tests {
     async fn guest_put_is_refused_and_changes_nothing() {
         let home = tempfile::tempdir().unwrap();
         let st = test_state(home.path(), false);
-        let (status, body) = put(&st, r#"{"consent": true, "consent_scope": 2}"#, true).await;
+        let (status, body) = put(&st, r#"{"consent": true, "consent_scope": 3}"#, true).await;
         assert_eq!((status, &body["detail"]["code"]), (StatusCode::FORBIDDEN, &json!("telemetry_owner_only")));
         assert_eq!(st.telemetry.as_ref().unwrap().consent(), None);
     }
 
     #[tokio::test]
-    async fn only_a_boolean_consent_is_accepted() {
+    async fn telemetry_consent_get_announces_scope_and_legacy_false_revokes() {
         let home = tempfile::tempdir().unwrap();
         let st = test_state(home.path(), false);
+        assert_eq!(request(&st, Method::GET, "", false).await,
+            (StatusCode::OK, json!({"consent": null, "consent_scope": 3, "disabled_by": null, "enabled": false})));
         for body in [r#"{"consent": "sim"}"#, r#"{"consent": null}"#, r#"{"consent": true, "x": 1}"#, "{}", "nada"] {
             let (status, reply) = put(&st, body, false).await;
             assert_eq!((status, &reply["detail"]["code"]), (StatusCode::UNPROCESSABLE_ENTITY, &json!("erro_corpo_invalido")), "{body}");
         }
         assert_eq!(st.telemetry.as_ref().unwrap().consent(), None);
-        for body in [r#"{"consent": true}"#, r#"{"consent": true, "consent_scope": 1}"#, r#"{"consent": true, "consent_scope": 3}"#] {
+        for body in [r#"{"consent": true}"#, r#"{"consent": true, "consent_scope": 2}"#, r#"{"consent": true, "consent_scope": 4}"#] {
             let (status, reply) = put(&st, body, false).await;
-            assert_eq!((status, &reply["detail"]["code"]), (StatusCode::CONFLICT, &json!("telemetry_consent_scope_mismatch")), "{body}");
+            assert_eq!((status, &reply["detail"]["code"]), (StatusCode::UNPROCESSABLE_ENTITY, &json!("telemetry_consent_scope_required")), "{body}");
         }
-        assert_eq!(request(&st, Method::GET, "", false).await,
-            (StatusCode::OK, json!({"consent": null, "consent_scope": 2, "disabled_by": null, "enabled": false})));
-        let (status, active) = put(&st, r#"{"consent": true, "consent_scope": 2}"#, false).await;
+        let (status, active) = put(&st, r#"{"consent": true, "consent_scope": 3}"#, false).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!((active["consent"].as_bool(), active["consent_scope"].as_u64(), active["enabled"].as_bool()), (Some(true), Some(2), Some(true)));
+        assert_eq!((active["consent"].as_bool(), active["consent_scope"].as_u64(), active["enabled"].as_bool()), (Some(true), Some(3), Some(true)));
         assert!(active["snapshot_period"].as_str().is_some());
-        assert!(st.telemetry.as_ref().unwrap().enabled());
-        assert_eq!(put(&st, r#"{"consent": false}"#, false).await.1["consent"], false);
-        assert_eq!(put(&st, r#"{"consent": false, "consent_scope": 3}"#, false).await.1["consent"], false);
+        assert_eq!(put(&st, r#"{"consent": false}"#, false).await,
+            (StatusCode::OK, json!({"consent": false, "consent_scope": 3, "disabled_by": null, "enabled": false})));
         assert!(!st.telemetry.as_ref().unwrap().enabled());
     }
 
@@ -659,7 +623,7 @@ mod tests {
         let telemetry = Arc::new(Telemetry::for_test(home.path(), Arc::new(move || clock)));
         let mut st = test_state(home.path(), false);
         Arc::get_mut(&mut st).unwrap().telemetry = Some(telemetry.clone());
-        let yes = r#"{"consent":true,"consent_scope":2}"#;
+        let yes = r#"{"consent":true,"consent_scope":3}"#;
         let (_, first) = put(&st, yes, false).await;
         let (_, unchanged) = put(&st, yes, false).await;
         assert_eq!(first["snapshot_period"], unchanged["snapshot_period"]);
@@ -674,7 +638,7 @@ mod tests {
         for bad in [body(&first["snapshot_period"], ts), body(&Value::Null, ts), body(&new["snapshot_period"], "2026-11-27T12:01:01Z")] {
             assert_eq!(request(&st, Method::POST, &bad, false).await.0, StatusCode::CONFLICT);
         }
-        let day = home.path().join(".hangar/telemetry-scope-2/queue/2026-11-27.json");
+        let day = home.path().join(".hangar/telemetry-v3/queue/2026-11-27.json");
         assert!(!day.exists());
         std::fs::create_dir_all(&day).unwrap();
         assert_eq!(request(&st, Method::POST, &current, false).await.0, StatusCode::SERVICE_UNAVAILABLE);
@@ -692,7 +656,7 @@ mod tests {
         assert_eq!(request(&st, Method::POST, &retry, false).await,
             (StatusCode::OK, json!({"snapshot_period": after_restart["snapshot_period"]})));
         assert_eq!(restarted.counters().iter().map(|c| (c.dims["setting"].as_str(), c.count)).collect::<Vec<_>>(), [("palette", 1), ("theme", 1)]);
-        assert!(!home.path().join(".hangar/telemetry-scope-2/once.json").exists());
+        assert!(!home.path().join(".hangar/telemetry-v3/once.json").exists());
     }
 
     /// Uma máquina do dono que responde `status` com `body` em `/api/telemetry/owner`.
@@ -733,11 +697,23 @@ mod tests {
         telemetry.counters().contains(&hangar_telemetry::wire::Counter::new(event, dims, bucket, count))
     }
 
+    fn count_screen(telemetry: &Telemetry, body: &[u8], accepted: usize, now: DateTime<Utc>) {
+        let period = telemetry.collection().unwrap();
+        let mut body: Value = serde_json::from_slice(body).unwrap();
+        for item in body["eventos"].as_array_mut().unwrap() {
+            item["ts"] = json!(now);
+            if item["evento"] == "app.visible_time" { item["started_at"] = json!(period.since); }
+        }
+        count_screen_in_period(telemetry, &period, telemetry.consent_epoch(), now, body.to_string().as_bytes(), accepted);
+    }
+
     #[test]
     fn screen_events_count_only_known_values() {
         use hangar_telemetry::buckets::Bucket;
         let home = tempfile::tempdir().unwrap();
-        let telemetry = test_telemetry(home.path(), true);
+        let now: DateTime<Utc> = "2026-11-27T20:00:00Z".parse().unwrap();
+        let telemetry = Telemetry::for_test(home.path(), Arc::new(move || now));
+        telemetry.set_consent(true).unwrap();
         let body = json!({"eventos": [
             {"evento": "app.visible_time", "ms": 900_000, "cliente": "ios"},
             {"evento": "rota.escolhida", "detalhe": "tailscale", "ms": 250, "cliente": "android"},
@@ -749,7 +725,7 @@ mod tests {
             // Fora das linhas que o diário gravou: a tela reenvia, e aqui não conta.
             {"evento": "app.visible_time", "ms": 900_000, "cliente": "ios"},
         ]}).to_string();
-        count_screen(&telemetry, telemetry.consent_epoch(), body.as_bytes(), 7);
+        count_screen(&telemetry, body.as_bytes(), 7, now);
         let android = || Dims::new().with("client", ClientKind::Android);
         assert!(has(&telemetry, Event::AppVisibleMinutes, Dims::new().with("client", ClientKind::Ios), None, 5), "teto de 5 min");
         assert!(has(&telemetry, Event::ClientRoute, android().with("failed", false).with("route", Code::known("tailscale", ROUTES)), Some(Bucket::Lt300ms), 1));
@@ -789,8 +765,10 @@ mod tests {
         assert_eq!(count("native", "font", "other"), 2, "nome de fonte sai other");
         assert_eq!(telemetry.counters().len(), 6, "preferência desconhecida e valor que não é texto ficam fora");
         telemetry.save().unwrap();
-        let day_file = home.path().join(".hangar/telemetry-scope-2/queue/2026-11-27.json");
-        let saved = std::fs::read(&day_file).unwrap();
+        let day_file = home.path().join(".hangar/telemetry-v3/queue/2026-11-27.json");
+        // O fechamento do dia muda o lote (selo, detalhe); os contadores do retrato não mudam.
+        let counters = || serde_json::from_slice::<Value>(&std::fs::read(&day_file).unwrap()).unwrap()["counters"].clone();
+        let saved = counters();
         now.fetch_add(24 * 60 * 60, Ordering::SeqCst);
         let mut late = snapshot("native", "a-1", "2026-11-28T01:59:59+02:00");
         late["values"]["theme"] = json!("light");
@@ -806,7 +784,32 @@ mod tests {
         assert!(!wire.contains("Fira") && !wire.contains("a-1"), "{wire}");
         assert_eq!(telemetry.counters().len(), 2, "o dia novo é outro pacote, e o aparelho conta de novo");
         telemetry.save().unwrap();
-        assert_eq!(std::fs::read(day_file).unwrap(), saved, "a captura atrasada não reescreve o dia fechado");
+        assert_eq!(counters(), saved, "a captura atrasada não reescreve o dia fechado");
+    }
+
+    #[test]
+    fn app_settings_snapshot_counts_under_scope_3_and_not_before_acceptance() {
+        let home = tempfile::tempdir().unwrap();
+        let now: DateTime<Utc> = "2026-11-27T12:00:00Z".parse().unwrap();
+        let telemetry = Telemetry::for_test(home.path(), Arc::new(move || now));
+        let diag = crate::diag::DiagClient::new();
+        let item = |period: Value| json!({"snapshot_period": period, "cliente": "native", "device": "a-1", "ts": now,
+            "values": {"theme": "dark"}});
+        assert!(telemetry.snapshot_period().is_none(), "sem aceite não há período para o app devolver");
+        assert!(settings_snapshot(&telemetry, &diag, &item(json!("0".repeat(32)))).unwrap().is_none());
+        assert!(telemetry.counters().is_empty());
+
+        telemetry.set_consent(true).unwrap();
+        let period = telemetry.snapshot_period().unwrap();
+        assert_eq!(settings_snapshot(&telemetry, &diag, &item(json!(period))).unwrap().as_deref(), Some(period.as_str()));
+        let counted = || telemetry.counters().into_iter()
+            .map(|c| (c.event, c.dims["client"].clone(), c.dims["setting"].clone(), c.dims["value"].clone(), c.count)).collect::<Vec<_>>();
+        assert_eq!(counted(), [("settings".into(), "native".into(), "theme".into(), "dark".into(), 1)]);
+        // O formato antigo, dentro do lote do diário, continua fora da contagem.
+        let legacy = json!({"eventos": [{"evento": "settings.snapshot", "cliente": "native", "aparelho": "b-2",
+            "valores": {"theme": "light"}}]}).to_string();
+        count_screen(&telemetry, legacy.as_bytes(), 1, now);
+        assert_eq!(counted().len(), 1);
     }
 
     #[test]
@@ -924,34 +927,7 @@ mod tests {
         assert!(diary_codes(&diag, diary.path()).await.iter().any(|row| row["codigo"] == "telemetry_settings_provider_timeout"));
     }
 
-    #[test]
-    fn names_use_the_server_id_of_now() {
-        let home = tempfile::tempdir().unwrap();
-        let st = test_state(home.path(), false);
-        *st.machine_identity.write().unwrap() = Some("lab-novo".into());
-        assert_eq!(local_inputs(&st).2, "lab-novo");
-    }
 
-    #[test]
-    fn log_lines_are_cleaned_before_counting() {
-        let home = tempfile::tempdir().unwrap();
-        let telemetry = test_telemetry(home.path(), true);
-        let names = crate::telemetry_scrub::Names {
-            sessions: vec!["ajuste-login-Coordenadora".into()], accounts: Vec::new(), machines: vec!["estudio-02".into()],
-        };
-        let line = |error, message: &str| Line { seq: 0, error, target: "hangar_server::list".into(), message: message.into() };
-        let lines = [
-            line(true, "sessão ajuste-login-Coordenadora não abriu em /home/fulano/pessoal/x"),
-            line(false, "peer estudio-02 lento"),
-            line(true, "sessão ajuste-login-Coordenadora não abriu em /home/fulano/pessoal/y"),
-        ];
-        record_lines(&telemetry, &Scrubber::new(Some("/home/fulano".into()), None), &names.words().unwrap(), &lines);
-        let logs: Vec<(String, String, u64)> = telemetry.logs().into_iter().map(|l| (l.level, l.message, l.count)).collect();
-        assert_eq!(logs, vec![
-            ("error".into(), "sessão <sessão> não abriu em <caminho>".into(), 2),
-            ("warn".into(), "peer <máquina> lento".into(), 1),
-        ]);
-    }
 
     #[tokio::test]
     async fn provider_is_discovered_only_after_the_day_mark() {
@@ -968,7 +944,7 @@ mod tests {
             daily_snapshot(telemetry.clone(), peers.clone(), crate::diag::DiagClient::new(), telemetry.today(),
                 discover, |p: Option<String>| vec![("default_provider", p.unwrap_or_default())])
         };
-        let day = home.path().join(".hangar/telemetry-scope-2/queue/2026-11-27.json");
+        let day = home.path().join(".hangar/telemetry-v3/queue/2026-11-27.json");
         std::fs::create_dir_all(&day).unwrap();
         assert!(round(&telemetry).await.unwrap().is_err());
         assert!(round(&telemetry).await.unwrap().is_err());
@@ -1029,7 +1005,7 @@ mod tests {
         assert!(daily_snapshot(telemetry.clone(), peers.clone(), diag.clone(), "2026-11-27".into(), cross_midnight, read).await.unwrap().unwrap());
         assert!(telemetry.counters().is_empty(), "o retrato antigo não entrou no dia novo");
         telemetry.save().unwrap();
-        let closed = std::fs::read_to_string(home.path().join(".hangar/telemetry-scope-2/queue/2026-11-27.json")).unwrap_or_default();
+        let closed = std::fs::read_to_string(home.path().join(".hangar/telemetry-v3/queue/2026-11-27.json")).unwrap_or_default();
         assert!(!closed.contains("default_provider") && !closed.contains(SERVER_SETTINGS_MARK), "dia fechado não foi reaberto: {closed}");
 
         let calls = AtomicUsize::new(0);
@@ -1049,7 +1025,7 @@ mod tests {
         std::fs::write(&file, json!({"a": {"base_url": "http://192.168.0.10:8765", "token": "t"}}).to_string()).unwrap();
         let peers = PeerClient::new(PeerBook::new(Some(file)));
         let collect = || peers_snapshot(&telemetry, &peers, &telemetry.today(), telemetry.consent_epoch());
-        let day = home.path().join(format!(".hangar/telemetry-scope-2/queue/{}.json", telemetry.today()));
+        let day = home.path().join(format!(".hangar/telemetry-v3/queue/{}.json", telemetry.today()));
         std::fs::create_dir_all(&day).unwrap();
         assert!(collect().is_err());
         assert!(collect().is_err(), "a falha continua até gravar");

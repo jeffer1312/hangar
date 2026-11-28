@@ -82,6 +82,7 @@ mod mention;
 mod server_config;
 mod scheduled;
 mod worktree_settings;
+mod placement;
 mod auto_hide;
 mod invite;
 mod pair_accept;
@@ -108,6 +109,7 @@ pub(crate) use whatsapp_outbox::{Draft as WhatsAppDraft, TextBlock as WhatsAppTe
     countdown_label as whatsapp_countdown_label, draft_card as whatsapp_draft_card, edit_button as whatsapp_edit_button,
     mark_invisibles as whatsapp_mark_invisibles};
 pub(crate) use create::{base_button, base_row, mode_row, provider_segment, provider_track, quiet_button, worktree_field_label, worktree_warning};
+pub(crate) use placement::reason_text as placement_reason_text;
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
@@ -119,7 +121,7 @@ pub(crate) use sign_in::{account_top as sign_in_account_top, default_picks as si
 pub(crate) use viewer::{STRIP_THUMB, play_badge, show_in_chat_button, strip_day, strip_frame, strip_row, strip_thumb, strip_window, viewer_counter,
     viewer_stage, viewer_title};
 pub(crate) use media_panel::{media_cell, media_cell_side, media_day_title, media_filter_chip, media_filter_row, media_grid_row, media_section_tabs};
-pub(crate) use machines::{Consent, ConsentChoice, SETTINGS_CONSENT_SCOPE, TELEMETRY_DOC, consent_row, telemetry_doc_row};
+pub(crate) use machines::{Consent, ConsentChoice, TELEMETRY_B_SCOPE, consent_row, telemetry_doc_row};
 pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news_kind_pill, news_markdown_block, setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
@@ -1063,6 +1065,7 @@ pub struct Hangar {
     server_config: server_config::ServerConfig,
     scheduled: scheduled::Scheduled,
     worktree_settings: worktree_settings::WorktreeSettings,
+    placement: placement::PlacementSettings,
     auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
     guests: guests::Guests,
@@ -1429,7 +1432,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
-            worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
+            worktree_settings: worktree_settings::WorktreeSettings::default(), placement: Default::default(), auto_hide: Default::default(),
             server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), guests: guests::Guests::default(), sign_in: sign_in::SignIn::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
             costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), whatsapp: whatsapp::WhatsApp::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
@@ -1999,7 +2002,11 @@ impl Hangar {
         self.stash_view_draft(cx);
         self.close_open_session(window, cx);
         self.reopen = None;
-        if !home { self.load_view_draft(window, cx); }
+        if !home {
+            self.load_view_draft(window, cx);
+            // Voltar à nova conversa é abri-la de novo: a máquina volta a ser a sugerida.
+            if let (Some(view), Some(api)) = (self.new_chat.clone(), self.api.clone()) { view.update(cx, |view, cx| view.ask_placement(api, cx)); }
+        }
         self.composer.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }

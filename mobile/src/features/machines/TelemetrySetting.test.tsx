@@ -14,20 +14,27 @@ vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock('../../ui/Toast', () => ({ toast: { erro: mocks.erro, ok: vi.fn() } }));
 import { TelemetrySetting } from './TelemetrySetting';
-import { TELEMETRY_DOC_URL, askTelemetry } from './startupQuestions';
+import { LEGACY_TELEMETRY_DOC_URL, TELEMETRY_DOC_URL, askTelemetry } from './startupQuestions';
 import * as m from '../../paraglide/messages';
 
 const server = { id: 'tel-a', label: 'fixture-a', baseUrl: 'https://tel-a.test', token: 'secret-a' };
 const other = { id: 'tel-b', label: 'fixture-b', baseUrl: 'https://tel-b.test', token: 'secret-b' };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 const refused = (status: number, code: string) => json({ detail: { code, params: {}, msg: 'fixture-telemetry-refused' } }, status);
-const view = (consent: boolean | null, disabled_by: string | null = null) =>
-  json({ consent, disabled_by, consent_scope: 2, enabled: consent === true && disabled_by === null });
+// Sem escopo = servidor anterior aos escopos; com escopo, `enabled` segue o aceite ligado.
+const view = (consent: boolean | null, disabled_by: string | null = null, consent_scope?: number) => json(consent_scope === undefined
+  ? { consent, disabled_by } : { consent, disabled_by, consent_scope, enabled: consent === true && disabled_by === null });
+const pending = (server: typeof other, consent_scope?: number) => ({ server, shown: { consent: null, disabled_by: null, consent_scope } });
 let root: Root;
 let el: HTMLDivElement;
 const row = () => el.querySelector(`[aria-label="${m.telemetry_setting()}"]`) as HTMLButtonElement | null;
 const puts = () => mocks.fetch.mock.calls.filter(([, init]) => init?.method === 'PUT');
 const render = () => act(async () => root.render(<TelemetrySetting server={server} />));
+// O "sim" do ajuste passa pelo mesmo aviso da abertura.
+const confirmYes = async (alert: { mock: { calls: unknown[][] } }) => act(async () => {
+  const buttons = alert.mock.calls.at(-1)![2] as { text: string; onPress?: () => void }[];
+  buttons.find((button) => button.text === m.telemetry_yes())!.onPress!();
+});
 beforeEach(() => {
   mocks.fetch.mockReset(); mocks.erro.mockReset(); mocks.saved.mockReset();
   configureApi({ getBaseUrl: () => 'https://wrong.test', getToken: () => 'wrong', origin: null, onUnauthorized: vi.fn(), createEventSource: vi.fn() });
@@ -44,8 +51,8 @@ describe('getTelemetry', () => {
     await expect(getTelemetry(server)).resolves.toBeUndefined();
     mocks.fetch.mockImplementation(async () => refused(503, 'other_failure'));
     await expect(getTelemetry(server)).rejects.toMatchObject({ status: 503 });
-    mocks.fetch.mockImplementation(async () => view(null, 'env'));
-    await expect(getTelemetry(server)).resolves.toEqual({ consent: null, disabled_by: 'env', consent_scope: 2, enabled: false });
+    mocks.fetch.mockImplementation(async () => view(null, 'env', 3));
+    await expect(getTelemetry(server)).resolves.toEqual({ consent: null, disabled_by: 'env', consent_scope: 3, enabled: false });
   });
 
   it('200 com corpo fora da forma é resposta inválida, não "sem telemetria"', async () => {
@@ -55,43 +62,61 @@ describe('getTelemetry', () => {
     }
   });
 
-  it('não tenta aceite de escopo desconhecido nem volta para o formato legado após recusa', async () => {
+  it('o período do retrato só vem com aceite ligado dos escopos 2 e 3', async () => {
+    const period = 'a'.repeat(32);
+    for (const [consent_scope, expected] of [[2, period], [3, period], [4, undefined]] as const) {
+      mocks.fetch.mockImplementation(async () => json({ consent: true, disabled_by: null, consent_scope, enabled: true, snapshot_period: period }));
+      expect((await getTelemetry(server))?.snapshot_period).toBe(expected);
+    }
+    mocks.fetch.mockImplementation(async () => json({ consent: true, disabled_by: null, snapshot_period: period }));
+    expect((await getTelemetry(server))?.snapshot_period).toBeUndefined();
+  });
+
+  it('não tenta aceite de escopo desconhecido; legado vai sem escopo', async () => {
     mocks.fetch.mockImplementation(async () => refused(409, 'telemetry_consent_scope_mismatch'));
-    await expect(putTelemetry(server, true, 3)).rejects.toThrow(m.telemetry_update_required());
-    await expect(putTelemetry(server, true, undefined)).rejects.toThrow(m.telemetry_update_required());
+    await expect(putTelemetry(server, true, 4)).rejects.toThrow(m.telemetry_scope_unknown());
     expect(puts()).toHaveLength(0);
     await expect(putTelemetry(server, true, 2)).rejects.toMatchObject({ status: 409 });
-    expect(puts().map(([, init]) => JSON.parse(init.body))).toEqual([{ consent: true, consent_scope: 2 }]);
+    await expect(putTelemetry(server, true, undefined)).rejects.toMatchObject({ status: 409 });
+    expect(puts().map(([, init]) => JSON.parse(init.body))).toEqual([{ consent: true, consent_scope: 2 }, { consent: true }]);
   });
 });
 
 describe('linha de telemetria', () => {
-  const revoke = () => el.querySelector(`[aria-label="${m.telemetry_revoke()}"]`) as HTMLButtonElement | null;
   it('reabre o mesmo aviso depois de fechar e só liga ao confirmar', async () => {
     const alert = vi.spyOn(Alert, 'alert');
-    mocks.fetch.mockImplementation(async (_url, init) => init?.method === 'PUT' ? view(JSON.parse(init.body).consent) : view(null));
+    mocks.fetch.mockImplementation(async (_url, init) => init?.method === 'PUT' ? view(JSON.parse(init.body).consent, null, 3) : view(null, null, 3));
     await render();
     expect(row()?.textContent).toContain(m.auto_report_value_unanswered());
     await act(async () => row()!.click());
-    const body = m.telemetry_question_body({ machines: 'fixture-a (https://tel-a.test)' });
+    const body = m.telemetry_b_question_body({ machines: 'fixture-a (tel-a.test)' });
     expect(alert.mock.calls[0][1]).toBe(body);
     expect(puts()).toHaveLength(0);
     await act(async () => alert.mock.calls[0][3]!.onDismiss!());
     expect(puts()).toHaveLength(0);
-    expect(row()?.textContent).toContain(m.auto_report_value_unanswered());
     await act(async () => row()!.click());
     expect(alert.mock.calls[1][1]).toBe(body);
-    await act(async () => alert.mock.calls[1][2]!.find((button) => button.text === m.telemetry_yes())!.onPress!());
+    await confirmYes(alert);
     expect(puts()).toHaveLength(1);
     expect(puts()[0][0]).toBe(`${server.baseUrl}/api/telemetry`);
-    expect(JSON.parse(puts()[0][1].body)).toEqual({ consent: true, consent_scope: 2 });
+    expect(JSON.parse(puts()[0][1].body)).toEqual({ consent: true, consent_scope: 3 });
     expect(row()?.textContent).toContain(m.auto_report_on());
-    expect(mocks.saved).toHaveBeenCalledWith(server, expect.objectContaining({ consent: true, consent_scope: 2, enabled: true }));
+    expect(mocks.saved).toHaveBeenCalledWith(server, expect.objectContaining({ consent: true, consent_scope: 3, enabled: true }));
+  });
+
+  it('servidor do escopo 2 recebe o aviso de preferências daquela versão', async () => {
+    const alert = vi.spyOn(Alert, 'alert');
+    mocks.fetch.mockImplementation(async (_url, init) => init?.method === 'PUT' ? view(true, null, 2) : view(null, null, 2));
+    await render();
+    await act(async () => row()!.click());
+    expect(alert.mock.calls[0][1]).toBe(m.telemetry_question_body({ machines: 'fixture-a (tel-a.test)' }));
+    await confirmYes(alert);
+    expect(JSON.parse(puts()[0][1].body)).toEqual({ consent: true, consent_scope: 2 });
   });
 
   it('"Não enviar" no aviso grava a recusa da máquina ainda sem resposta', async () => {
     const alert = vi.spyOn(Alert, 'alert');
-    mocks.fetch.mockImplementation(async (_url, init) => init?.method === 'PUT' ? view(JSON.parse(init.body).consent) : view(null));
+    mocks.fetch.mockImplementation(async (_url, init) => init?.method === 'PUT' ? view(JSON.parse(init.body).consent, null, 3) : view(null, null, 3));
     await render();
     await act(async () => row()!.click());
     await act(async () => alert.mock.calls[0][2]!.find((button) => button.text === m.telemetry_no())!.onPress!());
@@ -99,35 +124,33 @@ describe('linha de telemetria', () => {
     expect(row()?.textContent).toContain(m.auto_report_off());
   });
 
-  it('mostra bloqueio do ambiente antes de escolha ainda não respondida', async () => {
-    mocks.fetch.mockImplementation(async () => json({ consent: null, disabled_by: 'env' }));
-    await render();
-    expect(row()?.textContent).toContain(m.auto_report_off());
-    expect(row()?.textContent).not.toContain(m.auto_report_value_unanswered());
-    expect(row()?.disabled).toBe(true);
-  });
-
-  it('mostra desligada pelo ambiente e permite revogar o aceite que ficou salvo', async () => {
-    mocks.fetch.mockImplementation(async (_url, init) => view(init?.method !== 'PUT', 'ci'));
+  it('mesmo com o ambiente desligado, pode revogar o aceite salvo', async () => {
+    mocks.fetch.mockImplementation(async (_url, init) => view(init?.method !== 'PUT', 'ci', 3));
     await render();
     expect(el.textContent).toContain(m.telemetry_disabled_env());
-    expect(row()?.textContent).toContain(m.auto_report_off());
-    expect(row()?.disabled).toBe(true);
     await act(async () => row()!.click());
-    expect(puts()).toHaveLength(0);
-    await act(async () => revoke()!.click());
-    expect(puts().map(([, init]) => JSON.parse(init.body))).toEqual([{ consent: false }]);
-    expect(revoke()).toBeNull();
+    expect(puts()).toHaveLength(1);
+    expect(JSON.parse(puts()[0][1].body)).toEqual({ consent: false });
   });
 
-  it('permite revogar um aceite de aviso desconhecido, mas não autorizar outro', async () => {
-    mocks.fetch.mockImplementation(async (_url, init) => json({ consent: init?.method !== 'PUT', consent_scope: 3, disabled_by: null }));
+  it('aceite salvo que o servidor não está usando mostra o aviso e ainda revoga', async () => {
+    mocks.fetch.mockImplementation(async (_url, init) => json({ consent: init?.method !== 'PUT', disabled_by: null, consent_scope: 3, enabled: false }));
     await render();
-    expect(el.textContent).toContain(m.telemetry_update_required());
-    expect(row()?.disabled).toBe(true);
-    await act(async () => revoke()!.click());
+    expect(el.textContent).toContain(m.telemetry_not_active());
+    await act(async () => row()!.click());
     expect(puts().map(([, init]) => JSON.parse(init.body))).toEqual([{ consent: false }]);
-    expect(row()?.disabled).toBe(true);
+  });
+
+  it('usa escopo 3 no ajuste e nunca repete a gravação no formato legado', async () => {
+    mocks.fetch.mockImplementation(async (_url, init) => init?.method === 'PUT' ? refused(422, 'telemetry_consent_scope_required') : view(null, null, 3));
+    const alert = vi.spyOn(Alert, 'alert');
+    await render();
+    expect(el.textContent).toContain('400');
+    await act(async () => row()!.click());
+    expect(alert.mock.calls[0][1]).toBe(m.telemetry_b_question_body({ machines: 'fixture-a (tel-a.test)' }));
+    await confirmYes(alert);
+    expect(puts()).toHaveLength(1);
+    expect(JSON.parse(puts()[0][1].body)).toEqual({ consent: true, consent_scope: 3 });
   });
 
   it('"O que é enviado" abre a lista no repositório', async () => {
@@ -135,7 +158,7 @@ describe('linha de telemetria', () => {
     mocks.fetch.mockImplementation(async () => view(false));
     await render();
     await act(async () => (el.querySelector(`[aria-label="${m.telemetry_what_is_sent()}"]`) as HTMLButtonElement).click());
-    expect(open).toHaveBeenCalledWith(TELEMETRY_DOC_URL);
+    expect(open).toHaveBeenCalledWith(LEGACY_TELEMETRY_DOC_URL);
   });
 
   it('falha ao abrir a lista avisa na tela', async () => {
@@ -144,6 +167,19 @@ describe('linha de telemetria', () => {
     await render();
     await act(async () => (el.querySelector(`[aria-label="${m.telemetry_what_is_sent()}"]`) as HTMLButtonElement).click());
     expect(mocks.erro).toHaveBeenCalledWith(m.telemetry_doc_open_failed());
+  });
+
+  it('outra identidade do servidor com a leitura anterior em curso faz a leitura nova', async () => {
+    let answer: (response: Response) => void = () => {};
+    mocks.fetch.mockImplementation((url) => String(url).startsWith(server.baseUrl)
+      ? new Promise<Response>((resolve) => { answer = resolve; }) : Promise.resolve(view(true, null, 3)));
+    await render();
+    const moved = { ...server, baseUrl: other.baseUrl };
+    await act(async () => root.render(<TelemetrySetting server={moved} />));
+    await act(async () => answer(view(false, null, 3)));
+    expect(mocks.fetch.mock.calls.map(([url]) => String(url))).toEqual([`${server.baseUrl}/api/telemetry`, `${other.baseUrl}/api/telemetry`]);
+    expect(row()?.textContent).toContain(m.auto_report_on());
+    expect(row()?.disabled).toBe(false);
   });
 
   it.each([404, 503])('servidor sem telemetria (%i) não mostra a linha nem erro', async (status) => {
@@ -155,11 +191,38 @@ describe('linha de telemetria', () => {
 });
 
 describe('aviso da abertura', () => {
-  const pending = [server, other];
+  it('um aviso por escopo conhecido e nenhum para escopo que o app não conhece', async () => {
+    const alert = vi.spyOn(Alert, 'alert');
+    const scope2 = { ...other, id: 'tel-c', label: 'fixture-c', baseUrl: 'https://tel-c.test' };
+    mocks.fetch.mockImplementation(async (url) => String(url).startsWith(server.baseUrl) ? view(true, null, 3)
+      : String(url).startsWith(scope2.baseUrl) ? view(true, null, 2) : view(true));
+    const asked = askTelemetry([pending(other), pending(server, 3), pending(scope2, 2), pending({ ...other, label: 'fixture-unknown' }, 4)]);
+    const answer = async (n: number) => { alert.mock.calls[n][2]!.find((button) => button.text === m.telemetry_yes())!.onPress!(); await Promise.resolve(); };
+    expect(alert.mock.calls[0][1]).toBe(m.telemetry_b_question_body({ machines: 'fixture-a' }));
+    await answer(0);
+    expect(alert.mock.calls[1][1]).toBe(m.telemetry_question_body({ machines: 'fixture-c' }));
+    await answer(1);
+    expect(alert.mock.calls[2][1]).toBe(m.telemetry_legacy_question_body({ machines: 'fixture-b' }));
+    await answer(2);
+    await asked;
+    expect(alert).toHaveBeenCalledTimes(3);
+    expect(puts().map(([, init]) => JSON.parse(init.body))).toEqual([{ consent: true, consent_scope: 3 }, { consent: true, consent_scope: 2 }, { consent: true }]);
+  });
+
+  it('mesmo nome em avisos diferentes leva o endereço nos dois', async () => {
+    const alert = vi.spyOn(Alert, 'alert');
+    const asked = askTelemetry([pending(server, 3), pending({ ...other, label: server.label }, 2)]);
+    expect(alert.mock.calls[0][1]).toBe(m.telemetry_b_question_body({ machines: 'fixture-a (tel-a.test)' }));
+    alert.mock.calls[0][3]!.onDismiss!();
+    await vi.waitFor(() => expect(alert).toHaveBeenCalledTimes(2));
+    expect(alert.mock.calls[1][1]).toBe(m.telemetry_question_body({ machines: 'fixture-a (tel-b.test)' }));
+    alert.mock.calls[1][3]!.onDismiss!();
+    await asked;
+  });
 
   it('fechar sem tocar não grava nada', async () => {
     const alert = vi.spyOn(Alert, 'alert');
-    const asked = askTelemetry(pending, pending);
+    const asked = askTelemetry([pending(server, 3), pending(other, 3)]);
     expect(alert).toHaveBeenCalledTimes(1);
     expect(alert.mock.calls[0][1]).toContain('fixture-a, fixture-b');
     alert.mock.calls[0][3]!.onDismiss!();
@@ -171,8 +234,8 @@ describe('aviso da abertura', () => {
     const alert = vi.spyOn(Alert, 'alert');
     const open = vi.spyOn(Linking, 'openURL');
     mocks.fetch.mockImplementation(async (url) => String(url).startsWith(other.baseUrl)
-      ? refused(503, 'telemetry_unavailable') : view(true));
-    const asked = askTelemetry(pending, pending);
+      ? refused(503, 'telemetry_unavailable') : view(true, null, 3));
+    const asked = askTelemetry([pending(server, 3), pending(other, 3)]);
     const press = (text: string) => alert.mock.calls.at(-1)![2]!.find((button) => button.text === text)!.onPress!();
     press(m.telemetry_what_is_sent());
     expect(open).toHaveBeenCalledWith(TELEMETRY_DOC_URL);
@@ -182,32 +245,17 @@ describe('aviso da abertura', () => {
     await asked;
     await vi.waitFor(() => expect(mocks.erro).toHaveBeenCalledWith(m.auto_report_save_failed({ machines: 'fixture-b' })));
     expect(puts().map(([url, init]) => [url, JSON.parse(init.body)])).toEqual([
-      [`${server.baseUrl}/api/telemetry`, { consent: true, consent_scope: 2 }],
-      [`${other.baseUrl}/api/telemetry`, { consent: true, consent_scope: 2 }],
+      [`${server.baseUrl}/api/telemetry`, { consent: true, consent_scope: 3 }],
+      [`${other.baseUrl}/api/telemetry`, { consent: true, consent_scope: 3 }],
     ]);
+    expect(mocks.saved).toHaveBeenCalledWith(server, expect.objectContaining({ consent: true, consent_scope: 3 }));
   });
 
-  it('só propõe aviso reconhecido e distingue nome igual de máquina já respondida', async () => {
-    const duplicate = { ...other, label: server.label };
+  it('a lista da abertura só leva máquina de aviso conhecido e sem resposta', async () => {
     const future = { ...other, id: 'tel-c', label: 'fixture-c', baseUrl: 'https://tel-c.test' };
-    const legacy = { ...other, id: 'tel-d', label: 'fixture-d', baseUrl: 'https://tel-d.test' };
-    const alert = vi.spyOn(Alert, 'alert');
-    mocks.fetch.mockImplementation(async (url, init) => {
-      if (String(url).startsWith(legacy.baseUrl)) return json({ consent: null, disabled_by: null });
-      if (String(url).startsWith(future.baseUrl)) return json({ consent: null, consent_scope: 3 });
-      if (String(url).startsWith(duplicate.baseUrl)) return view(true);
-      return view(init?.method === 'PUT' ? true : null);
-    });
-    const registered = [server, legacy, future, duplicate];
-    const offered = await telemetryUnanswered(registered);
-    expect(offered).toEqual([server]);
-    const asked = askTelemetry(offered, registered);
-    expect(alert).toHaveBeenCalledTimes(1);
-    expect(alert.mock.calls[0][1]).toBe(m.telemetry_question_body({ machines: 'fixture-a (https://tel-a.test)' }));
-    alert.mock.calls[0][2]!.find((button) => button.text === m.telemetry_yes())!.onPress!();
-    await asked;
-    expect(puts().map(([url, init]) => [url, JSON.parse(init.body)])).toEqual([
-      [`${server.baseUrl}/api/telemetry`, { consent: true, consent_scope: 2 }],
-    ]);
+    mocks.fetch.mockImplementation(async (url) => String(url).startsWith(future.baseUrl) ? view(null, null, 4)
+      : String(url).startsWith(other.baseUrl) ? view(true, null, 3) : view(null, null, 3));
+    const offered = await telemetryUnanswered([server, other, future]);
+    expect(offered.map(({ server: s }) => s.id)).toEqual([server.id]);
   });
 });

@@ -18,7 +18,7 @@ use rmcp::ServiceExt;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, CallToolResult, ClientCapabilities,
     ClientConfig as McpClientInfo, ClientRequest, ContentBlock, Implementation,
-    PaginatedRequestParams, ResourceContents, ServerResult, Tool,
+    PaginatedRequestParams, ProtocolVersion, ResourceContents, ServerResult, Tool,
 };
 use rmcp::service::{
     ClientCacheConfig, ClientInitializeError, Peer, PeerRequestOptions, RoleClient,
@@ -1457,11 +1457,13 @@ impl SessionFingerprint {
     }
 }
 
+// O cliente sobe pelo `initialize`: declarar versão sem esse passo faz servidores reais recusarem a conexão.
 fn client_info() -> McpClientInfo {
     McpClientInfo::new(
         ClientCapabilities::default(),
         Implementation::new("hangar-integrations", env!("CARGO_PKG_VERSION")),
     )
+    .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
 }
 
 fn resolve_effective_oauth_override(
@@ -2010,6 +2012,12 @@ mod tests {
     use super::SessionFingerprint;
     use crate::model::{AuthConfig, IntegrationConfig, PermissionPolicy, Transport};
     use crate::secrets::IntegrationSecrets;
+
+    #[test]
+    fn initialize_declares_a_protocol_version_that_still_has_initialize() {
+        let version = super::client_info().protocol_version;
+        assert!(version.has_initialize(), "versão declarada: {version}");
+    }
 
     fn base_stdio_config(cmd: Vec<&str>, cwd: Option<&str>) -> IntegrationConfig {
         IntegrationConfig {

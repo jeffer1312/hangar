@@ -455,16 +455,27 @@ async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCal
         let stem = if stem.is_empty() { "worktree".to_owned() } else { stem };
         let source = spec.cwd.clone();
         let home = host.home().to_owned();
+        let fresh = wt.fresh;
         // A pasta das worktrees é a configurada neste servidor, como na rota de worktrees.
         let made = tokio::task::spawn_blocking(move || {
             let location = hangar_workspace::worktree_settings::WorktreeSettings::load_at(&home.join(".hangar/worktree-settings.json"))?
                 .location_path(&home)?;
-            hangar_workspace::git::create_branch_worktree(Path::new(&source), &wt.branch, &stem, &root, wt.new_branch, wt.base.as_deref(), &location)
+            let base = if wt.fresh && wt.new_branch { remote_base(Path::new(&source), wt.base.as_deref()) } else { wt.base.clone() };
+            hangar_workspace::git::create_branch_worktree(Path::new(&source), &wt.branch, &stem, &root, wt.new_branch, base.as_deref(), &location)
         }).await.map_err(|_| creation("a criação da worktree não terminou"))?
             .map_err(|e| OpenError::new(e.status, "erro_criacao_sessao", e.detail.as_str().map_or_else(|| e.detail.to_string(), str::to_owned)))?;
         if made.created {
             undo = Some(WorktreeUndo { source: spec.cwd.clone(), path: made.path.clone(), branch: made.branch.clone(),
                 branch_created: made.branch_created });
+        }
+        if fresh {
+            let (path, branch, created) = (made.path.clone(), made.branch.clone(), made.created);
+            let updated = tokio::task::spawn_blocking(move || fresh_update(Path::new(&path), &branch, created)).await
+                .unwrap_or_else(|_| Err(creation("a atualização da worktree não terminou")));
+            match updated {
+                Ok(warning) => warnings.extend(warning),
+                Err(error) => { if let Some(undo) = undo { undo.undo().await?; } return Err(error); }
+            }
         }
         spec.cwd = made.path.clone();
         if let Some(w) = spec.worktree.as_mut() { w.path = Some(made.path); w.branch = made.branch; }
@@ -491,6 +502,38 @@ async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCal
             if let Some(undo) = undo && error.code != Some(UNCERTAIN) { undo.undo().await?; }
             Err(error)
         }
+    }
+}
+
+/// A branch nova da abertura vinda de outra máquina parte do remoto da base, nunca da cópia local dela,
+/// que pode estar velha aqui.
+fn remote_base(source: &Path, base: Option<&str>) -> Option<String> {
+    let base = base.filter(|b| !b.is_empty())?;
+    upstream(source, base).or_else(|| Some(base.to_owned()))
+}
+
+/// `origin/x` da branch `x`; `None` sem upstream.
+fn upstream(dir: &Path, branch: &str) -> Option<String> {
+    let out = hangar_workspace::git::command(dir, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", &format!("{branch}@{{u}}")]).ok()?;
+    Some(out.stdout.trim().to_owned()).filter(|up| out.code == 0 && !up.is_empty())
+}
+
+/// A worktree da abertura vinda de outra máquina avança até o remoto recém-buscado. A pasta que já estava
+/// na branch (`created` falso) só serve sem mudança: o trabalho de lá não recebe a sessão por cima.
+fn fresh_update(dir: &Path, branch: &str, created: bool) -> Result<Option<String>, OpenError> {
+    let git = |args: &[&str]| hangar_workspace::process::run(dir, args, Duration::from_secs(120));
+    if !created {
+        let status = git(&["status", "--porcelain", "--untracked-files=no"]).map_err(|_| creation("não consegui ler o estado da pasta"))?;
+        if status.code != 0 || !status.stdout.trim().is_empty() {
+            return Err(OpenError::new(409, "placement_branch_busy", format!("a branch {branch} está aberta em {} com mudança não \
+                commitada: a sessão vinda de outra máquina não abre por cima dela", dir.display()))
+                .with_params(json!({"branch": branch, "path": dir.to_string_lossy()})));
+        }
+    }
+    let Some(up) = upstream(dir, branch) else { return Ok(None) };
+    match git(&["merge", "--ff-only", "--quiet", &up]) {
+        Ok(out) if out.code == 0 => Ok(None),
+        _ => Ok(Some(format!("a branch {branch} em {} não avançou até {up}: ficou como estava, sem o que veio do remoto", dir.display()))),
     }
 }
 
@@ -1098,5 +1141,73 @@ mod telemetry_tests {
         assert!(telemetry.counters().is_empty(), "falha de convidado não conta");
         count_open_failed(Some(&*telemetry), &OpenCaller::Owner, "claude", Some("erro_nome_em_uso"));
         assert_eq!(telemetry.counters().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod fresh_tests {
+    use std::{path::Path, process::Command};
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git").arg("-C").arg(dir).args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// `remote.git` com dois commits em `main` e `here`, o clone que ficou no primeiro e já buscou o segundo.
+    fn behind() -> (tempfile::TempDir, std::path::PathBuf, String) {
+        let base = tempfile::tempdir().unwrap();
+        let (remote, there, here) = (base.path().join("remote.git"), base.path().join("there"), base.path().join("here"));
+        git(base.path(), &["init", "--bare", "-b", "main", &remote.to_string_lossy()]);
+        git(base.path(), &["clone", &remote.to_string_lossy(), &there.to_string_lossy()]);
+        std::fs::write(there.join("a.txt"), "1").unwrap();
+        git(&there, &["add", "a.txt"]);
+        git(&there, &["commit", "-m", "um"]);
+        git(&there, &["push", "origin", "HEAD:main"]);
+        git(base.path(), &["clone", &remote.to_string_lossy(), &here.to_string_lossy()]);
+        std::fs::write(there.join("a.txt"), "2").unwrap();
+        git(&there, &["commit", "-am", "dois"]);
+        git(&there, &["push", "origin", "HEAD:main"]);
+        git(&here, &["fetch"]);
+        let tip = git(&there, &["rev-parse", "HEAD"]);
+        (base, here, tip)
+    }
+
+    #[test]
+    fn a_clean_folder_on_the_branch_moves_to_what_the_remote_has() {
+        let (_base, here, tip) = behind();
+        assert_eq!(super::fresh_update(&here, "main", false).unwrap(), None);
+        assert_eq!(git(&here, &["rev-parse", "HEAD"]), tip);
+    }
+
+    #[test]
+    fn a_folder_with_work_from_there_refuses_the_session_and_keeps_the_work() {
+        let (_base, here, tip) = behind();
+        std::fs::write(here.join("a.txt"), "trabalho de lá").unwrap();
+        let error = super::fresh_update(&here, "main", false).unwrap_err();
+        assert_eq!((error.status, error.code), (409, Some("placement_branch_busy")));
+        assert_ne!(git(&here, &["rev-parse", "HEAD"]), tip);
+        assert_eq!(std::fs::read_to_string(here.join("a.txt")).unwrap(), "trabalho de lá");
+    }
+
+    #[test]
+    fn a_branch_with_its_own_commits_stays_with_a_warning() {
+        let (_base, here, tip) = behind();
+        std::fs::write(here.join("b.txt"), "só aqui").unwrap();
+        git(&here, &["add", "b.txt"]);
+        git(&here, &["commit", "-m", "só aqui"]);
+        let own = git(&here, &["rev-parse", "HEAD"]);
+        let warning = super::fresh_update(&here, "main", true).unwrap().expect("aviso");
+        assert!(warning.contains("origin/main"), "{warning}");
+        assert_eq!(git(&here, &["rev-parse", "HEAD"]), own);
+        assert_ne!(own, tip);
+    }
+
+    #[test]
+    fn the_new_branch_starts_from_the_remote_of_the_base() {
+        let (_base, here, _) = behind();
+        assert_eq!(super::remote_base(&here, Some("main")).as_deref(), Some("origin/main"));
+        assert_eq!(super::remote_base(&here, Some("origin/main")).as_deref(), Some("origin/main"));
+        assert_eq!(super::remote_base(&here, None), None);
     }
 }

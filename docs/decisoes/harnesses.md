@@ -64,7 +64,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Antigravity fala com o Hangar pelo MCP `hangar` em stdio e pelos hooks, como Claude e Codex.** O `agy`
   só manda cabeçalho fixo ao MCP HTTP: o `mcp-register` grava em `~/.gemini/config/mcp_config.json` o
   lançador `~/.local/bin/hangar-mcp-stdio` (`.cmd` no Windows), que roda `hangar-server mcp-stdio`
-  (crate `hangar-mcp-stdio`), com `timeoutSeconds: 660` para o cofre; a ponte lê o token do `.env` e a
+  (crate `hangar-mcp-stdio`), com `timeoutSeconds: 900` para o cofre e o `new_session` noutra máquina; a ponte lê o token do `.env` e a
   identidade do ambiente que o `agy` repassa ao filho (`CP_SESSION_KEY`, `TMUX_PANE`, `CP_SESSION_NAME`,
   `HANGAR_JEV`). No `settings.json` do `agy` entram só as regras de `settings::HANGAR_RULES`: as quatro
   tools de recado (`mcp(hangar/send)`…) e o CLI de recado e do navegador, nunca `command(hangar-send)`
@@ -1602,8 +1602,8 @@ assim, esse era o arquivo em uso (alterado no dia), e o `~/.claude.json` estava 
 dias. Os escritores fixavam o
 `~/.claude.json`: o Computer Use tirava a pasta padrão da lista de contas e gravava só no
 `~/.claude.json` e nas outras contas, então as sessões da conta padrão não viam o
-`hangar-computer-control`; o `mcp-register` deixava o `hangar` de dentro da pasta sem o prazo de
-660 s; o espelho levava às contas os MCP do `~/.claude.json`, e o `open-design` registrado pela
+`hangar-computer-control`; o `mcp-register` deixava o `hangar` de dentro da pasta sem o prazo longo
+(hoje 900 s); o espelho levava às contas os MCP do `~/.claude.json`, e o `open-design` registrado pela
 conta padrão nunca chegava a elas. A regra única é `default_claude_json` (`hangar-core`), com o
 mesmo critério do `config_dir_to_export`. O principal do Computer Use continua o `~/.claude.json`:
 mudar para o de dentro da pasta faria a marca `registered` de quem já tinha o registro ler a

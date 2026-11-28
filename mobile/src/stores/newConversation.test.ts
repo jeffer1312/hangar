@@ -120,6 +120,37 @@ describe('newConversation', () => {
     expect(JSON.stringify([...memory.values()])).not.toContain('secret');
   });
 
+  it('"Abrir na <máquina>": o pedido vai ao servidor daqui com a máquina da regra; tentativa, envio e recuperação são de lá', async () => {
+    calls.create.mockImplementation(async (_server, body) => ({ name: body.name, state: 'idle' }));
+    calls.send.mockResolvedValue(undefined);
+    await beginAttempt('server-a', {
+      body: { cwd: '/repo/mobile', provider: 'claude', config_dir: '/h/.claude-x', prewarm: 'r1' }, reserveName: 'mobile',
+      text: 'oi', forward: { via: 'server-b', machine: 'vm' },
+    });
+    expect(calls.create).toHaveBeenCalledOnce();
+    const [asked, body] = calls.create.mock.calls[0];
+    expect(asked).toBe(serverB);
+    expect(body).toMatchObject({ cwd: '/repo/mobile', provider: 'claude', name: 'mobile', machine: 'vm' });
+    expect(body).not.toHaveProperty('config_dir');
+    expect(body).not.toHaveProperty('prewarm');
+    // O nome livre é conferido na máquina da regra, onde a sessão nasce.
+    expect(calls.sessions).toHaveBeenCalledWith(serverA);
+    expect(attempt('server-b')).toBeUndefined();
+    expect(stored()).toMatchObject({ serverId: 'server-a', phase: 'created', sessionName: 'mobile' });
+    await sendFirstInput('server-a', attempt()!.id);
+    expect(calls.send).toHaveBeenCalledWith(serverA, 'mobile', 'oi');
+  });
+
+  it('encaminhada e incerta, a recuperação aceita a sessão lá numa pasta traduzida', async () => {
+    calls.create.mockRejectedValue(httpError(503));
+    await beginAttempt('server-a', { body: { cwd: '/repo/mobile', provider: 'claude' }, text: 'oi', forward: { via: 'server-b', machine: 'vm' } });
+    expect(attempt()?.phase).toBe('create_unknown');
+    calls.sessions.mockResolvedValue([{ name: 'mobile', cwd: '/home/vm/repo/mobile', provider: 'claude' }]);
+    await recoverAttempt('server-a');
+    expect(calls.sessions).toHaveBeenLastCalledWith(serverA);
+    expect(issue()?.kind).toBe('candidate');
+  });
+
   it('dois toques e remontagem durante a criação disparam um único POST', async () => {
     const create = deferred<SessionInfo>();
     calls.create.mockReturnValue(create.promise);

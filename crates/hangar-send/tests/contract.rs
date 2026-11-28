@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 const CASES: &str = include_str!("contract/send_cases.json");
 
-const NEW_USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--forcar-conta] [--resume <id da conversa>]\n";
+const NEW_USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--forcar-conta] [--machine <id|auto>] [--resume <id da conversa>]\n";
 const PAIR_USAGE: &str = "uso: hangar-send --pair <sessao|servidor::sessao> [tarefa...] [--substituir-tarefa] [--orq] | --pair --orq [tarefa...]\n";
 const CONTRACT_USAGE: &str = "uso: hangar-send --contrato [--gravar <arquivo> [--mtime <valor da leitura>]]\n";
 const UNREADABLE_SEND: &str = "— não dá para dizer se foi entregue; confira com hangar-send --list\n";
@@ -158,6 +158,7 @@ fn overrides() -> BTreeMap<&'static str, Override> {
             .stdout("sessão criada: nova (/w) [jev: false] — fala com ela via: hangar-send nova \"msg\"\n")),
         ("new__providers-500", skip(lookup_gone, "o --new não consulta mais /api/providers")),
         ("new__providers-unreadable", skip(lookup_gone, "o --new não consulta mais /api/providers")),
+        ("new__link-remote", skip("filha ligada entre máquinas", "servidor:: com --link abre pelo servidor daqui (open_fields.rs)")),
         ("new__value-missing-at-end", why("D14.2").code(2).stderr("uso: --model <id>\n")),
         ("pair__no-peer", why("D14.2").code(2).stderr(PAIR_USAGE)),
         ("close__no-target", why("D14.2").code(2).stderr("uso: hangar-send --close <sessao|servidor::sessao>\n")),
@@ -342,6 +343,18 @@ fn run_case(case: &Value, change: Option<&Override>) -> Vec<String> {
                     request["auth"] = json!(auth);
                 }
             }
+        }
+    }
+    // Balanceamento: o `--new` sem servidor:: pede a escolha da máquina ao servidor daqui, só com a criadora
+    // identificada; fora de sessão (sem `creator`) abre aqui sem `machine`.
+    if let Some(requests) = wanted.get_mut("local").and_then(Value::as_array_mut) {
+        for request in requests.iter_mut().filter(|request| request["method"] == "POST" && request["path"] == "/api/sessions") {
+            let mut body: Value = serde_json::from_str(request["body"].as_str().unwrap()).unwrap();
+            if body["creator"].as_str().is_none_or(str::is_empty) {
+                continue;
+            }
+            body["machine"] = json!("auto");
+            request["body"] = Value::String(body.to_string());
         }
     }
     let empty = Vec::new();

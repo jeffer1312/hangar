@@ -545,6 +545,16 @@ fn task_state(out: &str, files_present: bool) -> ProcessState {
 mod tests {
     use super::*;
 
+    /// Executável gravado por um `install` à parte: gravado aqui, um filho de outro teste nascido nesse
+    /// instante herdaria o descritor de escrita, e rodar o arquivo daria "Text file busy" (ETXTBSY).
+    #[cfg(unix)]
+    fn exec_script(path: &Path, body: &str) {
+        let source = path.with_extension("src");
+        std::fs::write(&source, body).unwrap();
+        let status = std::process::Command::new("install").arg("-m").arg("755").arg(&source).arg(path).status().unwrap();
+        assert!(status.success(), "install {}", path.display());
+    }
+
     const WHATSAPP: ServiceId = ServiceId {
         unit: "hangar-whatsapp.service",
         launchd_label: "dev.hangar.whatsapp",
@@ -671,15 +681,13 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_refused_unload_is_an_error_unless_the_agent_is_not_loaded() {
-        use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
         let plist = launchd_plist_path(home.path(), &WHATSAPP);
         std::fs::create_dir_all(plist.parent().unwrap()).unwrap();
         std::fs::write(&plist, "<plist/>").unwrap();
         let fake = |name: &str, list: &str| {
             let path = home.path().join(name);
-            std::fs::write(&path, format!("#!/bin/sh\n[ \"$1\" = unload ] && {{ echo recusado >&2; exit 5; }}\n{list}\n")).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            exec_script(&path, &format!("#!/bin/sh\n[ \"$1\" = unload ] && {{ echo recusado >&2; exit 5; }}\n{list}\n"));
             path.display().to_string()
         };
         let unloaded = fake("unloaded", "echo 'Could not find service' >&2; exit 113");
@@ -692,7 +700,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn turning_autostart_off_and_on_keeps_the_unit() {
-        use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
         assert_eq!(systemd_autostart(home.path(), &WHATSAPP, false, "/nao/existe/systemctl").await, Ok(()), "sem unit");
         let unit = systemd_unit_path(home.path(), &WHATSAPP);
@@ -700,8 +707,7 @@ mod tests {
         std::fs::write(&unit, "[Unit]\n").unwrap();
         let seen = home.path().join("seen");
         let fake = home.path().join("systemctl");
-        std::fs::write(&fake, "#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/seen\"\n").unwrap();
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        exec_script(&fake, "#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/seen\"\n");
         let fake = fake.display().to_string();
         systemd_autostart(home.path(), &WHATSAPP, false, &fake).await.unwrap();
         systemd_autostart(home.path(), &WHATSAPP, true, &fake).await.unwrap();

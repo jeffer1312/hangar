@@ -53,6 +53,8 @@ const ROUTE_BODY_LIMIT: usize = 16 << 20;
 
 type Outcome = Result<CallToolResult, String>;
 
+tokio::task_local! { pub(super) static ARGUMENTS_REJECTED: std::cell::Cell<bool>; }
+
 pub struct Tools {
     st: Arc<AppState>,
     api: Router,
@@ -86,9 +88,12 @@ fn image(path: &Path) -> Option<ContentBlock> {
 }
 
 fn args<T: DeserializeOwned>(tool: &str, raw: JsonObject) -> Result<T, String> {
-    serde_json::from_value(Value::Object(raw)).map_err(|e| match super::expected_fields(tool) {
-        Some(fields) => format!("argumentos inválidos para {tool}: {e}. Campos: {fields}"),
-        None => format!("argumentos inválidos para {tool}: {e}"),
+    serde_json::from_value(Value::Object(raw)).map_err(|e| {
+        let _ = ARGUMENTS_REJECTED.try_with(|rejected| rejected.set(true));
+        match super::expected_fields(tool) {
+            Some(fields) => format!("argumentos inválidos para {tool}: {e}. Campos: {fields}"),
+            None => format!("argumentos inválidos para {tool}: {e}"),
+        }
     })
 }
 
@@ -156,7 +161,7 @@ struct NewSession {
     service_tier: Option<String>, branch: Option<String>, #[serde(default)] new_branch: bool, base: Option<String>,
     codex_account: Option<String>, subagent_model: Option<String>, initial_prompt: Option<String>, engine_account: Option<String>,
     omp_profile: Option<String>, claude_customizations: Option<Value>, inherit: Option<bool>, #[serde(default)] remember_provider: bool,
-    resume: Option<String>, #[serde(default)] link: bool, #[serde(default)] forcar_conta: bool,
+    resume: Option<String>, #[serde(default)] link: bool, #[serde(default)] forcar_conta: bool, machine: Option<String>,
 }
 
 impl NewSession {
@@ -166,7 +171,8 @@ impl NewSession {
             ("jev", self.jev.is_some()), ("code_mode", self.code_mode.is_some()), ("service_tier", self.service_tier.is_some()), ("branch", self.branch.as_deref().is_some_and(|b| !b.is_empty())),
             ("new_branch", self.new_branch), ("subagent_model", self.subagent_model.is_some()), ("initial_prompt", self.initial_prompt.is_some()),
             ("omp_profile", self.omp_profile.is_some()), ("claude_customizations", self.claude_customizations.is_some()),
-            ("inherit", self.inherit.is_some()), ("remember_provider", self.remember_provider), ("link", self.link), ("forcar_conta", self.forcar_conta)];
+            ("inherit", self.inherit.is_some()), ("remember_provider", self.remember_provider), ("link", self.link), ("forcar_conta", self.forcar_conta),
+            ("machine", self.machine.is_some())];
         if let Some((key, _)) = unsupported.iter().find(|(_, set)| *set) { return Err(format!("{key} não combina com resume")); }
         let mut body = json!({"name": self.nome});
         for (key, value) in [("provider", &self.provider), ("engine", &self.engine), ("model", &self.model), ("config_dir", &self.conta),
@@ -189,7 +195,8 @@ impl NewSession {
             ("initial_prompt", self.initial_prompt.map(Value::from)), ("engine_account", self.engine_account.map(Value::from)),
             ("omp_profile", self.omp_profile.map(Value::from)), ("claude_customizations", self.claude_customizations),
             ("read_only", self.read_only.then_some(Value::Bool(true))), ("new_branch", self.new_branch.then_some(Value::Bool(true))),
-            ("remember_provider", self.remember_provider.then_some(Value::Bool(true))), ("force_account", self.forcar_conta.then_some(Value::Bool(true)))];
+            ("remember_provider", self.remember_provider.then_some(Value::Bool(true))), ("force_account", self.forcar_conta.then_some(Value::Bool(true))),
+            ("machine", self.machine.filter(|m| !m.is_empty()).map(Value::from))];
         for (key, value) in optional {
             if let Some(value) = value { body[key] = value; }
         }
@@ -221,6 +228,14 @@ fn created(info: &Value, server: Option<&str>) -> Outcome {
         "config_dir": info["config_dir"], "account_source": info["account_source"]});
     if let Some(server) = server { out["server"] = json!(server); }
     if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
+    if info["placement"].is_object() { out["placement"] = info["placement"].clone(); }
+    // O nome para `send`, `close_session` e `interrupt`: com a máquina quando a sessão abriu noutra.
+    let name = info["name"].as_str().unwrap_or_default();
+    out["target"] = match (info["target"].as_str(), server) {
+        (Some(target), _) => json!(target),
+        (None, Some(server)) => json!(format!("{server}::{name}")),
+        (None, None) => json!(name),
+    };
     // A sessão abriu: o erro diz isso e leva a resposta inteira, para nada se perder.
     if let Some(e) = info.get("link_error").filter(|e| !e.is_null()) {
         return Err(format!("sessão '{}' abriu SEM a ligação: {}: {} — {out}",
@@ -232,7 +247,6 @@ fn created(info: &Value, server: Option<&str>) -> Outcome {
 /// `new_session` com `servidor::nome`: abre lá, pela API de lá (`peers.json`), com as contas e os padrões de lá, como
 /// `hangar-send --new servidor::nome`. Vai só o que veio explícito: nada herda de quem chama noutra máquina.
 async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> Outcome {
-    if a.link { return Err("erro_link_remoto: a ligação só vale entre sessões desta máquina".into()); }
     if a.inherit == Some(true) { return Err("inherit não vale noutra máquina: lá nada herda de quem chama".into()); }
     a.inherit = None;
     let resume = a.resume.clone().filter(|s| !s.is_empty());
@@ -252,7 +266,8 @@ async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> 
         let info = call(reqwest::Method::POST, format!("/api/archive/-/{}/resume", segment(&sid)), Some(a.clone_for_resume()?)).await?;
         return Ok(resumed(&info, Some(server)));
     }
-    let info = call(reqwest::Method::POST, "/api/sessions".into(), Some(a.create_body(cwd))).await?;
+    let info = crate::placement::forward::open(peers, server, &a.create_body(cwd), false).await
+        .map_err(|e| crate::placement::forward::failure_text(server, &e))?;
     created(&info, Some(server))
 }
 
@@ -409,11 +424,15 @@ fn verb_refusal(verb: &str) -> Option<String> {
 }
 
 /// `interrupt`, `child_status` e `child_answer`: a voz não abre filha ligada (nasce sem `creator`), e Esc na própria
-/// sessão mataria o turno de quem chama.
-fn interrupt_caller_refusal(me: &str, voice: bool, alvo: &str) -> Option<String> {
+/// sessão mataria o turno de quem chama. `sid`: o id desta máquina, que no `alvo` também quer dizer esta.
+fn interrupt_caller_refusal(me: &str, voice: bool, alvo: &str, sid: &str) -> Option<String> {
     if voice { return Some("recusado: a voz não tem filha ligada; só quem abriu a filha com `link` a alcança".into()); }
-    if alvo.contains("::") { return Some("só alcança filha desta máquina".into()); }
-    (alvo == me).then(|| format!("recusado: '{alvo}' é esta sessão"))
+    (alvo == me || (!sid.is_empty() && alvo == format!("{sid}::{me}"))).then(|| format!("recusado: '{alvo}' é esta sessão"))
+}
+
+/// `child_status` e `child_answer` leem a filha por rotas desta máquina: a de outra (`servidor::nome`) fica de fora.
+fn child_caller_refusal(me: &str, voice: bool, alvo: &str) -> Option<String> {
+    interrupt_caller_refusal(me, voice, alvo, "").or_else(|| alvo.contains("::").then(|| "só alcança filha desta máquina".into()))
 }
 
 /// O vínculo só vale com o pai ainda no grupo da filha: sair do grupo desfaz o poder sobre ela. `code` é o da tool.
@@ -573,22 +592,40 @@ impl Tools {
             _ => Err(format!("Unknown tool: {name}")),
         };
         let result = outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]));
-        if let Some(telemetry) = self.st.counting() && self.owner_session(headers).await {
-            use hangar_telemetry::events::{Code, Dims, Event};
-            let dims = Dims::new().with("tool", Code::known(name, &super::TOOL_NAMES)).with("error", result.is_error == Some(true));
-            telemetry.count(Event::McpTool, dims, 1);
-        }
         result
     }
 
-    /// A tool vem de sessão do dono: a de convidado com login usa o token do dono, e só o `guests.json`
-    /// a separa. Sessão que não se resolve, ou convidados ilegíveis, também não contam.
-    async fn owner_session(&self, headers: &HeaderMap) -> bool {
-        let Ok((name, _)) = self.resolve(headers).await else { return false };
-        let life = crate::login_guests::gate::session_life(&self.st, &name).await;
+    pub(super) fn telemetry(&self) -> Option<&hangar_telemetry::Telemetry> { self.st.counting() }
+
+    /// O bearer também serve a agentes de convidados; só a chave da vida, a propriedade e o
+    /// compartilhamento conferidos em conjunto permitem atribuir a ação ao dono.
+    pub(super) async fn owner_session(&self, headers: &HeaderMap) -> Option<(String, String)> {
+        let (name, Origin::Key) = self.resolve(headers).await.ok()? else { return None };
+        let key = header(headers, "x-hangar-key").filter(|key| !key.is_empty())?;
+        let life = crate::login_guests::gate::fresh_session_life(&self.st, &name).await?;
+        let binding = if let Some(life_key) = life.strip_prefix("k:") { life_key == key }
+            else if life.starts_with("t:") { self.st.list.env().mux.session_env(&name, "CP_SESSION_KEY").await.as_deref() == Some(key.as_str()) }
+            else { false };
+        if !binding { return None; }
         let base = self.st.accounts.env.claude_base.clone();
-        tokio::task::spawn_blocking(move || counts_as_owner(crate::session_open::server::read_guests(&base), &name, life.as_deref()))
-            .await.unwrap_or(false)
+        let (checked_name, checked_life) = (name.clone(), life.clone());
+        let owner = tokio::task::spawn_blocking(move || counts_as_owner(
+            crate::session_open::server::read_guests(&base), &checked_name, Some(&checked_life)))
+            .await.ok()?;
+        if !owner { return None; }
+        super::shared_guard::ensure_unshared(&self.st, &self.api, &name, super::shared_guard::INTEGRATIONS).await.ok()?;
+        if crate::login_guests::gate::fresh_session_life(&self.st, &name).await.as_deref() != Some(life.as_str()) { return None; }
+        Some((name, life))
+    }
+
+    pub(super) async fn observe(&self, period: hangar_telemetry::Collection, epoch: u64, name: &str,
+                                stage: &'static str, code: Option<&str>, took: std::time::Duration) {
+        use hangar_telemetry::events::{Code, Dims, Event};
+        let Some(telemetry) = self.telemetry() else { return };
+        let tool = Code::known(name, super::tool_names());
+        let dims = Dims::new().with("tool", tool).with("error", code.is_some());
+        telemetry.count_in(epoch, Event::McpTool, dims, 1);
+        crate::telemetry_hooks::record_action(&self.st, period, hangar_usage_diary::OwnerAction::Mcp, tool.as_str(), stage, code, took).await;
     }
 
     /// O convidado com login dono da sessão `name`; `None` = sessão do dono. Convidados ilegíveis sem última leitura
@@ -812,15 +849,20 @@ impl Tools {
         // Quem chama precisa ser resolvido também para abrir noutra máquina, mesmo sem herdar nada.
         let (me, voice) = self.caller(headers).await?;
         if let Some((server, name)) = remote_target(&a.nome)? {
+            if a.machine.is_some() { return Err("use `servidor::nome` ou `machine`, não os dois".into()); }
             a.nome = name;
-            return remote_session(&self.st.peers, &server, a).await;
+            // A filha ligada abre pelo servidor daqui, onde a criadora existe: ele a abre lá e faz a ligação.
+            if a.link { a.machine = Some(server); } else { return remote_session(&self.st.peers, &server, a).await; }
         }
         if let Some(sid) = a.resume.as_deref().filter(|s| !s.is_empty()) { return self.resume_session(sid, a.clone_for_resume()).await; }
         let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| self.home().display().to_string());
         let mut body = a.create_body(cwd);
+        // Sem máquina pedida o servidor escolhe; o modo do agente gravado lá diz se balanceia.
+        if body.get("machine").is_none() { body["machine"] = json!(crate::placement::suggest::AUTO); }
         // A voz não tem conta nem modo para herdar: o omitido fica com o padrão do servidor.
         if !voice { body["creator"] = Value::from(me); }
-        let info = self.ok(Method::POST, "/api/sessions", Some(body)).await?;
+        // Com o código na frente: `placement_ask` é o sinal de perguntar à pessoa.
+        let info = self.answer(None, Method::POST, "/api/sessions", Some(body), coded).await?;
         created(&info, None)
     }
 
@@ -853,7 +895,21 @@ impl Tools {
 
     async fn interrupt(&self, headers: &HeaderMap, alvo: &str) -> Outcome {
         let (me, voice) = self.caller(headers).await?;
-        if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo) { return Err(refusal); }
+        let sid = self.server_id.as_str();
+        if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo, sid) { return Err(refusal); }
+        let alvo = match remote_target(alvo)? {
+            Some((server, name)) if server != sid => {
+                if sid.is_empty() { return Err("CP_SERVER_ID ausente no backend/.env — obrigatório pra interromper filha noutra máquina".into()); }
+                // Lá é que o vínculo da filha é conferido.
+                let body = json!({"parent": format!("{sid}::{me}")});
+                let path = format!("/api/sessions/{}/linked-interrupt", segment(&name));
+                return self.st.peers.call(&server, reqwest::Method::POST, &path, Some(&body)).await
+                    .map(|answer| dict(answer.unwrap_or_else(|| json!({})))).map_err(|e| e.text(&server));
+            }
+            Some((_, name)) => name,
+            None => alvo.to_owned(),
+        };
+        let alvo = alvo.as_str();
         let home = self.home();
         if !identity::exists(&Local { home: &home, mux: &self.st.list.env().mux }, alvo).await {
             return Err(format!("sessão '{alvo}' não existe (tool `sessions`)"));
@@ -874,7 +930,7 @@ impl Tools {
     async fn child_status(&self, headers: &HeaderMap, a: ChildStatus) -> Outcome {
         let (me, voice) = self.caller(headers).await?;
         let alvo = a.alvo.as_str();
-        if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo) { return Err(refusal); }
+        if let Some(refusal) = child_caller_refusal(&me, voice, alvo) { return Err(refusal); }
         self.linked_child(&me, alvo, "erro_nao_ligada").await?;
         let produced = self.st.list.snapshot().await.map_err(|_| "child_status_list_failed: a lista de sessões não respondeu")?;
         let row = produced.rows.iter().find(|r| r.name == alvo);
@@ -902,7 +958,7 @@ impl Tools {
     async fn child_answer(&self, headers: &HeaderMap, a: ChildAnswer) -> Outcome {
         let (me, voice) = self.caller(headers).await?;
         let alvo = a.alvo.as_str();
-        if let Some(refusal) = interrupt_caller_refusal(&me, voice, alvo) { return Err(refusal); }
+        if let Some(refusal) = child_caller_refusal(&me, voice, alvo) { return Err(refusal); }
         self.linked_child(&me, alvo, "erro_nao_ligada").await?;
         if let Some(refusal) = answer_refusal(self.interaction_kind(alvo, &a.interaction_id).await.as_ref(), alvo) { return Err(refusal); }
         let body = json!({"answers": a.answers, "interaction_id": a.interaction_id});
@@ -1710,10 +1766,13 @@ mod tests {
 
     #[test]
     fn voice_self_and_remote_are_refused_before_the_link() {
-        assert!(interrupt_caller_refusal("voz", true, "filha").is_some());
-        assert!(interrupt_caller_refusal("pai", false, "pai").is_some());
-        assert!(interrupt_caller_refusal("pai", false, "srv::filha").is_some());
-        assert_eq!(interrupt_caller_refusal("pai", false, "filha"), None);
+        assert!(interrupt_caller_refusal("voz", true, "filha", "casa").is_some());
+        assert!(interrupt_caller_refusal("pai", false, "pai", "casa").is_some());
+        assert!(interrupt_caller_refusal("pai", false, "casa::pai", "casa").is_some(), "o próprio com o id daqui");
+        // A filha de outra máquina segue para lá, que confere o vínculo.
+        assert_eq!(interrupt_caller_refusal("pai", false, "lab::filha", "casa"), None);
+        assert_eq!(interrupt_caller_refusal("pai", false, "filha", "casa"), None);
+        assert!(child_caller_refusal("pai", false, "lab::filha").is_some(), "child_status e child_answer só leem filha daqui");
     }
 
     fn new_args(v: Value) -> NewSession { serde_json::from_value(v).unwrap() }
@@ -1837,10 +1896,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn link_and_inherit_are_refused_on_another_machine() {
+    async fn inherit_is_refused_on_another_machine() {
         let peers = PeerClient::new(crate::groups::peers::PeerBook::new(None));
-        let err = remote_session(&peers, "lab", new_args(json!({"nome": "filha", "cwd": "/tmp", "link": true}))).await.unwrap_err();
-        assert!(err.starts_with("erro_link_remoto:"), "{err}");
         let err = remote_session(&peers, "lab", new_args(json!({"nome": "filha", "cwd": "/tmp", "inherit": true}))).await.unwrap_err();
         assert!(err.contains("inherit"), "{err}");
     }
@@ -1896,7 +1953,8 @@ pub(super) async fn call_route(mut api: Router, token: &str, caller: Option<&str
         return (500, json!({"detail": "caminho inválido"}));
     };
     request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-    let Ok(response) = api.call(request).await;
+    request.extensions_mut().insert(crate::telemetry_hooks::NoTelemetry);
+    let Ok(response) = crate::telemetry_hooks::NO_TELEMETRY.scope((), api.call(request)).await;
     let status = response.status().as_u16();
     let raw = match axum::body::to_bytes(response.into_body(), ROUTE_BODY_LIMIT).await {
         Ok(raw) => raw,

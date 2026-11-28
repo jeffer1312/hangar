@@ -697,7 +697,8 @@ async fn shot_comes_back_as_an_image() {
 async fn browser_open_records_the_request_in_rust_and_waits_for_the_page() {
     let s = scene().await;
     let seen = desktop(&s.home, |verb| if verb == "url" { "ok: \"http://x/\"".into() } else { "ativo".into() }).await;
-    let later = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + 60_000;
+    // Fixo e depois de qualquer pedido: a página carregou depois dele.
+    let later: u64 = 4_102_444_800_000;
     write_json(&s.home.join(".hangar/nav/casa-beta.json"), json!({"chave": "casa::beta", "url": "http://x/", "ts": later}));
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
     let result = mcp.call("browser_open", json!({"url": "http://x"})).await;
@@ -769,11 +770,10 @@ async fn browser_open_with_a_dead_desktop_server_fails_at_once() {
     write_json(&s.home.join(".hangar/nav/_srv.json"), json!({"porta": port, "token": "t", "pid": dead}));
     write_json(&s.home.join(".hangar/nav/casa-beta.json"), json!({"chave": "casa::beta", "url": "http://antes/", "ts": 0}));
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
-    let started = std::time::Instant::now();
-    let result = mcp.call("browser_open", json!({"url": "http://x"})).await;
+    let result = tokio::time::timeout(Duration::from_secs(10), mcp.call("browser_open", json!({"url": "http://x"}))).await
+        .expect("a tool esperou o servidor morto em vez de falhar logo");
     let text = first_text(&result);
     assert!(failed(&result) && text.contains(&format!("pid {dead}")) && text.contains("precisa abrir o app"), "{text}");
-    assert!(started.elapsed() < std::time::Duration::from_secs(10), "esperou {:?}", started.elapsed());
     let verb = mcp.call("browser", json!({"verbo": "snapshot"})).await;
     assert!(failed(&verb) && first_text(&verb).contains(&format!("pid {dead}")), "{verb}");
 }
@@ -914,10 +914,8 @@ async fn mission_reads_and_reports_as_the_linked_caller() {
         .json(&json!({"key": "PM-7", "title": "Tela", "url": "https://help.invalid/pm/PM-7", "session": "beta"})).send().await.unwrap();
     assert_eq!(linked.status(), 200);
     // O aviso do vínculo entra pela rota de entrada da sessão, numa tarefa à parte.
-    let until=std::time::Instant::now()+Duration::from_secs(30);
-    while s.sink.count("beta")==0 && std::time::Instant::now()<until {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    tokio::time::timeout(Duration::from_secs(30), async { while s.sink.count("beta")==0 { tokio::task::yield_now().await } }).await
+        .expect("o aviso do vínculo não chegou em 30 s");
     assert_eq!(s.sink.count("beta"),1,"a vida associada recebe o aviso pela entrada real");
     let read = mcp.call("mission", json!({})).await;
     assert!(!failed(&read), "{read}");
@@ -1319,8 +1317,8 @@ async fn fake_c5(request: axum::extract::Request, drafts: &Mutex<Vec<Value>>, se
 }
 
 /// Expiração fixa, longe de hoje: a espera da tool decide igual em qualquer dia. A conversa `vencido` nasce com o prazo
-/// já passado, como um rascunho que o dono deixou expirar. A criação é agora: o de antes da subida seria recusado pela
-/// lista dos pendentes como sobra de outra vida.
+/// já passado, como um rascunho que o dono deixou expirar. A criação fica depois de qualquer subida, também fixa: a de
+/// antes da subida seria recusada pela lista dos pendentes como sobra de outra vida.
 fn c5_reply(method: &str, uri: &str, body: &[u8], drafts: &Mutex<Vec<Value>>, outcome: &Value) -> (u16, Value) {
     let error = |status: u16, code: &str| (status, json!({"detail": {"code": code, "msg": format!("recusado: {code}")}}));
     let mut drafts = drafts.lock().unwrap();
@@ -1331,7 +1329,7 @@ fn c5_reply(method: &str, uri: &str, body: &[u8], drafts: &Mutex<Vec<Value>>, ou
                 let asked: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
                 let expires = if asked["chat"] == "vencido" { "2000-01-01T00:10:00Z" } else { "2099-01-01T00:10:00Z" };
                 let draft = json!({"id": format!("d{}", drafts.len() + 1), "origin": asked["origin"], "chat": asked["chat"],
-                    "text": asked["text"], "state": "pending", "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    "text": asked["text"], "state": "pending", "created_at": "2099-01-01T00:00:00Z",
                     "expires_at": expires, "answered_at": null,
                     "message_id": "", "error": "", "asked": asked});
                 drafts.push(draft.clone());
@@ -1536,15 +1534,27 @@ async fn a_cancelled_whatsapp_draft_is_declined_unless_already_approved() {
             let before = reads(&fake);
             until(&fake, || (reads(&fake) > before + 1).then_some(())).await;
         }
-        let cancel = canceller.post(json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
-            "params": {"requestId": request, "reason": "teste"}})).send().await.unwrap();
-        assert_eq!(cancel.status(), 202);
         let decline = format!("POST /v1/outbox/{id}/decline");
         if approved {
-            tokio::time::sleep(Duration::from_millis(1500)).await; // estavel: ausência de pedido não tem sinal; a recusa, se existisse, sairia no cancelamento
+            // A ausência se prova por um rascunho de controle, pendente, na mesma sessão MCP e cancelado depois: o
+            // cancelamento dos dois passa em ordem pelo mesmo laço, e a recusa do controle chega pelo mesmo caminho.
+            let mut other = Mcp { addr: canceller.addr, headers: canceller.headers.clone(), session: canceller.session.clone(), next: 99 };
+            let control = tokio::spawn(async move { other.request("tools/call", json!({"name": "whatsapp_draft",
+                "arguments": {"chat": "5564998", "text": "controle"}})).await });
+            let control_id = until(&fake, || fake.drafts.lock().unwrap().get(1).and_then(|d| d["id"].as_str().map(str::to_owned))).await;
+            for target in [request, 100] {
+                let cancel = canceller.post(json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                    "params": {"requestId": target, "reason": "teste"}})).send().await.unwrap();
+                assert_eq!(cancel.status(), 202);
+            }
+            until(&fake, || declined(&fake, &control_id).then_some(())).await;
+            control.abort();
             assert!(!fake.seen.lock().unwrap().contains(&decline), "aprovado não é recusado");
             assert_eq!(fake.drafts.lock().unwrap()[0]["state"], json!("sending"));
         } else {
+            let cancel = canceller.post(json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                "params": {"requestId": request, "reason": "teste"}})).send().await.unwrap();
+            assert_eq!(cancel.status(), 202);
             until(&fake, || declined(&fake, &id).then_some(())).await;
             assert!(fake.seen.lock().unwrap().contains(&decline));
         }
@@ -1576,4 +1586,139 @@ async fn a_draft_born_after_the_call_was_cancelled_is_declined() {
     until(&fake, || declined(&fake, &id).then_some(())).await;
     assert!(fake.seen.lock().unwrap().contains(&format!("POST /v1/outbox/{id}/decline")));
     task.abort();
+}
+
+/// `machine` abre naquela máquina: o pedido vai com o id dela fixado (lá não se escolhe de novo), sem a
+/// criadora, que lá não existe, e a resposta dá o `target` com a máquina.
+#[tokio::test(flavor = "multi_thread")]
+async fn placement_machine_opens_there_with_its_id_fixed_and_answers_the_target() {
+    use axum::http::header::CONTENT_TYPE;
+    use axum::routing::{get, post};
+    use hangar_server::groups::peers::{PeerBook, PeerClient};
+    let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let sink = seen.clone();
+    // Lá o `CP_SERVER_ID` não é a chave do `peers.json` daqui: o pedido leva o id de lá, o `target`, a chave.
+    let facts = json!({"server_id": "lab-id", "version": "1", "capable": true, "mem_total": 0, "mem_available": 0, "working": 0,
+        "cpu_pct": null, "repos": [], "clone_dir": null}).to_string();
+    let app = axum::Router::new()
+        .route("/api/placement/facts", get(move || { let facts = facts.clone(); async move { ([(CONTENT_TYPE, "application/json")], facts) } }))
+        .route("/api/sessions", post(move |body: axum::body::Bytes| {
+            let sink = sink.clone();
+            async move {
+                sink.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
+                ([(CONTENT_TYPE, "application/json")], json!({"name": "filha", "cwd": "/home/lab", "provider": "claude"}).to_string())
+            }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("peers.json");
+    write_json(&file, json!({"lab": {"base_url": format!("http://{addr}"), "token": "tok-lab"}}));
+    let s = scene_tuned(false, Some(PeerClient::new(PeerBook::new(Some(file)))), false, "", Share::Absent, isolated_accounts).await;
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
+    // A pasta pessoal daqui vira a de lá.
+    let result = mcp.call("new_session", json!({"nome": "filha", "cwd": s.home, "machine": "lab", "provider": "claude", "inherit": false})).await;
+    assert!(!failed(&result), "{result}");
+    assert_eq!(result["structuredContent"]["target"], "lab::filha", "{result}");
+    let sent = seen.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!((&sent[0]["machine"], &sent[0]["cwd"], &sent[0]["provider"]), (&json!("lab-id"), &json!("~"), &json!("claude")), "{}", sent[0]);
+    assert!(sent[0].get("creator").is_none() && sent[0].get("inherit").is_none(), "lá a criadora não existe: {}", sent[0]);
+    // O id que ela informa (o que a sugestão e as mensagens citam) também abre lá, pela chave daqui.
+    let by_id = mcp.call("new_session", json!({"nome": "filha2", "cwd": s.home, "machine": "lab-id", "provider": "claude", "inherit": false})).await;
+    assert!(!failed(&by_id), "{by_id}");
+    assert_eq!(by_id["structuredContent"]["target"], "lab::filha", "{by_id}");
+    assert_eq!(seen.lock().unwrap().get(1).map(|b| b["machine"].clone()), Some(json!("lab-id")));
+    // Com a criadora (`beta`, a do pane), só ela é lida aqui: o nome em uso nesta máquina (o tmux falso diz que todo
+    // nome existe) é assunto de lá e não recusa a abertura.
+    let inherited = mcp.call("new_session", json!({"nome": "s0", "cwd": s.home, "machine": "lab", "provider": "claude"})).await;
+    assert!(!failed(&inherited), "{inherited}");
+    assert_eq!(seen.lock().unwrap().get(2).map(|b| b["name"].clone()), Some(json!("s0")));
+    let both = mcp.call("new_session", json!({"nome": "lab::x", "machine": "lab"})).await;
+    assert!(failed(&both) && first_text(&both).contains("não os dois"), "{both}");
+    // Nem chave do `peers.json` nem id informado: recusa clara, nada aberto.
+    let unknown = mcp.call("new_session", json!({"nome": "outra", "cwd": s.home, "machine": "nada", "provider": "claude", "inherit": false})).await;
+    assert!(failed(&unknown) && first_text(&unknown).starts_with("placement_machine_unknown:"), "{unknown}");
+    assert_eq!(seen.lock().unwrap().len(), 3);
+}
+
+/// A pasta fica reservada para a outra máquina só quando lá confirmou a abertura: a recusada não prende a próxima.
+#[tokio::test(flavor = "multi_thread")]
+async fn placement_reserves_the_folder_only_after_the_other_machine_opens() {
+    use axum::http::{StatusCode, header::CONTENT_TYPE};
+    use axum::routing::{get, post};
+    use hangar_server::groups::peers::{PeerBook, PeerClient};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let facts = json!({"server_id": "lab-id", "version": "1", "capable": true, "mem_total": 0, "mem_available": 0, "working": 0,
+        "cpu_pct": null, "repos": [{"project": "git:github.com/a/b", "root": "/lab/b"}], "clone_dir": null}).to_string();
+    let refuse = Arc::new(AtomicBool::new(true));
+    let gate = refuse.clone();
+    let app = axum::Router::new()
+        .route("/api/placement/facts", get(move || { let facts = facts.clone(); async move { ([(CONTENT_TYPE, "application/json")], facts) } }))
+        .route("/api/sessions", post(move || {
+            let refused = gate.swap(false, Ordering::SeqCst);
+            async move {
+                if refused { return (StatusCode::CONFLICT, [(CONTENT_TYPE, "application/json")], json!({"detail": {"code": "erro_x", "msg": "não"}}).to_string()) }
+                (StatusCode::OK, [(CONTENT_TYPE, "application/json")], json!({"name": "filha", "cwd": "/lab/b", "provider": "claude"}).to_string())
+            }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("peers.json");
+    write_json(&file, json!({"lab": {"base_url": format!("http://{addr}"), "token": "tok-lab"}}));
+    let s = scene_tuned(false, Some(PeerClient::new(PeerBook::new(Some(file)))), false, "", Share::Absent, isolated_accounts).await;
+    let repo = s.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [&["init", "-q", "-b", "main"][..], &["remote", "add", "origin", "https://github.com/a/b"],
+                 &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "um"]] {
+        let out = std::process::Command::new("git").arg("-C").arg(&repo).args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    let root = repo.to_string_lossy().into_owned();
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
+    let open = json!({"nome": "filha", "cwd": root, "machine": "lab", "provider": "claude", "inherit": false});
+    let refused = mcp.call("new_session", open.clone()).await;
+    assert!(failed(&refused), "{refused}");
+    assert_eq!(s.state.placement_reservations.lookup(&root), None, "lá recusou: a pasta não fica presa a lá");
+    let opened = mcp.call("new_session", open).await;
+    assert!(!failed(&opened), "{opened}");
+    assert_eq!(s.state.placement_reservations.lookup(&root).as_deref(), Some("lab-id"));
+}
+
+/// As contas e as regras do balanceamento na pasta pessoal da cena, nunca na de quem roda o teste.
+fn isolated_accounts(state: &mut AppState) {
+    use hangar_server::accounts::{AccountService, environment::AccountEnvironment};
+    let home = state.origins_home.display().to_string();
+    state.accounts = AccountService::new(AccountEnvironment::from_map([("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into()));
+}
+
+/// A sugestão da tela escolhe sem abrir: a pasta pessoal fica nesta máquina pela carga, e a pasta sem git, por
+/// existir só aqui, com o motivo em texto.
+#[tokio::test(flavor = "multi_thread")]
+async fn placement_suggest_chooses_without_opening() {
+    let s = scene_tuned(false, None, false, "", Share::Absent, isolated_accounts).await;
+    // Limites folgados: a carga é a da máquina que roda o teste.
+    write_json(&s.home.join(".hangar/placement.json"), json!({"limits": {"mem_free_pct": 0, "working": 1000, "cpu_pct": 100}}));
+    std::fs::create_dir_all(s.home.join("plain")).unwrap();
+    let url = format!("http://{}/api/placement/suggest", s.addr);
+    let suggest = |cwd: PathBuf| { let url = url.clone(); async move {
+        let resp = client().post(&url).bearer_auth(OWNER).json(&json!({"cwd": cwd})).send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        resp.json::<Value>().await.unwrap()
+    } };
+    let body = suggest(s.home.clone()).await;
+    assert_eq!(body["server"], json!(s.state.current_server_id()), "{body}");
+    // Processador acima de 100% da carga média também tira a local; sem outra máquina, fica nela do mesmo jeito.
+    assert!(matches!(body["reason"]["code"].as_str(), Some("local_within_limits" | "no_candidate")), "{body}");
+    assert!(body["text"].as_str().is_some_and(|t| !t.is_empty()), "{body}");
+    let plain = suggest(s.home.join("plain")).await;
+    assert_eq!((&plain["server"], &plain["reason"]["code"]), (&json!(s.state.current_server_id()), &json!("plain_dir")), "{plain}");
+    let bad = client().post(&url).bearer_auth(OWNER).body("{}").send().await.unwrap();
+    assert_eq!(bad.status(), 422);
+    let anonymous = client().post(&url).json(&json!({"cwd": "/tmp"})).send().await.unwrap();
+    assert!(matches!(anonymous.status().as_u16(), 401 | 403), "só o dono: {}", anonymous.status());
 }

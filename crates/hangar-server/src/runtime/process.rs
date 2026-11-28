@@ -191,6 +191,18 @@ pub(crate) fn scope_unit_missing(stderr: &[u8]) -> Option<String> {
     Some(line.chars().take(200).collect())
 }
 
+#[cfg(unix)]
+static PREFIX: OnceLock<Vec<std::ffi::OsString>> = OnceLock::new();
+
+/// Fixa o prefixo do escopo antes da primeira sondagem, pelo mesmo motivo do `use_cano_binary`: os testes
+/// de integração não sobem escopo no systemd da máquina. O mesmo prefixo de novo é aceito; outro devolve o que já valia.
+#[cfg(unix)]
+#[doc(hidden)]
+pub fn use_scope_prefix(prefix: Vec<std::ffi::OsString>) -> Result<(), Vec<std::ffi::OsString>> {
+    let current = PREFIX.get_or_init(|| prefix.clone());
+    if *current == prefix { Ok(()) } else { Err(current.clone()) }
+}
+
 /// Escopo transiente do systemd, fora do cgroup do serviço (senão o restart dele mata o cano).
 /// `--scope` faz `exec`: o pid lançado continua sendo o do cano. Sondado como `tmux._scope_probe`.
 /// Caminho absoluto pelo PATH do servidor: o processo nasce com o ambiente da sessão, cujo PATH não
@@ -201,7 +213,6 @@ pub(crate) fn scope_unit_missing(stderr: &[u8]) -> Option<String> {
 #[cfg(unix)]
 pub(crate) fn scope_prefix() -> &'static [std::ffi::OsString] {
     const ARGS: &[&str] = &["--user", "--scope", "--collect", "-q", "--"];
-    static PREFIX: OnceLock<Vec<std::ffi::OsString>> = OnceLock::new();
     // Uma sondagem por vez: duas em paralelo criariam a colisão de escopos que a repetição tenta evitar.
     static PROBING: std::sync::Mutex<()> = std::sync::Mutex::new(());
     if let Some(prefix) = PREFIX.get() { return prefix; }

@@ -7,11 +7,11 @@ use crate::{Result, error, git, real, worktree_residual};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     path::{Component, Path, PathBuf},
     sync::{
-        LazyLock, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        Arc, LazyLock, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     time::{Duration, Instant},
@@ -240,6 +240,9 @@ pub struct Repo {
     config: Option<HashMap<String, String>>,
     references: Option<HashMap<String, String>>,
     remotes: Option<Vec<String>>,
+    /// Branch principal do remoto (`origin/HEAD`, ou a do único remoto que a publica), sem
+    /// `refs/remotes/`: base de quem não tem branch.
+    remote_head: Option<String>,
 }
 
 impl Repo {
@@ -272,11 +275,11 @@ impl Repo {
             }
             map
         });
-        let references = git::command(
+        let listed = git::command(
             Path::new(main),
             &[
                 "for-each-ref",
-                "--format=%(refname)%00%(upstream)",
+                "--format=%(refname)%00%(upstream)%00%(symref)",
                 "refs/heads/",
                 "refs/remotes/",
                 "refs/tags/",
@@ -287,14 +290,38 @@ impl Repo {
         .map(|out| {
             out.stdout
                 .lines()
-                .filter_map(|line| line.split_once('\0'))
-                .map(|(name, upstream)| (name.to_owned(), upstream.to_owned()))
-                .collect()
+                .filter_map(|line| {
+                    let (name, rest) = line.split_once('\0')?;
+                    let (upstream, symref) = rest.split_once('\0').unwrap_or((rest, ""));
+                    Some((name.to_owned(), upstream.to_owned(), symref.to_owned()))
+                })
+                .collect::<Vec<_>>()
         });
         let remotes = git::command(Path::new(main), &["remote"])
             .ok()
             .filter(|out| out.code == 0)
-            .map(|out| out.stdout.lines().map(str::to_owned).collect());
+            .map(|out| out.stdout.lines().map(str::to_owned).collect::<Vec<_>>());
+        let remote_head = listed.as_ref().zip(remotes.as_ref()).and_then(|(refs, remotes)| {
+            let heads = refs
+                .iter()
+                .filter_map(|(name, _, symref)| {
+                    let remote = name.strip_prefix("refs/remotes/")?.strip_suffix("/HEAD")?;
+                    Some((remote, symref.strip_prefix("refs/remotes/")?))
+                })
+                .collect::<Vec<_>>();
+            // Com `origin`, só a HEAD dele vale; outro remoto só entra quando não há `origin`.
+            let (_, target) = if remotes.iter().any(|remote| remote == "origin") {
+                heads.iter().find(|(remote, _)| *remote == "origin")?
+            } else {
+                (heads.len() == 1).then(|| &heads[0])?
+            };
+            Some((*target).to_owned())
+        });
+        let references = listed.map(|refs| {
+            refs.into_iter()
+                .map(|(name, upstream, _)| (name, upstream))
+                .collect()
+        });
         Repo {
             main: main.to_owned(),
             main_branch: git::head_info(Some(main)).0,
@@ -302,6 +329,7 @@ impl Repo {
             config,
             references,
             remotes,
+            remote_head,
         }
     }
 
@@ -411,6 +439,13 @@ impl Repo {
                 .or_else(|| self.main_branch.clone())
         });
         base.map(|b| self.published_base(cwd, &b, probe))
+    }
+
+    /// Base de quem não tem branch; sem HEAD de remoto, ou com dúvida entre remotos, não há base
+    /// nem prova de merge.
+    fn default_base(&self, cwd: &str, probe: &mut Probe) -> Option<String> {
+        let target = self.remote_head.as_deref()?;
+        Some(self.published_base(cwd, target, probe))
     }
 
     fn admin_of(&self, path: &str) -> Option<&PathBuf> {
@@ -672,9 +707,11 @@ pub fn status(
             && (repo.config.is_none() || repo.references.is_none() || repo.remotes.is_none()),
     };
     let cwd = if exists { path } else { main };
-    let base = branch
-        .as_deref()
-        .and_then(|b| repo.base_of(cwd, b, &mut probe));
+    let base = match branch.as_deref() {
+        Some(b) => repo.base_of(cwd, b, &mut probe),
+        None if exists => repo.default_base(cwd, &mut probe),
+        None => None,
+    };
     let head_ref = branch
         .as_deref()
         .map_or("HEAD".into(), |b| format!("refs/heads/{b}"));
@@ -693,8 +730,8 @@ pub fn status(
     let (mut ahead, mut behind, mut ancestor) = (0u64, 0u64, false);
     let mut commits = Vec::new();
     let mut last = Vec::new();
-    if let (Some(branch), Some(base), Some(head)) = (&branch, &base, &head)
-        && branch != base
+    if let (Some(base), Some(head)) = (&base, &head)
+        && branch.as_ref() != Some(base)
     {
         // Nome curto perde para uma tag homônima, e o commit dela pareceria já mesclado.
         let range = format!("{base}...{head}");
@@ -817,96 +854,142 @@ pub struct Discovery {
 
 type DiscoveryCache = HashMap<Vec<String>, (Instant, Discovery)>;
 static DISCOVERY: LazyLock<Mutex<DiscoveryCache>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static SCANNING: LazyLock<Mutex<HashMap<Vec<String>, Arc<Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 const DISCOVERY_TTL: Duration = Duration::from_secs(30);
-const DISCOVERY_LIMIT: usize = 20_000;
-const DISCOVERY_BUDGET: Duration = Duration::from_secs(2);
+const DISCOVERY_LIMIT: usize = 1_000_000;
+const DISCOVERY_BUDGET: Duration = Duration::from_secs(5);
 
-fn scan_repositories(locations: &[String], roots: &[String]) -> Discovery {
-    let start = Instant::now();
-    let mut scan = Discovery::default();
-    let mut pending = locations
-        .iter()
-        .map(|p| real(Path::new(p)))
-        .collect::<VecDeque<_>>();
-    let mut visited = HashSet::new();
-    let mut repos = HashSet::new();
-    let mut inspected = 0;
-    'scan: while let Some(path) = pending.pop_front() {
-        if !visited.insert(path.clone()) {
-            continue;
+/// Varredura em paralelo: cada pasta é lida uma vez só, e o `.git` aparece na própria listagem.
+struct Walk<'a> {
+    roots: &'a [String],
+    /// Toda raiz parte já no começo; quem a alcança por dentro de outra não a lê de novo.
+    starts: HashSet<PathBuf>,
+    start: Instant,
+    budget: Duration,
+    stop: AtomicBool,
+    partial: AtomicBool,
+    inspected: AtomicUsize,
+    found: Mutex<HashSet<String>>,
+}
+
+impl Walk<'_> {
+    fn halt(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.partial.store(true, Ordering::Relaxed);
+    }
+
+    fn halted(&self) -> bool {
+        if self.stop.load(Ordering::Relaxed) {
+            return true;
         }
-        inspected += 1;
-        if inspected > DISCOVERY_LIMIT || start.elapsed() > DISCOVERY_BUDGET {
-            scan.partial = true;
+        let over = self.start.elapsed() > self.budget;
+        if over {
+            self.halt();
+        }
+        over
+    }
+}
+
+fn scan_repositories(locations: &[String], roots: &[String], budget: Duration) -> Discovery {
+    let walk = Walk {
+        roots,
+        starts: locations.iter().map(|p| real(Path::new(p))).collect(),
+        start: Instant::now(),
+        budget,
+        stop: AtomicBool::new(false),
+        partial: AtomicBool::new(false),
+        inspected: AtomicUsize::new(0),
+        found: Mutex::default(),
+    };
+    rayon::scope(|scope| {
+        for path in &walk.starts {
+            let walk = &walk;
+            scope.spawn(move |scope| visit(scope, path.clone(), walk));
+        }
+    });
+    let mut repos = walk
+        .found
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner())
+        .into_iter()
+        .collect::<Vec<_>>();
+    repos.sort();
+    Discovery { repos, partial: walk.partial.into_inner() }
+}
+
+fn skipped_artifact(name: &str) -> bool {
+    matches!(name, "node_modules" | "target" | ".venv" | "venv" | "__pycache__" | ".cache")
+}
+
+/// Lê uma pasta, anota o repositório dela e manda percorrer as subpastas.
+fn visit<'s>(scope: &rayon::Scope<'s>, path: PathBuf, walk: &'s Walk<'s>) {
+    if walk.halted() {
+        return;
+    }
+    if walk.inspected.fetch_add(1, Ordering::Relaxed) >= DISCOVERY_LIMIT {
+        walk.halt();
+        return;
+    }
+    let incomplete = || walk.partial.store(true, Ordering::Relaxed);
+    let Ok(entries) = std::fs::read_dir(&path) else {
+        return incomplete();
+    };
+    let mut repository = false;
+    for entry in entries {
+        // Uma pasta com centenas de milhares de entradas não segura a busca além do prazo.
+        if walk.halted() {
             break;
         }
-        if path.join(".git").exists() {
-            let main = text(&real(Path::new(&main_repo_of(&text(&path)))));
-            if roots.iter().any(|root| within(Path::new(&main), root)) {
-                repos.insert(main);
+        let Ok(entry) = entry else {
+            incomplete();
+            continue;
+        };
+        let name = entry.file_name();
+        if name == ".git" {
+            repository = true;
+            continue;
+        }
+        // O tipo vem da listagem e não segue links; no Windows o `is_symlink` cobre a junction.
+        let Ok(kind) = entry.file_type() else {
+            incomplete();
+            continue;
+        };
+        if !kind.is_dir() || kind.is_symlink() {
+            continue;
+        }
+        // Pasta que ainda está só na nuvem (OneDrive) busca o conteúdo pela rede ao ser listada e
+        // não guarda repositório utilizável; a já baixada é percorrida.
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const RECALL_ON_OPEN: u32 = 0x40000;
+            const RECALL_ON_DATA_ACCESS: u32 = 0x400000;
+            match entry.metadata() {
+                Ok(meta) if meta.file_attributes() & (RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS) != 0 => continue,
+                Ok(_) => {}
+                Err(_) => {
+                    incomplete();
+                    continue;
+                }
             }
         }
-        let entries = match std::fs::read_dir(&path) {
-            Ok(entries) => entries,
-            Err(_) => {
-                scan.partial = true;
-                continue;
-            }
-        };
-        for entry in entries {
-            if start.elapsed() > DISCOVERY_BUDGET {
-                scan.partial = true;
-                break 'scan;
-            }
-            let Ok(entry) = entry else {
-                scan.partial = true;
-                continue;
-            };
-            let Ok(kind) = entry.file_type() else {
-                scan.partial = true;
-                continue;
-            };
-            if kind.is_symlink() || !kind.is_dir() {
-                continue;
-            }
-            let Ok(meta) = entry.metadata() else {
-                scan.partial = true;
-                continue;
-            };
-            let link = false;
-            #[cfg(windows)]
-            let link = {
-                use std::os::windows::fs::MetadataExt;
-                link || meta.file_attributes() & 0x400 != 0
-            };
-            if link || !meta.is_dir() {
-                continue;
-            }
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let child = entry.path();
-            if name == ".git" {
-                continue;
-            }
-            // Um repositório com nome de artefato continua sendo um repositório.
-            if matches!(
-                name.as_ref(),
-                "node_modules" | "target" | ".venv" | "venv" | "__pycache__" | ".cache"
-            ) && !child.join(".git").exists()
-            {
-                continue;
-            }
-            // O limite é de pastas: arquivos de um build não disputam a descoberta dos repos.
-            if visited.len() + pending.len() >= DISCOVERY_LIMIT {
-                scan.partial = true;
-                continue;
-            }
-            pending.push_back(child);
+        let child = entry.path();
+        if walk.starts.contains(&child) {
+            continue;
+        }
+        // Um repositório com nome de artefato continua sendo um repositório.
+        if skipped_artifact(&name.to_string_lossy()) && !child.join(".git").exists() {
+            continue;
+        }
+        scope.spawn(move |scope| visit(scope, child, walk));
+    }
+    if repository {
+        let main = text(&real(Path::new(&main_repo_of(&text(&path)))));
+        if walk.roots.iter().any(|root| within(Path::new(&main), root)) {
+            walk.found.lock().unwrap_or_else(|e| e.into_inner()).insert(main);
         }
     }
-    scan.repos = repos.into_iter().collect();
-    scan.repos.sort();
-    scan
 }
 
 /// A pasta principal de cada pasta de trabalho, pelo caminho real e sem repetir: o mesmo repo por um symlink
@@ -917,6 +1000,13 @@ pub fn main_repos<'a>(dirs: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     mains.sort();
     mains.dedup();
     mains
+}
+
+/// URL do `origin` de uma raiz. Só sob pedido (balanceamento): a lista de worktrees não paga o `git`.
+pub fn origin_url(root: &str) -> Option<String> {
+    let out = git::command(Path::new(root), &["config", "--get", "remote.origin.url"]).ok()?;
+    let url = out.stdout.trim();
+    (out.code == 0 && !url.is_empty()).then(|| url.to_owned())
 }
 
 /// Repositórios autorizados, inclusive quando já não há conversa recente deles.
@@ -936,13 +1026,32 @@ pub fn discover_repositories(roots: &[String]) -> Discovery {
     key.sort();
     key.push(String::new());
     key.extend(locations.iter().cloned());
-    let mut cache = DISCOVERY.lock().unwrap_or_else(|error| error.into_inner());
-    if let Some((at, scan)) = cache.get(&key)
-        && at.elapsed() < DISCOVERY_TTL
-    {
-        return scan.clone();
+    let cached = || {
+        DISCOVERY
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&key)
+            .filter(|(at, _)| at.elapsed() < DISCOVERY_TTL)
+            .map(|(_, scan)| scan.clone())
+    };
+    if let Some(scan) = cached() {
+        return scan;
     }
-    let scan = scan_repositories(&locations, roots);
+    // Uma varredura por lista de raízes: quem chega durante ela espera e lê o resultado, e outra
+    // lista de raízes não espera esta.
+    let turn = {
+        let mut scanning = SCANNING.lock().unwrap_or_else(|error| error.into_inner());
+        if scanning.len() >= 16 {
+            scanning.retain(|_, turn| Arc::strong_count(turn) > 1);
+        }
+        scanning.entry(key.clone()).or_default().clone()
+    };
+    let _turn = turn.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(scan) = cached() {
+        return scan;
+    }
+    let scan = scan_repositories(&locations, roots, DISCOVERY_BUDGET);
+    let mut cache = DISCOVERY.lock().unwrap_or_else(|error| error.into_inner());
     if cache.len() >= 16 {
         cache.clear();
     }
@@ -1436,6 +1545,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn missing_root_inside_another_still_marks_the_discovery_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("projects");
+        std::fs::create_dir(&root).unwrap();
+        let scan = discover_repositories(&[text(&root), text(&root.join("ausente"))]);
+        assert!(scan.partial, "raiz configurada que não existe deixa a busca incompleta");
+    }
+
+    #[test]
+    fn discovery_finishes_a_tree_with_thirty_thousand_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("projects");
+        for i in 0..30_000 {
+            std::fs::create_dir_all(root.join("dados").join((i % 100).to_string()).join(i.to_string())).unwrap();
+        }
+        let repo = root.join("dados/7/repositorio");
+        std::fs::create_dir_all(&repo).unwrap();
+        fixture_git(&repo, &["init", "-b", "main"]);
+        let roots = [text(&root)];
+        let scan = scan_repositories(&roots, &roots, Duration::from_secs(600));
+        assert!(!scan.partial, "a busca tem de chegar ao fim numa árvore com 30 mil pastas");
+        assert_eq!(scan.repos, vec![text(&real(&repo))]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn discovery_does_not_follow_a_link_outside_the_authorized_roots() {
@@ -1472,6 +1606,20 @@ mod tests {
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
 
+    #[test]
+    fn origin_url_reads_only_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        fixture_git(&repo, &["init", "-b", "main"]);
+        assert_eq!(origin_url(&text(&repo)), None, "sem origin");
+        fixture_git(&repo, &["remote", "add", "team", "git@github.com:outro/repo.git"]);
+        assert_eq!(origin_url(&text(&repo)), None, "outro remote não é o origin");
+        fixture_git(&repo, &["remote", "add", "origin", "git@github.com:jeffer1312/hangar.git"]);
+        assert_eq!(origin_url(&text(&repo)).as_deref(), Some("git@github.com:jeffer1312/hangar.git"));
+        assert_eq!(origin_url(&text(&dir.path().join("sumiu"))), None, "pasta que não existe");
+    }
+
     fn published_fixture(root: &Path, source: &str, remote: &str) -> (PathBuf, PathBuf) {
         let repo = root.join("repo");
         let feature = root.join("feature");
@@ -1495,6 +1643,69 @@ mod tests {
         fixture_git(&integration, &["merge", "--no-ff", "-m", "Integração", "feature"]);
         fixture_git(&integration, &["push", remote, &format!("HEAD:{base}")]);
         (repo, feature)
+    }
+
+    /// Checkout principal numa branch de trabalho e uma worktree sem branch cujo commit já está na
+    /// develop do remoto, seguido por outro: devolve o repositório e essa worktree.
+    fn detached_fixture(root: &Path) -> (PathBuf, PathBuf) {
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        fixture_git(&repo, &["init", "-b", "main"]);
+        fixture_git(&repo, &["commit", "--allow-empty", "-m", "Inicial"]);
+        let origin = root.join("origin.git");
+        fixture_git(root, &["init", "--bare", "-b", "develop", origin.to_str().unwrap()]);
+        fixture_git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        fixture_git(&repo, &["push", "origin", "main:develop"]);
+        fixture_git(&repo, &["fetch", "origin"]);
+        fixture_git(&repo, &["remote", "set-head", "origin", "develop"]);
+        fixture_git(&repo, &["checkout", "-b", "trabalho"]);
+        let merged = root.join("mesclada");
+        detached_commit(&repo, &merged, "mesclada.txt", true);
+        detached_commit(&repo, &root.join("depois"), "depois.txt", true);
+        (repo, merged)
+    }
+
+    fn detached_commit(repo: &Path, path: &Path, file: &str, push: bool) {
+        fixture_git(repo, &["worktree", "add", "--detach", path.to_str().unwrap(), "origin/develop"]);
+        std::fs::write(path.join(file), "conteúdo\n").unwrap();
+        fixture_git(path, &["add", file]);
+        fixture_git(path, &["commit", "-m", file]);
+        if push { fixture_git(path, &["push", "origin", "HEAD:develop"]); }
+    }
+
+    #[test]
+    fn detached_worktree_compares_against_the_remote_default_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = real(dir.path());
+        let (repo, merged) = detached_fixture(&root);
+        let pending = root.join("pendente");
+        detached_commit(&repo, &pending, "pendente.txt", false);
+        let done = status_of(merged.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(done["branch"], Value::Null);
+        assert_eq!(done["base"], "origin/develop");
+        assert_eq!(done["degraded"], false);
+        assert_eq!(done["merged"], true, "o commit sem branch já está na develop do remoto");
+        let open = status_of(pending.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(open["base"], "origin/develop");
+        assert_eq!(open["ahead"], 1);
+        assert_eq!(open["merged"], false, "commit sem branch fora da develop não está mesclado");
+    }
+
+    #[test]
+    fn detached_worktree_without_remote_default_branch_has_no_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = real(dir.path());
+        let (repo, merged) = detached_fixture(&root);
+        fixture_git(&repo, &["remote", "set-head", "origin", "--delete"]);
+        let st = status_of(merged.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(st["base"], Value::Null);
+        assert_eq!(st["merged"], false);
+        let origin = root.join("origin.git");
+        fixture_git(&repo, &["remote", "add", "upstream", origin.to_str().unwrap()]);
+        fixture_git(&repo, &["fetch", "upstream"]);
+        fixture_git(&repo, &["remote", "set-head", "upstream", "develop"]);
+        let st = status_of(merged.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(st["base"], Value::Null, "com origin sem HEAD, a HEAD de outro remoto não vira base");
     }
 
     fn creation_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
@@ -1989,12 +2200,11 @@ mod tests {
         std::fs::write(path.join("b"), b"x").unwrap();
         let p = text(&path);
         assert!(disk_usage(&p, Some(1), true).is_none());
-        let size = (0..500)
-            .find_map(|_| {
-                std::thread::sleep(Duration::from_millis(10));
-                disk_usage(&p, Some(1), false)
-            })
-            .expect("medição");
+        // Espera a medição em segundo plano pela condição: medida pronta no cache.
+        let size = loop {
+            if let Some(size) = disk_usage(&p, Some(1), false) { break size; }
+            std::thread::yield_now();
+        };
         assert!(!size.error && !size.partial);
         assert!(size.bytes.unwrap() >= 64 * 1024);
         assert_eq!(size.biggest.unwrap()["name"], "big");

@@ -487,7 +487,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   internos `orq/*` foram removidos. [Contrato](docs/decisoes/plataforma.md#provedores-e-orquestração-no-rust).
 - **Worktrees mescladas usam a origem e a base publicada.** Base explícita vence; sem ela,
   referência nomeada de criação no reflog, com fallback para a branch principal. Base local usa
-  seu upstream ou o único remoto correspondente. Ambiguidade e falha de leitura impedem marcar
+  seu upstream ou o único remoto correspondente. Worktree sem branch compara com a branch
+  principal do remoto (`origin/HEAD`; sem `origin`, a do único remoto que a publica); sem ela, não
+  há base.
+  Ambiguidade e falha de leitura impedem marcar
   mesclada; upstream apagado nunca comprova merge. Pontas iguais continuam protegidas. Evidência
   e limites em [plataforma.md](docs/decisoes/plataforma.md#worktrees-mescladas-usam-a-origem-e-a-base-publicada).
 - **Worktree registrada com pasta existente sem `.git` é residual.** A identidade vem da
@@ -716,14 +719,16 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   sai); o resultado mora em `.hangar-update/relatorio.json`, fora do `estado.json`. Contrato em
   [plataforma.md](docs/decisoes/plataforma.md#relatório-automático-quando-a-atualização-falha-30102026).
 - **Telemetria anônima é do Rust: crate `hangar-telemetry`, ligado pelo servidor em
-  `telemetry_routes.rs` e `telemetry_hooks.rs`.** Conta só ação do dono (convidado, 8766 e login de
-  convidado nunca) e a saúde do servidor. Toda dimensão é enum, bool, versão ou código de lista
-  fechada, e o que está fora vira `other`; texto livre só nas linhas de aviso e erro do log do
-  servidor, depois da limpeza por regras de `telemetry_scrub.rs` (pode deixar passar pedaço do texto do
-  erro; a doc diz isso), até 100 distintas por dia. Nada é contado nem gravado sem o aceite do
-  aviso de preferências (`consent_scope: 2` em `~/.hangar/telemetry.json`); `HANGAR_TELEMETRY=0`, `DO_NOT_TRACK=1` e CI vencem
-  e apagam a fila. Um pacote por dia UTC; o receptor (`services/telemetry-ingest`) grava evento e
-  valor que não conhece, desde que no formato do `wire`, em vez de recusá-los. Evento ou valor novo entra em `events.rs` e em
+  `telemetry_routes.rs` e `telemetry_hooks.rs`.** Um aceite só, o do escopo 3 no
+  `PUT /api/telemetry`, cobre a opção B e o retrato diário de preferências do servidor e dos apps
+  (`POST /api/telemetry`, lista fechada de `events::SETTINGS`); servidor que anuncia só o escopo 2
+  segue com o aviso de preferências. Um aceite anterior não liga B, e `consent: false` em qualquer
+  versão revoga e apaga também as filas das versões anteriores. Fila e marcas de B são próprias
+  (`telemetry-v3`); o booleano legado permanece desligado no aceite de B. Só sai ação comprovada do
+  dono e situação de saúde da máquina, com campos de listas fechadas e descrições fixas, nunca logs
+  genéricos ou diário bruto. A época de coleta é conferida a cada POST; `HANGAR_TELEMETRY=0`,
+  `DO_NOT_TRACK=1` e CI vencem. Retratos de hora em hora e final do dia UTC usam o mesmo
+  `batch_id`; teto de 2 MiB no JSON, 413 não remove o lote. Evento ou valor novo entra em `events.rs` e em
   [`docs/telemetria.md`](docs/telemetria.md) no mesmo commit. Motivo em
   [plataforma.md](docs/decisoes/plataforma.md#telemetria-anônima-só-o-dono-lista-fechada-envio-diário-26112026).
 - **Aviso na tela só para ação que falhou ou bloqueio real.** Falha de acompanhamento, dado velho
@@ -764,7 +769,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `desktop-native/src/app/server_config.rs`, `destinoDoJev` em `shell/jev_objetivo.cjs` (só o CLI
   fora de sessão) e `jev_destination` de `runtime/codex_launch.rs` (ambiente do Codex que o Rust
   lança). Precedência única: runtime-config acima do ambiente. O modelo auxiliar (texto e
-  imagem) também é um só, `jev_aux_*`, lido pelo navegador e pelo Computer Use. O hangar-preview
+  imagem) também é um só, `jev_aux_*`, lido pelo navegador e pelo Computer Use; com
+  `jev_aux_mode=session` nenhum dos dois o chama e a dúvida volta à sessão que chamou o Jev. O hangar-preview
   manda o print ao Jev só quando a decisão sem ele sai fraca (o `confere`, só na faixa de dúvida); o
   Computer Use manda em todo passo; o print vai ao provedor do Jev sem exceção. Pelo OpenRouter a
   imagem só vale como parte `image_url` no `state` (o `assets` da Typesafe é ignorado calado); o
@@ -856,7 +862,7 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   release que muda o `user_version` só com confirmação do dono, e o binário grava
   `messages.db.schema<v>.bak` antes de migrar, que o Hangar tenta devolver se a nova não sobe; envio durante a troca é
   409 `whatsapp_updating` (outra operação na vez: `whatsapp_busy`). `whatsapp_draft` recusa em sessão compartilhada e sem o
-  prazo de 660 s; `MarkRead`, `SendPresence` e `SubscribePresence` seguem proibidos (lista fechada).
+  prazo longo do MCP; `MarkRead`, `SendPresence` e `SubscribePresence` seguem proibidos (lista fechada).
   Instalar exige aceite (`accepted.json`); o router usa `Edge::owner_only` e a 8766 não o monta; as
   ferramentas marcam texto de terceiros. Mídia antiga só a pedido, com teto. Loopback com HMAC nos dois
   sentidos: resposta sem assinatura é 502 `whatsapp_untrusted`. Evidência em
@@ -1041,6 +1047,17 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   (`hangar-send/tests/open_fields.rs`) e `the_open_body_does_not_depend_on_what_this_computer_saved`
   (`desktop-native/src/app/create/default_tests.rs`). Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#padrão-de-abertura-é-do-servidor-22112026).
+- **Balanceamento: a máquina da sessão nova é escolhida pelo servidor, só com `machine: "auto"`.**
+  Passo antes do `decide()` no `POST /api/sessions` (`placement/`), com o `choose` puro no crate
+  `hangar-placement`; nunca no `resolve_open()`. A tela pede `/api/placement/suggest` (sem efeito) e
+  cria na máquina marcada; MCP e `hangar-send` sem máquina mandam `auto`. Não balanceia convidado,
+  reserva, campo só daqui nem orquestração (criadora em grupo `orq` ou que conduz execução viva).
+  Mesma raiz git de sessão aberta e trabalho não publicado ficam; regras do dono vencem a carga;
+  limite, não pontuação. O id da máquina é o `CP_SERVER_ID` que ela informa nos fatos. O pedido
+  encaminhado vai com `machine` fixada e a herança só da criadora, lida aqui sem a resolução da abertura.
+  Prazos: fatos 2 s, abertura lá 150 s, clone 660 s, cliente (MCP, `hangar-send` com máquina) 900 s. Regras em
+  `~/.hangar/placement.json`, gravadas pela tela em todas as máquinas.
+  [Decisão](docs/decisoes/plataforma.md#balanceamento-de-sessões-entre-máquinas-27112026).
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
   do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
   fecha sem matar e reabre no nome novo na mesma geração; falha no meio desfaz e diz o que não voltou.
@@ -1112,18 +1129,23 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   alcança a máquina do par; par 1:1 antigo vira grupo sozinho. Sem rede sob o lock de grupo.
   Evidência em [plataforma.md](docs/decisoes/plataforma.md#grupo-entre-máquinas-do-dono-uma-dona-um-gid-e-fila-em-disco-20102026).
 - **Sessão filha ligada: `link` na abertura, vínculo no arquivo de grupo da filha.** Só o dono liga
-  (`erro_link_convidado`), só local (`erro_link_remoto`), nunca em grupo `orq`. O vínculo é
-  `linked_by` no sidecar da filha e vale só com o pai entre os `peers`; o pai sair o apaga. Ligar
-  não injeta protocolo de grupo, nem no `SessionStart`: a filha recebe uma linha curta no começo do
-  `initial_prompt` (sem ele, nada). `interrupt`, `child_status` e `child_answer` (MCP) só alcançam
-  filha ligada a quem chama. A resposta final de turno pedido pelo pai volta sozinha como
-  `[de: <filha>]` (só Claude e Codex), por uma assinatura interna da lista que não conta como app
-  aberto; sem esperar bloqueante. A pergunta (`AskUserQuestion`) da filha chega ao pai uma vez por
-  `interaction_id` e é respondida por `child_answer`; menu e permissão só avisam. Parar (botão e
-  tool `interrupt`) para só a sessão, nunca as filhas. Fechar o pai com filhas abertas pergunta
-  antes se fecha também as filhas; fechar só o pai, pelo dono e com a morte confirmada, interrompe
-  as filhas (pelo convidado, não) e as mantém abertas; toda saída do grupo grava `orphaned_from` nelas. Os clientes calculam a linha
-  "N subagentes" da lista. Motivo em
+  (`erro_link_convidado`), a criadora é desta máquina (`erro_link_remoto`), nunca em grupo `orq`. A
+  filha pode abrir noutra máquina (`servidor::nome`, `machine`): a ligação é feita daqui, e o vínculo
+  vai pela federação (`GroupRecord.links`, `linked_by = "<id A>::pai"` no sidecar da filha lá). O
+  vínculo vale só com o pai entre os `peers`; o pai sair o apaga, pela fila do grupo quando é de outra
+  máquina. Ligar não injeta protocolo de grupo, nem no `SessionStart`: a filha desta máquina recebe uma
+  linha curta no começo do `initial_prompt` (sem ele, nada). `interrupt` (MCP) só alcança filha ligada
+  a quem chama; a de outra máquina, por `POST /api/sessions/{name}/linked-interrupt`, que confere
+  `linked_parent` lá. `child_status` e `child_answer` (MCP) só alcançam filha ligada desta máquina. A
+  resposta final de turno pedido pelo pai volta sozinha como `[de: <filha>]` (de outra máquina,
+  `[de: <id B>::filha]`, pela rede, com a mesma fila de 2 h; só Claude e Codex), por uma assinatura
+  interna da lista que não conta como app aberto; sem esperar bloqueante. A pergunta
+  (`AskUserQuestion`) da filha desta máquina chega ao pai uma vez por `interaction_id` e é respondida
+  por `child_answer`; menu e permissão só avisam. Parar (botão e tool `interrupt`) para só a sessão,
+  nunca as filhas. Fechar o pai com filhas abertas pergunta antes se fecha também as filhas; fechar só
+  o pai, pelo dono e com a morte confirmada, interrompe as filhas (pelo convidado, não) e as mantém
+  abertas; toda saída do grupo grava `orphaned_from` nelas. Pai com filha ligada noutra máquina não
+  adormece. Os clientes calculam a linha "N subagentes" da lista. Motivo em
   [plataforma.md](docs/decisoes/plataforma.md#sessão-filha-ligada-a-quem-a-abriu) e
   [plataforma.md](docs/decisoes/plataforma.md#filhas-ligadas-pergunta-ao-pai-parar-só-na-sessão-e-pai-que-fecha-27112026).
 - **A porta privada de loopback do Rust mora no mesmo processo**, anunciada na saúde somente como
