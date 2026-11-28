@@ -1380,7 +1380,9 @@ async function load(days, quiet = false) {
   fresh.classList.add("busy");
   try {
     // Com teto: uma leitura presa na troca de rede travaria a releitura e o toque no indicador.
-    const res = await fetch("/panel/data?days=" + days, { cache: "no-store", signal: AbortSignal.timeout(30000) });
+    // AbortController em vez de AbortSignal.timeout, que o iOS 15 não tem.
+    const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 30000);
+    const res = await fetch("/panel/data?days=" + days, { cache: "no-store", signal: stop.signal }).finally(() => clearTimeout(timer));
     if (mine !== request) return;
     if (res.status === 401) { location.replace("/panel"); return; }
     if (!res.ok) throw new Error("HTTP " + res.status);
