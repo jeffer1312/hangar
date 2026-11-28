@@ -30,7 +30,7 @@ const MAX_BODY: usize = 2 * 1024 * 1024;
 
 /// Status HTTP da resposta; `None` quando não houve resposta (rede).
 pub type PostFuture = Pin<Box<dyn Future<Output = Option<u16>> + Send>>;
-/// Quem leva o corpo ao receptor. A construção e o primeiro poll não podem bloquear nem chamar o portão de volta.
+/// Quem leva o corpo ao receptor. A construção e cada poll não podem bloquear nem chamar o portão de volta.
 pub type Post = Arc<dyn Fn(Vec<u8>) -> PostFuture + Send + Sync>;
 
 /// O que a tarefa de fundo devolve a quem a chamou, para o diário.
@@ -137,10 +137,11 @@ impl Telemetry {
         let mut file = match queue::read_day(&self.home, day) {
             Ok(file) => file.filter(|file| file.collection == period.id && file.day == day)
                 .unwrap_or_else(|| DayFile { day: day.into(), collection: period.id.clone(), ..DayFile::default() }),
+            // Recomeça pelo diário: retornar aqui deixaria o dia ser selado sem a reconstrução.
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
                 queue::remove_day(&self.home, day)?;
                 self.note(Failure::Disk(e));
-                return Ok(());
+                DayFile { day: day.into(), collection: period.id.clone(), ..DayFile::default() }
             }
             Err(e) => return Err(e),
         };
@@ -244,21 +245,21 @@ impl Telemetry {
         Ok(Some(Failure::Unreachable { status: last }))
     }
 
-    /// Prepara e dispara uma tentativa. O portão é conferido sob a trava junto com o primeiro poll:
-    /// revogação depois do preparo impede o pedido de sair. `None`: nada a enviar ou portão fechado.
+    /// Prepara e dispara uma tentativa. Cada poll do pedido passa pelo portão sob a trava, e a revogação
+    /// fecha o portão sob a mesma trava: revogado, o próximo poll descarta o pedido (cancela a tentativa) e a
+    /// resposta não dá baixa. O cliente HTTP só entrega o pedido à conexão dentro de um poll, então revogação
+    /// anterior a essa entrega impede a saída. Depois dela, a conexão do `reqwest` escreve o corpo na própria
+    /// tarefa: o que já foi entregue ao transporte não volta. `None`: nada a enviar ou portão fechado.
     async fn attempt(&self, day: &str, collection: &str, partial: bool, expected: Option<&str>, post: &Post)
         -> io::Result<Option<(String, Option<u16>)>> {
         let Some((id, body)) = self.prepare(day, collection, partial, expected)? else { return Ok(None) };
         let mut request = post(body);
-        let first = poll_fn(|cx| Poll::Ready(lock(&self.post_gate).map(|gate| {
-            (gate.as_deref() == Some(collection)).then(|| request.as_mut().poll(cx))
-        }))).await?;
-        let status = match first {
-            None => return Ok(None),
-            Some(Poll::Ready(status)) => status,
-            Some(Poll::Pending) => request.await,
-        };
-        Ok(Some((id, status)))
+        let status = poll_fn(|cx| match lock(&self.post_gate) {
+            Err(e) => Poll::Ready(Err(e)),
+            Ok(gate) if gate.as_deref() != Some(collection) => Poll::Ready(Ok(None)),
+            Ok(_open) => request.as_mut().poll(cx).map(|status| Ok(Some(status))),
+        }).await?;
+        Ok(status.map(|status| (id, status)))
     }
 
     fn prepare(&self, day: &str, collection: &str, partial: bool, expected: Option<&str>) -> io::Result<Option<(String, Vec<u8>)>> {
@@ -354,6 +355,7 @@ fn jitter() -> Duration {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
     use crate::aggregate::tests::{Fixture, message};
@@ -421,6 +423,41 @@ mod tests {
         assert!(seen.lock().unwrap().is_empty());
     }
 
+    /// POST que fica pendente até `release`; `delivered` marca quando o corpo teria chegado ao transporte.
+    fn held_receiver(status: u16) -> (Post, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>, Arc<AtomicBool>) {
+        let (polled, release, delivered) = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()), Arc::new(AtomicBool::new(false)));
+        let (seen, gate, sent) = (polled.clone(), release.clone(), delivered.clone());
+        let post: Post = Arc::new(move |_body| {
+            seen.notify_one();
+            let (gate, sent) = (gate.clone(), sent.clone());
+            Box::pin(async move {
+                gate.notified().await;
+                sent.store(true, Ordering::SeqCst);
+                Some(status)
+            })
+        });
+        (post, polled, release, delivered)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revocation_while_the_post_is_pending_cancels_it_before_the_body_goes_out() {
+        let fx = Fixture::new();
+        let telemetry = Arc::new(fx.start());
+        telemetry.count(Event::MessageSent, message(), 1);
+        fx.next_day();
+        telemetry.save().unwrap();
+        let (post, polled, release, delivered) = held_receiver(200);
+        let sending = tokio::spawn({
+            let (telemetry, post) = (telemetry.clone(), post.clone());
+            async move { telemetry.send_closed(&post).await }
+        });
+        polled.notified().await;
+        telemetry.set_consent(false).unwrap();
+        release.notify_one();
+        assert!(sending.await.unwrap().is_empty());
+        assert!(!delivered.load(Ordering::SeqCst), "o pedido pendente é cancelado na revogação");
+    }
+
     #[tokio::test(start_paused = true)]
     async fn telemetry_old_success_cannot_ack_the_new_acceptance_for_the_same_day() {
         let fx = Fixture::new();
@@ -429,22 +466,50 @@ mod tests {
         fx.next_day();
         telemetry.save().unwrap();
         let day = "2026-11-26";
+        let old_period = telemetry.collection().unwrap().id;
         let old = queue::read_day(fx.home.path(), day).unwrap().unwrap().batch_id.unwrap();
-        let home = fx.home.path().to_owned();
-        let reaccepting = telemetry.clone();
-        let replacement = "a".repeat(32);
-        let id = replacement.clone();
-        let post: Post = Arc::new(move |body| {
-            assert_eq!(serde_json::from_slice::<Batch>(&body).unwrap().batch_id, old);
-            reaccepting.set_consent(false).unwrap();
-            reaccepting.set_consent(true).unwrap();
-            let period = reaccepting.collection().unwrap();
-            queue::write_day(&home, &DayFile { day: day.into(), collection: period.id, batch_id: Some(id.clone()),
-                sealed: true, ..DayFile::default() }).unwrap();
-            Box::pin(async { Some(200) })
+        let (post, polled, release, _) = held_receiver(200);
+        let sending = tokio::spawn({
+            let (telemetry, post) = (telemetry.clone(), post.clone());
+            async move { telemetry.send_closed(&post).await }
         });
-        assert!(telemetry.send_closed(&post).await.is_empty());
+        // O primeiro poll já passou pelo portão; a troca de coleção vem com o POST antigo pendente.
+        polled.notified().await;
+        telemetry.set_consent(false).unwrap();
+        telemetry.set_consent(true).unwrap();
+        let replacement = "a".repeat(32);
+        let period = telemetry.collection().unwrap();
+        queue::write_day(fx.home.path(), &DayFile { day: day.into(), collection: period.id, batch_id: Some(replacement.clone()),
+            sealed: true, ..DayFile::default() }).unwrap();
+        release.notify_one();
+        assert!(sending.await.unwrap().is_empty());
+        assert_eq!(queue::read_day(fx.home.path(), day).unwrap().unwrap().batch_id, Some(replacement.clone()));
+        // A baixa tardia do lote antigo, se chegasse, também não apaga o dia do aceite novo.
+        telemetry.drop_day(day, &old_period, &old).unwrap();
         assert_eq!(queue::read_day(fx.home.path(), day).unwrap().unwrap().batch_id, Some(replacement));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unreadable_closed_day_is_rebuilt_from_the_diary_before_sealing() {
+        use crate::wire::Step;
+        let fx = Fixture::new();
+        let day = "2026-11-26";
+        let source: crate::diary::DetailSource = Arc::new(|day: &str, _: &Collection, _: DateTime<Utc>| -> io::Result<DayDetail> {
+            Ok(if day == "2026-11-26" { DayDetail { trail: vec![Step { t: "10:01:00".into(), event: "app.abriu".into(),
+                level: "ok".into(), screen: None, count: 1 }], ..DayDetail::default() } } else { DayDetail::default() })
+        });
+        let telemetry = fx.start();
+        telemetry.count(Event::MessageSent, message(), 1);
+        telemetry.save().unwrap();
+        drop(telemetry);
+        std::fs::write(fx.queue().join(format!("{day}.json")), "{").unwrap();
+        fx.next_day();
+        let telemetry = fx.start_as_is();
+        telemetry.set_detail(source);
+        telemetry.save().unwrap();
+        let file = queue::read_day(fx.home.path(), day).unwrap().expect("o dia volta pelo diário");
+        assert!(file.sealed && file.batch_id.is_some());
+        assert_eq!(file.detail.trail.len(), 1);
     }
 
     #[tokio::test(start_paused = true)]

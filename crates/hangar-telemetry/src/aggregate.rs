@@ -47,7 +47,7 @@ pub struct Telemetry {
     live: Mutex<Live>,
     /// Ordena quem toca o disco: gravação, envio, consentimento. Ordem das travas: `io`, `settings`, `live`.
     pub(crate) io: Mutex<()>,
-    /// Só protege a admissão do primeiro poll do POST; nunca fica presa enquanto ele espera a rede.
+    /// Cada poll do POST passa por ela; nunca fica presa enquanto ele espera a rede.
     pub(crate) post_gate: Mutex<Option<String>>,
     /// O que não fez a operação falhar mas o diário precisa saber (arquivo ilegível recomeçado, dias
     /// apagados pelo teto); a tarefa de fundo entrega.
@@ -431,14 +431,25 @@ impl Telemetry {
             (live.closed.iter().map(Day::file).collect::<Vec<_>>(), current, new_file)
         };
         let written = closed.iter().chain(&current).try_for_each(|latest| {
-            let mut file = queue::read_day(&self.home, &latest.day)?
-                .filter(|file| file.collection == period.id && file.day == latest.day).unwrap_or_else(|| DayFile {
-                    day: latest.day.clone(), collection: period.id.clone(), ..DayFile::default()
-                });
+            let stored = match queue::read_day(&self.home, &latest.day) {
+                Ok(file) => file,
+                // A memória é a cópia boa do dia: o arquivo ilegível sai e ela o substitui.
+                Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                    queue::remove_day(&self.home, &latest.day)?;
+                    self.note(Failure::Disk(e));
+                    None
+                }
+                Err(e) => return Err(e),
+            };
+            let mut file = stored.filter(|file| file.collection == period.id && file.day == latest.day).unwrap_or_else(|| DayFile {
+                day: latest.day.clone(), collection: period.id.clone(), ..DayFile::default()
+            });
             if !file.sealed {
                 file.counters.clone_from(&latest.counters);
                 file.snapshot_keys.clone_from(&latest.snapshot_keys);
-                if !file.counters.is_empty() || !file.detail.is_empty() { queue::write_day(&self.home, &file)?; }
+                if !file.counters.is_empty() || !file.detail.is_empty() || !file.snapshot_keys.is_empty() {
+                    queue::write_day(&self.home, &file)?;
+                }
             }
             Ok(())
         });
@@ -996,5 +1007,30 @@ pub(crate) mod tests {
         assert_eq!(days.first().map(String::as_str), Some("2026-11-13"));
         assert_eq!(days.last().map(String::as_str), Some("2026-11-26"));
         assert!(matches!(telemetry.take_notes().as_slice(), [Failure::Pruned(1)]), "o dia apagado vai ao diário");
+    }
+
+    #[test]
+    fn unreadable_day_file_is_replaced_by_the_counts_in_memory() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        telemetry.count(Event::MessageSent, message(), 2);
+        telemetry.save().unwrap();
+        std::fs::write(fx.queue().join("2026-11-26.json"), "{").unwrap();
+        telemetry.count(Event::MessageSent, message(), 1);
+        telemetry.save().unwrap();
+        let file = queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap();
+        assert_eq!(file.counters[0].count, 3);
+        assert!(matches!(telemetry.take_notes().as_slice(), [Failure::Disk(e)] if e.kind() == io::ErrorKind::InvalidData));
+    }
+
+    #[test]
+    fn a_snapshot_without_counters_keeps_its_mark_across_restart() {
+        let fx = Fixture::new();
+        let telemetry = fx.start();
+        let period = telemetry.snapshot_period().unwrap();
+        let now = *fx.now.lock().unwrap();
+        assert!(telemetry.record_snapshot(&period, now, "settings:native:d1", Vec::new()).unwrap());
+        drop(telemetry);
+        assert!(fx.start_as_is().recorded("2026-11-26", "settings:native:d1"));
     }
 }

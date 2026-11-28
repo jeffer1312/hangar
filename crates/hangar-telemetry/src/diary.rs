@@ -64,7 +64,7 @@ pub fn project(line: &Value, day: &str, period: &Collection, now: DateTime<Utc>,
             let stage = match event {
                 "login.falhou" => "authenticate", "rota.falhou" | "api.sem_rede" => "connect",
                 "sse.caiu" | "chat.sincronia_falhou" => "stream", "dictation.recording_failed" => "record",
-                "dictation.upload_failed" => "upload", "lista.falhou" | "machines.request_failed" => "request",
+                "dictation.upload_failed" => "upload", "lista.falhou" => "request",
                 "app.crash" | "js.fatal" => "runtime", _ => "other",
             };
             let code = match text("codigo") {

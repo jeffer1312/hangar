@@ -88,10 +88,12 @@ pub(crate) fn cap(home: &Path) -> io::Result<usize> {
 /// A fila e as marcas do escopo 3.
 pub(crate) fn wipe(home: &Path) -> io::Result<()> { remove_tree(&root(home)) }
 
-/// As filas das versões sem escopo (`~/.hangar/telemetry/`) e do escopo 2 (`telemetry-scope-2/`): só a
-/// recusa as apaga; o aceite as deixa para o binário revertido, que não envia sem o próprio aceite.
+/// As filas das versões sem escopo (`~/.hangar/telemetry/`) e do escopo 2 (`telemetry-scope-2/`): a
+/// recusa e o desligamento (`HANGAR_TELEMETRY=0`, `DO_NOT_TRACK`, CI) as apagam, mesmo com o aceite
+/// gravado; o aceite ligado as deixa para o binário revertido, que não envia sem o próprio aceite.
+/// Tenta as duas antes de devolver o primeiro erro.
 pub(crate) fn wipe_legacy(home: &Path) -> io::Result<()> {
-    ["telemetry", "telemetry-scope-2"].iter().try_for_each(|name| remove_tree(&home.join(".hangar").join(name)))
+    ["telemetry", "telemetry-scope-2"].map(|name| remove_tree(&home.join(".hangar").join(name))).into_iter().collect()
 }
 
 fn remove_tree(root: &Path) -> io::Result<()> {
@@ -129,5 +131,15 @@ mod tests {
         assert_eq!(days.len(), MAX_DAYS);
         assert_eq!(days.first().map(String::as_str), Some("2026-11-02"));
         assert_eq!(days.last().map(String::as_str), Some("2026-11-15"));
+    }
+
+    #[test]
+    fn legacy_wipe_tries_both_queues_before_failing() {
+        let home = tempfile::tempdir().unwrap();
+        let hangar = home.path().join(".hangar");
+        std::fs::create_dir_all(hangar.join("telemetry-scope-2/queue")).unwrap();
+        std::fs::write(hangar.join("telemetry"), "not a directory").unwrap();
+        assert!(wipe_legacy(home.path()).is_err());
+        assert!(!hangar.join("telemetry-scope-2").exists());
     }
 }
