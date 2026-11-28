@@ -1,7 +1,7 @@
 /// Linha real do Claude Code 2.1.296 (sem terminal, caminhos encurtados): três mensagens que chegaram durante o
 /// turno viraram UMA mensagem `user` com um bloco de texto por entrada (e as imagens no meio).
 pub(crate) fn merged_inputs_line(session:&str,timestamp:&str) -> serde_json::Value {
-    json!({"type":"user","uuid":"17729883-e589-4998-b1ee-45d3e73dcd56","timestamp":timestamp,"sessionId":session,
+    serde_json::json!({"type":"user","uuid":"17729883-e589-4998-b1ee-45d3e73dcd56","timestamp":timestamp,"sessionId":session,
         "promptSource":"sdk","message":{"role":"user","content":[
             {"type":"text","text":"aqui precisava saber oque esta rodando, ou ja terminou — \u{1f4ce} imagem: /up/1791899344-c98f30.png"},
             {"type":"image","source":{"type":"base64","media_type":"image/png","data":""}},
