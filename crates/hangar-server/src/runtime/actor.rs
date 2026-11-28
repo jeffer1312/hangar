@@ -3186,6 +3186,21 @@ pub(crate) fn report_crash(code:&'static str,session:&str,line:&Value,working:bo
 mod tests {
     use super::*;
 
+    /// Toda causa que `crash` devolve está no catálogo de cada código que a reporta: fora dele, a projeção a lê `other`.
+    #[test]
+    fn telemetry_crash_causes_are_in_the_catalog_of_every_crash_code() {
+        let lines = [json!({"type":"cano_saiu"}), json!({"type":"cano_saiu","cause":"cano_died_socket_down"}),
+            json!({"type":"cano_saiu","cause":"respawn_failed","rc":1}), json!({"type":"cano_saiu","rc":-9}), json!({"type":"cano_saiu","rc":0}),
+            json!({"type":"cano_saiu","rc":2}), json!({"type":"cano_saiu","rc":-11})];
+        for code in ["headless_processo_caiu","headless_caiu"] {
+            let causes = hangar_telemetry::events::HEALTH.iter().find(|h|h.code == code).unwrap().causes;
+            for line in &lines {
+                let (cause,_) = crash(line,true).unwrap();
+                assert!(causes.contains(&cause),"{code}: {cause}");
+            }
+        }
+    }
+
     #[test]
     fn telemetry_crash_cause_comes_from_the_exit_and_the_turn() {
         let exit = |rc:Value| json!({"type":"cano_saiu","rc":rc});

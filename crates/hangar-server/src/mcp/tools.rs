@@ -62,6 +62,9 @@ tokio::task_local! {
 /// Marca onde a tool parou; fora de uma chamada do MCP não faz nada.
 pub(super) fn fail(code: &'static str) { let _ = FAILURE.try_with(|failure| failure.set(Some(code))); }
 
+/// Apaga a marca de uma tentativa que o chamador tratou e deixou para trás.
+fn clear_failure() { let _ = FAILURE.try_with(|failure| failure.set(None)); }
+
 /// `call` com o argumento recusado e o lugar da falha à vista de quem grava a telemetria.
 pub(super) async fn observed<T>(call: impl std::future::Future<Output = T>) -> (T, bool, Option<&'static str>) {
     use std::cell::Cell;
@@ -1246,7 +1249,7 @@ impl Tools {
     /// nasceu com o Jev (o `headersHelper` repassa o `HANGAR_JEV` dela); a voz usa a do servidor.
     async fn jev_cli(&self, headers: &HeaderMap, sessao: &str, args: Vec<String>, limit: Duration) -> Result<(i32, String), String> {
         let (_, voice) = self.caller(headers).await?;
-        if !voice && header(headers, "x-hangar-jev").as_deref() != Some("on") { return Err(JEV_OFF.into()); }
+        if !voice && header(headers, "x-hangar-jev").as_deref() != Some("on") { fail("jev_off"); return Err(JEV_OFF.into()); }
         let target = self.me(headers, sessao).await?;
         // `runtime-config.json` da conta do servidor (`settings.projects_dir.parent`, a pasta `claude` da lista).
         let base = self.st.list.env().dirs.as_ref().map(|d| d.claude.clone())
@@ -1258,7 +1261,7 @@ impl Tools {
                 && !matches!(k.as_str(), "CP_AUTH_TOKEN" | "HANGAR_INTERNAL_SECRET" | "HANGAR_RUNTIME_INSTANCE" | "HANGAR_AUTH_CONTEXT"))
             .collect();
         env.extend(crate::session_open::claude::jev_pairs(true, &runtime));
-        if !env.iter().any(|(k, v)| k == "TYPESAFE_API_KEY" && !v.is_empty()) { return Err(JEV_UNCONFIGURED.into()); }
+        if !env.iter().any(|(k, v)| k == "TYPESAFE_API_KEY" && !v.is_empty()) { fail("jev_unconfigured"); return Err(JEV_UNCONFIGURED.into()); }
         let node = crate::runtime::process::resolve_program("node", env.iter().map(|(k, v)| (k, v)))
             .ok_or("node não encontrado no PATH do backend: o objetivo roda pelo hangar-preview")?;
         // A raiz da instalação; sem ela, a da cópia onde o servidor roda.
@@ -1286,7 +1289,8 @@ impl Tools {
         let mut args = a.cli_args();
         // O script roda no cwd do servidor: a pasta do roteiro sai do git onde a sessão trabalha.
         let target = self.me(headers, &a.sessao).await?;
-        let rows = self.ok(Method::GET, "/api/sessions", None).await.unwrap_or(Value::Null);
+        // Sem a lista, segue sem o cwd: a recusa dela não é a causa do que vier depois.
+        let rows = self.ok(Method::GET, "/api/sessions", None).await.unwrap_or_else(|_| { clear_failure(); Value::Null });
         let row = rows.as_array().into_iter().flatten().find(|r| r["name"] == target.as_str());
         let cwd = row.and_then(|r| r["git_cwd"].as_str().filter(|c| !c.is_empty()).or_else(|| r["cwd"].as_str().filter(|c| !c.is_empty())));
         let note = match cwd {
@@ -1566,7 +1570,7 @@ fn fill_failure(answer: &str) -> String {
 /// e ele pode já estar na página.
 fn host_fill_answer(reply: hangar_browser_host::Reply) -> String {
     match reply {
-        hangar_browser_host::Reply::Text(text) => text,
+        hangar_browser_host::Reply::Text(text) | hangar_browser_host::Reply::Error(_, text) => text,
         hangar_browser_host::Reply::Png(_) => "erro: erro_cofre_incerto: o app desktop respondeu o fill-secret com uma imagem; o valor pode ter sido digitado".into(),
     }
 }
@@ -2055,6 +2059,7 @@ pub(super) async fn call_route(mut api: Router, token: &str, caller: Option<&str
     let Ok(response) = crate::telemetry_hooks::NO_TELEMETRY.scope((), api.call(request)).await;
     let status = response.status().as_u16();
     let failure = response.extensions().get::<crate::diag::FailureCode>().map(|code| code.0);
+    let browser_code = response.headers().get(crate::browser_host::BROWSER_CODE).and_then(|v| v.to_str().ok()).map(str::to_owned);
     let raw = match axum::body::to_bytes(response.into_body(), ROUTE_BODY_LIMIT).await {
         Ok(raw) => raw,
         Err(error) => {
@@ -2062,7 +2067,9 @@ pub(super) async fn call_route(mut api: Router, token: &str, caller: Option<&str
             return (502, json!({"detail": format!("resposta da rota {path} ilegível ({status}): {error}")}));
         }
     };
-    let value = serde_json::from_slice(&raw).unwrap_or_else(|_| json!({"detail": String::from_utf8_lossy(&raw)}));
+    let mut value = serde_json::from_slice(&raw).unwrap_or_else(|_| json!({"detail": String::from_utf8_lossy(&raw)}));
+    // A `browser-cmd` responde texto: a causa da recusa do app vem no cabeçalho, e o `host_answer` a lê aqui.
+    if let (Some(code), Some(map)) = (browser_code, value.as_object_mut()) { map.insert("code".into(), json!(code)); }
     let _ = FAILURE.try_with(|marked| marked.set(route_failure(status, failure, &value)));
     (status, value)
 }

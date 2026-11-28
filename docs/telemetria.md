@@ -33,7 +33,7 @@ do dia, cada versão manda o próprio pacote, com o que aconteceu enquanto ela r
   da primeira e antes da última vez (`trail`, `trail_last`, cada passo como `ação` ou `ação:tela`),
   o estado da máquina e da sessão na primeira e na última vez (`ctx_first`, `ctx_last`, veja
   "Retrato da falha") e o que houve depois da última (`after`: `recovered`, o mesmo passo deu certo em
-  até 2 min; `other_action`, a pessoa fez outra coisa; `none`, nada mais no dia);
+  até 2 min; `other_action`, a pessoa fez outra coisa; `none`, nada mais registrado até o envio);
 - `trail`: até 5.000 passos por dia, com hora UTC, ação, nível e tela quando conhecida. Passos iguais
   seguidos têm uma contagem só. Cortes dos registros ou da trilha entram em `diary_dropped`.
 
@@ -197,14 +197,15 @@ entrega mais de 30 s depois de acontecer leva só `up`: o resto já seria o esta
 
 Cada falha leva em `causa` um código de lista fechada, decidido onde ela nasce. As listas estão em
 `events.rs`: `HEALTH` (falhas do servidor, abaixo), `MCP_CAUSES` (por que uma ferramenta do MCP não
-concluiu: app desktop fechado, página fechada, navegador não pronto, sessão sem navegador, máquina do
-par fora…) e `CLIENT_CODES` (o que os apps dizem de uma falha de rede: `rede`, `timeout`,
+concluiu: app desktop fechado, página fechada, navegador não pronto, sessão sem navegador, Jev desligado
+ou sem configuração, máquina do par fora…) e `CLIENT_CODES` (o que os apps dizem de uma falha de rede: `rede`, `timeout`,
 `silencio`, `servidor_fechou`, `http_4xx`, `http_5xx`…).
 
 ### Falhas que o servidor percebe sozinho
 
-Sem ação do dono por trás, com o horário de quando aconteceram. Uma linha por minuto no máximo, por
-sessão e código.
+Sem ação do dono por trás, com o horário de quando aconteceram. A queda do servidor que não gravou a
+parada leva a hora da subida que a viu, nunca a do começo da vida que caiu. Uma linha por minuto no
+máximo, por sessão e código.
 
 | Código | O que é | Causas |
 |---|---|---|

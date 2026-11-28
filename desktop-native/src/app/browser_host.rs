@@ -259,7 +259,9 @@ fn refusal(id: u64, error: &str) -> Out { Out::Text(json!({"id": id, "ok": false
 
 fn reply_out(id: u64, reply: Reply, pairs: &[(u16, u16)]) -> Out {
     match reply {
-        Reply::Text(text) | Reply::Error(_, text) => Out::Text(json!({"id": id, "ok": true, "text": to_remote(&text, pairs)}).to_string()),
+        Reply::Text(text) => Out::Text(json!({"id": id, "ok": true, "text": to_remote(&text, pairs)}).to_string()),
+        // A causa vai junto: sem ela, o servidor de lá só saberia que o verbo foi recusado.
+        Reply::Error(code, text) => Out::Text(json!({"id": id, "ok": true, "text": to_remote(&text, pairs), "code": code}).to_string()),
         Reply::Png(png) => Out::Png(id, png),
     }
 }

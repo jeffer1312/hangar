@@ -200,14 +200,14 @@ pub fn is_bad_value(error: &sqlx::Error) -> bool {
 
 /// Assinatura de falha agregada: nível, evento, codigo, etapa, erro_tipo, vezes, máquinas, versões,
 /// sistemas, primeira e última vez, a amostra (horário, campos, passos, retratos, desfecho e lote), ação, total de
-/// assinaturas antes do corte e se alguma contagem bateu no teto.
+/// assinaturas antes do corte, se alguma contagem bateu no teto e a causa.
 type RecordRow = (
     String, String, Option<String>, Option<String>, Option<String>, i64, i64, Vec<String>, Vec<String>, String, String,
-    Json<serde_json::Value>, Option<String>, i64, bool,
+    Json<serde_json::Value>, Option<String>, i64, bool, Option<String>,
 );
 
-/// Assinatura de uma falha: evento, codigo, etapa, erro_tipo e ação.
-type RecordKey = (String, Option<String>, Option<String>, Option<String>, Option<String>);
+/// Assinatura de uma falha: evento, codigo, etapa, erro_tipo, ação e causa.
+type RecordKey = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
 
 /// Hoje e os `days - 1` dias antes dele, em UTC; dia à frente (relógio adiantado) só conta quando chegar.
 /// `concat!` porque o sqlx só aceita SQL estático.
@@ -322,48 +322,51 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
                     r.trail_last, r.ctx_first, r.ctx_last, r.after, r.capped, b.\"commit\", b.install, b.clock_skew_s, b.machine,
                     b.day + r.first_at AS first_ts, b.day + r.last_at AS last_ts,
                     r.fields->>'codigo' AS codigo, r.fields->>'etapa' AS etapa, r.fields->>'erro_tipo' AS erro_tipo,
-                    r.fields->>'action' AS action
+                    r.fields->>'action' AS action, r.fields->>'causa' AS causa
              FROM records r JOIN batches b ON b.batch_id = r.batch_id
              WHERE ", in_period!("b.day"), "),
          g AS (
              SELECT CASE WHEN bool_or(level = 'error') THEN 'error' ELSE 'warn' END AS level, event, codigo, etapa, erro_tipo,
                     LEAST(sum(count), 9223372036854775807)::bigint AS count, count(DISTINCT machine_id) AS machines,
                     array_agg(DISTINCT version ORDER BY version) AS versions, array_agg(DISTINCT os ORDER BY os) AS os,
-                    min(first_ts) AS first_ts, max(last_ts) AS last_ts, action, count(*) OVER () AS total, bool_or(capped) AS capped
-             FROM r GROUP BY event, codigo, etapa, erro_tipo, action
-             ORDER BY machines DESC, count DESC, event, action LIMIT 300),
+                    min(first_ts) AS first_ts, max(last_ts) AS last_ts, action, causa, count(*) OVER () AS total, bool_or(capped) AS capped
+             FROM r GROUP BY event, codigo, etapa, erro_tipo, action, causa
+             ORDER BY machines DESC, count DESC, event, action, causa LIMIT 300),
          s AS (
-             SELECT DISTINCT ON (r.event, r.codigo, r.etapa, r.erro_tipo, r.action)
-                    r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.first_ts, r.fields, r.trail,
+             SELECT DISTINCT ON (r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.causa)
+                    r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.causa, r.first_ts, r.fields, r.trail,
                     r.trail_last, r.ctx_first, r.ctx_last, r.after, r.version, r.\"commit\", r.install, r.os, r.clock_skew_s, r.machine
              FROM r JOIN g ON g.event = r.event AND g.codigo IS NOT DISTINCT FROM r.codigo AND g.etapa IS NOT DISTINCT FROM r.etapa
                   AND g.erro_tipo IS NOT DISTINCT FROM r.erro_tipo AND g.action IS NOT DISTINCT FROM r.action
-             ORDER BY r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.first_ts DESC, r.batch_id, r.fields, r.trail)
+                  AND g.causa IS NOT DISTINCT FROM r.causa
+             ORDER BY r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.causa, r.first_ts DESC, r.batch_id, r.fields, r.trail)
          SELECT g.level, g.event, g.codigo, g.etapa, g.erro_tipo, g.count, g.machines, g.versions, g.os,
                 to_char(g.first_ts, 'YYYY-MM-DD HH24:MI:SS'), to_char(g.last_ts, 'YYYY-MM-DD HH24:MI:SS'),
                 jsonb_build_object('at', to_char(s.first_ts, 'YYYY-MM-DD HH24:MI:SS'), 'fields', s.fields, 'trail', s.trail,
                     'trail_last', s.trail_last, 'ctx_first', coalesce(s.ctx_first, '{}'), 'ctx_last', coalesce(s.ctx_last, '{}'),
                     'after', s.after, 'batch', jsonb_build_object('version', s.version, 'commit', s.\"commit\", 'install', s.install,
                         'os', s.os, 'clock_skew_s', s.clock_skew_s, 'machine', s.machine)),
-                g.action, g.total, g.capped
+                g.action, g.total, g.capped, g.causa
          FROM g JOIN s ON s.event = g.event AND s.codigo IS NOT DISTINCT FROM g.codigo AND s.etapa IS NOT DISTINCT FROM g.etapa
               AND s.erro_tipo IS NOT DISTINCT FROM g.erro_tipo AND s.action IS NOT DISTINCT FROM g.action
-         ORDER BY g.machines DESC, g.count DESC, g.event, g.action"
+              AND s.causa IS NOT DISTINCT FROM g.causa
+         ORDER BY g.machines DESC, g.count DESC, g.event, g.action, g.causa"
     ))
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
     let records_total = records.first().map_or(0, |r| r.13);
     // Vezes por dia no período de cada assinatura devolvida acima (só as do corte), para a minibarra da lista de problemas.
-    let record_days: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>, String, i64)> = sqlx::query_as(concat!(
-        "WITH s AS (SELECT * FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::text[]) AS s(event, codigo, etapa, erro_tipo, action))
-         SELECT s.event, s.codigo, s.etapa, s.erro_tipo, s.action, to_char(b.day, 'YYYY-MM-DD'), LEAST(sum(r.count), 9223372036854775807)::bigint
+    let record_days: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, String, i64)> = sqlx::query_as(concat!(
+        "WITH s AS (SELECT * FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
+                    AS s(event, codigo, etapa, erro_tipo, action, causa))
+         SELECT s.event, s.codigo, s.etapa, s.erro_tipo, s.action, s.causa, to_char(b.day, 'YYYY-MM-DD'), LEAST(sum(r.count), 9223372036854775807)::bigint
          FROM s JOIN records r ON r.event = s.event AND r.fields->>'codigo' IS NOT DISTINCT FROM s.codigo
                   AND r.fields->>'etapa' IS NOT DISTINCT FROM s.etapa AND r.fields->>'erro_tipo' IS NOT DISTINCT FROM s.erro_tipo
-                  AND r.fields->>'action' IS NOT DISTINCT FROM s.action
+                  AND r.fields->>'action' IS NOT DISTINCT FROM s.action AND r.fields->>'causa' IS NOT DISTINCT FROM s.causa
               JOIN batches b ON b.batch_id = r.batch_id
          WHERE ", in_period!("b.day"), "
-         GROUP BY s.event, s.codigo, s.etapa, s.erro_tipo, s.action, b.day ORDER BY b.day"
+         GROUP BY s.event, s.codigo, s.etapa, s.erro_tipo, s.action, s.causa, b.day ORDER BY b.day"
     ))
     .bind(days)
     .bind(records.iter().map(|r| r.1.as_str()).collect::<Vec<_>>())
@@ -371,11 +374,12 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .bind(records.iter().map(|r| r.3.as_deref()).collect::<Vec<_>>())
     .bind(records.iter().map(|r| r.4.as_deref()).collect::<Vec<_>>())
     .bind(records.iter().map(|r| r.12.as_deref()).collect::<Vec<_>>())
+    .bind(records.iter().map(|r| r.15.as_deref()).collect::<Vec<_>>())
     .fetch_all(&mut *pool)
     .await?;
     let mut daily_of: HashMap<RecordKey, Vec<serde_json::Value>> = HashMap::new();
-    for (event, codigo, etapa, erro_tipo, action, day, count) in record_days {
-        daily_of.entry((event, codigo, etapa, erro_tipo, action)).or_default().push(serde_json::json!({"day": day, "count": count}));
+    for (event, codigo, etapa, erro_tipo, action, causa, day, count) in record_days {
+        daily_of.entry((event, codigo, etapa, erro_tipo, action, causa)).or_default().push(serde_json::json!({"day": day, "count": count}));
     }
     // Passagens de um passo ao seguinte dentro de cada pacote: pacotes do mesmo dia vêm de aceites
     // diferentes da máquina, e ligar o fim de um ao começo do outro inventaria uma passagem.
@@ -415,7 +419,7 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     use serde_json::json;
     Ok(json!({
         "records": records.into_iter().map(|r| {
-            let daily = daily_of.remove(&(r.1.clone(), r.2.clone(), r.3.clone(), r.4.clone(), r.12.clone())).unwrap_or_default();
+            let daily = daily_of.remove(&(r.1.clone(), r.2.clone(), r.3.clone(), r.4.clone(), r.12.clone(), r.15.clone())).unwrap_or_default();
             json!({
                 "level": r.0, "event": r.1, "codigo": r.2, "etapa": r.3, "erro_tipo": r.4, "action": r.12, "count": r.5, "machines": r.6,
                 "versions": r.7, "os": r.8, "first": r.9, "last": r.10,

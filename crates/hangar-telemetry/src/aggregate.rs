@@ -604,7 +604,8 @@ impl Telemetry {
             match queue::rotate(&self.home, &self.build) {
                 Ok(0) => {}
                 Ok(removed) => self.note(Failure::Legacy(removed)),
-                Err(e) => self.note(Failure::Disk(e)),
+                // O dia do binário anterior ainda não foi congelado: ligada, a coleta o leria como deste binário.
+                Err(e) => return Err(e),
             }
             let file = match queue::read_day(&self.home, &today) {
                 Ok(file) => file.filter(|file| file.collection == period.id && file.day == today && !file.sealed),
@@ -673,7 +674,9 @@ pub(crate) mod tests {
         pub(crate) fn start_with(&self, lookup: EnvLookup) -> Telemetry { self.start_version("0.42.0", lookup) }
 
         /// Como `start_with`, num binário de outra versão.
-        pub(crate) fn start_version(&self, version: &str, lookup: EnvLookup) -> Telemetry {
+        pub(crate) fn start_version(&self, version: &str, lookup: EnvLookup) -> Telemetry { self.try_start_version(version, lookup).unwrap() }
+
+        pub(crate) fn try_start_version(&self, version: &str, lookup: EnvLookup) -> io::Result<Telemetry> {
             let config = Config {
                 home: self.home.path().to_owned(),
                 backend: None,
@@ -682,7 +685,7 @@ pub(crate) mod tests {
                 channel: "latest".into(),
                 install: "package".into(),
             };
-            Telemetry::with(config, self.clock(), lookup).unwrap()
+            Telemetry::with(config, self.clock(), lookup)
         }
 
         pub(crate) fn next_day(&self) { *self.now.lock().unwrap() += chrono::TimeDelta::days(1); }
@@ -905,6 +908,28 @@ pub(crate) mod tests {
         let next = fx.start_version("0.43.0", none.clone());
         assert_eq!((next.build(), next.previous_build()), ("0.43.0-dev", "0.42.0-dev"));
         assert_eq!(fx.start_version("0.43.0", none).previous_build(), "0.43.0-dev");
+    }
+
+    /// Sem a cópia congelada do dia do binário anterior, a coleta não liga: ligada, leria aquele arquivo e
+    /// gravaria por cima dele os contadores deste binário. O erro sai, como o da leitura do dia.
+    #[test]
+    fn telemetry_stays_off_while_the_previous_build_day_is_not_frozen() {
+        let fx = Fixture::new();
+        let none: EnvLookup = Arc::new(|_: &str| -> Option<String> { None });
+        let before = fx.start();
+        before.count(Event::MessageSent, message(), 2);
+        before.save().unwrap();
+        drop(before);
+        let frozen = fx.queue().join("2026-11-26_0.42.0-dev.json");
+        std::fs::create_dir_all(&frozen).unwrap();
+        assert!(fx.try_start_version("0.43.0", none.clone()).is_err(), "a rotação falhou: a coleta não liga");
+        let kept = queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap();
+        assert_eq!((kept.build.as_str(), kept.counters.len()), ("0.42.0-dev", 1), "o dia do binário anterior fica intacto");
+        std::fs::remove_dir(&frozen).unwrap();
+        let next = fx.start_version("0.43.0", none);
+        assert!(next.enabled(), "com o dia congelado, liga");
+        assert!(next.counters().is_empty(), "os contadores do anterior não passam a este binário");
+        assert_eq!(queue::read_day(fx.home.path(), "2026-11-26_0.42.0-dev").unwrap().unwrap().counters.len(), 1);
     }
 
     #[test]

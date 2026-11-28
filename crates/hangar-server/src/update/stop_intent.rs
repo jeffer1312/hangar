@@ -368,8 +368,15 @@ pub fn record_previous(hangar_dir: &Path, update_state: &Path, previous: Option<
         Some(package) => update_run(update_state, &package.version, now),
         None => Ok(None),
     });
-    remember_exits(&lines, panic.as_deref());
+    remember_exits(&lines, panic.as_deref(), exit_at(previous, now));
     lines
+}
+
+/// Quando a vida anterior saiu, para o registro de saúde: a parada gravada; sem ela, esta subida, que viu a saída.
+/// O começo da vida, que o `quando` do diário usa na falta das duas, pode ser dias antes da queda.
+fn exit_at(previous: Option<&Previous>, now: u64) -> Option<DateTime<chrono::FixedOffset>> {
+    let secs = previous.and_then(|previous| previous.stop.as_ref()).and_then(|stop| stop.at).unwrap_or(now);
+    DateTime::from_timestamp(i64::try_from(secs).ok()?, 0).map(|at| at.fixed_offset())
 }
 
 /// O lugar do último pânico de uma vida (`crate::panic_site`), gravado pelo gancho de pânico.
@@ -408,12 +415,12 @@ type Crash = (&'static str, Option<String>, Option<chrono::DateTime<chrono::Fixe
 /// A saída da vida anterior espera a telemetria, que só abre depois da subida.
 static PREVIOUS_EXITS: std::sync::Mutex<Vec<(hangar_telemetry::events::Code, hangar_telemetry::events::Code, Option<Crash>)>> = std::sync::Mutex::new(Vec::new());
 
-fn remember_exits(lines: &[Value], panic: Option<&str>) {
+fn remember_exits(lines: &[Value], panic: Option<&str>, at: Option<DateTime<chrono::FixedOffset>>) {
     use hangar_telemetry::events::Code;
     let exits = lines.iter().filter(|line| line["evento"] == "hangar_server.saida").map(|line| {
         let crash = (line["tipo"] == "crash").then(|| {
             let (cause, panic_at) = crash_cause(line["causa"].as_str(), panic);
-            (cause, panic_at, line["quando"].as_str().and_then(|when| DateTime::parse_from_rfc3339(when).ok()))
+            (cause, panic_at, at)
         });
         (Code::known(line["tipo"].as_str().unwrap_or_default(), EXIT_KINDS), Code::known(line["causa"].as_str().unwrap_or("none"), EXIT_CAUSES), crash)
     });
@@ -529,6 +536,17 @@ mod tests {
 
     fn started() -> Option<String> {
         Some(STARTED.into())
+    }
+
+    /// A queda sem parada gravada não leva o começo da vida como hora: leva a da subida que a viu.
+    #[test]
+    fn health_exit_time_is_the_recorded_stop_or_this_boot() {
+        let unix = |secs: u64| DateTime::from_timestamp(i64::try_from(secs).unwrap(), 0).map(|at| at.fixed_offset());
+        assert_eq!(exit_at(Some(&life(41, true, None)), NOW), unix(NOW), "sem parada: nunca o começo da vida");
+        let mut stopped = life(41, true, Some(("serve_failed", true)));
+        stopped.stop.as_mut().unwrap().at = Some(NOW - 50);
+        assert_eq!(exit_at(Some(&stopped), NOW), unix(NOW - 50));
+        assert_eq!(exit_at(None, NOW), unix(NOW));
     }
 
     #[test]

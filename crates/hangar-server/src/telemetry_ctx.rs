@@ -151,7 +151,7 @@ fn os_facts(os: &str, distribution: &str, os_version: Option<&str>, kernel: Opti
     facts.into_iter().filter_map(|(key, value)| Some((key, events::closed(events::MACHINE, key, &value)?))).collect()
 }
 
-/// O primeiro número de versão do texto (`codex-cli 0.120.0` → `0.120.0`, `tmux 3.5a` → `3.5a`), sem sufixo.
+/// O primeiro número de versão do texto, sem sufixo; uma letra só no fim do número fica.
 fn public_version(text: &str) -> Option<String> {
     text.split(|c: char| c.is_whitespace() || matches!(c, ',' | '(' | ')')).find_map(|token| {
         let token = token.strip_prefix('v').unwrap_or(token);

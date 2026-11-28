@@ -31,7 +31,7 @@ export function LevelBadge({ level }: { level: string }) {
 }
 
 type Sort = "machines" | "count" | "recent";
-const recordText = (r: FailureRecord) => { const h = happened(r); return [r.event, r.level === "error" ? "erro" : "aviso", h.summary, h.cause ?? "",
+const recordText = (r: FailureRecord) => { const h = happened(r); return [headline(r), r.event, r.level === "error" ? "erro" : "aviso", h.summary, h.cause ?? "",
   ...fieldsOf(r).map(f => f.key + " " + f.label + " " + f.value), ...(r.trail ?? []), ...(r.versions ?? []), ...(r.os ?? [])].join(" "); };
 
 function CopyForAgent({ r }: { r: FailureRecord }) {

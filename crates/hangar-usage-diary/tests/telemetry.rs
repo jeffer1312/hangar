@@ -39,3 +39,17 @@ fn telemetry_lines_carry_the_binary_the_context_and_the_cause() {
     assert!(rows[4].get("ctx").is_none());
     assert_eq!(rows[5]["ctx"], json!({"up": "down"}), "falha antiga: só se sabe que o servidor estava fora");
 }
+
+/// O `up` de uma falha antiga é o tempo de pé do servidor na hora dela, não o de agora.
+#[test]
+fn telemetry_old_screen_failure_carries_the_uptime_of_its_own_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let started = DateTime::parse_from_rfc3339("2026-11-16T09:00:00-03:00").unwrap();
+    let body = json!([{"evento": "sse.caiu", "nivel": "erro", "ts": "2026-11-16T12:00:01Z"},
+                      {"evento": "sse.caiu", "nivel": "erro", "ts": "2026-11-16T12:20:00Z"}]);
+    let ctx = [("mem_free", "lt10".to_owned()), ("up", "lt1d".to_owned())];
+    record_screen_with_owner(dir.path(), body.to_string().as_bytes(), now(), Some(("c1", &ctx[..], started))).unwrap();
+    let rows = rows(dir.path());
+    assert_eq!(rows[0]["ctx"], json!({"up": "lt1m"}), "um segundo depois da subida");
+    assert_eq!(rows[1]["ctx"], json!({"up": "lt1h"}));
+}

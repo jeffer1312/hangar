@@ -41,6 +41,14 @@ impl Cdp {
         }
     }
 
+    /// O WebView2 fechou ou o processo do navegador caiu: depois disso toda chamada à vista falha, até a leitura do pid.
+    /// Com a vista de pé, a leitura passa, e a falha de uma chamada CDP fica sendo da página.
+    pub fn closed(&self) -> bool {
+        let mut pid = 0u32;
+        // SAFETY: leitura de propriedade na thread da interface, dona do WebView2.
+        unsafe { self.view.BrowserProcessId(&mut pid) }.is_err()
+    }
+
     /// Chamada sem esperar resposta; a falha vai para o log, porque o motor não tem executor para aguardar.
     pub fn fire(&self, method: &str, params: Value) {
         let label = method.to_owned();

@@ -102,8 +102,12 @@ pub fn record_screen_with_owner(base: &Path, body: &[u8], now: DateTime<FixedOff
                 // O retrato é o do servidor na chegada: falha de antes da subida dele aconteceu com ele fora, e a de
                 // mais de meio minuto atrás leva só isso, porque memória e sessões já seriam as de outra hora.
                 let recent = now - at <= TimeDelta::seconds(30);
+                let up = || match u64::try_from((at - started).num_seconds()) {
+                    Ok(secs) => hangar_telemetry::events::age_band(secs).as_str().to_owned(),
+                    Err(_) => "down".to_owned(),
+                };
                 let ctx: Vec<_> = ctx.iter().filter(|(key, _)| recent || *key == "up")
-                    .map(|(key, value)| (*key, if *key == "up" && at < started { "down".to_owned() } else { value.clone() })).collect();
+                    .map(|(key, value)| (*key, if *key == "up" { up() } else { value.clone() })).collect();
                 put_ctx(&mut line, &ctx);
             }
             mark_telemetry(&mut line, "owner_screen", collection);

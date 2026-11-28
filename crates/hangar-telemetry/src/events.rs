@@ -389,7 +389,7 @@ pub fn io_kind(kind: std::io::ErrorKind) -> Code {
 #[derive(Clone, Copy, Debug)]
 pub enum Kind {
     List(&'static [&'static str]),
-    /// Número de versão público: 1 a 4 segmentos numéricos, com letra final opcional (`3.5a`), ou `absent`.
+    /// Número de versão público: 1 a 4 segmentos numéricos, com letra final opcional, ou `absent`.
     Number,
     /// Lugar de um pânico no código do Hangar (`crates.hangar-server.src.x:12`) ou `dependency`.
     Site,
@@ -509,7 +509,8 @@ pub const HEALTH: &[Health] = &[
         causes: &["sigkill", "exit_nonzero", "signal_other", "exit_while_working", "cano_died_socket_down", "pipe_closed_no_rc",
             "respawn_failed", "not_logged_in"] },
     Health { code: "headless_caiu", event: "health.headless", description: "O processo da sessão sem terminal terminou sozinho.",
-        causes: &["sigkill", "exit_nonzero", "signal_other", "exit_while_working", "pipe_closed_no_rc", "not_logged_in"] },
+        causes: &["sigkill", "exit_nonzero", "signal_other", "exit_while_working", "cano_died_socket_down", "pipe_closed_no_rc",
+            "respawn_failed", "not_logged_in"] },
     Health { code: "server_exit", event: "health.server_exit", description: "O servidor do Hangar parou.",
         causes: &["out_of_memory", "timeout", "signal", "exit_code", "core_dump", "watchdog", "resources", "start_limit_hit",
             "serve_failed", "panic", "none"] },
@@ -527,7 +528,7 @@ pub const HEALTH: &[Health] = &[
 pub const MCP_CAUSES: &[&str] = &[
     "caller_unknown", "voice_needs_session", "self_target", "invalid_verb_args", "unknown_verb", "shot_dir_failed",
     "desktop_registry_unreadable", "desktop_app_restarting", "desktop_app_closed", "desktop_app_dead", "desktop_app_unreachable",
-    "desktop_app_timeout", "browser_not_open", "browser_not_ready", "browser_paused", "browser_verb_refused",
+    "desktop_app_timeout", "browser_not_open", "browser_not_ready", "browser_paused", "browser_verb_refused", "jev_off", "jev_unconfigured",
     "browser_host_none", "browser_host_stale", "browser_host_not_allowed", "browser_host_gone", "browser_host_timeout",
     "browser_host_verb_unsupported", "browser_host_app_outdated",
     "page_gone", "browser_starting", "browser_start_failed", "app_closing", "app_no_answer", "cdp_closed", "dialog_open",

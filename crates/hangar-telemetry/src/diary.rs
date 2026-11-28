@@ -247,8 +247,8 @@ pub fn build(mut entries: Vec<Entry>) -> DayDetail {
         let Some(last) = last else { continue };
         let (at, step, _) = steps[last];
         let later = &steps[last + 1..];
-        record.after = Some(match later.iter().find(|(_, s, _)| *s == step) {
-            Some((when, _, "ok")) if *when - at <= RECOVERY => "recovered",
+        record.after = Some(match later.iter().find(|(_, s, level)| *s == step && *level == "ok") {
+            Some((when, _, _)) if *when - at <= RECOVERY => "recovered",
             _ if later.is_empty() => "none",
             _ => "other_action",
         }.into());
@@ -262,6 +262,26 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// O passo que falha de novo por outra causa e depois dá certo em até 2 minutos recuperou.
+    #[test]
+    fn telemetry_recovery_looks_past_a_failure_of_the_same_step_with_another_cause() {
+        let start: DateTime<Utc> = "2026-11-27T03:00:00Z".parse().unwrap();
+        let entry = |secs: i64, level, cause| Entry { at: start + TimeDelta::seconds(secs), event: "mcp.tool", level, screen: None,
+            action: Some("browser"), code: if level == "ok" { "other" } else { "tool_failed" }, stage: "dispatch", description: "", ms: None,
+            cause, ctx: BTreeMap::new(), device: None, health: false };
+        let detail = build(vec![entry(0, "error", Some("desktop_app_closed")), entry(30, "error", Some("cdp_closed")), entry(60, "ok", None)]);
+        assert_eq!(detail.records[0].after.as_deref(), Some("recovered"));
+        let late = build(vec![entry(0, "error", Some("desktop_app_closed")), entry(30, "error", Some("cdp_closed")), entry(200, "ok", None)]);
+        assert_eq!(late.records[0].after.as_deref(), Some("other_action"), "sucesso depois de 2 minutos não é recuperação");
+    }
+
+    /// O retrato só tem chaves de `CONTEXT` e as `sessions.<agente>.<superfície>`: todas juntas cabem no teto do registro.
+    #[test]
+    fn telemetry_every_context_key_fits_the_record_limit() {
+        use crate::events::{Provider, Surface};
+        assert!(CONTEXT.len() + Provider::ALL.len() * Surface::ALL.len() <= MAX_RECORD_FIELDS);
+    }
 
     #[test]
     fn telemetry_keeps_only_the_recent_trail_and_the_ten_steps_before_a_failure() {

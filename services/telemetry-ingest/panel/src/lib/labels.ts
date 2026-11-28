@@ -325,6 +325,8 @@ export const CAUSES: Record<string, string> = {
   browser_not_ready: "o navegador da sessão ainda não estava pronto",
   browser_paused: "a pessoa pausou o navegador",
   browser_verb_refused: "o navegador recusou o comando",
+  jev_off: "a sessão não tinha o Jev ligado",
+  jev_unconfigured: "o Jev não estava configurado no servidor",
   browser_host_none: "nenhuma máquina estava emprestando o navegador",
   browser_host_stale: "o navegador emprestado era de uma conexão antiga",
   browser_host_not_allowed: "a máquina do navegador emprestado não é permitida",
@@ -456,7 +458,7 @@ export const SCREEN_LABEL: Record<string, string> = { chat: "conversa", lista: "
 export const AFTER_LABEL: Record<string, string> = {
   recovered: "Recuperou sozinho: o mesmo passo deu certo em até 2 minutos.",
   other_action: "A pessoa fez outra coisa depois; o mesmo passo não voltou a dar certo em 2 minutos.",
-  none: "Parou aí: nada mais aconteceu no dia.",
+  none: "Nada mais foi registrado depois disso até o envio.",
 };
 export const INSTALL_LABEL: Record<string, string> = { package: "pacote instalado", checkout: "checkout de desenvolvimento", other: "outra" };
 

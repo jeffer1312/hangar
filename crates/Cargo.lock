@@ -2532,6 +2532,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hangar-core",
+ "hangar-telemetry",
  "proptest",
  "serde_json",
  "tempfile",

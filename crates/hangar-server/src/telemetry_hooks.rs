@@ -269,10 +269,12 @@ pub(crate) fn report_health(code: &'static str, cause: &str, severity: hangar_us
     let build = installed().filter(|_| previous).map(|t| t.previous_build().to_owned());
     let (event, cause, session) = (health.event, cause.to_owned(), session.map(str::to_owned));
     let now = chrono::Local::now().fixed_offset();
-    // O retrato lê memória e discos: fora da thread do runtime, junto da gravação.
+    // A sessão é lida agora, como em `record_action`: na vez da gravação ela já pode estar noutro estado, ou ser outra.
+    let session = session.map(|name| crate::telemetry_ctx::session(&st, &name)).unwrap_or_default();
+    // O retrato da máquina lê memória e discos: fora da thread do runtime, junto da gravação.
     let write = move || {
         let mut ctx = if previous { Vec::new() } else { crate::telemetry_ctx::machine(&st) };
-        if let Some(name) = &session { ctx.extend(crate::telemetry_ctx::session(&st, name)); }
+        ctx.extend(session);
         ctx.extend(extra);
         if let Err(error) = hangar_usage_diary::record_health(&base, &period.id, now, at, event, code, &cause, severity, &ctx, build.as_deref()) {
             tracing::warn!(code = "telemetry_diary_write_failed", ?error, "falha ao gravar saúde no diário da telemetria");

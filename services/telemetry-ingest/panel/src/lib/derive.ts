@@ -190,7 +190,7 @@ export type Derived = ReturnType<typeof derive>;
 
 export const fieldsOf = (r: FailureRecord) => Object.entries(FIELD_LABEL).filter(([key]) => typeof r.fields?.[key] === "string")
   .map(([key, label]) => ({ key, label, value: r.fields![key] as string }));
-export const recordKey = (r: FailureRecord) => JSON.stringify([r.event, r.action, r.codigo, r.etapa, r.erro_tipo]);
+export const recordKey = (r: FailureRecord) => JSON.stringify([r.event, r.action, r.codigo, r.etapa, r.erro_tipo, r.fields?.causa ?? null]);
 export const SAMPLE_TIME = "Amostra (primeira ocorrência no lote)";
 export const SAMPLE_TRAIL = "Passos antes da primeira ocorrência da amostra";
 

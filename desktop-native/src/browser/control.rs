@@ -1374,6 +1374,8 @@ impl Page for CdpPage {
     fn hold_size(&self, held: bool) { self.cdp.viewport.held.set(held) }
     #[cfg(target_os = "linux")]
     fn closed(&self) -> bool { !self.cdp.browser().alive() }
+    #[cfg(target_os = "windows")]
+    fn closed(&self) -> bool { self.cdp.closed() }
     fn background<T: Send + 'static>(&self, work: impl FnOnce() -> T + Send + 'static) -> impl Future<Output = T> {
         self.executor.spawn(async move { work() })
     }

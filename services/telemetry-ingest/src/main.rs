@@ -790,14 +790,21 @@ mod tests {
             open["fields"]["action"] = json!("browser_open");
             let mut close = record(&event, level, "erro_pasta", count + 2, first, last, "amostra do fechamento");
             close["fields"]["action"] = json!("browser_close");
+            // A mesma ferramenta por duas causas: duas linhas, cada uma com a amostra da sua causa.
+            let [closed, gone] = ["desktop_app_closed", "cdp_closed"].map(|cause| {
+                let mut row = record(&event, level, "erro_pasta", 1, first, last, cause);
+                row["fields"]["action"] = json!("browser");
+                row["fields"]["causa"] = json!(cause);
+                row
+            });
             // Todas as assinaturas têm duas máquinas para disputar o corte com os outros testes.
-            body["records"] = json!([legacy, open, close, record(&event, "warn", "erro_outro", 1, first, last, "x")]);
+            body["records"] = json!([legacy, open, close, closed, gone, record(&event, "warn", "erro_outro", 1, first, last, "x")]);
             assert_eq!(post_json(pool.clone(), &body).await.0, StatusCode::OK);
             ids.push(id);
         }
         let data = store::summary(&pool, 7).await.unwrap();
         let rows: Vec<&Value> = data["records"].as_array().unwrap().iter().filter(|r| r["event"] == json!(event)).collect();
-        assert_eq!(rows.len(), 4, "{rows:?}");
+        assert_eq!(rows.len(), 6, "{rows:?}");
         let row = rows.iter().find(|r| r["codigo"] == json!("erro_pasta") && r["action"].is_null()).unwrap();
         assert_eq!(**row, json!({
             "level": "error", "event": event, "codigo": "erro_pasta", "etapa": "abrir", "erro_tipo": null, "action": null,
@@ -816,7 +823,12 @@ mod tests {
             assert_eq!(row["fields"]["action"], json!(action));
             assert_eq!(row["fields"]["detalhe"], json!(detail));
         }
-        assert!(data["records_total"].as_i64().unwrap() >= 4);
+        for cause in ["desktop_app_closed", "cdp_closed"] {
+            let row = rows.iter().find(|r| r["fields"]["causa"] == json!(cause)).unwrap();
+            assert_eq!((&row["count"], &row["machines"], &row["action"]), (&json!(3), &json!(2), &json!("browser")), "{cause}");
+            assert_eq!(row["daily"], json!([{"day": yesterday, "count": 1}, {"day": today, "count": 2}]), "{cause}");
+        }
+        assert!(data["records_total"].as_i64().unwrap() >= 6);
         forget(&pool, &ids).await;
     }
 

@@ -35,8 +35,7 @@ impl Unavailable {
     }
 }
 
-/// O cabeçalho em que o app nativo diz por que o verbo respondeu `erro:`.
-const BROWSER_CODE: &str = "x-hangar-browser-code";
+use crate::browser_host::BROWSER_CODE;
 const APP_CODES: &[&str] = &["page_gone", "browser_starting", "browser_start_failed", "app_closing", "app_no_answer", "cdp_closed",
     "dialog_open", "queue_deadline", "verb_unconfirmed", "target_missing", "target_ambiguous", "ref_invalid", "wait_timeout",
     "browser_not_open"];
@@ -155,8 +154,8 @@ pub fn host_answer(status: u16, body: &Value, local_app: bool) -> Result<String,
     // ponytail: texto que por acaso é JSON volta reserializado; só muda espaçamento, nunca o conteúdo.
     if (200..300).contains(&status) {
         let text = body["detail"].as_str().map_or_else(|| body.to_string(), str::to_owned);
-        // O app de lá responde a recusa em texto; o motivo dela não atravessa a rota.
-        if text.starts_with("erro") { super::tools::fail("browser_verb_refused"); }
+        // O app de lá responde a recusa em texto, com a causa no `code` que a rota repassa.
+        if text.starts_with("erro:") { super::tools::fail(app_code(body["code"].as_str())); }
         return Ok(text);
     }
     let detail = &body["detail"];
@@ -194,7 +193,7 @@ async fn verb_on(http: &reqwest::Client, home: &Path, sc: Option<&Value>, verb: 
     let code = app_code(answer.headers().get(BROWSER_CODE).and_then(|v| v.to_str().ok()));
     // Resposta fora de 2xx também é a frase do app (`erro: …`), como no `hangar-preview`.
     let text = answer.text().await.map_err(|e| unreachable(&e))?;
-    if text.starts_with("erro") { super::tools::fail(code); }
+    if text.starts_with("erro:") { super::tools::fail(code); }
     Ok(text)
 }
 
@@ -302,14 +301,26 @@ mod tests {
         assert_eq!(host_answer(502, &gone, false).unwrap_err().0, "o app caiu; o shot pode ter sido executado");
     }
 
+    /// Só o prefixo `erro:` é recusa; a causa do app de lá vem no `code` que a rota repassa, conferida na lista.
+    #[tokio::test]
+    async fn host_answer_marks_only_the_refusal_with_the_app_cause() {
+        let marked = |body: serde_json::Value| async move { super::super::tools::observed(async { host_answer(200, &body, false) }).await.2 };
+        assert_eq!(marked(json!({"detail": "error handling: a página fala disso"})).await, None, "leitura que começa com error");
+        assert_eq!(marked(json!({"detail": "erro: a pagina caiu", "code": "page_gone"})).await, Some("page_gone"));
+        assert_eq!(marked(json!({"detail": "erro: x", "code": "inventado"})).await, Some("browser_verb_refused"));
+        assert_eq!(marked(json!({"detail": "erro: x"})).await, Some("browser_verb_refused"), "app antigo, sem código");
+    }
+
     /// O app nativo diz no cabeçalho por que o verbo deu `erro:`; sem ele, a recusa genérica.
     #[tokio::test]
     async fn mcp_failure_marks_the_app_refusal_code() {
         use axum::routing::post;
         let app = axum::Router::new()
             .route("/cmd", post(|body: String| async move {
+                use axum::response::IntoResponse;
+                if body.contains("\"url\"") { return "error handling: a página fala disso".into_response(); }
                 let code = if body.contains("\"click\"") { "page_gone" } else { "inventado" };
-                ([(super::BROWSER_CODE, code)], "erro: a página fechou")
+                ([(super::BROWSER_CODE, code)], "erro: a página fechou").into_response()
             }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -326,6 +337,9 @@ mod tests {
             assert!(text.unwrap().starts_with("erro:"));
             assert_eq!(failure, Some(cause), "{verb}");
         }
+        let call = super::verb(&http, home.path(), "s", "url", &[], None, super::VERB_TIMEOUT);
+        let (text, _, failure) = super::super::tools::observed(call).await;
+        assert_eq!((text.unwrap().as_str(), failure), ("error handling: a página fala disso", None), "leitura não é recusa");
         std::fs::remove_file(nav.join("s.json")).unwrap();
         let call = async { super::verb(&http, home.path(), "s", "click", &[], None, super::VERB_TIMEOUT).await.map_err(Unavailable::into_text) };
         let (text, _, failure) = super::super::tools::observed(call).await;
