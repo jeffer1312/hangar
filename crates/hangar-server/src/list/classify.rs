@@ -189,6 +189,8 @@ fn codex_question(row: &mut SessionRow, question: Option<&serde_json::Map<String
     let Some(q) = question else { return };
     if row.state != "working" { row.state = "awaiting_input".into(); }
     row.question = q.get("questions").and_then(|qs| qs[0]["question"].as_str()).map(str::to_owned);
+    // Sem terminal o ID da pergunta só vem no formulário: sem ele, a filha ligada não avisa o pai nem é respondida.
+    row.ask_form = Some(Value::Object(q.clone()));
 }
 
 /// Contagem de perguntas assíncronas sem resposta, do ator do Rust (os fatos do Python não o veem).
@@ -970,6 +972,21 @@ mod tests {
         Classifier::default().classify(std::slice::from_mut(&mut counted), &Facts { headless: Some(&owned), ..facts }, &io).await;
         assert_eq!(counted.pending_questions, 1);
         assert_eq!(*io.calls.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_headless_question_reaches_the_row_with_its_form_and_id() {
+        let mut row: SessionRow = serde_json::from_value(serde_json::json!({"name": "f", "provider": "claude", "headless": true,
+            "state": "idle"})).unwrap();
+        let retrato = BTreeMap::from([("f".to_owned(), serde_json::json!({"error": null, "view": {"alive": true, "public_state": {
+            "state": "awaiting_input", "question": "Qual cor?", "interaction_id": null,
+            "codex_question": {"request_id": 1, "interaction_id": "form-1",
+                "questions": [{"question": "Qual cor?", "options": [{"label": "Azul"}, {"label": "Verde"}]}]}}}}))]);
+        headless_state(&mut row, Some(&retrato), None);
+        assert_eq!((row.state.as_str(), row.question.as_deref()), ("awaiting_input", Some("Qual cor?")));
+        assert_eq!(row.ask_form.as_ref().and_then(|form| form["interaction_id"].as_str()), Some("form-1"));
+        // É o ID que o aviso ao pai cita e o `child_answer` devolve.
+        assert_eq!(crate::groups::link_return::open_interaction(&row).as_deref(), Some("form-1"));
     }
 
     #[tokio::test]
