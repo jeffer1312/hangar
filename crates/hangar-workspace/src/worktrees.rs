@@ -958,13 +958,15 @@ fn visit<'s>(scope: &rayon::Scope<'s>, path: PathBuf, walk: &'s Walk<'s>) {
         if !kind.is_dir() || kind.is_symlink() {
             continue;
         }
-        // Os outros pontos de nova análise (pasta do OneDrive só na nuvem, por exemplo) buscam o
-        // conteúdo pela rede ao serem listados.
+        // Pasta que ainda está só na nuvem (OneDrive) busca o conteúdo pela rede ao ser listada e
+        // não guarda repositório utilizável; a já baixada é percorrida.
         #[cfg(windows)]
         {
             use std::os::windows::fs::MetadataExt;
+            const RECALL_ON_OPEN: u32 = 0x40000;
+            const RECALL_ON_DATA_ACCESS: u32 = 0x400000;
             match entry.metadata() {
-                Ok(meta) if meta.file_attributes() & 0x400 != 0 => continue,
+                Ok(meta) if meta.file_attributes() & (RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS) != 0 => continue,
                 Ok(_) => {}
                 Err(_) => {
                     incomplete();

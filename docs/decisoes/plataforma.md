@@ -3334,8 +3334,8 @@ que tem dentro. A busca agora roda no pool do `rayon`, lê o `.git` na listagem 
 (sem stat extra por pasta), faz uma varredura por lista de raízes (quem chega durante ela espera o
 resultado, outra lista não espera) e tem teto de 1 milhão de pastas e 5 s. Cada raiz configurada,
 inclusive a pasta das worktrees dentro de outra raiz, parte já no começo, e a raiz de fora não a
-lê de novo. No Windows os pontos de nova análise que não são link (pasta do OneDrive só na
-nuvem) continuam de fora: listá-los busca o conteúdo pela rede. Medido nas mesmas raízes, em release: antes, 0,16 a 0,54 s com 232 repositórios e
+lê de novo. No Windows a pasta do OneDrive que ainda está só na nuvem fica de fora (listá-la
+busca o conteúdo pela rede); a já baixada é percorrida. Medido nas mesmas raízes, em release: antes, 0,16 a 0,54 s com 232 repositórios e
 busca incompleta; agora, 0,2 a 0,26 s com cache de disco quente e 1,2 s na primeira leitura, os
 mesmos 232, completa.
 
