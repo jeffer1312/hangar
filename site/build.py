@@ -18,6 +18,7 @@ HANGAR_ARCS = '<path d="M 34.18 138 A 76 76 0 1 1 165.82 138"></path><path d="M 
 DOWNLOAD_ARROW = '<path d="M12 4v12"></path><path d="m7 11 5 5 5-5"></path><path d="M5 20h14"></path>'
 GO_ARROW = '<path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path>'
 OWN_ICONS = {
+    "antigravity": '<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M20.553 21.436C21.743 22.329 23.527 21.734 21.891 20.098C16.984 15.34 18.025 2.254 11.928 2.254C5.832 2.254 6.873 15.34 1.966 20.098C0.181 21.882 2.114 22.329 3.304 21.436C7.914 18.314 7.616 12.812 11.928 12.812C16.241 12.812 15.943 18.314 20.553 21.436Z"></path></svg>',
     "pi": '<svg viewBox="0 0 560 560" fill="currentColor" aria-hidden="true"><path d="M420 280H280V140H0V0H420V280Z"></path><path d="M560 560H420V280H560V560Z"></path><path d="M140 560H0V140H140V280H280V420H140V560Z"></path></svg>',
     "omp": '<svg viewBox="0 0 120 90" fill="currentColor" aria-hidden="true"><rect x="10" y="8" width="100" height="12" rx="2"></rect><rect x="25" y="20" width="12" height="62" rx="2"></rect><rect x="75" y="20" width="12" height="45" rx="2"></rect><rect x="71" y="55" width="20" height="16" rx="3"></rect></svg>',
 }
@@ -38,6 +39,39 @@ def render_agents_lead(i):
 
 def render_flags():
     return "".join(f'<li class="ag-{key}" style="--i:{n}">{agent_icon(key)}<span>{name}</span></li>' for n, (key, name) in enumerate(S.AGENTS))
+
+
+def render_november(i):
+    month = ("nov", "Nov")[i]
+    return "\n".join(
+        f'<li><span class="mono">{f"{day} {month}" if i == 0 else f"{month} {day}"}</span><span>{esc(item[i])}</span></li>'
+        for day, *item in S.NOVEMBER
+    )
+
+
+def render_bench(i):
+    rows = []
+    for pt, en, unit, values in S.BENCH:
+        top = max((v for v in values.values() if v is not None), default=0)
+        bars = []
+        for key, name in S.BENCH_APPS:
+            v = values[key]
+            width = f"{v / top * 100:.1f}%" if v is not None and top else "0%"
+            label = f"{v:g} {unit}".replace(".", ",") if i == 0 and v is not None else (f"{v:g} {unit}" if v is not None else S.T["bn_todo"][i])
+            bars.append(f'<li class="bar bar-{key}"><span class="bar-name">{name}</span><span class="bar-track"><span class="bar-fill" style="width:{width}"></span></span><span class="bar-val mono">{label}</span></li>')
+        rows.append(f'<div class="bench-row"><h4>{(pt, en)[i]}</h4><ol>{"".join(bars)}</ol></div>')
+    return "\n".join(rows)
+
+
+def render_news_cards(i):
+    folder = "pt/" if S.LANGS[i] == "pt" else ""
+    return "\n".join(
+        '<article class="card">'
+        f'<div class="card-text"><h3>{esc(title[i])}</h3><p>{esc(text[i])}</p></div>'
+        f'<div class="card-media news-media"><video class="shot loop" src="{media(folder + key + ".mp4")}" poster="{media(folder + key + ".jpg")}" muted loop playsinline preload="metadata" aria-label="{esc(title[i])}"></video></div>'
+        '</article>'
+        for key, title, text in S.NEWS_CARDS
+    )
 
 
 def lang_switch(lang):
@@ -100,7 +134,7 @@ def render_page(i):
     clip = {c["key"]: c for c in S.CLIPS}
     extra = {
         "canonical": S.BASE_URL + ("/" if lang == "pt" else "/en/"),
-        "og_image": S.BASE_URL + media(f"og-card-{lang}.png"),
+        "og_image": S.BASE_URL + media(f"og-card-{lang}-v2.png"),
         "h1_plain": S.T["h1"][i],
         "lang_switch": lang_switch(lang),
         "SMALL": render_small(i),
@@ -109,6 +143,11 @@ def render_page(i):
         "SHOWCASE": render_showcase(i),
         "AGENTS_LEAD": render_agents_lead(i),
         "FLAGS": render_flags(),
+        "NOVEMBER": render_november(i),
+        "BENCH": render_bench(i),
+        "NEWS_CARDS": render_news_cards(i),
+        "VIDEO_wa": media(("pt/" if lang == "pt" else "") + "news-whatsapp.mp4"), "POSTER_wa": media(("pt/" if lang == "pt" else "") + "news-whatsapp.jpg"),
+        "COMPAT": "".join(f'<li class="ag-{key}">{agent_icon(key)}<span>{name}</span></li>' for key, name in S.AGENTS),
         "VIDEO_orq": media(clip["orq"]["video"][i]), "POSTER_orq": media(clip["orq"]["poster"][i]),
         "VIDEO_pair": media(clip["pair"]["video"][i]), "POSTER_pair": media(clip["pair"]["poster"][i]),
     }
