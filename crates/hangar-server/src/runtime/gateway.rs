@@ -133,6 +133,8 @@ pub struct RuntimeRegistry {
     limits:std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<LimitHit>>,
     /// O mesmo vigia, para a sessão cuja conta teve o login recusado.
     auth_refusals:std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<AuthHit>>,
+    /// Quem continua sozinho depois da parada passageira (`auto_continue`).
+    stops:std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<hangar_auto_continue::StopHit>>,
     /// Sessões Claude paradas no limite à espera da troca: a fila não entrega nada até ela terminar.
     limit_holds:std::sync::Mutex<std::collections::BTreeSet<String>>,
     /// Troca de agente pedida com a sessão trabalhando: a fila para até a troca terminar, e o que estiver
@@ -456,7 +458,7 @@ impl RuntimeRegistry {
         Self { startup: Default::default(), other:std::sync::OnceLock::new(), diag:crate::diag::DiagClient::new(),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
             policy:PolicyClient::new().with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
-            watcher:std::sync::OnceLock::new(),watcher_pending:tokio::sync::watch::channel(false).0,codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),limit_holds:Default::default(),handoffs:Default::default(),waking:Default::default(),rewake:Default::default() }
+            watcher:std::sync::OnceLock::new(),watcher_pending:tokio::sync::watch::channel(false).0,codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),stops:std::sync::OnceLock::new(),limit_holds:Default::default(),handoffs:Default::default(),waking:Default::default(),rewake:Default::default() }
     }
     /// Prova de vida para o watchdog do systemd: o mapa das entradas não está preso por ninguém.
     pub async fn responsive(&self) {
@@ -473,6 +475,21 @@ impl RuntimeRegistry {
     /// Liga a troca de conta no limite; sem ela o aviso de limite só fica no estado da sessão.
     pub fn set_limit_sink(&self,sink:tokio::sync::mpsc::UnboundedSender<LimitHit>) { let _ = self.limits.set(sink); }
     pub fn set_auth_sink(&self,sink:tokio::sync::mpsc::UnboundedSender<AuthHit>) { let _ = self.auth_refusals.set(sink); }
+    /// Liga a continuação depois da parada passageira; sem ela o fim de turno só fica no estado da sessão.
+    pub fn set_stop_sink(&self,sink:tokio::sync::mpsc::UnboundedSender<hangar_auto_continue::StopHit>) { let _ = self.stops.set(sink); }
+    /// Todo fim de turno passa aqui; só a parada passageira perdida vai ao diário, o fim normal é a maioria.
+    pub fn turn_stopped(&self,hit:hangar_auto_continue::StopHit) {
+        let transient = hit.kind.is_transient();
+        let name = hit.name.clone();
+        let code = match self.stops.get() {
+            None => "stop_sink_absent",
+            Some(sink) => match sink.send(hit) { Ok(()) => return, Err(_) => "stop_sink_closed" },
+        };
+        if transient && crate::warn_limit::allow(Some(name.as_str()),code) {
+            tracing::warn!(session=%name,code,"parada passageira sem a agenda de continuar; o turno fica parado");
+            self.diag.report("runtime.stop_sink_closed",&name,code,"a agenda de continuar sozinho não recebeu a parada passageira");
+        }
+    }
     /// A fila do Claude para já, no mesmo passo do aviso: o que estiver nela iria para a conta esgotada.
     /// `true`: o vigia recebeu. Sem vigia vai ao diário.
     pub fn usage_limit(&self,hit:LimitHit) -> bool {

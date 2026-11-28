@@ -24,7 +24,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         super::repaint_in(until_next_step(t), window, cx);
         frame(t)
     };
-    let choice = ConsentChoice { answer, disabled: false };
+    let choice = ConsentChoice { answer, disabled: false, inactive: false, scope: Some(app::TELEMETRY_B_SCOPE) };
     // Miniatura só leitura: o interruptor fica fora do Tab, e a tampa por cima não deixa o mouse levar o foco para ele.
     let toggle = Switch::new("news-telemetry-switch").tab_stop(false);
     let cover = div().absolute().top_0().left_0().size_full().block_mouse_except_scroll();
@@ -41,7 +41,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
     }
     stage.p(px(14.))
         .child(app::settings_box().child(app::consent_row(Consent::Telemetry, false, Some(choice), false, false, false, toggle))
-            .child(app::telemetry_doc_row(false)))
+            .child(app::telemetry_doc_row(false, choice.scope)))
         .child(cover).into_any_element()
 }
 

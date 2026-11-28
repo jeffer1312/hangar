@@ -9,6 +9,7 @@ hangar-api.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 regex.workspace = true
+rayon.workspace = true
 chrono.workspace = true
 tempfile.workspace = true
 ring = "=0.17.14"

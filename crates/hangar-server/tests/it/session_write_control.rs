@@ -742,3 +742,82 @@ async fn stop_task_on_a_name_without_rust_owner_is_409_only_claude_not_python() 
     let (status, body) = send(server, "POST", "shell-cru/tasks/bserqfwvd/stop", "").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_parar_so_claude")), "{body}");
 }
+
+/// Pai `p` e filhas ligadas `a` (sem terminal, parada) e `b` (nenhuma sessão com esse nome), pelos arquivos de grupo.
+/// Volta também o diário do servidor, para esperar as gravações dele.
+async fn linked_family(registry: Arc<RuntimeRegistry>, dir: &Path) -> (Arc<Fake>, std::net::SocketAddr, hangar_server::diag::DiagClient) {
+    use hangar_server::groups::{orq::OrqVault, service::GroupService, store::PairDir};
+    let pair = dir.join("pair");
+    std::fs::create_dir_all(&pair).unwrap();
+    for child in ["a", "b"] {
+        let sidecar = json!({"peers": ["p"], "task": "", "gid": "g1", "harness": {child: "claude", "p": "claude"}, "linked_by": "p"});
+        std::fs::write(pair.join(format!("{child}.json")), sidecar.to_string()).unwrap();
+    }
+    let (python, _) = spawn_fake().await;
+    let mut state = AppState::new(config("127.0.0.1"));
+    state.write_gate_wait = Duration::from_secs(5);
+    state.diag = python.bind_diary(state.diag.clone());
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair, dir.join("arquivo")), Arc::new(OrqVault::from_state(&state)), "casa".into())));
+    assert!(state.state.runtime.set(registry).is_ok());
+    let diag = state.diag.clone();
+    let addr = spawn_state_for(&python, state).await;
+    (python, addr, diag)
+}
+
+/// O Parar para só a sessão: as filhas ligadas não recebem nada, nem com o `cascade=1` de um cliente antigo, que é
+/// ignorado. Quem interrompe as filhas é só o fechamento do pai.
+#[tokio::test]
+async fn interrupting_a_parent_does_not_touch_its_linked_children() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    open_headless(&registry, dir.path(), "p").await;
+    let child = open_headless(&registry, dir.path(), "a").await;
+    let (python, server, diag) = linked_family(registry, dir.path()).await;
+    for path in ["p/interrupt", "p/interrupt?cascade=1"] {
+        let (status, body) = send(server, "POST", path, "").await;
+        assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{path}: {body}");
+        assert!(body.get("cascade").is_none(), "{path}: {body}");
+    }
+    assert!(!child.lock().unwrap().iter().any(|e| e.to_string().contains("interrupt")), "nada foi à filha");
+    diag.flush().await;
+    let tried = python.diag().into_iter().filter(|d| d["evento"] == "rust.link_cascade_failed").count();
+    assert_eq!(tried, 0, "nenhuma filha foi procurada: {:?}", python.diag());
+}
+
+/// Pai em turno: o Parar chega a ele e só a ele, também com o `cascade=1` de um cliente antigo.
+#[tokio::test]
+async fn interrupting_a_parent_in_a_turn_stops_only_the_parent() {
+    let interrupted = |sink: &Arc<std::sync::Mutex<Vec<Value>>>| sink.lock().unwrap().iter()
+        .filter_map(|e| serde_json::from_str::<Value>(e["frame"].as_str()?).ok())
+        .any(|frame| frame["request"]["subtype"] == "interrupt");
+    for path in ["p/interrupt", "p/interrupt?cascade=1"] {
+        let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+        let parent = open_headless(&registry, dir.path(), "p").await;
+        let child = open_headless(&registry, dir.path(), "a").await;
+        let (_python, server, _diag) = linked_family(registry, dir.path()).await;
+        // O cano falso nunca termina o turno que o envio abre.
+        let (status, body) = send(server, "POST", "p/input", r#"{"text":"um"}"#).await;
+        assert_eq!((status, &body["delivered"]), (200, &json!(true)), "{path}: o envio abre o turno: {body}");
+        let (status, body) = send(server, "POST", path, "").await;
+        assert_eq!((status, &body), (200, &json!({"ok": true})), "{path}: {body}");
+        assert!(interrupted(&parent), "{path}: o Parar chegou ao pai");
+        assert!(!interrupted(&child), "{path}: nada foi à filha");
+    }
+}
+
+/// Pai Claude sem terminal estacionado (só o arquivo dele): a recusa sem turno vem antes da entrada, sem subir o
+/// processo só para o Esc.
+#[tokio::test]
+async fn a_parked_session_answers_no_turn_without_launching_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecars = dir.path().join(".hangar/claude-headless");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    let parked = json!({"name": "p", "key": "cd".repeat(16), "cwd": dir.path(), "session_id": "sid-p", "headless": true, "permission_mode": "manual"});
+    std::fs::write(sidecars.join("p.json"), parked.to_string()).unwrap();
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), dir.path().to_string_lossy().into_owned())].into());
+    let registry = Arc::new(RuntimeRegistry::new("instance-test".into())
+        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))).with_codex_environment(env));
+    let (_, server) = serve(registry.clone()).await;
+    let (status, body) = send(server, "POST", "p/interrupt", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_sem_turno")), "{body}");
+    assert!(registry.writable("p").await.is_none(), "o estacionado não subiu só para o Esc");
+}

@@ -76,12 +76,14 @@ pub fn list_sig<'a>(rows: impl IntoIterator<Item = &'a SessionRow>) -> String {
             // Só no Rust: vazio deixa a assinatura byte a byte com a do Python.
             if let (Value::Array(items), false) = (&mut sig, i.plugin_tool_servers.is_empty()) { items.push(json!(i.plugin_tool_servers)); }
             if let (Value::Array(items), Some(parent)) = (&mut sig, i.linked_by.as_ref()) { items.push(json!({"linked_by": parent})); }
+            if let (Value::Array(items), Some(parent)) = (&mut sig, i.orphaned_from.as_ref()) { items.push(json!({"orphaned_from": parent})); }
             if let (Value::Array(items), Some(owner)) = (&mut sig, i.pair_owner.as_ref()) { items.push(json!({"pair_owner": owner})); }
             if let (Value::Array(items), Some(lead)) = (&mut sig, i.pair_lead.as_ref()) { items.push(json!({"pair_lead": lead})); }
             if let (Value::Array(items), Some(name)) = (&mut sig, i.rename_suggestion.as_ref()) { items.push(json!({"rename_suggestion": name, "weak": i.rename_weak})); }
             if let (Value::Array(items), true) = (&mut sig, i.hidden_from_list) { items.push(json!({"hidden_from_list": true})); }
             if let (Value::Array(items), true) = (&mut sig, i.asleep) { items.push(json!({"asleep": true, "wake": i.wake_surface})); }
             if let (Value::Array(items), Some(handoff)) = (&mut sig, i.handoff.as_ref()) { items.push(json!({"handoff": handoff})); }
+            if let (Value::Array(items), true) = (&mut sig, i.auto_continue_off) { items.push(json!({"auto_continue_off": true})); }
             if let (Value::Array(items), false) = (&mut sig, i.ports.is_empty()) { items.push(json!({"ports": i.ports})); }
             sig
         })
@@ -125,6 +127,20 @@ mod tests {
         assert_ne!(first, list_sig(&[row]));
     }
 
+    /// A filha que perde o pai muda só esse campo: sem ele na assinatura, "sem pai" não chegaria à tela.
+    #[test]
+    fn orphaned_from_alone_changes_the_signature() {
+        let mut row: SessionRow = serde_json::from_value(json!({"name": "filha"})).unwrap();
+        let before = list_sig(&[row.clone()]);
+        row.orphaned_from = Some("pai".into());
+        let after = list_sig(&[row.clone()]);
+        assert_ne!(before, after);
+        let items: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(items[0].as_array().unwrap().last(), Some(&json!({"orphaned_from": "pai"})));
+        row.orphaned_from = Some("outro".into());
+        assert_ne!(after, list_sig(&[row]), "outro pai, outra assinatura");
+    }
+
     #[test]
     fn plugin_tool_servers_enter_the_signature_only_when_present() {
         let mut row: SessionRow = serde_json::from_value(json!({"name": "s"})).unwrap();
@@ -159,6 +175,18 @@ mod tests {
         assert!(serde_json::to_value(&row).unwrap()["handoff"]["state"] == "running");
         row.handoff = None;
         assert!(serde_json::to_value(&row).unwrap().get("handoff").is_none(), "sem troca, o campo não vai ao JSON");
+    }
+
+    #[test]
+    fn the_signature_changes_when_auto_continue_off_changes() {
+        let mut row: SessionRow = serde_json::from_value(json!({"name": "s"})).unwrap();
+        let on = list_sig(&[row.clone()]);
+        row.auto_continue_off = true;
+        assert_ne!(on, list_sig(&[row.clone()]));
+        assert_eq!(serde_json::to_value(&row).unwrap()["auto_continue_off"], json!(true));
+        row.auto_continue_off = false;
+        assert_eq!(on, list_sig(&[row.clone()]), "religado, a assinatura volta à de antes");
+        assert!(serde_json::to_value(&row).unwrap().get("auto_continue_off").is_none(), "ligado, o campo não vai ao JSON");
     }
 
     #[test]

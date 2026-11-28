@@ -310,6 +310,7 @@ export default function IntegrationsScreen() {
           }
           editing={activeEditor.mode === 'edit' ? activeEditor.integration : null}
           existingIds={existingIds}
+          existingIntegrations={integrations ?? []}
           onClose={() => {
             if (!sameServerScope(activeEditor.serverKey)) return;
             closeEditor(activeEditor.instance);
@@ -326,12 +327,13 @@ export default function IntegrationsScreen() {
             // Só abre detalhe/OAuth se esta gravação ainda pertencer à instância ativa do editor.
             if (activeEditorInstanceRef.current === activeEditor.instance) {
               const isOAuth = saved.auth.kind === 'oauth_dcr' || saved.auth.kind === 'oauth_manual_client';
-              if (isNew && isOAuth) {
+              // A integração nova abre na hora: a pessoa vê onde ela entrou e o que fazer em seguida (Testar, ou o login).
+              if (isNew) {
                 setSelection({
                   serverKey: activeEditor.serverKey,
                   id: saved.id,
                   pendingNew: saved,
-                  autoStartOAuth: true,
+                  autoStartOAuth: isOAuth,
                 });
               }
             }

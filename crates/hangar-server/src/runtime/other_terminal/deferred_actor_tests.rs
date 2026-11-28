@@ -21,6 +21,9 @@ impl OtherIo for BusyIo {
     ) -> BoxFuture<'a, Result<(), RuntimeError>> {
         Box::pin(async { panic!("rascunho ocupado não autoriza escrita") })
     }
+    fn kimi_permission(&self) -> BoxFuture<'_, Result<Option<String>, RuntimeError>> {
+        Box::pin(async { Ok(None) })
+    }
     fn release<'a>(&'a self) -> BoxFuture<'a, ()> {
         Box::pin(async {})
     }

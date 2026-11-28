@@ -8,6 +8,7 @@ use axum::Router;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use tokio::sync::Semaphore;
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
@@ -86,9 +87,24 @@ fn csp(html: &str) -> String {
 
 static CSP: LazyLock<[String; 3]> = LazyLock::new(|| [csp(DASHBOARD), csp(LOGIN), csp(JOIN)]);
 
+/// O CSS vai dentro da página: um arquivo à parte ficava no cache do navegador e a página nova
+/// aparecia com o estilo da versão anterior.
+static PAGES: LazyLock<[String; 3]> = LazyLock::new(|| [inline_style(DASHBOARD), inline_style(LOGIN), inline_style(JOIN)]);
+
+fn inline_style(html: &str) -> String {
+    html.replace(r#"<link rel="stylesheet" href="/panel/assets/panel.css">"#, &format!("<style>{STYLE}</style>"))
+}
+
 #[derive(Deserialize)]
 struct Period {
     days: Option<i32>,
+}
+
+/// Opcionais para a sessão ser conferida antes: sem login é 401 mesmo com o pedido torto.
+#[derive(Deserialize)]
+struct TrailQuery {
+    machine: Option<String>,
+    day: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -109,9 +125,9 @@ pub fn router(pool: PgPool) -> Router {
     let state = Panel { pool, limiter: Arc::new(Limiter::new()) };
     Router::new()
         .route("/panel", get(home))
-        .route("/panel/join", get(|| async { page(JOIN, 2) }))
-        .route("/panel/assets/panel.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLE) }))
+        .route("/panel/join", get(|| async { page(2) }))
         .route("/panel/data", get(data))
+        .route("/panel/trail", get(trail))
         .route("/panel/api/me", get(me))
         .route("/panel/api/login", post(login))
         .route("/panel/api/logout", post(logout))
@@ -120,11 +136,11 @@ pub fn router(pool: PgPool) -> Router {
         .with_state(state)
 }
 
-fn page(html: &'static str, csp: usize) -> Response {
+fn page(which: usize) -> Response {
     // A página não roda dentro de outro site (clickjacking) e não manda o caminho a links de fora.
-    let mut response = Html(html).into_response();
+    let mut response = Html(PAGES[which].as_str()).into_response();
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&CSP[csp]).expect("CSP em ASCII"));
+    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&CSP[which]).expect("CSP em ASCII"));
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -172,8 +188,8 @@ fn unavailable(what: &str, cause: &sqlx::Error) -> Response {
 
 async fn home(State(panel): State<Panel>, headers: HeaderMap) -> Response {
     match user(&panel.pool, &headers).await {
-        Ok(Some(_)) => page(DASHBOARD, 0),
-        Ok(None) => page(LOGIN, 1),
+        Ok(Some(_)) => page(0),
+        Ok(None) => page(1),
         Err(response) => response,
     }
 }
@@ -186,17 +202,39 @@ async fn me(State(panel): State<Panel>, headers: HeaderMap) -> Response {
     }
 }
 
-async fn data(State(panel): State<Panel>, headers: HeaderMap, Query(period): Query<Period>) -> Response {
+// A consulta torta só é recusada depois da sessão: sem ela, 401 não diz o formato da rota.
+async fn data(State(panel): State<Panel>, headers: HeaderMap, period: Result<Query<Period>, QueryRejection>) -> Response {
     let pool = &panel.pool;
     match user(pool, &headers).await {
         Ok(Some(_)) => {}
         Ok(None) => return error(StatusCode::UNAUTHORIZED, "session"),
         Err(response) => return response,
     }
+    let Ok(Query(period)) = period else { return error(StatusCode::BAD_REQUEST, "query") };
     let days = period.days.unwrap_or(DEFAULT_DAYS).clamp(1, 400);
     match store::summary(pool, days).await {
         Ok(summary) => ([(header::CACHE_CONTROL, "no-store")], axum::Json(summary)).into_response(),
         Err(e) => unavailable("summary", &e),
+    }
+}
+
+async fn trail(State(panel): State<Panel>, headers: HeaderMap, query: Result<Query<TrailQuery>, QueryRejection>) -> Response {
+    let pool = &panel.pool;
+    match user(pool, &headers).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return error(StatusCode::UNAUTHORIZED, "session"),
+        Err(response) => return response,
+    }
+    let Ok(Query(query)) = query else { return error(StatusCode::BAD_REQUEST, "query") };
+    let is_hex_id = |v: &str| v.len() == 32 && v.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let is_day = |v: &str| v.len() == 10 && v.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });
+    let (Some(machine), Some(day)) = (query.machine.filter(|m| is_hex_id(m)), query.day.filter(|d| is_day(d))) else {
+        return error(StatusCode::BAD_REQUEST, "query");
+    };
+    match store::trail(pool, &machine, &day).await {
+        Ok(steps) => ([(header::CACHE_CONTROL, "no-store")], axum::Json(steps)).into_response(),
+        Err(e) if store::is_bad_value(&e) => error(StatusCode::BAD_REQUEST, "day"),
+        Err(e) => unavailable("trail", &e),
     }
 }
 
@@ -336,6 +374,13 @@ mod tests {
         limiter.failed("c@x.com", 5);
         limiter.succeeded("c@x.com");
         assert!(limiter.failures.lock().unwrap().get("c@x.com").is_none(), "acerto zera a conta");
+    }
+
+    #[test]
+    fn pages_carry_their_style_inline() {
+        for page in PAGES.iter() {
+            assert!(page.contains("<style>") && !page.contains("/panel/assets/panel.css"), "o estilo vai dentro da página");
+        }
     }
 
     #[test]

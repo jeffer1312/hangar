@@ -33,6 +33,7 @@ html_render, sem esperar pedido; imagem por caminho só para print real de tela.
 Ver ou testar uma página: browser_open e depois browser (um verbo) ou browser_batch (vários já conhecidos); \
 tela desconhecida com várias ações: browser_goal, quando a sessão tem o Jev. \
 Falar com outra sessão: sessions, send, group, pair; abrir ou fechar: new_session, close_session; parar o turno de uma filha ligada: interrupt; \
+estado e resposta inteira dela: child_status; responder a pergunta dela: child_answer; \
 ler ou gravar o contrato do grupo: contract. \
 Senha nunca no chat: request_secret ou vault_* (vault_list, vault_fill, vault_exec, vault_file). \
 Sessão ligada a um ticket: mission (etapa do trabalho, nota e evidências de validação, como prints e vídeos). \
@@ -47,6 +48,11 @@ static CATALOG: LazyLock<Vec<Tool>> = LazyLock::new(|| {
 
 /// Os nomes do catálogo, para o `mcp_tool`: nome fora dele sai `other`.
 static TOOL_NAMES: LazyLock<Vec<&'static str>> = LazyLock::new(|| CATALOG.iter().map(|tool| &*tool.name).collect());
+
+#[derive(Clone, Copy)]
+struct OwnerTransport;
+
+pub(crate) fn tool_names() -> &'static [&'static str] { &TOOL_NAMES }
 
 /// O cliente pode adiar o schema e mostrar só o nome da tool; as instruções sempre chegam, então
 /// levam os campos obrigatórios para o modelo não chutar `to`/`message`.
@@ -125,39 +131,64 @@ impl ServerHandler for Handler {
     }
 
     async fn call_tool(&self, request: CallToolRequestParams, context: RequestContext<RoleServer>) -> Result<CallToolResponse, ErrorData> {
-        let headers = context.extensions.get::<axum::http::request::Parts>().map(|p| p.headers.clone()).unwrap_or_default();
+        let parts = context.extensions.get::<axum::http::request::Parts>();
+        let headers = parts.map(|p| p.headers.clone()).unwrap_or_default();
+        let capture = if parts.is_some_and(|p| p.extensions.get::<OwnerTransport>().is_some())
+            && let Some(telemetry) = self.tools.telemetry() {
+            let epoch = telemetry.consent_epoch();
+            match (telemetry.collection(), Box::pin(self.tools.owner_session(&headers)).await) {
+                (Some(period), Some(owner)) if telemetry.consent_epoch() == epoch && telemetry.enabled() => Some((period, epoch, owner)),
+                _ => None,
+            }
+        } else { None };
         let name = OLD_NAMES.iter().find(|(old, _)| *old == request.name).map_or(&*request.name, |(_, new)| new);
         let args = request.arguments.unwrap_or_default();
         let draft = (name == "whatsapp_draft").then(|| Arc::new(hangar_whatsapp::outbox::Progress::default()));
         let is_integration = matches!(name, "integrations_list" | "integration_tools" | "integration_call")
             || name.starts_with("int__");
         let external_started = is_integration.then(|| Arc::new(AtomicBool::new(false)));
-        let call = self.tools.call(name, args, &headers, draft.clone(), external_started.clone());
+        let start = std::time::Instant::now();
+        // Em debug o futuro de todas as tools junto estoura a pilha de 2 MiB do worker do tokio.
+        let call = Box::pin(self.tools.call(name, args, &headers, draft.clone(), external_started.clone()));
+        let call = tools::ARGUMENTS_REJECTED.scope(std::cell::Cell::new(false), async move {
+            let result = crate::telemetry_hooks::NO_TELEMETRY.scope((), call).await;
+            (result, tools::ARGUMENTS_REJECTED.with(std::cell::Cell::get))
+        });
         // O rmcp só cancela o token no `notifications/cancelled`: largar o futuro é o que cancela o pedido na dona do cofre
         // e o que recusa o rascunho do WhatsApp, que mora no binário. O `select!` larga o futuro antes do braço rodar.
-        if name == "request_secret" || name.starts_with("vault_") || draft.is_some() {
-            return Ok(CallToolResponse::Complete(tokio::select! {
-                result = call => result,
-                () = context.ct.cancelled() => match draft {
+        let ((result, invalid_arguments), cancelled) = if name == "request_secret" || name.starts_with("vault_") || draft.is_some() {
+            tokio::select! {
+                result = call => (result, false),
+                () = context.ct.cancelled() => ((match draft {
                     Some(draft) => CallToolResult::error(vec![ContentBlock::text(draft.cancelled().await)]),
                     None => CallToolResult::error(vec![ContentBlock::text("erro_cofre_cancelado: a chamada foi cancelada")]),
-                },
-            }));
-        }
+                }, false), true),
+            }
         // O cancelamento MCP dropa o futuro e o `ApprovalWaiter::drop` remove o cartão pendente na UI.
         // Quando o envio externo já começou, `CancelWarningGuard` grava o aviso de efeito desconhecido
         // consultável via `integrations_list` (`last_warning`), mesmo se o `rmcp` descartar este `CallToolResponse`
         // após `notifications/cancelled`.
-        if let Some(external_started) = external_started {
-            return Ok(CallToolResponse::Complete(tokio::select! {
-                result = call => result,
+        } else if let Some(external_started) = external_started {
+            tokio::select! {
+                result = call => (result, false),
                 () = context.ct.cancelled() => {
                     let msg = integration_cancel_message(external_started.load(Ordering::SeqCst));
-                    CallToolResult::error(vec![ContentBlock::text(msg)])
+                    ((CallToolResult::error(vec![ContentBlock::text(msg)]), false), true)
                 }
-            }));
+            }
+        } else { (call.await, false) };
+        let took = start.elapsed();
+        if let Some((period, epoch, owner)) = capture
+            && self.tools.telemetry().is_some_and(|telemetry| telemetry.consent_epoch() == epoch)
+            && Box::pin(self.tools.owner_session(&headers)).await.as_ref() == Some(&owner) {
+            let (stage, code) = if cancelled { ("cancelled", Some("tool_cancelled")) }
+                else if invalid_arguments { ("arguments", Some("invalid_arguments")) }
+                else if result.is_error != Some(true) { ("dispatch", None) }
+                else if !is_integration && !tool_names().contains(&name) { ("dispatch", Some("unknown_tool")) }
+                else { ("dispatch", Some("tool_failed")) };
+            self.tools.observe(period, epoch, name, stage, code, took).await;
         }
-        Ok(CallToolResponse::Complete(call.await))
+        Ok(CallToolResponse::Complete(result))
     }
 }
 
@@ -220,6 +251,39 @@ mod tests {
         (session, String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes()).into_owned())
     }
 
+    #[test]
+    fn telemetry_mcp_bearer_without_a_verified_session_is_not_counted() {
+        // O futuro do roteador inteiro, em debug, passa de 8 MiB de pilha.
+        const STACK: usize = 256 << 20;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        std::thread::Builder::new().stack_size(STACK).spawn(move || rt.block_on(bearer_without_session_body())).unwrap().join().unwrap();
+    }
+
+    async fn bearer_without_session_body() {
+        use tower::ServiceExt;
+        let home = tempfile::tempdir().unwrap();
+        let st = crate::telemetry_hooks::test_state(home.path(), true);
+        let svc = router(st.clone(), Router::new());
+        let post = |session: Option<&str>, body: serde_json::Value| {
+            let mut req = axum::http::Request::post("/mcp").header("host", "127.0.0.1")
+                .header("authorization", "Bearer owner").header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream").header("mcp-protocol-version", "2025-06-18");
+            if let Some(session) = session { req = req.header("mcp-session-id", session); }
+            let mut req = req.body(Body::from(body.to_string())).unwrap();
+            req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5000))));
+            svc.clone().oneshot(req)
+        };
+        let init = post(None, json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+            "params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}})).await.unwrap();
+        let session = init.headers()["mcp-session-id"].to_str().unwrap().to_owned();
+        assert!(post(Some(&session), json!({"jsonrpc":"2.0","method":"notifications/initialized"})).await.unwrap().status().is_success());
+        let response = post(Some(&session), json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"who_am_i","arguments":{"private":"fixture_secret"}}})).await.unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&body).contains("isError"));
+        assert!(st.counting().unwrap().counters().iter().all(|counter| counter.event != "mcp_tool"));
+    }
+
     /// A tool que demora mais que a ociosidade padrão do SDK (5 min) ainda responde na mesma sessão:
     /// a sessão só fecha depois de 30 min parada, como no Python.
     #[tokio::test(start_paused = true)]
@@ -264,7 +328,7 @@ mod tests {
 
 /// O bearer do dono, conferido antes do servidor MCP, e só de quem está nesta máquina (o celular e os
 /// peers usam a API normal).
-async fn gate(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Response {
+async fn gate(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request, next: Next) -> Response {
     let (client_ip, _) = st.cfg.trusted.resolve(peer.ip(), req.headers());
     if !client_ip.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()) {
         return (StatusCode::FORBIDDEN, [("content-type", "application/json")], r#"{"detail":"so na maquina do backend"}"#).into_response();
@@ -274,5 +338,6 @@ async fn gate(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<So
     if token.is_empty() || owner.is_empty() || !bool::from(token.ct_eq(owner)) {
         return (StatusCode::UNAUTHORIZED, [("content-type", "application/json")], r#"{"detail":"unauthorized"}"#).into_response();
     }
+    if !crate::telemetry_routes::guest(&req) { req.extensions_mut().insert(OwnerTransport); }
     next.run(req).await
 }

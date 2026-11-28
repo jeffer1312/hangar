@@ -133,11 +133,11 @@ pub fn sandboxed(prefix: &[String], command: &[String], windows: bool) -> Vec<St
 /// O que só a sessão põe (ou a configuração do servidor, relida na abertura) e o que é
 /// segredo do servidor. Servidor tmux subido de dentro de outra sessão teria os dela; o pane sai sem
 /// os que esta não pôs por `-e`. As do motor são as que o `hangar-engine` exporta (`engines.env_de`).
-pub const NOT_INHERITED: [&str; 48] = [
+pub const NOT_INHERITED: [&str; 49] = [
     "CLAUDE_CODE_SUBAGENT_MODEL", super::claude::CODE_MODE_ENV, "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS", "HANGAR_PLUGIN_URL", "HANGAR_PLUGIN_TOKEN",
     "HANGAR_CLAUDE_SETTINGS", "HANGAR_JEV", "TYPESAFE_API_KEY", "JEV_ENDPOINT", "JEV_MODEL",
     "JEV_TEXTO_BASE_URL", "JEV_TEXTO_API_KEY", "JEV_TEXTO_MODELO", "JEV_TEXTO_CMD",
-    "JEV_AUX_BASE_URL", "JEV_AUX_API_KEY", "JEV_AUX_MODELO", "JEV_AUX_ESFORCO",
+    "JEV_AUX_BASE_URL", "JEV_AUX_API_KEY", "JEV_AUX_MODELO", "JEV_AUX_ESFORCO", "JEV_AUX_MODE",
     "CP_ENGINE", "CP_ENGINE_ACCOUNT", "CP_ENGINE_BINDING", "CP_ENGINE_CREDENTIAL_ID", "CP_ENGINE_ACCOUNT_BASE_URL", "CP_ENGINE_SERVICE_TIER",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "HANGAR_ORQ_READ_ONLY", "HANGAR_CANO_KEY", "HANGAR_CANO_OWNER",
     "CP_PI_SESSION", "OMP_PROFILE",

@@ -194,6 +194,24 @@ async fn pair_delivers_protocol_only_to_newcomers() {
     assert_eq!(input_hits(&srv.sink,&["s0", "s1", "s2"]), [1, 1, 1], "veterano não é acordado");
 }
 
+/// O pai que sai pelo `DELETE /pair` deixa a filha ligada sem pai como no fechamento: ela ganha a marca de órfã.
+#[tokio::test(flavor = "multi_thread")]
+async fn unpairing_a_parent_marks_its_linked_child_orphan() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = server(dir.path(), 3).await;
+    let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"peer": "s1", "link": true})), OWNER).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = call(srv.addr, "POST", "s2/pair", Some(&json!({"peer": "s0"})), OWNER).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = call(srv.addr, "DELETE", "s0/pair", None, OWNER).await;
+    assert_eq!((status, &body["warning"]), (200, &Value::Null), "{body}");
+    let marks = hangar_delegation::orphans::read(&dir.path().join("hangar")).unwrap();
+    assert_eq!(marks.get("s1").map(|o| o.parent.as_str()), Some("s0"), "{marks:?}");
+    assert!(!marks.contains_key("s2") && !marks.contains_key("s0"), "só a filha ligada: {marks:?}");
+    let child: Value = serde_json::from_str(&std::fs::read_to_string(srv.pair.join("s1.json")).unwrap()).unwrap();
+    assert!(child.get("linked_by").is_none(), "sem pai no grupo: {child}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn linked_pair_marks_the_child_records_linked_at_and_sends_no_protocol() {
     let dir = tempfile::tempdir().unwrap();

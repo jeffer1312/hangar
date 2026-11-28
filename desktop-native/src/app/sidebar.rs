@@ -126,7 +126,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, Provider { label: String, request: hangar_api::session::ClaudeProviderSwitch }, DismissRename, AnotherRename, Hide, Show, Reopen, Dismiss }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, Provider { label: String, request: hangar_api::session::ClaudeProviderSwitch }, DismissRename, AnotherRename, Hide, Show, Reopen { continue_turn: bool, lifecycle: Option<String> }, AutoContinue(bool), Dismiss(Option<String>) }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -145,6 +145,8 @@ pub(super) enum SidebarReply {
     NotSaved(&'static str, String),
     /// Resposta de agrupar, sair do grupo ou sugerir a tarefa, amarrada ao número do pedido.
     Group(u64, super::grouping::GroupReply),
+    /// Fechar com as filhas: as que não fecharam, com o motivo, e os avisos do grupo das que fecharam.
+    ClosedWithChildren(Vec<(Target, Failure)>, Vec<String>),
     /// Resposta de um pedido do painel do grupo.
     Sheet(super::group_sheet::SheetReply),
     /// Identificador de uma máquina, pela chave dela.
@@ -160,6 +162,32 @@ pub(super) fn git_note(name: &str, kind: NotificationType, text: String) -> Noti
     // O título diz de qual sessão é: o gesto pode ter sido numa linha que não é a aberta.
     Notification::new().title(name.to_owned()).message(text).with_type(kind).id1::<GitNote>(SharedString::from(name.to_owned()))
 }
+
+/// As filhas ligadas de `parent`, pela regra do `linkedChildren` do core: o vínculo é um nome local, então só conta a
+/// linha da mesma máquina. Em ordem de nome.
+pub(super) fn close_children_of(lists: &[(&str, &[SessionInfo])], parent: &Target) -> Vec<Target> {
+    let mut kids: Vec<Target> = lists.iter().filter(|(server, _)| *server == parent.server)
+        .flat_map(|(server, sessions)| sessions.iter().filter(|s| s.linked_by.as_deref() == Some(parent.name.as_str()))
+            .map(move |s| Target::new(server, &s.name)))
+        .collect();
+    kids.sort_by(|a, b| a.name.cmp(&b.name));
+    kids
+}
+
+/// O texto do fechar com filhas: o de sempre e a pergunta das filhas. A novidade `filhas-ligadas` desenha o mesmo.
+pub(crate) fn close_children_text(body: String, question: String) -> Div {
+    div().flex().flex_col().gap(px(10.)).text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal()
+        .child(body).child(question)
+}
+
+/// Os botões do fechar com filhas, sem o clique: Cancelar, Fechar só esta e Fechar com as filhas.
+pub(crate) fn close_children_buttons(n: &str) -> [Button; 3] {
+    [Button::new("close-cancel").label(tr("cancel")),
+        Button::new("close-only-this").danger().label(tr_shared("session_close_only_this", &[])),
+        Button::new("close-with-children").danger().label(tr_shared("session_close_with_children", &[("n", n)]))]
+}
+
+pub(crate) fn close_children_footer(buttons: [Button; 3]) -> Div { div().flex().justify_end().gap_2().children(buttons) }
 
 /// Git no menu só com pasta num repositório: o backend manda `branch` nulo fora de um (como o web, SCM:162).
 pub(super) fn has_git(s: &SessionInfo) -> bool { s.cwd.as_deref().is_some_and(|c| !c.is_empty()) && s.branch.is_some() }
@@ -1042,19 +1070,43 @@ impl Hangar {
         self.write(target, Write::Delete, cx);
     }
 
-    /// Reabre a sessão que o sistema derrubou, com o mesmo nome e a mesma conversa; a linha volta viva pela lista.
-    pub(super) fn reopen_target(&mut self, target: Target, cx: &mut Context<Self>) {
-        if !self.sidebar.reopening.insert(target.clone()) { return; }
-        self.write(target, Write::Reopen, cx);
+    /// Fechar com as filhas: uma a uma pelo DELETE de sempre (vale em servidor antigo), as filhas antes do pai. As linhas
+    /// somem na hora; as que falharem voltam e entram num aviso só, no fim.
+    pub(super) fn delete_with_children(&mut self, parent: Target, kids: Vec<Target>, cx: &mut Context<Self>) {
+        let api = self.machine_api(&parent.server).ok_or_else(|| self.machine_error(&parent.server));
+        let order: Vec<Target> = kids.into_iter().chain(std::iter::once(parent)).collect();
+        for target in &order { self.sidebar.deleting.insert(target.clone()); }
+        let tell = self.sidebar_tell();
+        self.runtime.spawn(async move {
+            let (mut failed, mut warnings) = (Vec::new(), Vec::new());
+            for target in order {
+                let result = match &api { Ok(api) => api.act(&target.name, &[], None, true, 30).await, Err(reason) => Err(Failure::local(reason.clone())) };
+                match result {
+                    Ok(value) => warnings.extend(value.get("warning").filter(|w| !w.is_null()).map(crate::api::warning_text)),
+                    Err(error) => failed.push((target, error)),
+                }
+            }
+            tell.send(SidebarReply::ClosedWithChildren(failed, warnings)).await;
+        });
+        cx.notify();
     }
 
-    /// Tira a caída da lista pela rota própria: se o nome já voltou vivo (menu aberto sobre a linha velha), o
-    /// servidor recusa em vez de fechar a sessão. Durante a reabertura da mesma sessão, não manda nada.
-    pub(super) fn dismiss_target(&mut self, target: Target, cx: &mut Context<Self>) {
+    /// Reabre a sessão que o sistema derrubou, com o mesmo nome e a mesma conversa; a linha volta viva pela lista.
+    /// `continue_turn`: o "Reabrir e continuar", que manda o turno cortado seguir, uma vez por queda (o servidor confere).
+    /// `lifecycle`: a vida que a linha mostrava; o servidor recusa outra.
+    pub(super) fn reopen_with(&mut self, target: Target, continue_turn: bool, lifecycle: Option<String>, cx: &mut Context<Self>) {
+        if !self.sidebar.reopening.insert(target.clone()) { return; }
+        self.write(target, Write::Reopen { continue_turn, lifecycle }, cx);
+    }
+
+    /// A rota própria não dispensa uma vida diferente da que a linha mostrava.
+    pub(super) fn dismiss_target(&mut self, target: Target, lifecycle: Option<String>, cx: &mut Context<Self>) {
         if self.sidebar.reopening.contains(&target) { return; }
-        self.sidebar.deleting.insert(target.clone());
-        self.sidebar.dismissing.insert(target.clone());
-        self.write(target, Write::Dismiss, cx);
+        if lifecycle.is_none() {
+            self.sidebar.deleting.insert(target.clone());
+            self.sidebar.dismissing.insert(target.clone());
+        }
+        self.write(target, Write::Dismiss(lifecycle), cx);
     }
 
     fn write(&mut self, target: Target, what: Write, cx: &mut Context<Self>) {
@@ -1082,8 +1134,16 @@ impl Hangar {
                 Write::Show => api.server_send(reqwest::Method::DELETE, &["sessions", name.as_str(), "hidden"], None, 15).await,
                 Write::Mode(terminal) => api.act(name, &["modo-execucao"], Some(json!({"terminal": terminal})), false, crate::api::REOPEN_SECONDS).await,
                 Write::Reload => api.act(name, &["recarregar"], None, false, crate::api::REOPEN_SECONDS).await,
-                Write::Reopen => api.act(name, &["reopen"], None, false, crate::api::REOPEN_SECONDS).await,
-                Write::Dismiss => api.act(name, &["dismiss"], None, false, 15).await,
+                Write::Reopen { continue_turn, lifecycle } => {
+                    let mut query: Vec<(&str, &str)> = Vec::new();
+                    if let Some(id) = lifecycle.as_deref() { query.push(("lifecycle_id", id)); }
+                    if *continue_turn { query.push(("continue", "1")); }
+                    api.request_query(name, reqwest::Method::POST, &["reopen"], &query, None, crate::api::REOPEN_SECONDS).await
+                }
+                // A linha muda quando a lista seguinte trouxer o `auto_continue_off` novo.
+                Write::AutoContinue(enabled) => api.server_send(reqwest::Method::PUT, &["sessions", name.as_str(), "auto-continue"],
+                    Some(json!({"enabled": enabled})), 15).await,
+                Write::Dismiss(life) => api.request(name, reqwest::Method::POST, &["dismiss"], life.as_deref().map(|id| ("lifecycle_id", id)), None, 15).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
                 Write::Provider { request, .. } => api.act(name, &["engine", "provider"], Some(json!(request)), false, crate::api::REOPEN_SECONDS).await,
             };
@@ -1386,26 +1446,53 @@ impl Hangar {
         // Fechar a ponta de um par externo desfaz o par para o grupo inteiro: a confirmação diz.
         let body = std::iter::once(target.name.clone())
             .chain(self.anchored_owners(&target).iter().map(|dono| tr_shared("pair_undo_anchor_body", &[("dono", dono)]))).collect::<Vec<_>>().join("\n\n");
+        let kids: Vec<Target> = close_children_of(&[(target.server.as_str(), self.sessions_of(&target.server))], &target)
+            .into_iter().filter(|kid| !self.sidebar.deleting.contains(kid)).collect();
+        if !kids.is_empty() { self.confirm_delete_with_children(target, kids, body, window, cx); return; }
         chrome::confirm_alert(window, cx, tr("sidebar_close_title"), body, tr("sidebar_close"), ButtonVariant::Danger,
-            move |window, cx| { let _ = this.update(cx, |this, cx| {
-                    // A linha some na hora e volta se o servidor recusar; sem conexão nada sai, ela não some e o motivo aparece.
-                    if this.machine_api(&target.server).is_none() {
-                        window.push_notification(Notification::error(tr("sidebar_close_failed").replace("{n}", &this.machine_error(&target.server))), cx);
-                        return;
-                    }
-                    this.delete_target(target.clone(), cx);
-                    // O Confirm fecha com animação e só então devolve o foco à linha, que já sumiu: passado esse prazo, a raiz
-                    // o recebe (`fallbackFocus` do web). Se a linha voltou (o servidor recusou), o foco fica nela.
-                    let target = target.clone();
-                    cx.spawn_in(window, async move |this, cx| {
-                        cx.background_executor().timer(*dialog::ANIMATION_DURATION + Duration::from_millis(50)).await;
-                        let _ = this.update_in(cx, |this, window, cx| {
-                            let gone = this.sidebar.deleting.contains(&target) || this.target_session(&target).is_none();
-                            let on_row = this.row_focus(&target).is_some_and(|f| f.is_focused(window));
-                            if gone && (on_row || window.focused(cx).is_none()) { this.root_focus.focus(window, cx); }
-                        });
-                    }).detach();
-                }); true });
+            move |window, cx| { let _ = this.update(cx, |this, cx| this.close_confirmed(target.clone(), Vec::new(), window, cx)); true });
+    }
+
+    /// Pai com filhas ligadas abertas: fechar só ele (elas param e ficam, sem pai) ou junto com elas.
+    fn confirm_delete_with_children(&mut self, target: Target, kids: Vec<Target>, body: String, window: &mut Window, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let n = kids.len().to_string();
+        let question = tr_shared("session_close_children_question", &[("name", &target.name), ("n", &n)]);
+        window.open_dialog(cx, move |dialog, _, _| {
+            let run = |button: Button, with: bool| {
+                let (weak, target, kids) = (weak.clone(), target.clone(), kids.clone());
+                button.on_click(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    let kids = if with { kids.clone() } else { Vec::new() };
+                    let _ = weak.update(cx, |this, cx| this.close_confirmed(target.clone(), kids, window, cx));
+                })
+            };
+            let [cancel, only_this, with_children] = close_children_buttons(&n);
+            popup::dialog(dialog).w(px(420.)).title(tr("sidebar_close_title"))
+                .child(close_children_text(body.clone(), question.clone()))
+                .footer(close_children_footer([cancel.on_click(|_, window, cx| window.close_dialog(cx)), run(only_this, false), run(with_children, true)]))
+                .on_ok(enter_to_focused)
+        });
+    }
+
+    /// O fechar já confirmado, com as filhas escolhidas (vazio = só a linha).
+    fn close_confirmed(&mut self, target: Target, kids: Vec<Target>, window: &mut Window, cx: &mut Context<Self>) {
+        // A linha some na hora e volta se o servidor recusar; sem conexão nada sai, ela não some e o motivo aparece.
+        if self.machine_api(&target.server).is_none() {
+            window.push_notification(Notification::error(tr("sidebar_close_failed").replace("{n}", &self.machine_error(&target.server))), cx);
+            return;
+        }
+        if kids.is_empty() { self.delete_target(target.clone(), cx); } else { self.delete_with_children(target.clone(), kids, cx); }
+        // O Confirm fecha com animação e só então devolve o foco à linha, que já sumiu: passado esse prazo, a raiz
+        // o recebe (`fallbackFocus` do web). Se a linha voltou (o servidor recusou), o foco fica nela.
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(*dialog::ANIMATION_DURATION + Duration::from_millis(50)).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let gone = this.sidebar.deleting.contains(&target) || this.target_session(&target).is_none();
+                let on_row = this.row_focus(&target).is_some_and(|f| f.is_focused(window));
+                if gone && (on_row || window.focused(cx).is_none()) { this.root_focus.focus(window, cx); }
+            });
+        }).detach();
     }
 
     pub(super) fn receive_sidebar(&mut self, reply: SidebarReply, window: &mut Window, cx: &mut Context<Self>) {
@@ -1450,6 +1537,15 @@ impl Hangar {
                 window.push_notification(Notification::error(tr(key).replace("{names}", &names.join(", "))), cx);
             }
             SidebarReply::Group(seq, reply) => self.receive_group(seq, reply, window, cx),
+            SidebarReply::ClosedWithChildren(failed, warnings) => {
+                for (target, _) in &failed { self.sidebar.deleting.remove(target); }
+                if !failed.is_empty() {
+                    let names: Vec<String> = failed.iter().map(|(t, error)| format!("{} ({})", t.name, Self::fetch_failure(error))).collect();
+                    window.push_notification(Notification::error(tr_shared("session_close_children_failed", &[("names", &names.join(", "))])), cx);
+                }
+                if !warnings.is_empty() { window.push_notification(Notification::warning(warnings.join("\n")), cx); }
+                cx.notify();
+            }
             SidebarReply::Sheet(reply) => self.receive_sheet(reply, window, cx),
             SidebarReply::Identity(key, result) => self.receive_identity(key, result, window, cx),
             SidebarReply::AutoHide(reply) => self.receive_auto_hide(reply, window, cx),
@@ -1580,12 +1676,20 @@ impl Hangar {
                         self.sidebar.deleting.remove(&target);
                         Some(Notification::error(failed("sidebar_close_failed", &error)))
                     }
-                    (Write::Reopen, result) => {
+                    (Write::Reopen { continue_turn, .. }, result) => {
                         self.sidebar.reopening.remove(&target);
-                        result.err().map(|error| Notification::error(format!("{}: {}", tr("session_reopen"), Self::fetch_failure(&error))))
+                        let label = if *continue_turn { tr_shared("session_reopen_continue", &[]) } else { tr("session_reopen") };
+                        match result {
+                            // Reabriu, mas o continue não saiu: o motivo aparece, a sessão já está de pé.
+                            Ok(value) => reopen_continue_refused(&value).map(Notification::warning),
+                            Err(error) => Some(Notification::error(format!("{label}: {}", Self::fetch_failure(&error)))),
+                        }
                     }
-                    (Write::Dismiss, Ok(_)) => None,
-                    (Write::Dismiss, Err(error)) => {
+                    (Write::AutoContinue(_), Ok(_)) => None,
+                    (Write::AutoContinue(_), Err(error)) =>
+                        Some(Notification::error(tr_shared("auto_continue_toggle_failed", &[("why", &Self::fetch_failure(&error))]))),
+                    (Write::Dismiss(_), Ok(_)) => None,
+                    (Write::Dismiss(_), Err(error)) => {
                         self.sidebar.deleting.remove(&target);
                         self.sidebar.dismissing.remove(&target);
                         Some(Notification::error(format!("{}: {}", tr("session_dismiss"), Self::fetch_failure(&error))))
@@ -1837,19 +1941,24 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
     // No convite o item de fechar vira "Parar de acompanhar": sai só deste aparelho, nunca fecha a sessão do dono. Com o convite
     // como servidor ativo ele não sai daqui (a troca de ativo é das configurações).
     let label = exit_label(session, invite);
-    // A caída não tem processo a fechar: Dispensar só tira a linha, sem a confirmação do Fechar.
     let fell = !invite && fallen(session);
     let busy = fell && hangar.upgrade().is_some_and(|e| e.read(cx).sidebar.reopening.contains(target));
     let close = {
-        let (hangar, target) = (hangar.clone(), target.clone());
+        let (hangar, target, life) = (hangar.clone(), target.clone(), session.lifecycle_id.clone());
         PopupMenuItem::element(move |_, _| div().text_color(theme::danger()).child(label.clone())).disabled((invite && access.active) || busy)
-            .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| if fell { this.dismiss_target(target.clone(), cx) } else { this.close_target(target.clone(), window, cx) }); })
+            .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| if fell { this.dismiss_target(target.clone(), life.clone(), cx) } else { this.close_target(target.clone(), window, cx) }); })
     };
-    let reopen = fell.then(|| {
-        let label = if busy { format!("{}…", tr("session_reopen")) } else { tr("session_reopen") };
-        let (hangar, target) = (hangar.clone(), target.clone());
+    let reopens: Vec<PopupMenuItem> = if invite { &[][..] } else { reopen_choices(session) }.iter().map(|choice| {
+        let label = if busy { format!("{}…", choice.label()) } else { choice.label() };
+        let (hangar, target, continue_turn, life) = (hangar.clone(), target.clone(), choice.continues(), session.lifecycle_id.clone());
         PopupMenuItem::new(label).disabled(busy)
-            .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.reopen_target(target.clone(), cx)); })
+            .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.reopen_with(target.clone(), continue_turn, life.clone(), cx)); })
+    }).collect();
+    // O ✓ é o que vale na sessão; o clique grava o contrário e a linha seguinte da lista traz a marca nova.
+    let auto_continue = (!fell && auto_continue_offered(session)).then(|| {
+        let (hangar, target, on) = (hangar.clone(), target.clone(), !session.auto_continue_off);
+        PopupMenuItem::new(tr_shared("auto_continue_toggle", &[])).checked(on)
+            .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.write(target.clone(), Write::AutoContinue(!on), cx)); })
     });
     let pairs = session.outside_pairs().into_owned();
     let (undo_weak, undo_target) = (hangar.clone(), target.clone());
@@ -1917,6 +2026,7 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
             .separator()
             .when_some(mode, |menu, mode| menu.item(mode))
             .when_some(reload, |menu, reload| menu.item(reload))
+            .when_some(auto_continue, |menu, auto_continue| menu.item(auto_continue))
             .submenu(tr("sidebar_baton"), window, cx, move |menu, window, cx| {
                 let (hangar, target, cwd) = (baton_weak.clone(), baton_target.clone(), baton_cwd.clone());
                 let menu = menu_style(menu).min_w(px(200.)).item(PopupMenuItem::new(tr("sidebar_baton_summary")).on_click(move |_, window, cx| {
@@ -1932,13 +2042,39 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
                 menu.when(shows, |menu| menu.submenu(tr("sidebar_same"), window, cx, move |menu, window, cx| accounts_menu(menu, &weak, &target, idle, window, cx)))
             }))
         .separator()
-        .when_some(reopen, |menu, reopen| menu.item(reopen))
+        .map(|menu| reopens.into_iter().fold(menu, |menu, reopen| menu.item(reopen)))
         .item(close)
 }
 
 /// Sessão de terminal que o sistema derrubou (falta de memória ou queda): a linha fica para reabrir ou dispensar.
 pub(super) fn fallen(session: &SessionInfo) -> bool {
     session.state == "dead" && matches!(session.problema.as_deref(), Some("terminal_out_of_memory" | "terminal_died"))
+}
+
+/// O continuar sozinho depois de queda passageira vale para Claude e Codex.
+fn auto_continue_offered(session: &SessionInfo) -> bool { matches!(session.provider.as_str(), "claude" | "codex") }
+
+/// Os jeitos de reabrir a caída: o Reabrir e o "Reabrir e continuar", que manda o turno cortado seguir.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReopenChoice { Reopen, ReopenAndContinue }
+
+impl ReopenChoice {
+    pub(super) fn label(self) -> String {
+        match self { Self::Reopen => tr("session_reopen"), Self::ReopenAndContinue => tr_shared("session_reopen_continue", &[]) }
+    }
+
+    pub(super) fn continues(self) -> bool { self == Self::ReopenAndContinue }
+}
+
+pub(super) fn reopen_choices(session: &SessionInfo) -> &'static [ReopenChoice] {
+    if fallen(session) { &[ReopenChoice::Reopen, ReopenChoice::ReopenAndContinue] } else { &[] }
+}
+
+/// O "Reabrir e continuar" reabriu, mas o continue não saiu (`continued: false` com `code`): o motivo, com a frase do teto.
+fn reopen_continue_refused(value: &Value) -> Option<String> {
+    if value.get("continued").and_then(Value::as_bool) != Some(false) { return None; }
+    let code = value.get("code").and_then(Value::as_str).unwrap_or_default();
+    Some(super::auto_continue_capped_text(code).unwrap_or_else(|| tr_shared("session_reopen_continue_failed", &[("code", code)])))
 }
 
 /// O item que tira a linha da lista: o convite para de acompanhar; a caída é só dispensada.
@@ -2258,6 +2394,7 @@ impl Hangar {
         if questions > 0 { tip.push_str(&format!(" · ? {questions}")); }
         // O trilho não tem largura para o selo: a marca vai na dica e no que o leitor de tela diz.
         if session.asleep { tip.push_str(&format!(" · {}", tr_shared("session_asleep_badge", &[]))); }
+        if let Some(parent) = &session.orphaned_from { tip.push_str(&format!(" · {}", tr_shared("session_orphaned_from", &[("name", parent)]))); }
         if session.orq() { tip.push_str(&format!(" · {}", tr_shared("orq_row_badge", &[]))); }
         if let Some((text, _)) = self.work_review_badge(&target.server, &session.name) { tip.push_str(&format!(" · {text}")); }
         let status = self.nav_avatar(format!("rail-mark-{row_key}"), session_look(&session), 24.);
@@ -2312,6 +2449,19 @@ mod tests {
     }
 
     #[test]
+    fn close_children_of_counts_only_linked_children_of_the_same_server() {
+        use super::{Target, close_children_of};
+        let row = |name: &str, parent: Option<&str>| SessionInfo { name: name.into(), linked_by: parent.map(str::to_owned), ..Default::default() };
+        let nb = vec![row("pai", None), row("filha-b", Some("pai")), row("filha-a", Some("pai")), row("neta", Some("filha-a")), row("outra", None)];
+        let dp = vec![row("pai", None), row("filha-de-la", Some("pai"))];
+        let lists = [("nb", nb.as_slice()), ("dp", dp.as_slice())];
+        assert_eq!(close_children_of(&lists, &Target::new("nb", "pai")), vec![Target::new("nb", "filha-a"), Target::new("nb", "filha-b")],
+            "só as filhas diretas, da mesma máquina, por nome");
+        assert_eq!(close_children_of(&lists, &Target::new("dp", "pai")), vec![Target::new("dp", "filha-de-la")]);
+        assert!(close_children_of(&lists, &Target::new("nb", "outra")).is_empty(), "sem filhas, nada");
+    }
+
+    #[test]
     fn outside_session_menu_leaves_the_pair_and_never_closes() {
         use super::{MenuExit, menu_exit};
         use crate::api::dto::OutsideMark;
@@ -2341,6 +2491,33 @@ mod tests {
         }
         // No convite a sessão é do dono: segue "Parar de acompanhar".
         assert_eq!(exit_label(&row("dead", Some("terminal_died")), true), crate::i18n::tr_shared("convite_parar", &[]));
+    }
+
+    #[test]
+    fn auto_continue_oom_row_offers_reopen_and_continue() {
+        use super::{ReopenChoice, auto_continue_offered, reopen_choices, reopen_continue_refused};
+        crate::i18n::english_in_this_thread(false);
+        let row = |state: &str, problema: Option<&str>| SessionInfo { name: "s".into(), provider: "claude".into(), state: state.into(),
+            problema: problema.map(Into::into), ..Default::default() };
+        for code in ["terminal_out_of_memory", "terminal_died"] {
+            assert_eq!(reopen_choices(&row("dead", Some(code))), [ReopenChoice::Reopen, ReopenChoice::ReopenAndContinue], "{code}");
+        }
+        assert_eq!(ReopenChoice::ReopenAndContinue.label(), "Reabrir e continuar");
+        assert!(ReopenChoice::ReopenAndContinue.continues() && !ReopenChoice::Reopen.continues());
+        for other in [row("dead", Some("headless_processo_caiu")), row("dead", None), row("idle", Some("terminal_died"))] {
+            assert!(reopen_choices(&other).is_empty(), "sem queda do sistema não há o que reabrir");
+        }
+        // O interruptor do continuar sozinho vale para Claude e Codex.
+        assert!(auto_continue_offered(&row("idle", None)));
+        assert!(auto_continue_offered(&SessionInfo { provider: "codex".into(), ..row("idle", None) }));
+        assert!(!auto_continue_offered(&SessionInfo { provider: "pi".into(), ..row("idle", None) }));
+        // Reabriu, mas o continue não saiu: o teto tem a frase dele; outro motivo leva o código.
+        assert_eq!(reopen_continue_refused(&serde_json::json!({"ok": true, "continued": true})), None);
+        assert_eq!(reopen_continue_refused(&serde_json::json!({"ok": true})), None, "Reabrir sem continuar");
+        assert_eq!(reopen_continue_refused(&serde_json::json!({"ok": true, "continued": false, "code": "auto_continue_capped:once"})).as_deref(),
+            Some("Já continuei sozinho depois deste mesmo aviso e parei para não virar laço. Mande uma mensagem para seguir."));
+        assert_eq!(reopen_continue_refused(&serde_json::json!({"ok": true, "continued": false, "code": "erro_envio_falhou"})).as_deref(),
+            Some("A sessão reabriu, mas o turno não continuou (erro_envio_falhou)."));
     }
 
     #[test]

@@ -41,6 +41,8 @@ pub struct AccountMachine {
 enum Failure {
     Unreachable,
     Refused(u16),
+    /// O serviço não fala por uma máquina que a conta não liberou: `this` é esta, senão a outra.
+    NotReleased { this: bool, revoked: bool },
     /// A outra máquina respondeu `connect_store_failed`: esperar não conserta o disco dela.
     Store,
     Invalid,
@@ -51,10 +53,23 @@ impl Failure {
         match self {
             Failure::Unreachable => ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_unreachable", format!("{who} não respondeu")),
             Failure::Refused(status) => ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_refused", format!("{who} recusou o pedido (HTTP {status})")),
+            Failure::NotReleased { this, revoked } => not_released(*this, *revoked),
             Failure::Store => ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_store_failed", format!("{who} não conseguiu gravar os aparelhos dela")),
             Failure::Invalid => ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_invalid", format!("{who} devolveu uma resposta inválida")),
         }
     }
+}
+
+fn not_released(this: bool, revoked: bool) -> ConnectError {
+    let (code, msg) = match (this, revoked) {
+        (true, false) => ("connect_account_machine_pending",
+            "este computador espera liberação na conta: libere-o em \"Aparelhos da conta\" num aparelho ou PC já liberado"),
+        (false, false) => ("connect_peer_pending",
+            "a outra máquina espera liberação na conta: libere-a em \"Aparelhos da conta\" num aparelho ou PC já liberado"),
+        (true, true) => ("connect_account_machine_revoked", "a conta revogou este computador: ligue-o de novo ao Connect"),
+        (false, true) => ("connect_peer_revoked", "a conta revogou a outra máquina: ligue-a de novo ao Connect"),
+    };
+    ConnectError::new(StatusCode::FORBIDDEN, code, msg)
 }
 
 const SERVICE: &str = "o serviço do Connect";
@@ -74,9 +89,18 @@ async fn fetch<T: DeserializeOwned>(request: reqwest::RequestBuilder) -> Result<
     let response = request.send().await.map_err(|_| Failure::Unreachable)?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.bytes().await.ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-        let store = body.is_some_and(|body| body["detail"]["code"] == "connect_store_failed");
-        return Err(if store { Failure::Store } else { Failure::Refused(status.as_u16()) });
+        let body = response.bytes().await.ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()).unwrap_or_default();
+        if body["detail"]["code"] == "connect_store_failed" {
+            return Err(Failure::Store);
+        }
+        // Sem o motivo do serviço a tela só diria "HTTP 403", e ninguém saberia qual máquina liberar.
+        return Err(match body["reason"].as_str() {
+            Some("device_pending") => Failure::NotReleased { this: true, revoked: false },
+            Some("machine_pending") => Failure::NotReleased { this: false, revoked: false },
+            Some("device_revoked") => Failure::NotReleased { this: true, revoked: true },
+            Some("machine_revoked") => Failure::NotReleased { this: false, revoked: true },
+            _ => Failure::Refused(status.as_u16()),
+        });
     }
     let bytes = response.bytes().await.map_err(|_| Failure::Unreachable)?;
     serde_json::from_slice(&bytes).map_err(|_| Failure::Invalid)
@@ -332,12 +356,12 @@ async fn revoke_on_peer(http: &reqwest::Client, reach: &str, device_id: &str, to
 }
 
 /// Tarefa que entra em pânico não chega ao `finish`: a linha ficaria em `Requesting`, e `begin` recusaria ligar de novo.
-fn watch_link(links: Links, id: String, link: tokio::task::JoinHandle<()>) {
+fn watch_link(links: Links, id: String, link: tokio::task::JoinHandle<()>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if link.await.is_err() {
             links.finish(&id, &Err(ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_peer_interrupted", "a ligação com a outra máquina parou no meio; ligue de novo")));
         }
-    });
+    })
 }
 
 async fn approved_token(http: &reqwest::Client, base: &str, device_id: &str, secret: &str) -> Result<String, ConnectError> {
@@ -442,6 +466,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_service_says_which_machine_the_account_has_not_released() {
+        for (body, code) in [
+            (r#"{"error":"este aparelho espera a liberação da conta","reason":"device_pending"}"#, "connect_account_machine_pending"),
+            (r#"{"error":"esta máquina espera a liberação da conta","reason":"machine_pending"}"#, "connect_peer_pending"),
+            (r#"{"error":"este aparelho perdeu o acesso","reason":"device_revoked"}"#, "connect_account_machine_revoked"),
+            (r#"{"error":"esta máquina perdeu o acesso","reason":"machine_revoked"}"#, "connect_peer_revoked"),
+            (r#"{"error":"sem permissão","reason":null}"#, "connect_peer_refused"),
+        ] {
+            let base = answering("403 Forbidden", body).await;
+            let refused = fetch::<Value>(client(LINK_TIMEOUT).unwrap().post(base)).await.unwrap_err();
+            assert_eq!(refused.error(SERVICE).code, code, "{body}");
+        }
+    }
+
+    #[tokio::test]
     async fn approved_without_a_token_is_a_lost_token() {
         let lost = polled("200 OK", r#"{"status":"approved"}"#).await.unwrap_err();
         assert_eq!(lost.code, "connect_peer_token_lost");
@@ -451,12 +490,8 @@ mod tests {
     async fn a_panic_in_the_link_ends_it_as_failed() {
         let links = Links::default();
         assert!(links.begin("pc-b"));
-        watch_link(links.clone(), "pc-b".into(), tokio::spawn(async { panic!("ligação caiu") }));
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while links.list()[0].stage != Stage::Failed {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        }).await.expect("a linha sai de `Requesting`");
+        watch_link(links.clone(), "pc-b".into(), tokio::spawn(async { panic!("ligação caiu") })).await.unwrap();
+        assert_eq!(links.list()[0].stage, Stage::Failed, "a linha sai de `Requesting`");
         assert_eq!(links.list()[0].code, Some("connect_peer_interrupted"));
         assert!(links.begin("pc-b"), "dá para ligar de novo");
     }

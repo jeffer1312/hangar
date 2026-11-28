@@ -11,6 +11,8 @@ pub(crate) struct WireFacts {
     pub alias: Option<String>,
     pub effort: Option<String>,
     pub tokens: Option<f64>,
+    pub permission: Option<String>,
+    seen_main: bool,
 }
 
 impl WireFacts {
@@ -20,7 +22,16 @@ impl WireFacts {
         if event["agentId"].as_str().is_some_and(|agent| agent != "main") {
             return;
         }
+        // O estado inicial do agente é manual; uma escolha configurada ou feita na TUI
+        // grava permission.set_mode. Modo desconhecido continua desconhecido.
+        if !self.seen_main {
+            self.seen_main = true;
+            self.permission = Some("manual".into());
+        }
         match event["type"].as_str() {
+            Some("permission.set_mode") => {
+                self.permission = event["mode"].as_str().filter(|mode| ["manual", "yolo", "auto"].contains(mode)).map(str::to_owned);
+            }
             Some("profile.bind" | "config.update") => {
                 let alias = event["modelAlias"].as_str().filter(|s| !s.is_empty());
                 let switched = alias.is_some_and(|alias| self.alias.as_deref() != Some(alias));
@@ -211,6 +222,21 @@ mod tests {
     const CONFIG: &str = "[models.\"kimi-code/k3-256k\"]\nprovider = \"managed:kimi-code\"\nmodel = \"k3-256k\"\nmax_context_size = 262144\ndisplay_name = \"K3-256k\"\n";
 
     #[test]
+    fn kimi_permissions_follow_the_main_wire_and_keep_partial_events() {
+        use std::io::Write;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("wire.jsonl");
+        std::fs::write(&path, "{\"type\":\"permission.set_mode\",\"agentId\":\"main\",\"mode\":\"auto\"}\n{\"type\":\"permission.set_mode\",\"agentId\":\"child\",\"mode\":\"manual\"}\n").unwrap();
+        let mut tail = WireTail::default();
+        assert_eq!(tail.read(&path).unwrap().permission.as_deref(), Some("auto"));
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"type\":\"permission.set_mode\",\"agentId\":\"main\",\"mode\":\"yolo\"}").unwrap();
+        assert_eq!(tail.read(&path).unwrap().permission.as_deref(), Some("auto"));
+        file.write_all(b"\n").unwrap();
+        assert_eq!(tail.read(&path).unwrap().permission.as_deref(), Some("yolo"));
+    }
+
+    #[test]
     fn wire_follows_the_main_agent_model_effort_and_context() {
         let mut facts = WireFacts::default();
         for line in [
@@ -222,7 +248,10 @@ mod tests {
         ] {
             facts.absorb(line);
         }
-        assert_eq!(facts, WireFacts { alias: Some("kimi-code/k3-256k".into()), effort: Some("max".into()), tokens: Some(21058.0) });
+        assert_eq!(facts.alias.as_deref(), Some("kimi-code/k3-256k"));
+        assert_eq!(facts.effort.as_deref(), Some("max"));
+        assert_eq!(facts.tokens, Some(21058.0));
+        assert_eq!(facts.permission.as_deref(), Some("manual"));
     }
 
     #[test]
@@ -289,7 +318,7 @@ mod tests {
 
     #[test]
     fn line_joins_model_context_and_plan_windows() {
-        let facts = WireFacts { alias: Some("kimi-code/k3-256k".into()), effort: Some("high".into()), tokens: Some(21058.0) };
+        let facts = WireFacts { alias: Some("kimi-code/k3-256k".into()), effort: Some("high".into()), tokens: Some(21058.0), ..WireFacts::default() };
         let config = CONFIG.parse::<toml::Table>().unwrap();
         let quotas = json!({"kimi:managed:kimi-code":{"cota":{"estado":"lida","janelas":[
             {"rotulo":"5h","pct":70.6,"reset_ts":1000.0 + 5880.0},

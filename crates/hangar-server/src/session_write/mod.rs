@@ -87,6 +87,12 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
         return Err(response);
     }
     let Some(runtime) = runtime else { return Err(no_runtime(req.headers())) };
+    // Sem turno não há o que parar: o Esc não acorda a adormecida nem sobe a estacionada.
+    if route == WriteRoute::Interrupt && let Some((status, body)) = control::parked_no_turn(&runtime, &name).await {
+        let mut response = json_response(status, body);
+        cors(req.headers(), response.headers_mut());
+        return Err(response);
+    }
     // A troca de agente à espera segurou a fila para o Codex: orientar ou "Enviar agora" entregaria ao Claude.
     if matches!(route, WriteRoute::Steer | WriteRoute::QueueSteer) && runtime.handoff_held(&name) {
         let mut response = json_response(StatusCode::CONFLICT, detail_body("session_transfer_busy", "a sessão está trocando de agente", json!({})));

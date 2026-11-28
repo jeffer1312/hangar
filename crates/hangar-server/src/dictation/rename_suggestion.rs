@@ -62,7 +62,8 @@ pub fn user_requests(provider: &str, jsonl: &Path) -> Result<Requests, &'static 
         let Some(text) = event.text.as_deref().filter(|t| matches!(event.kind, ChatKind::UserMsg) && !t.trim().is_empty()) else { return true };
         asked.count += 1;
         if asked.first.is_none() {
-            asked.first = Some(cut(text));
+            // A filha ligada abre pela linha de retorno, igual em todas: o nome sai do pedido.
+            asked.first = Some(cut(hangar_delegation::guidance::without_child_prefix(text)));
         } else {
             if recent.len() == RECENT { recent.pop_front(); }
             recent.push_back(cut(text));
@@ -455,6 +456,16 @@ mod tests {
             "message":{"role":"user","timestamp":1767225600000u64,"content":[{"type":"text","text":"pedido Pi"}]}});
         std::fs::write(&jsonl, format!("{pi}\n")).unwrap();
         assert_eq!(user_requests("pi", &jsonl), Ok(Requests { count: 1, first: Some("pedido Pi".into()), recent: vec![] }));
+    }
+
+    #[test]
+    fn the_first_request_of_a_linked_child_drops_the_child_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("c.jsonl");
+        let first = format!("{} revisa o parser de datas", hangar_delegation::guidance::child_prefix("pai"));
+        let line = json!({"type": "user", "uuid": "u1", "timestamp": "2026-10-04T19:11:00.000Z", "message": {"role": "user", "content": first}});
+        std::fs::write(&jsonl, format!("{line}\n")).unwrap();
+        assert_eq!(user_requests("claude", &jsonl).unwrap().first.as_deref(), Some("revisa o parser de datas"));
     }
 
     #[test]

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { canChooseSurface, contextModel, CREATE_SESSION_PROVIDERS, effortLevels, engineModelChoice, hasContext, hasExecutionMode,
-  permissionModes, SESSION_PROVIDERS } from './sessionOptions';
+  KIMI_OPEN_PERMISSION_MODES, permissionModes, SESSION_PROVIDERS } from './sessionOptions';
 
 describe('opções de abertura', () => {
+  it('Kimi oferece os modos com flag de abertura, sem inventar manual na CLI', () => {
+    expect(KIMI_OPEN_PERMISSION_MODES).toEqual(['yolo', 'auto']);
+    expect(permissionModes('kimi', false)).toEqual([]);
+  });
   it('esforço: lista fixa por provider, a do Codex vem do modelo, o Kimi não tem', () => {
     expect(effortLevels('omp', [], '')).toEqual(effortLevels('pi', [], ''));
     expect(effortLevels('kimi', [], '')).toEqual([]);

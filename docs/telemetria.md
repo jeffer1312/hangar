@@ -1,8 +1,9 @@
 # Telemetria anônima do Hangar
 
-O Hangar pode mandar, uma vez por dia, contagens de uso e de erros do próprio Hangar ao
-desenvolvedor. Serve para corrigir erro antes de alguém reclamar e saber o que melhorar. Nada é
-contado antes de você responder ao aviso, e nunca sai conversa, texto digitado, nome ou endereço.
+Com sua autorização, o Hangar envia ao desenvolvedor contagens de uso e preferências, falhas e
+passos anteriores à falha. Envia um retrato por hora e um final ao fechar o dia UTC. Não envia o
+diário bruto nem linhas genéricas de log; conversa, texto digitado, nome e endereço ficam de fora.
+Os dados recebidos ficam por 400 dias.
 
 A lista abaixo descreve o que o código faz. A fonte é
 [`crates/hangar-telemetry/src/events.rs`](../crates/hangar-telemetry/src/events.rs) (eventos e valores
@@ -21,10 +22,15 @@ Cada pacote é um dia (UTC) de uma máquina e leva:
 - `day`: o dia, sem horário;
 - `env`: versão do Hangar, commit (só em pacote de release; fora disso, `dev`), sistema,
   arquitetura e canal de atualização (`latest`, `beta` ou `other`);
-- `counters`: a lista de contadores `(evento, dimensões, faixa) → quantidade`.
+- `counters`: a lista de contadores `(evento, dimensões, faixa) → quantidade`;
+- `partial`: aparece nos retratos por hora, não no final;
+- `records`: até 200 falhas agrupadas por ação, nível, código e etapa, com primeira e última hora UTC,
+  quantidade, descrição fixa e duração em milissegundos quando conhecidas, e até 10 passos anteriores;
+- `trail`: até 5.000 passos por dia, com hora UTC, ação, nível e tela quando conhecida. Passos iguais
+  seguidos têm uma contagem só. Cortes dos registros ou da trilha entram em `diary_dropped`.
 
-Toda dimensão é um valor de uma lista fixa no código, um sim/não ou um número de versão. Valor fora
-da lista sai como `other`. Não existe campo de texto livre.
+As dimensões vêm de listas fixas, booleanos ou versões. Quando a origem foi confirmada, um rótulo
+fora da lista vira `other`; origem não confirmada fica fora. Não há texto livre no pacote.
 
 Tempo vai em faixas: `lt100ms`, `lt300ms`, `lt1s`, `lt3s`, `lt10s`, `lt30s`, `ge30s`. Nos
 eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
@@ -33,9 +39,8 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 
 | Evento | Dimensões | O que conta |
 |---|---|---|
-| `app_visible_minutes` | `client` (`ios`, `android`, `pwa`, `native`, `other`) | Minutos com o app na tela. O app avisa a cada 5 min, só ao servidor ativo; no máximo 5 min por aviso |
+| `app_visible_minutes` | `client` (`ios`, `android`) | Minutos com o Expo na tela. Só conta se o início e o fim da medida caem no período ativo e no mesmo dia UTC; no máximo 5 min por aviso ao servidor ativo |
 | `message_sent` | `provider`, `surface` (`terminal`, `headless`), `steer` (sim/não), `origin` (`person`, ou `session` quando a mensagem é recado de outra sessão) | Mensagem que você mandou pelo app ou pela API |
-| `turn_finished` (faixa) | `provider` | Turno do agente, do começo do trabalho até parar |
 | `session_opened` (faixa) | `provider`, `surface`, `model` (lista curta de modelos; motor do `engines.json` sai `engine`, nunca o nome), `effort`, `permission`, e sim/não para `restore`, `jev`, `prewarm`, `worktree` | Sessão que você abriu, com o tempo que levou. Sessão aberta por convidado não conta |
 | `feature_used` | `feature` (código da lista `FEATURE_ROUTES`, como `session.rename` ou `search`) | Ação sua que deu certo numa rota da lista. Leituras que os apps repetem sozinhos (lista, conversa, status) não contam |
 | `mcp_tool` | `tool` (nome da tool do MCP `hangar`), `error` (sim/não) | Chamada de tool do MCP `hangar` por um agente. Sessão de convidado com login não conta |
@@ -49,14 +54,10 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 
 | Evento | Dimensões | O que conta |
 |---|---|---|
-| `problem_shown` | `code` (lista de avisos de tela) | Aviso que apareceu na lista de sessões; conta quando ele aparece, não a cada atualização da lista |
-| `problem_hidden` | `code` (lista de avisos só de diagnóstico) | Aviso que o Hangar tirou da tela por ser só diagnóstico; no máximo um por minuto por sessão e código |
 | `session_open_failed` | `provider`, `code` | Sessão que você pediu e não abriu, também a recusada antes de começar (nome em uso, pasta fora do permitido, worktree) |
 | `send_failed` | `code` | Mensagem recusada |
-| `session_fallen` | `cause` (`terminal_out_of_memory`, `terminal_died`) | Sessão com terminal que caiu |
-| `server_exit` | `kind` (`crash`, `update`, `requested`), `cause` | Como o servidor anterior parou; contado na subida seguinte |
-| `limit_switch` | `code` | Troca de conta pelo limite de uso: trocou, ficou ou falhou |
-| `client_fatal` | `client`, `code` (tipo do erro, como `typeerror`, ou `panic` no desktop) | Queda do app. O texto do erro nunca sai |
+| `client_fatal` | `client`, `code` (tipo do erro, como `typeerror`) | Queda do app com horário comprovado. O texto do erro nunca sai |
+| `diary_dropped` | `part` (`records`, `trail`) | Registros e passos fora dos tetos do formato ou do tamanho em bytes |
 
 ### Atualização
 
@@ -75,43 +76,123 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 | `server_startup` (faixa) | — | Tempo de subida do servidor |
 | `chat_open` (faixa) | `client` | Tempo para abrir uma conversa |
 
-## O que nunca sai
+### Preferências
 
-Texto de mensagem e de comando, nome de sessão, pasta, repositório, branch, conta, e-mail, nome da
-máquina, endereço e IP, user-agent, detalhe e texto de erro, nome de skill, nome de motor, tokens e
-custo, modelo do aparelho, horário dentro do dia, multiplexador.
+Uma vez por dia (UTC), com o aceite do escopo 3, o servidor conta as preferências dele, e o app do PC
+e o do celular mandam ao servidor ativo (nunca a um convite) o retrato das preferências daquele
+aparelho. O mesmo aceite da opção B cobre esse retrato: não há segundo aviso. O servidor confirma o
+retrato do app em `POST /api/telemetry`, fora do diário. Só aceita o período de coleta ativo e uma
+captura do dia UTC da chegada, com até um minuto de diferença para o futuro. Envio atrasado não ocupa
+a vaga do dia nem reabre pacote fechado. Cada par vira um contador `settings` com `client`
+(`native`, `ios`, `android` ou `server`), `setting` e `value`. O servidor conta no máximo um
+retrato por dia de cada app e aparelho: o app manda junto o id aleatório que já guarda para as
+novidades da atualização. A marca do aparelho e os contadores são gravados juntos no arquivo local do
+dia antes da confirmação; o id não entra no pacote. Preferência fora da tabela é descartada; valor
+fora da lista sai `other`. Nome de fonte, cor escolhida, modelo e qualquer número não saem.
 
-O que convidado faz (porta de convidado, convite, par, login de convidado) não conta: mensagem,
-sessão aberta ou que não abriu, tela, ação na API, evento do app dele e tool do MCP na sessão dele ficam fora.
-Fim de turno, erros, quedas e troca por limite contam para todas as sessões da máquina, sem dizer de quem é a sessão.
+As contagens de preferências são por máquina servidora, não por pessoa nem por aparelho único: cada
+servidor manda no próprio pacote os retratos que contou. Tanto o celular quanto o desktop podem
+mandar uma vez por dia a cada máquina que ficou ativa naquele aparelho, desde que ela tenha aceitado
+o aviso. Se um celular ou PC alternar entre três máquinas no mesmo dia, pode aparecer nas três.
+
+| `setting` | Valores | De onde |
+|---|---|---|
+| `theme` | `auto`, `light`, `dark`, `desktop` | PC, celular (`system` do celular sai `auto`) |
+| `panels` | `attached`, `floating` | PC |
+| `palette` | `classic`, `neutral` | PC, celular |
+| `background` | `plain`, `texture`, `aurora`, `image`, `desktop` | PC, celular (o liso do celular sai `plain`; o fundo com luz do PC sai `aurora`) |
+| `background_effect` | `none`, `dither`, `ascii`, `halftone`, `scanlines` | PC, celular |
+| `wallpaper` | `window`, `glass` | PC |
+| `surface_material` | `glass`, `opaque` | PC |
+| `reading` | `auto`, `none`, `text`, `sheet` | PC, celular |
+| `font` | `system`, `mono`, `custom` (outra fonte instalada; o nome não sai) | PC |
+| `code_font` | `jetbrains_mono`, `system`, `custom` | PC |
+| `text_size` | `small`, `normal`, `large`: menor, igual ou maior que o tamanho de fábrica do app | PC, celular |
+| `compact_style` | `on`, `off`: a aparência é a do atalho "Estilo compacto" | PC |
+| `tool_look` | `classic`, `chips`, `tree`, `terminal`, `claude_desktop` | PC, celular |
+| `thinking_tools` | `none`, `search`, `all` | PC, celular |
+| `thinking_collapsed`, `task_list`, `table_chart` | `on`, `off` | PC (`task_list` e `table_chart` também no celular) |
+| `ask_highlight` | `accent`, `amber` | PC, celular |
+| `delivery` | `queue`, `direct`, `jev`, `conversation` | PC, celular |
+| `hands_free` | `on`, `off` | PC, celular |
+| `navigation` | `tabs`, `bottom_tabs`, `conversations`, `sidebar` | PC |
+| `sidebar_compact`, `tabs_full` | `on`, `off` | PC |
+| `sidebar_height` | `full`, `content` | PC |
+| `sidebar_group` | `none`, `project`, `machine` | PC |
+| `list_group` | `none`, `server`, `project` | celular |
+| `list_organize` | `sessions`, `conversations` | celular |
+| `home_screen` | `sessions`, `new_conversation` | celular |
+| `tablet_bar` | `left`, `bottom`, `top` | só tablet |
+| `language` | `system`, `pt`, `en` | PC, celular |
+| `tips` | `on`, `off` | PC |
+| `tour` | `done`, `skipped`, `none` | PC |
+| `conversation_beta`, `code_mode` | `on`, `off` (opções da tela Beta, guardadas no servidor) | servidor |
+| `default_provider` | `claude`, `codex`, `pi`, `omp`, `kimi`, `antigravity` | servidor |
+| `default_effort` | `unset`, `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` (o padrão salvo do agente padrão) | servidor |
+| `auto_report` | `on`, `off`, `unanswered` | servidor |
+| `dictation_org` | `none`, `harness`, `external_api` | servidor |
+| `dictation_provider` | `openai`, `groq`, `elevenlabs`, `whisper_cpp`, `none` (o primeiro serviço da lista; `groq` é a chave Groq antiga, sem lista) | servidor |
+| `connect`, `computer_use` | `on`, `off` | servidor |
+| `whatsapp` | `installed`, `no` | servidor |
+| `jev` | `configured`, `no` (só se há chave; a chave não sai) | servidor |
+
+O canal de atualização não entra aqui: ele já vai em `env` em todo pacote.
+
+### Falhas e trilha
+
+- Tela: só eventos recebidos com autenticação do dono e horário original dentro da coleta. O
+  servidor marca a origem em disco; um campo no corpo do cliente não muda essa decisão. O dia é
+  calculado pelo horário UTC completo da linha, não pelo nome do arquivo local.
+- HTTP: ação do catálogo de rotas e código fixo do servidor, sem URL, parâmetros nem resposta.
+- MCP: só chamadas de uma sessão identificada pela chave, comprovadamente do dono e sem convidado,
+  convite ou par de fora. Nome de ferramenta fora do catálogo vira `other`; argumentos e respostas
+  não são lidos para a coleta.
+
+O pacote não inclui texto de conversa, erro livre, saída de comando, pilha, caminhos, nomes de sessão,
+conta ou máquina, credenciais, e-mails, endereços nem conteúdo de convidado. Turnos, avisos de sessão,
+quedas sem autoria provada e ocorrências antigas sem horário comprovado ficam fora. O diário local,
+os logs e o envio manual de relatório continuam separados. O receptor preserva os lotes históricos de
+versões anteriores, que podiam trazer `logs`.
 
 ## Quando sai
 
-- Os contadores do dia ficam na memória e são gravados na fila a cada 15 min e quando o servidor
-  desliga, para não perder o dia num reinício.
-- Quando o dia (UTC) fecha, o pacote dele sai numa espera aleatória de até 1 h, para as máquinas não
-  enviarem todas no mesmo instante.
-- Sem rede ou com erro do receptor: tenta de novo depois de 1, 3 e 7 min; não deu, o dia fica na
-  fila para a rodada seguinte. Pacote recusado como malformado (400 ou 413) é apagado.
-- A fila guarda no máximo 14 dias; passando disso, sai o mais antigo.
+- A cada 15 min e no desligamento, o servidor grava os contadores e a projeção segura. Uma vez por
+  hora envia o retrato parcial do dia UTC. Um dia com só falhas ou passos também gera pacote.
+- Ao fechar o dia UTC, congela a projeção final em disco, antes do envio e da poda habitual do diário.
+  O envio final espera até 1 h de forma aleatória. Os parciais e o final usam o mesmo `batch_id`;
+  substituem o que chegou antes, sem somar, e um parcial atrasado não substitui o final.
+- Sem rede ou com erro do receptor, o final tenta de novo após 1, 3 e 7 min e segue na fila se não
+  for aceito. `400` dá baixa no lote rejeitado; `413` fica na fila com falha registrada. O corpo
+  JSON é limitado a 2 MiB, cortando detalhes antes dos contadores.
+- A fila guarda no máximo 14 arquivos de dias; passando disso, sai o mais antigo.
 
 ## Ver o que está guardado
 
-- `~/.hangar/telemetry/queue/<dia>.json`: um arquivo por dia ainda não enviado, com os contadores
-  exatamente como vão sair (o dia de hoje está lá desde a última gravação).
-- `~/.hangar/telemetry.json`: sua resposta (`consent`) e os dois números aleatórios.
-- `~/.hangar/telemetry/once.json`: marcas do que só conta uma vez (o retrato do dia, cada
-  atualização).
+- `~/.hangar/telemetry-v3/queue/<dia>.json`: contadores, projeção e ID de cada dia do escopo 3, e as
+  marcas privadas dos retratos do dia (máquinas e preferências do servidor e de cada app), gravadas
+  junto com as contagens deles. As marcas não saem no pacote.
+- `~/.hangar/telemetry.json`: escolha de B em `option_b`, período de coleta e dois números aleatórios.
+  O booleano legado `consent` permanece `false` ao aceitar B: uma reversão não autoriza logs antigos.
+  Um "sim" sem escopo ou do escopo 2 sai do arquivo na subida, e a máquina fica sem resposta.
+- `~/.hangar/telemetry-v3/once.json`: marcas do que só conta uma vez na coleta atual, como cada
+  atualização. O emissor de B nunca importa a fila nem as marcas de versões anteriores.
 
 No Windows, `~` é a pasta do seu usuário.
 
 ## Responder e mudar
 
-- Ao abrir o app (desktop nativo ou celular), o aviso "Ajudar a melhorar o Hangar" pergunta pelas
-  suas máquinas que ainda não responderam. "Pode enviar" ou "Não enviar" grava em todas elas de
-  uma vez. Fechar sem escolher não grava nada: o aviso volta na próxima abertura.
-- Para mudar depois: linha "Contagens anônimas de uso" nas Configurações da máquina.
-- "Não enviar" apaga a fila na hora.
+- Na abertura do desktop nativo e do Expo, máquinas que conhecem o mesmo aviso respondem juntas.
+  Fechar sem escolher não grava nada. O ajuste fica em "Contagens anônimas de uso" nas Configurações;
+  o "Não enviar" do aviso aberto ali também grava a recusa da máquina ainda sem resposta.
+- `GET /api/telemetry` anuncia `consent_scope: 3` e, ligada, o `snapshot_period` que os apps
+  devolvem com o retrato. Para ligar: `PUT {"consent":true,"consent_scope":3}`, que vale para a
+  opção B e para o retrato de preferências. Um sim antigo (sem escopo ou do escopo 2) não liga nada;
+  o não antigo vale. Com servidor que anuncia só o escopo 2 ou nenhum escopo, o app mostra o aviso
+  daquela versão (veja "Servidores legados"). Não há segunda tentativa sem escopo depois de uma
+  recusa. A PWA não oferece o ajuste.
+- `PUT {"consent":false}` revoga, mesmo de um cliente antigo, e apaga a fila de B e as das versões
+  anteriores (`~/.hangar/telemetry/` e `~/.hangar/telemetry-scope-2/`). O que o receptor já recebeu
+  não é apagado pela revogação.
 
 Sem resposta, nenhum contador é contado nem gravado: só existe o `telemetry.json`, com `consent: null` e
 os dois números aleatórios.
@@ -127,9 +208,9 @@ Estas opções vencem a resposta dada no app e apagam a fila:
 - Em CI desliga sozinho: `CI`, `GITHUB_ACTIONS`, `GITLAB_CI` ou `JENKINS_URL` definidas (valor
   diferente de vazio, `0` ou `false`).
 
-A mudança no `.env` vale na próxima passada de 15 min ou ao reiniciar o servidor. Com ela, a linha
-em Configurações diz que a telemetria foi desligada pelo ambiente da máquina. Se o `.env` não puder
-ser lido, a contagem para, mas a fila fica.
+O servidor relê o `.env` antes de cada envio, na gravação periódica (15 min) e ao reiniciar. A linha de
+Configurações informa se o ambiente desligou a coleta. Se o `.env` estiver ilegível, a coleta para e o
+período é invalidado: os arquivos antigos podem ficar no disco, mas não voltam a ser enviados.
 
 ## Dono de várias máquinas
 
@@ -142,6 +223,15 @@ máquina de outra pessoa no `peers.json`, as duas passam a contar como um dono s
 
 `https://telemetry.hangar.dev.br/v1/batch`, atrás do proxy da Cloudflare. O receptor é código aberto,
 em [`services/telemetry-ingest`](../services/telemetry-ingest): grava o pacote num Postgres, não lê
-IP, recusa só pacote malformado (até 64 KB) e guarda evento ou valor que ainda não conhece em vez de
+IP, limita o corpo a 2 MiB e guarda evento ou valor que ainda não conhece em vez de
 recusar. Os dados ficam 400 dias. Só o mantenedor do Hangar e quem ele convidar veem o resumo, na
 página `/panel` do mesmo receptor, com conta e senha.
+
+## Servidores legados
+
+Servidores que não anunciam `consent_scope` usam o aviso antigo: mandavam um pacote por dia com
+contagens e linhas de aviso e erro do servidor. A limpeza antiga tirava caminhos, nomes de sessão,
+contas, máquinas, e-mails, endereços, trechos entre aspas e identificadores; mesmo assim, parte do
+texto do erro podia passar. Servidores que anunciam só `consent_scope: 2` usam o aviso de preferências
+daquela versão: o mesmo pacote diário com as linhas limpas do log, mais o retrato de preferências do
+servidor e dos apps. Nenhum dos dois é o comportamento da opção B descrito acima.

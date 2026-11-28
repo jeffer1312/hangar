@@ -71,6 +71,14 @@ static ONE_WRITER: Mutex<()> = Mutex::new(());
 /// Devolve quantas linhas foram tratadas: linha descartada (teto, inválida) conta, porque a tela
 /// reenvia quando o número não bate; corpo ilegível dá 0, e o disco recusando também.
 pub fn record_screen(base: &Path, body: &[u8], now: DateTime<FixedOffset>) -> Result<usize, WriteError> {
+    record_screen_with_owner(base, body, now, None)
+}
+
+/// `owner_collection` vem do portão do servidor, nunca do corpo do cliente.
+///
+/// # Errors
+/// Devolve `WriteError` se não puder preparar a pasta. Falha no append mantém o contrato de reenvio.
+pub fn record_screen_with_owner(base: &Path, body: &[u8], now: DateTime<FixedOffset>, owner_collection: Option<&str>) -> Result<usize, WriteError> {
     let Some(batch) = parse_body(body) else { return Ok(0) };
     let batch = match batch {
         Value::Object(mut fields) => fields.shift_remove("eventos").unwrap_or(Value::Null),
@@ -78,9 +86,17 @@ pub fn record_screen(base: &Path, body: &[u8], now: DateTime<FixedOffset>) -> Re
     };
     let Value::Array(items) = batch else { return Ok(0) };
     let received = &items[..items.len().min(BATCH_MAX)];
-    let lines = received.iter().filter_map(|item| clean(item, now)).map(|mut line| {
+    let lines = received.iter().filter_map(|item| {
+        let mut line = clean(item, now)?;
         line.insert("origem".into(), json!("tela"));
-        line
+        if let Some(collection) = owner_collection && screen_exportable(item)
+            && let Some(at) = item["ts"].as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            && at <= now {
+            // O diário local pode corrigir o horário para a chegada; a coleta nunca usa esse substituto.
+            line.insert("telemetry_at".into(), json!(at.to_rfc3339()));
+            mark_telemetry(&mut line, "owner_screen", collection);
+        }
+        Some(line)
     }).collect();
     match write(base, lines, now) {
         Ok(()) => Ok(received.len()),
@@ -90,6 +106,39 @@ pub fn record_screen(base: &Path, body: &[u8], now: DateTime<FixedOffset>) -> Re
         }
         Err(error) => Err(error),
     }
+}
+
+/// A marca vinda do cliente só pode tirar uma linha da coleta. As versões antigas
+/// também redirecionavam `machines.request_failed`, sem comprovar a origem.
+pub fn screen_exportable(item: &Value) -> bool {
+    item.get("local_only").is_none_or(|value| value == &Value::Bool(false))
+        && !matches!(item["evento"].as_str(), Some("settings.snapshot" | "machines.request_failed"))
+}
+
+/// Origem de uma linha produzida pelo servidor, depois de conferir a autoria.
+#[derive(Clone, Copy)]
+pub enum OwnerAction { Http, Mcp }
+
+/// Acrescenta ao diário apenas os campos técnicos da ação, sem corpo, argumentos nem resposta.
+///
+/// # Errors
+/// Devolve `WriteError` se a pasta não puder ser preparada ou o append falhar.
+pub fn record_owner_action(base: &Path, origin: OwnerAction, collection: &str, now: DateTime<FixedOffset>,
+                           action: &str, stage: &'static str, code: Option<&str>, ms: u64) -> Result<(), WriteError> {
+    let (event, source) = match origin { OwnerAction::Http => ("http.action", "owner_http"), OwnerAction::Mcp => ("mcp.tool", "owner_mcp") };
+    let mut line = Map::from_iter([
+        ("ts".into(), json!(now.to_rfc3339())), ("origem".into(), json!("servidor")),
+        ("evento".into(), json!(event)), ("action".into(), json!(action)), ("etapa".into(), json!(stage)),
+        ("nivel".into(), json!(if code.is_some() { "erro" } else { "ok" })), ("ms".into(), json!(ms)),
+    ]);
+    if let Some(code) = code { line.insert("codigo".into(), json!(code)); }
+    mark_telemetry(&mut line, source, collection);
+    write(base, vec![line], now)
+}
+
+fn mark_telemetry(line: &mut Map<String, Value>, source: &'static str, collection: &str) {
+    line.insert("telemetry_origin".into(), json!(source));
+    line.insert("telemetry_collection".into(), json!(collection));
 }
 
 /// O `request.json()`: UTF-8 com ou sem BOM, espaço JSON em volta, surrogate solto aceito.
@@ -103,7 +152,9 @@ fn parse_body(body: &[u8]) -> Option<Value> {
 /// Uma linha da tela virando uma linha do arquivo.
 fn clean(raw: &Value, now: DateTime<FixedOffset>) -> Option<Map<String, Value>> {
     let raw = raw.as_object()?;
-    if py::strip(raw.get("evento")?.as_str()?).is_empty() {
+    let event = py::strip(raw.get("evento")?.as_str()?);
+    // O retrato é só da telemetria; confirmar o lote não exige escrevê-lo no diário geral.
+    if event.is_empty() || event == "settings.snapshot" {
         return None;
     }
     let mut out = Map::new();

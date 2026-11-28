@@ -85,6 +85,7 @@ async fn other_terminal_empty_transport_keeps_input_durably_in_the_common_queue(
         fn prove<'a>(&'a self,_:&'a OtherTarget)->futures_util::future::BoxFuture<'a,Result<bool,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async {Ok(true)})}
         fn capture<'a>(&'a self)->futures_util::future::BoxFuture<'a,Result<hangar_server::runtime::other_terminal::OtherFrame,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async {Err(hangar_server::runtime::protocol::RuntimeError::new("capture_failed","captura indisponível"))})}
         fn write<'a>(&'a self,_:&'a OtherTarget,_:&'a str,_:bool,_:Option<&'a hangar_server::runtime::other_terminal::OtherWriteGuard>)->futures_util::future::BoxFuture<'a,Result<(),hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async {panic!("captura incerta não autoriza escrever")})}
+        fn kimi_permission(&self)->futures_util::future::BoxFuture<'_,Result<Option<String>,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async {Ok(None)})}
         fn release<'a>(&'a self)->futures_util::future::BoxFuture<'a,()> {Box::pin(async {})}
     }
     let mut options=OtherOptions::new(TerminalPool::new(),inbox::Store::new(),Arc::new(SystemProcs::default()),Arc::new(InteractionStore::default()));
@@ -247,6 +248,7 @@ impl hangar_server::runtime::other_terminal::OtherIo for RecordingIo {
     fn write<'a>(&'a self,_:&'a hangar_server::runtime::other_terminal::OtherTarget,text:&'a str,literal:bool,_:Option<&'a hangar_server::runtime::other_terminal::OtherWriteGuard>)->futures_util::future::BoxFuture<'a,Result<(),hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {
         if text=="C-s" && !literal {self.tui_queue.store(false,std::sync::atomic::Ordering::SeqCst);}
         self.writes.lock().unwrap().push((text.into(),literal));Ok(())})}
+    fn kimi_permission(&self)->futures_util::future::BoxFuture<'_,Result<Option<String>,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async {Ok(None)})}
     fn release<'a>(&'a self)->futures_util::future::BoxFuture<'a,()> {Box::pin(async {})}
 }
 fn start_recording(root:&std::path::Path,provider:&str,inbox:std::sync::Arc<hangar_server::provider_models::inbox::Store>,io:std::sync::Arc<RecordingIo>)->hangar_server::runtime::other_terminal::OtherHandle {

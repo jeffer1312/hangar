@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi, installCode, type ConnectMachine, type Server } from '@hangar/core';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -37,6 +37,9 @@ let machineList: ConnectMachine[] = [];
 // Status deste aparelho (`ad1`) na conta e a lista de aparelhos dela.
 let deviceStatus = 'pending';
 let accountRows: unknown[] = [];
+// Status da remoção de computador no serviço; 204 tira o computador da lista.
+let removeStatus = 204;
+let devicesFail = false;
 // Relógio fixo: a linha calcula "pediu há" a partir dele; o pedido chegou dois minutos antes.
 const CREATED_AT = 1_794_000_000;
 const NOW = new Date((CREATED_AT + 120) * 1000);
@@ -65,6 +68,8 @@ beforeEach(async () => {
   machineList = [];
   deviceStatus = 'pending';
   accountRows = [];
+  removeStatus = 204;
+  devicesFail = false;
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input);
     if (url.origin !== CONNECT_SERVICE_URL) return json({});
@@ -72,8 +77,14 @@ beforeEach(async () => {
       if (machinesFail) throw new TypeError('network');
       return json(machineList);
     }
-    if (url.pathname === '/v1/devices') return json(accountRows);
+    if (url.pathname === '/v1/devices') return devicesFail ? json({}, 503) : json(accountRows);
     if (url.pathname === '/v1/devices/ad1') return json({ status: deviceStatus });
+    const removing = /^\/v1\/machines\/([^/]+)$/.exec(url.pathname)?.[1];
+    if (removing && init?.method === 'DELETE') {
+      if (removeStatus !== 204) return json({ error: 'eco' }, removeStatus);
+      machineList = machineList.filter((item) => item.machine_id !== removing);
+      return new Response(null, { status: 204 });
+    }
     if (init?.method === 'DELETE') return new Response(null, { status: 204 });
     return json({ status: 'approved' });
   }));
@@ -113,7 +124,7 @@ it('pendente mostra "Liberar este celular" com o código deste aparelho e não d
   const pc3Row = checkRow('pc3');
   expect(pc3Row.disabled || pc3Row.getAttribute('aria-disabled') === 'true').toBe(true);
   expect(button(m.login_guest_enter_one())).toBeUndefined();
-  expect(el.textContent).not.toContain(m.connect_account_devices());
+  expect(el.textContent).not.toContain(m.connect_devices_all());
 });
 
 it('liberado, as ligadas vêm marcadas, a desligada não marca, e Entrar pede só as marcadas', async () => {
@@ -126,7 +137,9 @@ it('liberado, as ligadas vêm marcadas, a desligada não marca, e Entrar pede s�
   await vi.waitFor(() => expect(button(m.login_guest_enter_many({ n: '2' }))).toBeTruthy());
   expect(checkRow('pc3').getAttribute('aria-checked')).toBe('true');
   expect(checkRow('pc4').getAttribute('aria-checked')).toBe('true');
-  expect(checkRow('pc5').getAttribute('aria-checked')).toBe('false');
+  // Desligada não é marcável: a linha abre o detalhe dela.
+  expect(el.querySelector('[role="checkbox"][aria-label="pc5"]')).toBeNull();
+  expect(button('pc5')).toBeTruthy();
   expect(el.textContent).toContain(m.connect_machine_off_now());
   // Nada é pedido antes do toque.
   expect(serviceCalls().some((call) => /^\/v1\/machines\/\w+\/devices$/.test(call.url.pathname))).toBe(false);
@@ -139,34 +152,130 @@ it('liberado, as ligadas vêm marcadas, a desligada não marca, e Entrar pede s�
     .map((call) => call.url.pathname)).toEqual(['/v1/machines/pc3/devices']));
 });
 
-it('o pendente da lista de aparelhos mostra o mesmo código do celular que pediu', async () => {
+it('o pedido esperando aparece no topo, com o mesmo código do celular que pediu, e sai da lista de celulares', async () => {
   deviceStatus = 'approved';
+  machinesFail = false;
+  machineList = [pc3];
   const code = installCode('b'.repeat(32));
   accountRows = [row('ad1', 'iPhone', 'approved'), { ...row('ad2', 'Pixel', 'pending'), install_code: code }];
   await render();
-  await vi.waitFor(() => expect(button('Pixel')).toBeTruthy());
-  expect(el.textContent).toContain(m.connect_account_device_asked_code({ code, when: m.tempo_min_atras({ n: 2 }) }));
+  await vi.waitFor(() => expect(button(m.connect_request_release_label({ name: 'Pixel' }))).toBeTruthy());
+  const text = el.textContent ?? '';
+  expect(text).toContain(m.connect_request_help());
+  expect(text).toContain(m.connect_request_code({ code }));
+  expect(text).toContain(m.connect_account_device_asked({ when: m.tempo_min_atras({ n: 2 }) }));
+  // Pedido antes dos computadores, e os computadores antes dos celulares.
+  const request = text.indexOf(m.connect_request_title({ name: 'Pixel' }));
+  expect(request).toBeGreaterThanOrEqual(0);
+  expect(request).toBeLessThan(text.indexOf(m.connect_computers_title()));
+  expect(text.indexOf(m.connect_computers_title())).toBeLessThan(text.indexOf(m.connect_devices_all()));
+  // O pendente não se repete como linha da lista de celulares.
+  expect(button('Pixel')).toBeUndefined();
 });
 
-it('liberado lista os aparelhos da conta, e o pendente se libera pelo alerta, com a credencial deste aparelho', async () => {
+it('Liberar no pedido confirma e libera com a credencial deste aparelho; os liberados ficam em Celulares com acesso', async () => {
   deviceStatus = 'approved';
-  accountRows = [row('ad1', 'iPhone', 'approved'), row('ad2', 'Pixel', 'pending'), row('ad3', 'Moto', 'approved'), row('ad4', 'fixture-gone', 'revoked')];
+  accountRows = [row('ad1', 'iPhone', 'approved'), row('ad2', 'Pixel', 'pending'), { ...row('ad3', 'Moto', 'approved'), approved_at: CREATED_AT },
+    row('ad4', 'fixture-gone', 'revoked')];
   let release: (() => void) | undefined;
   const { Alert } = await import('react-native');
   const alert = vi.spyOn(Alert, 'alert').mockImplementation((_t, _b, buttons) => {
-    release = (buttons as { onPress?: () => void }[] | undefined)?.[2]?.onPress;
+    release = (buttons as { text: string; onPress?: () => void }[] | undefined)?.find((b) => b.text === m.connect_account_device_release())?.onPress;
   });
   await render();
-  await vi.waitFor(() => expect(button('Pixel')).toBeTruthy());
-  expect(el.textContent).toContain(m.connect_account_device_asked({ when: m.tempo_min_atras({ n: 2 }) }));
+  await vi.waitFor(() => expect(button(m.connect_request_release_label({ name: 'Pixel' }))).toBeTruthy());
   expect(button('Moto')).toBeTruthy();
+  expect(el.textContent).toContain(m.connect_phone_released({ when: m.tempo_min_atras({ n: 2 }) }));
   expect(el.textContent).toContain('fixture-phone');
   expect(el.textContent).not.toContain('fixture-gone');
 
-  await act(async () => button('Pixel')!.click());
+  await act(async () => button(m.connect_request_release_label({ name: 'Pixel' }))!.click());
+  expect(alert.mock.calls.at(-1)![0]).toBe(m.connect_account_device_release_title({ name: 'Pixel' }));
   await act(async () => release!());
 
   await vi.waitFor(() => expect(serviceCalls().filter((call) => call.url.pathname === '/v1/devices/ad2/approve')
     .map((call) => `${call.method} ${call.device}`)).toEqual(['POST ad1']));
   alert.mockRestore();
+});
+
+it('Recusar no pedido recusa direto, com a credencial deste aparelho', async () => {
+  deviceStatus = 'approved';
+  accountRows = [row('ad1', 'iPhone', 'approved'), row('ad2', 'Pixel', 'pending')];
+  await render();
+  await vi.waitFor(() => expect(button(m.connect_request_deny_label({ name: 'Pixel' }))).toBeTruthy());
+  await act(async () => button(m.connect_request_deny_label({ name: 'Pixel' }))!.click());
+  await vi.waitFor(() => expect(serviceCalls().filter((call) => call.url.pathname === '/v1/devices/ad2')
+    .map((call) => `${call.method} ${call.device}`)).toEqual(['DELETE ad1']));
+});
+
+it('sem celular liberado, a lista de celulares diz que está vazia', async () => {
+  deviceStatus = 'approved';
+  machinesFail = false;
+  accountRows = [row('ad2', 'Pixel', 'revoked')];
+  await render();
+  await vi.waitFor(() => expect(el.textContent).toContain(m.connect_phones_empty()));
+});
+
+it('lista de celulares que falha mostra o erro e Tentar de novo, que relê', async () => {
+  deviceStatus = 'approved';
+  machinesFail = false;
+  devicesFail = true;
+  await render();
+  await vi.waitFor(() => expect(el.textContent).toContain(m.connect_error_unavailable()));
+  expect(el.textContent).not.toContain(m.connect_phones_empty());
+  devicesFail = false;
+  accountRows = [row('ad3', 'Moto', 'approved')];
+  await act(async () => button(m.mobile_machines_retry())!.click());
+  await vi.waitFor(() => expect(button('Moto')).toBeTruthy());
+  expect(button(m.mobile_machines_retry())).toBeUndefined();
+});
+
+describe('remover um computador da conta', () => {
+  const pc1: ConnectMachine = { machine_id: 'pc1', name: 'pc1', host: 'pc1.acme.hangar.dev.br', online: true };
+  let confirmRemove: (() => void) | undefined;
+  let alertTitle = '';
+  let alert: { mockRestore(): void } | undefined;
+  beforeEach(async () => {
+    deviceStatus = 'approved';
+    machinesFail = false;
+    machineList = [pc1, pc3];
+    const { Alert } = await import('react-native');
+    alert = vi.spyOn(Alert, 'alert').mockImplementation((title, _b, buttons) => {
+      alertTitle = title;
+      confirmRemove = (buttons as { text: string; onPress?: () => void }[] | undefined)?.find((b) => b.text === m.connect_computer_remove())?.onPress;
+    });
+  });
+  afterEach(() => { alert?.mockRestore(); });
+
+  async function openAndConfirm(name: string) {
+    await vi.waitFor(() => expect(button(name)).toBeTruthy());
+    await act(async () => button(name)!.click());
+    const remove = button(m.connect_computer_remove());
+    expect(remove, 'o detalhe traz Remover da conta').toBeTruthy();
+    await act(async () => remove!.click());
+    expect(alertTitle).toBe(m.connect_computer_remove_title({ name }));
+    await act(async () => confirmRemove!());
+  }
+
+  it('o toque abre o detalhe; confirmado, apaga na conta, tira o servidor deste app e relê a lista', async () => {
+    await render();
+    await openAndConfirm('pc1');
+    await vi.waitFor(() => expect(serviceCalls().filter((call) => call.method === 'DELETE' && call.url.pathname === '/v1/machines/pc1')
+      .map((call) => call.device)).toEqual(['ad1']));
+    await vi.waitFor(() => expect(useServers.getState().servers.map((server) => server.id)).toEqual(['pc2']));
+    const removedAt = serviceCalls().findIndex((call) => call.method === 'DELETE' && call.url.pathname === '/v1/machines/pc1');
+    expect(serviceCalls().slice(removedAt).some((call) => call.method === 'GET' && call.url.pathname === '/v1/machines')).toBe(true);
+    // Relida sem ele, a linha e o detalhe somem.
+    await vi.waitFor(() => expect(button('pc1')).toBeUndefined());
+    expect(button(m.connect_computer_remove())).toBeUndefined();
+  });
+
+  it('recusa do serviço aparece no detalhe e o servidor fica', async () => {
+    removeStatus = 503;
+    await render();
+    await openAndConfirm('pc1');
+    await vi.waitFor(() => expect(el.textContent).toContain(m.connect_error_unavailable()));
+    expect(useServers.getState().servers.map((server) => server.id)).toEqual(['pc1', 'pc2']);
+    expect(button(m.connect_computer_remove())).toBeTruthy();
+  });
 });

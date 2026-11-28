@@ -25,7 +25,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if matches!(path, "/mcp" | "/mcp/") { return true; }
     if *method == Method::GET && path == "/api/whoami" { return true; }
     if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/auto-report" | "/api/session-defaults" | "/api/session-options" | "/api/tags" | "/api/notice-ignores" | "/api/tour-progress" | "/api/web-ui" | "/api/session-auto-hide" | "/api/telemetry") { return true; }
-    if *method == Method::GET && path == "/api/telemetry/owner" { return true; }
+    if (*method == Method::GET && path == "/api/telemetry/owner") || (*method == Method::POST && path == "/api/telemetry") { return true; }
     if (matches!(*method, Method::GET | Method::PUT) && path == "/api/update-channel") { return true; }
     if (*method == Method::GET && path == "/api/atualizacao")
         || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
@@ -136,6 +136,10 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     }
     // Ocultar da lista (`session_visibility`): só o dono, nunca repassada.
     if matches!(*method, Method::PUT | Method::DELETE) && tail == Some("hidden") {
+        return true;
+    }
+    // Continuar sozinho depois de queda (`auto_continue`): interruptor e Cancelar, só do dono, nunca repassada.
+    if matches!(*method, Method::PUT | Method::DELETE) && tail == Some("auto-continue") {
         return true;
     }
     // A pergunta lateral do Claude, com e sem terminal, e o histórico dela.

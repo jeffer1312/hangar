@@ -522,6 +522,7 @@ impl OpenFacts for LocalFacts {
     }
 
     fn name_in_use(&self, name: &str) -> Result<bool, OpenError> {
+        if super::orphans::holds(name) { return Ok(true); }
         if self.headless_sidecar(name).exists() || self.codex_sidecar(name).exists() || self.antigravity_sidecar(name).exists() { return Ok(true); }
         // Sem resposta do multiplexador o nome não está livre: só a ausência conhecida (sem servidor ou
         // sem o programa) é "nenhum pane".

@@ -12,15 +12,20 @@
     ],
     "requires_loopback_redirect": true,
     "setup_guide": {
-      "title": "Configurar Client ID do Google Cloud para Gmail MCP",
+      "title": "Criar o acesso no Google Cloud (uma vez)",
       "steps": [
-        "No Google Cloud Console, crie ou selecione um projeto e habilite a API/MCP do Gmail para uso com agentes.",
-        "Configure a tela de consentimento OAuth: em conta pessoal (@gmail.com) use Público-alvo Externo em modo Testing; em Google Workspace use Interno para evitar expiração semanal.",
-        "Se escolheu Externo em modo Testing, acesse Público-alvo → Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail do Google antes de tentar conectar.",
-        "Crie uma credencial do tipo ID do cliente OAuth, marque a opção \"Use this client for an AI-powered agent\" (is_agentic) e adicione a URI de redirecionamento http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
-        "Copie o Client ID e o Client Secret para os campos abaixo. Atenção: em contas @gmail.com em modo Testing, o refresh token expira a cada 7 dias e exige clicar em Reconectar."
+        "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Gmail e também o serviço MCP dela (gmailmcp.googleapis.com); são duas ativações separadas.",
+        "Em Google Auth Platform → Público-alvo, escolha Externo se a conta for @gmail.com ou Interno se for Google Workspace. Em Externo, ainda em Público-alvo, use Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail.",
+        "Em Clientes, use um cliente OAuth para agentes deste projeto ou crie um Aplicativo da Web com \"Use this client for an AI-powered agent\" (is_agentic). No cliente escolhido, confira se http://127.0.0.1:<porta>/api/integrations/oauth/callback está nas URIs de redirecionamento autorizadas.",
+        "Use as credenciais do mesmo projeto já salvas no Hangar ou informe o Client ID e o Client Secret. Ao salvar, o Google pede autorização para este serviço.",
+        "Conta @gmail.com em Externo fica em modo de teste: o Google derruba a autorização a cada 7 dias e a integração pede Reconectar."
       ],
-      "docs_hint": "Google Cloud Console -> APIs e Serviços -> Credenciais -> Criar ID do cliente OAuth"
+      "docs_hint": "Google Cloud Console → Google Auth Platform → Clientes",
+      "docs_url": "https://console.cloud.google.com/auth/clients"
+    },
+    "brand": {
+      "icon": "gmail",
+      "color": "#EA4335"
     }
   },
   {
@@ -36,15 +41,20 @@
     ],
     "requires_loopback_redirect": true,
     "setup_guide": {
-      "title": "Configurar Client ID do Google Cloud para Google Drive MCP",
+      "title": "Criar o acesso no Google Cloud (uma vez)",
       "steps": [
-        "No Google Cloud Console, crie ou selecione um projeto e habilite a API/MCP do Google Drive.",
-        "Configure a tela de consentimento OAuth: em conta pessoal (@gmail.com) use Externo em modo Testing; em Google Workspace prefira Interno para não expirar semanalmente.",
-        "Se escolheu Externo em modo Testing, acesse Público-alvo → Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail do Google antes de conectar a integração.",
-        "Crie um ID do cliente OAuth marcando a opção \"Use this client for an AI-powered agent\" (is_agentic) e cadastre http://127.0.0.1:<porta>/api/integrations/oauth/callback como URI de redirecionamento autorizada.",
-        "Copie o Client ID e o Client Secret abaixo. Em contas @gmail.com em modo Testing, a autorização expira após 7 dias (use Reconectar quando solicitado). Observação: o endpoint /mcp/v1self atua diretamente na conta conectada, sem suporte a formulários interativos (elicitation)."
+        "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Google Drive e também o serviço MCP dela (drivemcp.googleapis.com); são duas ativações separadas.",
+        "Em Google Auth Platform → Público-alvo, escolha Externo se a conta for @gmail.com ou Interno se for Google Workspace. Em Externo, ainda em Público-alvo, use Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail.",
+        "Em Clientes, use um cliente OAuth para agentes deste projeto ou crie um Aplicativo da Web com \"Use this client for an AI-powered agent\" (is_agentic). No cliente escolhido, confira se http://127.0.0.1:<porta>/api/integrations/oauth/callback está nas URIs de redirecionamento autorizadas.",
+        "Use as credenciais do mesmo projeto já salvas no Hangar ou informe o Client ID e o Client Secret. Ao salvar, o Google pede autorização para este serviço.",
+        "Conta @gmail.com em Externo fica em modo de teste: o Google derruba a autorização a cada 7 dias e a integração pede Reconectar."
       ],
-      "docs_hint": "Google Cloud Console -> APIs e Serviços -> Credenciais -> Criar ID do cliente OAuth"
+      "docs_hint": "Google Cloud Console → Google Auth Platform → Clientes",
+      "docs_url": "https://console.cloud.google.com/auth/clients"
+    },
+    "brand": {
+      "icon": "googledrive",
+      "color": "#4285F4"
     }
   },
   {
@@ -60,15 +70,20 @@
     ],
     "requires_loopback_redirect": true,
     "setup_guide": {
-      "title": "Configurar Client ID do Google Cloud para Google Agenda MCP",
+      "title": "Criar o acesso no Google Cloud (uma vez)",
       "steps": [
-        "No Google Cloud Console, crie ou selecione um projeto e habilite a API/MCP do Google Calendar.",
-        "Configure a tela de consentimento OAuth: conta pessoal (@gmail.com) usa Externo em modo Testing; Google Workspace pode usar Interno.",
-        "Se escolheu Externo em modo Testing, acesse Público-alvo → Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail do Google antes de conectar a integração.",
-        "Crie um ID do cliente OAuth marcando a opção \"Use this client for an AI-powered agent\" (is_agentic) com URI de redirecionamento http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
-        "Informe o Client ID e o Client Secret abaixo. Em contas @gmail.com pessoais em modo Testing, o acesso expira a cada 7 dias e pede Reconectar. Observação: o endpoint /mcp/v1self atua diretamente na conta conectada, sem suporte a formulários interativos (elicitation)."
+        "Abra o Google Cloud Console pelo botão abaixo, escolha ou crie um projeto e ative a API do Google Calendar e também o serviço MCP dela (calendarmcp.googleapis.com); são duas ativações separadas.",
+        "Em Google Auth Platform → Público-alvo, escolha Externo se a conta for @gmail.com ou Interno se for Google Workspace. Em Externo, ainda em Público-alvo, use Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail.",
+        "Em Clientes, use um cliente OAuth para agentes deste projeto ou crie um Aplicativo da Web com \"Use this client for an AI-powered agent\" (is_agentic). No cliente escolhido, confira se http://127.0.0.1:<porta>/api/integrations/oauth/callback está nas URIs de redirecionamento autorizadas.",
+        "Use as credenciais do mesmo projeto já salvas no Hangar ou informe o Client ID e o Client Secret. Ao salvar, o Google pede autorização para este serviço.",
+        "Conta @gmail.com em Externo fica em modo de teste: o Google derruba a autorização a cada 7 dias e a integração pede Reconectar."
       ],
-      "docs_hint": "Google Cloud Console -> APIs e Serviços -> Credenciais -> Criar ID do cliente OAuth"
+      "docs_hint": "Google Cloud Console → Google Auth Platform → Clientes",
+      "docs_url": "https://console.cloud.google.com/auth/clients"
+    },
+    "brand": {
+      "icon": "googlecalendar",
+      "color": "#4285F4"
     }
   },
   {
@@ -81,7 +96,11 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "notion",
+      "color": "#000000"
+    }
   },
   {
     "id": "linear",
@@ -93,7 +112,11 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "linear",
+      "color": "#5E6AD2"
+    }
   },
   {
     "id": "slack",
@@ -106,13 +129,18 @@
     "default_scopes": [],
     "requires_loopback_redirect": true,
     "setup_guide": {
-      "title": "Configurar Slack App com suporte MCP",
+      "title": "Criar um app do Slack com MCP (uma vez)",
       "steps": [
-        "Acesse api.slack.com/apps, crie um novo App no seu workspace e habilite o suporte a MCP (is_mcp_enabled) com PKCE no manifesto.",
-        "Em OAuth & Permissions, cadastre a URI de redirecionamento http://localhost:<porta>/api/integrations/oauth/callback e adicione em User Token Scopes os escopos necessários para leitura e busca: search:read.public, search:read.private, search:read.mpim, search:read.im, channels:history, groups:history, im:history, mpim:history, channels:read e users:read.",
-        "Copie o Client ID (e Client Secret, se exigido pelo app) para os campos abaixo e conclua o login no navegador."
+        "Abra api.slack.com/apps pelo botão abaixo, crie um app no seu workspace e, no manifesto, ligue o MCP (is_mcp_enabled) e o PKCE.",
+        "Em OAuth & Permissions, adicione a URI de redirecionamento http://localhost:<porta>/api/integrations/oauth/callback e, em User Token Scopes, os escopos: search:read.public, search:read.private, search:read.mpim, search:read.im, channels:history, groups:history, im:history, mpim:history, channels:read e users:read.",
+        "Copie o Client ID (e o Client Secret, se o app tiver) para os campos abaixo e salve: o navegador abre para você autorizar."
       ],
-      "docs_hint": "api.slack.com/apps -> Basic Information & OAuth -> Redirect URLs"
+      "docs_hint": "api.slack.com/apps → OAuth & Permissions → Redirect URLs",
+      "docs_url": "https://api.slack.com/apps"
+    },
+    "brand": {
+      "icon": "slack",
+      "color": "#4A154B"
     }
   },
   {
@@ -125,7 +153,11 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "figma",
+      "color": "#F24E1E"
+    }
   },
   {
     "id": "atlassian",
@@ -137,7 +169,11 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "atlassian",
+      "color": "#0052CC"
+    }
   },
   {
     "id": "github",
@@ -146,15 +182,22 @@
     "description": "Repositórios, pull requests, issues e busca de código no GitHub.",
     "url": "https://api.githubcopilot.com/mcp/",
     "url_editable": false,
-    "auth_kind": "oauth_dcr_or_bearer",
+    "auth_kind": "bearer",
     "default_scopes": [],
     "requires_loopback_redirect": false,
     "setup_guide": {
-      "title": "Login automático ou Token pessoal (PAT)",
+      "title": "Conectar com um token pessoal do GitHub (PAT)",
       "steps": [
-        "Você pode conectar direto via OAuth clicando em Conectar, ou escolher Bearer para usar um Personal Access Token (PAT) com escopos restritos aos repositórios desejados."
+        "O login do GitHub não aceita o cadastro automático de aplicativo que o Conectar por OAuth usa; a conexão é por token pessoal.",
+        "Em github.com/settings/tokens, crie um token fine-grained com acesso só aos repositórios e às permissões que os agentes podem usar.",
+        "Cole o token no campo Token Bearer abaixo, salve e clique em Testar."
       ],
-      "docs_hint": "github.com/settings/tokens"
+      "docs_hint": "github.com/settings/tokens",
+      "docs_url": "https://github.com/settings/personal-access-tokens/new"
+    },
+    "brand": {
+      "icon": "github",
+      "color": "#181717"
     }
   },
   {
@@ -164,10 +207,14 @@
     "description": "Busca na documentação da Cloudflare pela URL padrão (docs.mcp.cloudflare.com/mcp); edite a URL para conectar aos endpoints MCP de Workers, DNS e serviços da conta.",
     "url": "https://docs.mcp.cloudflare.com/mcp",
     "url_editable": true,
-    "auth_kind": "oauth_dcr",
+    "auth_kind": "none",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "cloudflare",
+      "color": "#F38020"
+    }
   },
   {
     "id": "sentry",
@@ -179,7 +226,11 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "sentry",
+      "color": "#362D59"
+    }
   },
   {
     "id": "supabase",
@@ -191,6 +242,10 @@
     "auth_kind": "oauth_dcr",
     "default_scopes": [],
     "requires_loopback_redirect": false,
-    "setup_guide": null
+    "setup_guide": null,
+    "brand": {
+      "icon": "supabase",
+      "color": "#3FCF8E"
+    }
   }
 ]

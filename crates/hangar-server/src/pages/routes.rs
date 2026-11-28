@@ -94,7 +94,7 @@ fn own_host(host: &str) -> bool {
 }
 
 #[cfg(unix)]
-fn machine_name() -> Option<String> {
+pub(crate) fn machine_name() -> Option<String> {
     let mut b = [0u8; 256];
     // SAFETY: buffer próprio, tamanho certo; o nome sai terminado em zero ou cortado no tamanho.
     if unsafe { libc::gethostname(b.as_mut_ptr().cast(), b.len()) } != 0 { return None; }
@@ -104,7 +104,7 @@ fn machine_name() -> Option<String> {
 }
 
 #[cfg(not(unix))]
-fn machine_name() -> Option<String> {
+pub(crate) fn machine_name() -> Option<String> {
     std::env::var("COMPUTERNAME").ok().map(|n| n.to_ascii_lowercase()).filter(|n| !n.is_empty())
 }
 

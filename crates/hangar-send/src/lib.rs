@@ -57,7 +57,7 @@ pub fn split_root(args: &[String]) -> (Option<PathBuf>, Vec<String>) {
 }
 
 /// Roda o comando e devolve o código de saída: 0 feito, 1 recusa ou erro, 2 uso errado ou servidor
-/// sem resposta, como o script antigo.
+/// sem resposta, como o script antigo; 4 no recado cortado que a conversa não provou.
 pub fn run(invocation: &Invocation, host: &dyn Host, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let args = &invocation.args;
     // A ajuda sai antes do `.env`: é o que se lê numa máquina ainda sem Hangar.
@@ -126,6 +126,11 @@ impl Ctx<'_> {
 
     pub fn total(&self) -> f64 {
         http::seconds(self.inv.vars.get("API_TIMEOUT").map(String::as_str), 30.0)
+    }
+
+    /// Quanto o recado cortado espera aparecer na conversa do destino.
+    pub fn check_window(&self) -> f64 {
+        http::seconds(self.inv.vars.get("HANGAR_SEND_CHECK_SECONDS").map(String::as_str), 6.0)
     }
 
     pub fn base(&self) -> String {

@@ -5,6 +5,26 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Permissão do Kimi vem do wire do agente principal.** `permission.set_mode` decide o modo,
+  com leitura incremental; ausência de evento após o primeiro registro válido é o estado inicial
+  manual do Kimi. O rodapé é configurável e não comprova permissão. A troca dirige `/permission`,
+  preserva rascunho e confirma a escolha; antes do primeiro wire, confere o tique do seletor e o
+  fecha. `--yolo` e `--auto` só entram na conversa nova: retomar conserva a escolha persistida.
+  Ver [permissões e envio direto do Kimi](#permissões-e-envio-direto-do-kimi-27112026).
+
+- **Continuação automática só depois de parada passageira, uma vez, por um registro só.** Rede, stream
+  perdido ou 5xx (este uma vez por corrente) continuam quando a sondagem compartilhada alcança o
+  provedor, até 2 h depois da parada. Toda continuação automática, inclusive a troca de conta no limite
+  e o login recusado, passa pelo `Ledger` de `hangar-auto-continue` antes de reabrir: uma por linha de
+  erro, 2 seguidas sem resposta real (a corrente expira em 30 min), 3 por hora. Na troca de conta o teto
+  só vale para o turno que o próprio Hangar começou com um "continue". A mensagem da pessoa pelo `/input`
+  (fora recado `[de: …]`/`[painel: …]` e o próprio "continue") zera a corrente. Barrada, nada reabre e
+  nenhuma conta fica gasta. A espera é nota neutra na conversa, nunca faixa; o Cancelar é marcado no
+  registro e responde na hora, e a agenda confere a marca antes de mandar. Reboot da máquina continua
+  uma vez com ressalva; falta de memória só pelo botão. O retorno da filha ligada pula o "continue"
+  automático ao decidir quem pediu o turno, e a linha de erro da API não volta como resposta. Ver
+  [continuar sozinho](#continuar-sozinho-depois-de-parada-passageira-27112026).
+
 - **O Kimi fica só com os provedores dele: motor nenhum vai ao `config.toml` do Kimi.** O espelho de
   credenciais (`engines/mirrors.rs`) leva motores só ao Pi e ao Codex (`SYNC_TARGETS`); "Sincronizar"
   e o reparo de credenciais da saúde não oferecem o Kimi, e a subida tira os blocos
@@ -1268,6 +1288,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   não viu o despacho procura no arquivo, para trás. Chamada feita dentro do script grava `content`
   vazio: o resultado sai do `toolUseResult`. Os aparelhos não sabem de Code Mode, só chamam o `REPL`
   de "Script". Ver [Code Mode](#code-mode-do-claude-code-script-entrega-e-página-20112026).
+
+## Continuar sozinho depois de parada passageira (27/11/2026)
+
+Medido nas conversas desta máquina (Claude, 60 dias, 3 contas, 4.455 transcripts):
+
+- 56 episódios de "Can't reach the API". Antes de desistir a CLI já tenta ~10 vezes em ~3 min; em 37
+  deles o dono mandou "continua" ou parecido, com mediana de 14 min depois da parada.
+- 16 "continua" dele vieram depois de fim normal e 5 depois de interrupção: esses nunca continuam
+  sozinhos. Por isso a classificação é por lista do que é passageiro, e o resto cai em `Other`.
+- Em 13/11 o "Continue de onde parou." da troca por login recusado foi mandado 4 vezes em 38 s numa
+  sessão: cada recusa reabria e mandava de novo. O teto agora vem antes de reabrir, e o caso manda no
+  máximo 2.
+- Os tetos ficam em `~/.hangar/auto-continue.json`: reiniciar o servidor no meio do laço não os zera.
 
 ## Claude relançado como filho do próprio processo (24/11/2026)
 
@@ -6004,3 +6037,40 @@ desatualizado do painel: a recontagem agora entrega a mesma leitura à aba e inv
 anteriores. O detalhe adota a retomada do mesmo filho e volta a consultar, sem reabertura; a
 transição invalida também o detalhe antigo em voo. A versão recompilada confirmou na tela a
 retomada com o detalhe aberto e a linha Rodando com modelo, chamadas e ferramenta atual.
+
+
+## Permissões e envio direto do Kimi (27/11/2026)
+
+A CLI 2.8.1 oferece manual (`Always Ask`), yolo (`Ask When Needed`) e auto (`Never Ask`).
+`/permission` abre uma lista com as três escolhas. Na abertura existem `--yolo` e `--auto`;
+sem flag, a CLI lê seu padrão. Não há flag manual de abertura. O desktop nativo e o Expo
+mostram os três modos na conversa, e os dois modos por flag mais Padrão na criação.
+
+O Kimi permite reordenar ou remover a peça de modo do rodapé e substituir a linha por um
+comando. Inferir manual pela ausência de um prefixo podia manter auto enquanto o Hangar
+confirmava manual. O evento durável `permission.set_mode`, filtrado pelo agente principal,
+é a fonte do modo. A leitura usa o mesmo leitor incremental e limitado em memória da barra.
+Antes de existir conversa, a confirmação vem do `← current` do seletor, fechado antes da resposta.
+
+As flags de abertura sobrepõem o modo de uma conversa retomada. Reaplicá-las após uma troca
+manual elevava a permissão na restauração. O comando de retomada preserva o modo persistido
+pela CLI, sem as flags da criação.
+
+Sem `permission.set_mode` do agente principal, o modo é manual: na CLI 2.8.1 o estado nasce
+`manual` (`defineState("permissionMode", () => "manual")`), e tanto o `defaultPermissionMode`
+do config quanto `--yolo`/`--auto` passam por `setMode`, que grava o evento durável na
+primeira vez mesmo sem mudança (`permissionMode.configured`).
+
+Limite conhecido: o spec de uma sessão Kimi aberta com `--yolo` grava `"permission":"yolo"`,
+valor que a versão anterior não lê. Depois da volta da atualização, restaurar ou reabrir essa
+sessão pelo spec falha com `restore_spec_unreadable`; as demais sessões não mudam.
+
+O Ctrl+S orienta a fila da própria TUI e a resposta é assíncrona. Conferir uma única captura
+300 ms depois podia responder sem confirmação enquanto a orientação estava em andamento.
+O driver agora aguarda o desaparecimento da fila por até 5 s e nunca repete a tecla nessa
+espera. O prazo esgotado continua incerto; não autoriza redigitar a mensagem.
+
+Costuras verificadas: controle público do ator com E/S externa simulada e relógio pausado;
+leitura incremental de eventos reais em arquivo temporário; comando público de abertura e
+retomada; opções compartilhadas; seleção na folha real de ajustes do Expo. As simulações não
+comprovam o tempo de resposta do serviço do modelo nem executam um turno de produção.

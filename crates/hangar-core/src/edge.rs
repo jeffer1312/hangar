@@ -19,6 +19,9 @@ impl RequestAuth {
     pub async fn receipt(&self) -> Option<String> {
         self.0.lock().await.as_ref().and_then(|(_, receipt)| receipt.clone())
     }
+
+    /// O portão efetivamente confirmou o dono neste pedido, mesmo sem emitir recibo assinado.
+    pub async fn owner_verified(&self) -> bool { self.0.lock().await.is_some() }
 }
 
 /// Cliente já resolvido pelo `TrustedHosts`: é a origem que conta as tentativas de senha.

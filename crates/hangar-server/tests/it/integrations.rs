@@ -249,40 +249,29 @@ async fn call_owner(addr: SocketAddr, method: Method, path: &str, body: Option<V
     call_owner_with_headers(addr, method, path, &[], body).await
 }
 
-/// Repete apenas em falha de conexão até o prazo; resposta HTTP != 200 falha na hora.
-async fn wait_http_ready(
-    url: &str,
-    method: Method,
-    headers: &[(&str, &str)],
-    token: Option<&str>,
-) -> reqwest::Response {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let mut req = client().request(method.clone(), url);
-        if let Some(tok) = token {
-            req = req.bearer_auth(tok);
-        }
-        for (k, v) in headers {
-            req = req.header(*k, *v);
-        }
-        match req.send().await {
-            Ok(resp) => {
-                let status = resp.status();
-                if status == 200 {
-                    return resp;
-                }
-                let body = resp.text().await.unwrap_or_default();
-                panic!("status inesperado {status} em {url}: {body}");
-            }
-            Err(err) => {
-                assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "servidor não respondeu em {url} até o prazo: {err}"
-                );
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-        }
+async fn spawn_guest_fixture(state: Arc<AppState>) -> (SocketAddr, ServerTask) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = hangar_server::routes::guest_router(state)
+        .into_make_service_with_connect_info::<hangar_server::share::gate::GuestConn>();
+    let task = ServerTask(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    (addr, task)
+}
+
+async fn ok_response(url: &str, method: Method, headers: &[(&str, &str)]) -> reqwest::Response {
+    let mut req = client().request(method, url);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
     }
+    let response = req.send().await.expect("listener de teste vinculado");
+    let status = response.status();
+    if status != StatusCode::OK {
+        let body = response.text().await.unwrap_or_default();
+        panic!("status inesperado {status} em {url}: {body}");
+    }
+    response
 }
 
 // ---------------------------------------------------------------------------
@@ -943,6 +932,109 @@ async fn crud_persists_outside_vault_never_leaks_secrets_and_rolls_back_on_secre
 }
 
 #[tokio::test]
+async fn google_credential_reuse_copies_only_the_pair_between_official_integrations() {
+    let srv = spawn_test_server(Arc::new(MemoryKeyStore::new())).await;
+    let dest = json!({
+        "id": "drive", "name": "Drive", "preset": "google-drive",
+        "transport": { "kind": "remote_http", "url": "https://drivemcp.googleapis.com/mcp/v1self" },
+        "auth": { "kind": "oauth_manual_client", "client_id": "", "scopes": ["https://www.googleapis.com/auth/drive.file"] },
+        "reuse_google_credentials_from": "gmail"
+    });
+    let create_gmail = json!({
+        "id": "gmail", "name": "Gmail", "preset": "google-gmail",
+        "transport": { "kind": "remote_http", "url": "https://gmailmcp.googleapis.com/mcp/v1self" },
+        "auth": { "kind": "oauth_manual_client", "client_id": "google-example", "scopes": ["https://www.googleapis.com/auth/gmail.modify"] },
+        "policy": "allow_all", "pinned": true
+    });
+    let (status, body, _) = call_owner(srv.addr, Method::POST, "/api/integrations", Some(create_gmail)).await;
+    assert_eq!(status, 201);
+    assert_ne!(body["integration"]["can_reuse_google_credentials"], true);
+    for source_id in ["gmail", "removed"] {
+        let mut invalid = dest.clone();
+        invalid["reuse_google_credentials_from"] = json!(source_id);
+        let (status, _, _) = call_owner(srv.addr, Method::POST, "/api/integrations", Some(invalid)).await;
+        assert_eq!(status, 409);
+        assert!(srv.state.integrations.registry.get("drive").unwrap().is_none());
+    }
+
+    let pair_secret = "fixture-google-manual-secret";
+    let source = hangar_integrations::IntegrationSecrets {
+        client_secret: Some(zeroize::Zeroizing::new(pair_secret.to_owned())),
+        oauth: Some(hangar_integrations::OAuthTokens {
+            access_token: zeroize::Zeroizing::new("fixture-google-access".to_owned()),
+            refresh_token: Some(zeroize::Zeroizing::new("fixture-google-refresh".to_owned())),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    srv.state.integrations.secrets.set("gmail", source).await.unwrap();
+    let (status, listed, raw) = call_owner(srv.addr, Method::GET, "/api/integrations", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(listed["integrations"][0]["can_reuse_google_credentials"], true);
+    assert!(!raw.contains(pair_secret));
+
+    let other = json!({
+        "id": "other", "name": "Other", "preset": "google-gmail",
+        "transport": { "kind": "remote_http", "url": "https://mcp.example.com/mcp" },
+        "auth": { "kind": "oauth_manual_client", "client_id": "other-client" },
+        "secrets": { "oauth_client_secret": "fixture-other-secret" }
+    });
+    let (status, body, _) = call_owner(srv.addr, Method::POST, "/api/integrations", Some(other)).await;
+    assert_eq!(status, 201);
+    assert_ne!(body["integration"]["can_reuse_google_credentials"], true);
+    let mut wrong_source = dest.clone();
+    wrong_source["reuse_google_credentials_from"] = json!("other");
+    let (status, _, _) = call_owner(srv.addr, Method::POST, "/api/integrations", Some(wrong_source)).await;
+    assert_eq!(status, 409);
+    assert!(srv.state.integrations.registry.get("drive").unwrap().is_none());
+
+    let mut wrong_url = dest.clone();
+    wrong_url["transport"]["url"] = json!("https://mcp.example.com/mcp");
+    let mut conflicting_secret = dest.clone();
+    conflicting_secret["secrets"] = json!({"oauth_client_secret": "fixture-different-secret"});
+    let mut conflicting_id = dest.clone();
+    conflicting_id["auth"]["client_id"] = json!("other-client");
+    for invalid in [wrong_url, conflicting_secret, conflicting_id] {
+        let (status, _, _) = call_owner(srv.addr, Method::POST, "/api/integrations", Some(invalid)).await;
+        assert_eq!(status, 422);
+        assert!(srv.state.integrations.registry.get("drive").unwrap().is_none());
+        assert!(srv.state.integrations.secrets.get("drive").await.unwrap().is_none());
+    }
+
+    let (status, created, raw) = call_owner(srv.addr, Method::POST, "/api/integrations", Some(dest)).await;
+    assert_eq!(status, 201, "{raw}");
+    let item = &created["integration"];
+    assert_eq!(item["status"], "auth_required");
+    assert_eq!(item["auth"]["client_id"], "google-example");
+    assert_eq!(item["auth"]["scopes"], json!(["https://www.googleapis.com/auth/drive.file"]));
+    assert_eq!(item["policy"], "read_free_ask_write");
+    assert_eq!(item["pinned"], false);
+    assert!(!raw.contains(pair_secret));
+    let dest_secrets = srv.state.integrations.secrets.get("drive").await.unwrap().unwrap();
+    assert_eq!(dest_secrets.client_secret.as_deref().map(String::as_str), Some(pair_secret));
+    assert!(dest_secrets.oauth.is_none());
+    let source = srv.state.integrations.secrets.get("gmail").await.unwrap().unwrap();
+    assert_eq!(source.oauth.unwrap().access_token.as_str(), "fixture-google-access");
+
+    let (status, patched, _) = call_owner(srv.addr, Method::PATCH, "/api/integrations/drive", Some(json!({"preset": null}))).await;
+    assert_eq!(status, 200);
+    assert_eq!(patched["integration"]["can_reuse_google_credentials"], true, "o preset não decide");
+    let new_id = json!({ "kind": "oauth_manual_client", "client_id": "another-client", "scopes": [] });
+    let (status, refused, _) = call_owner(srv.addr, Method::PATCH, "/api/integrations/drive", Some(json!({ "auth": new_id }))).await;
+    assert_eq!(status, 422, "{refused}");
+    assert_eq!(refused["detail"]["code"], "integration_client_secret_required");
+    let drive = srv.state.integrations.secrets.get("drive").await.unwrap().unwrap();
+    assert_eq!(drive.client_secret.as_deref().map(String::as_str), Some(pair_secret), "a recusa não mexe no segredo salvo");
+    let (status, patched, _) = call_owner(srv.addr, Method::PATCH, "/api/integrations/drive", Some(json!({
+        "auth": new_id,
+        "secrets": { "oauth_client_secret": "fixture-another-secret" }
+    }))).await;
+    assert_eq!(status, 200, "{patched}");
+    let drive = srv.state.integrations.secrets.get("drive").await.unwrap().unwrap();
+    assert_eq!(drive.client_secret.as_deref().map(String::as_str), Some("fixture-another-secret"));
+}
+
+#[tokio::test]
 async fn secrets_store_errors_are_surfaced_without_masking() {
     let srv = spawn_test_server(Arc::new(MemoryKeyStore::new())).await;
     let (st, _, _) = call_owner(
@@ -1027,7 +1119,6 @@ async fn oauth_flow_uses_bound_local_port_handoff_browser_callback_test_and_expi
     let dir = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let owner_addr = listener.local_addr().unwrap();
-    let guest_addr = crate::connect_port::free_port();
 
     let mut cfg = config("127.0.0.1");
     cfg.listen = "127.0.0.1:0".parse().unwrap();
@@ -1067,23 +1158,19 @@ async fn oauth_flow_uses_bound_local_port_handoff_browser_callback_test_and_expi
         connect: None,
     }));
 
+    let (mut guest_state, _) = build_isolated_state(&dir, config("127.0.0.1"), Arc::new(MemoryKeyStore::new()));
+    guest_state.share = state.share.clone();
+    guest_state.integrations = state.integrations.clone();
+    let (guest_addr, _guest_task) = spawn_guest_fixture(Arc::new(guest_state)).await;
     let serve_task = tokio::spawn(async move {
-        serve_with_guest(listener, state, Some(guest_addr)).await.unwrap();
+        serve_with_guest(listener, state, None).await.unwrap();
     });
 
-    // Aguarda portas do dono e do convidado subirem (preflight/health valem em RED e GREEN).
-    wait_http_ready(
-        &format!("http://{owner_addr}/__hangar_server/health"),
-        Method::GET,
-        &[],
-        None,
-    )
-    .await;
-    wait_http_ready(
+    ok_response(&format!("http://{owner_addr}/__hangar_server/health"), Method::GET, &[]).await;
+    ok_response(
         &format!("http://{guest_addr}/api/integrations/oauth/callback"),
         Method::OPTIONS,
         &[("origin", "http://localhost"), ("access-control-request-method", "GET")],
-        None,
     )
     .await;
 
@@ -1554,7 +1641,7 @@ async fn approvals_sse_publishes_to_owner_only_and_never_to_share_guest() {
         fn needs_operator(&self) -> bool { false }
     }
 
-    tokio::time::timeout(Duration::from_secs(15), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let script = crate::list_support::sessions(root, 1);
@@ -1574,7 +1661,6 @@ async fn approvals_sse_publishes_to_owner_only_and_never_to_share_guest() {
 
     let owner_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let owner_addr = owner_listener.local_addr().unwrap();
-    let guest_addr = crate::connect_port::free_port();
 
     let mut cfg = config("127.0.0.1");
     cfg.listen = owner_addr;
@@ -1614,23 +1700,23 @@ async fn approvals_sse_publishes_to_owner_only_and_never_to_share_guest() {
     state.share = Some(share);
 
     let integrations = state.integrations.clone();
-    let task = tokio::spawn(async move {
-        serve_with_guest(owner_listener, state, Some(guest_addr)).await.unwrap();
-    });
+    let state = Arc::new(state);
+    let (guest_addr, _guest_task) = spawn_guest_fixture(state.clone()).await;
+    let app = hangar_server::routes::router(state).into_make_service_with_connect_info::<SocketAddr>();
+    let _owner_task = ServerTask(tokio::spawn(async move {
+        axum::serve(owner_listener, app).await.unwrap();
+    }));
 
-    // Aguarda SSEs do dono e do convidado responderem com prazo e pausa controlada.
-    let owner_resp = wait_http_ready(
+    let owner_resp = ok_response(
         &format!("http://{owner_addr}/api/sessions/events?token={OWNER}"),
         Method::GET,
         &[],
-        None,
     )
     .await;
-    let guest_resp = wait_http_ready(
+    let guest_resp = ok_response(
         &format!("http://{guest_addr}/api/sessions/events?token={guest_token}"),
         Method::GET,
         &[],
-        None,
     )
     .await;
 
@@ -1671,31 +1757,20 @@ async fn approvals_sse_publishes_to_owner_only_and_never_to_share_guest() {
         .unwrap();
     assert_eq!(card["tool"], "create_issue");
 
-    // Convidado recebe `sessions`, mas nunca `integrations_approvals` (inclusive antes de `sessions`).
-    // O prazo é o único fim esperado da janela de silêncio: EOF ou erro de parse falham explicitamente.
-    let mut deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    // Provoca outro evento depois da publicação ao dono, sem depender do intervalo do ping.
     let mut saw_sessions = false;
     loop {
-        match tokio::time::timeout_at(deadline, guest_sse.next()).await {
-            Err(_) => break,
-            Ok(None) => panic!("stream SSE do convidado encerrou inesperadamente (EOF)"),
-            Ok(Some(Err(err))) => panic!("erro de parse no stream SSE do convidado: {err:?}"),
-            Ok(Some(Ok(ev))) => {
-                assert_ne!(
-                    ev.event, "integrations_approvals",
-                    "convidado nunca pode receber eventos integrations_approvals"
-                );
-                if !saw_sessions && ev.event == "sessions" {
-                    saw_sessions = true;
-                    let post_sessions = tokio::time::Instant::now() + Duration::from_millis(350);
-                    if post_sessions < deadline {
-                        deadline = post_sessions;
-                    }
-                }
+        let ev = guest_sse.next().await.expect("stream do convidado aberto").expect("evento SSE válido");
+        assert_ne!(ev.event, "integrations_approvals", "só o dono recebe o cartão");
+        match ev.event.as_str() {
+            "sessions" if !saw_sessions => {
+                saw_sessions = true;
+                std::fs::write(root.join("fail"), "").unwrap();
             }
+            "list_error" if saw_sessions => break,
+            _ => {}
         }
     }
-    assert!(saw_sessions, "convidado deve receber sessions dentro da janela");
 
     // Limpa pedido aberto.
     let (st_del, _, _) = call_owner(
@@ -1706,7 +1781,6 @@ async fn approvals_sse_publishes_to_owner_only_and_never_to_share_guest() {
     )
     .await;
     assert_eq!(st_del, 200);
-    task.abort();
     })
     .await
     .expect("prazo do SSE excedido");

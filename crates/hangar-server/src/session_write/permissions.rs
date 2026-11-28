@@ -1,4 +1,4 @@
-//! Modos Claude, no ator que já serializa suas escritas; o relançamento só começa sem IngressPass.
+//! Modos de permissão nos atores; o relançamento só começa sem IngressPass.
 use std::{net::SocketAddr,sync::Arc};
 use axum::{extract::{ConnectInfo,Request,State},body::to_bytes,http::StatusCode,response::Response};
 use serde::Deserialize;
@@ -17,7 +17,7 @@ fn mode_body(bytes:&[u8])->Result<String,(&'static str,StatusCode)> {
     let body:ModeBody=serde_json::from_slice::<Value>(bytes).ok().filter(Value::is_object).and_then(|v|serde_json::from_value(v).ok())
         .ok_or(("erro_corpo_invalido",StatusCode::UNPROCESSABLE_ENTITY))?;
     let mode=body.mode.or(body.permission_mode).filter(|s|!s.is_empty()).ok_or(("erro_permissao_invalida",StatusCode::UNPROCESSABLE_ENTITY))?;
-    if !MODES.contains(&mode.as_str()) {return Err(("erro_permissao_invalida",StatusCode::CONFLICT));}
+    if !MODES.contains(&mode.as_str()) && mode != "yolo" {return Err(("erro_permissao_invalida",StatusCode::CONFLICT));}
     Ok(mode)
 }
 /// As recusas que o app já explica, nos códigos que ele conhece (os do Python).
@@ -87,12 +87,12 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
     };
     let target=match found {
         // O Antigravity com terminal troca pelo rodapé e pelo shift+tab, no ator dele.
-        Ok(Some((held,target))) if target.provider=="claude" || target.provider=="antigravity"=>(held,target),
+        Ok(Some((held,target))) if target.provider=="claude" || target.provider=="antigravity" || target.provider=="kimi"=>(held,target),
         Ok(Some(_))=>return reply(StatusCode::CONFLICT,detail_body(ONLY_CLAUDE,ONLY_CLAUDE_MSG,json!({}))),
         // Sem entrada aqui: a linha da lista diz se a sessão existe e de quem é; nunca Shift+Tab por fora.
         Ok(None)=>return match listed(&st,&name).await {
             Ok(None)=>reply(StatusCode::NOT_FOUND,detail_body("erro_sessao_inexistente","sessao nao encontrada",json!({}))),
-            Ok(Some((provider,_))) if provider!="claude" && provider!="antigravity"=>reply(StatusCode::CONFLICT,detail_body(ONLY_CLAUDE,ONLY_CLAUDE_MSG,json!({}))),
+            Ok(Some((provider,_))) if provider!="claude" && provider!="antigravity" && provider!="kimi"=>reply(StatusCode::CONFLICT,detail_body(ONLY_CLAUDE,ONLY_CLAUDE_MSG,json!({}))),
             // Sem terminal parado que nada religou: repetir não muda; só reabrir a sessão.
             Ok(Some((_,true)))=>reply(StatusCode::CONFLICT,detail_body("erro_permissao_sessao_parada","a sessão está parada; reabra-a para trocar o modo de permissão",json!({}))),
             Ok(Some(_))=>reply(StatusCode::SERVICE_UNAVAILABLE,detail_body("runtime_unhealthy","o terminal desta sessão não está com o servidor; tente de novo",json!({}))),
@@ -111,10 +111,16 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
         }
     } else {None};
     // A tarefa carrega o passe só pelo comando; o freeze nunca espera o próprio pedido.
+    if let Some(mode)=mode.as_deref() {
+        let valid=if target.provider=="kimi" {["manual","yolo","auto"].contains(&mode)} else {mode!="yolo"};
+        if !valid {return reply(StatusCode::CONFLICT,detail_body("erro_permissao_invalida","modo de permissão inválido",json!({})));}
+    }
     let life_st=st.clone();
     let job=tokio::spawn(async move {
         let reply=match &target.handle {
             EntryHandle::Terminal {handle,..}=>handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),if let Some(mode)=&mode {json!({"mode":mode})} else {json!({"probe":probe})}).await?,
+            EntryHandle::OtherTerminal {handle,..} if target.provider=="kimi"=>
+                handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),json!({"mode":mode})).await?,
             EntryHandle::OtherTerminal {handle,..} if target.provider=="antigravity"=> {
                 // O bypass é flag do processo e não aparece no rodapé: o registro da abertura diz se ele está ligado.
                 let bypass=match runtime.antigravity_spec_bypass(&target.key).await {

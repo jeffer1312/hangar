@@ -82,6 +82,14 @@ pub(crate) fn virtual_result(obj: &Map<String, Value>) -> Option<String> {
         ),
         Value::Object(m) if let Some(files) = m.get("filenames").and_then(Value::as_array) =>
             Some(files.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n")),
+        // Agent: o relatório em blocos e o id do subagente, como a CLI escreve quando a chamada não vem de um script.
+        Value::Object(m) if let Some(blocks) = m.get("content").and_then(Value::as_array) => {
+            let mut parts: Vec<String> = blocks.iter().filter_map(|b| b.get("text").and_then(Value::as_str)).map(str::to_owned).collect();
+            if let Some(id) = m.get("agentId").and_then(Value::as_str).filter(|id| !id.is_empty()) {
+                parts.push(format!("agentId: {id}"));
+            }
+            (!parts.is_empty()).then(|| parts.join("\n"))
+        }
         Value::Object(m) if let Some(text) = ["content", "result"].iter().find_map(|k| m.get(*k).and_then(Value::as_str)) =>
             Some(text.to_owned()),
         _ => None,
@@ -434,6 +442,23 @@ mod tests {
             "isVirtual": true, "toolUseResult": {"mode": "files_with_matches", "filenames": ["a.rs", "b.rs"], "numFiles": 2},
             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "repl_g", "content": ""}]}})]);
         assert_eq!(evs[0].result.as_deref(), Some("a.rs\nb.rs"));
+    }
+
+    #[test]
+    fn an_agent_called_inside_a_script_shows_its_report_and_its_id() {
+        let evs = feed_all(&[json!({"type": "user", "uuid": "u-a", "timestamp": "2026-11-27T16:35:42.739Z",
+            "isVirtual": true, "toolUseResult": {"status": "completed", "agentId": "aa4752a94f4767aad",
+                "content": [{"type": "text", "text": "Relatório da tarefa"}]},
+            "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_cc_f2d6", "content": ""}]}})]);
+        assert_eq!(evs[0].result.as_deref(), Some("Relatório da tarefa\nagentId: aa4752a94f4767aad"));
+    }
+
+    #[test]
+    fn a_result_of_blocks_without_text_stays_without_result() {
+        let evs = feed_all(&[json!({"type": "user", "uuid": "u-b", "timestamp": "2026-11-27T16:35:42.739Z",
+            "isVirtual": true, "toolUseResult": {"content": [{"type": "image"}]},
+            "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_cc_img", "content": ""}]}})]);
+        assert_eq!(evs[0].result.as_deref(), Some(""));
     }
 
     #[test]

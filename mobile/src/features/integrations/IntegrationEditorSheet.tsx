@@ -67,8 +67,19 @@ const sameList = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((v, i) => v === b[i]);
 
 function defaultAuthForPreset(preset?: IntegrationPreset | null): AuthKind {
-  if (!preset) return 'oauth_dcr';
-  return preset.auth_kind === 'oauth_manual_client' ? 'oauth_manual_client' : 'oauth_dcr';
+  switch (preset?.auth_kind) {
+    case 'none': return 'none';
+    case 'bearer': return 'bearer';
+    case 'oauth_manual_client': return 'oauth_manual_client';
+    default: return 'oauth_dcr';
+  }
+}
+
+/** Preset público de URL editável aceita OAuth: a URL trocada pode apontar para um endpoint com login. */
+function presetAuthChoices(preset: IntegrationPreset): AuthKind[] {
+  if (preset.auth_kind === 'oauth_dcr_or_bearer') return ['oauth_dcr', 'bearer'];
+  if (preset.auth_kind === 'none' && preset.url_editable) return ['none', 'oauth_dcr'];
+  return [defaultAuthForPreset(preset)];
 }
 
 /** Folha para criar (preset do catálogo ou customizada) ou editar uma integração existente. */
@@ -77,6 +88,7 @@ export function IntegrationEditorSheet({
   preset = null,
   editing = null,
   existingIds,
+  existingIntegrations = [],
   onClose,
   onSaved,
 }: {
@@ -84,6 +96,7 @@ export function IntegrationEditorSheet({
   preset?: IntegrationPreset | null;
   editing?: IntegrationView | null;
   existingIds: string[];
+  existingIntegrations?: readonly Pick<IntegrationView, 'id' | 'name' | 'can_reuse_google_credentials'>[];
   onClose: () => void;
   onSaved: (integration: IntegrationView, opts: { isNew: boolean }) => void;
 }) {
@@ -112,13 +125,19 @@ export function IntegrationEditorSheet({
   );
   const [envText, setEnvText] = useState('');
 
-  const [authKind, setAuthKind] = useState<AuthKind>(
-    editing?.auth.kind ?? defaultAuthForPreset(preset),
-  );
+  // Cloudflare criada antes do preset público, ainda na URL padrão: a edição já propõe "Sem autenticação".
+  const [authKind, setAuthKind] = useState<AuthKind>(() => {
+    if (!editing) return defaultAuthForPreset(preset);
+    const publicDefault = preset?.auth_kind === 'none'
+      && editing.transport.kind === 'remote_http'
+      && editing.transport.url === preset.url;
+    return publicDefault && editing.auth.kind === 'oauth_dcr' ? 'none' : editing.auth.kind;
+  });
   const [clientId, setClientId] = useState(
     editing?.auth.kind === 'oauth_manual_client' ? editing.auth.client_id : '',
   );
   const [clientSecret, setClientSecret] = useState('');
+  const [reuseGoogleCredentialsFrom, setReuseGoogleCredentialsFrom] = useState<string | null>(null);
   const [originalScopes] = useState<string[] | null>(() => (
     editing?.auth.kind === 'oauth_manual_client' ? editing.auth.scopes : null
   ));
@@ -157,15 +176,28 @@ export function IntegrationEditorSheet({
   const isPreset = !!preset;
   const urlEditable = isPreset ? preset.url_editable : true;
   const authChoices: AuthKind[] = isPreset
-    ? preset.auth_kind === 'oauth_dcr_or_bearer'
-      ? ['oauth_dcr', 'bearer']
-      : [defaultAuthForPreset(preset)]
+    ? presetAuthChoices(preset)
     : transportKind === 'local_stdio'
       ? ['none']
       : ['oauth_dcr', 'oauth_manual_client', 'bearer', 'none'];
 
   const effectiveAuth: AuthKind = authChoices.includes(authKind) ? authKind : authChoices[0];
   const isOAuth = effectiveAuth === 'oauth_dcr' || effectiveAuth === 'oauth_manual_client';
+  const googleCredentialSources = !editing
+    && preset?.auth_kind === 'oauth_manual_client'
+    && !preset.url_editable
+    && ['google-gmail', 'google-drive', 'google-calendar'].includes(preset.id)
+    ? existingIntegrations.filter((item) => item.can_reuse_google_credentials === true)
+    : [];
+  const googleCredentialSourceMissing = reuseGoogleCredentialsFrom !== null
+    && !googleCredentialSources.some((item) => item.id === reuseGoogleCredentialsFrom);
+
+  const selectGoogleCredentials = (source: string | null) => {
+    haptic.selection();
+    clearValidation();
+    setApiError('');
+    setReuseGoogleCredentialsFrom(source);
+  };
 
   const authLabel = (kind: AuthKind): string => {
     switch (kind) {
@@ -210,14 +242,14 @@ export function IntegrationEditorSheet({
       const envResult = parseEnvVars(envText);
       if (!envResult.ok) return envErrorText(envResult);
     }
-    if (effectiveAuth === 'oauth_manual_client' && !clientId.trim()) {
+    if (effectiveAuth === 'oauth_manual_client' && !reuseGoogleCredentialsFrom && !clientId.trim()) {
       return m.integrations_validation_client_id();
     }
     return null;
   };
 
   const submit = async () => {
-    if (busy) return;
+    if (busy || googleCredentialSourceMissing) return;
     const invalid = validate();
     if (invalid) {
       setValidationError(invalid);
@@ -278,7 +310,7 @@ export function IntegrationEditorSheet({
       const auth: IntegrationAuthConfig = effectiveAuth === 'oauth_manual_client'
         ? {
           kind: 'oauth_manual_client',
-          client_id: clientId.trim(),
+          client_id: reuseGoogleCredentialsFrom ? '' : clientId.trim(),
           // Preserva o vetor original enquanto o campo não for editado (tokens OAuth podem conter vírgula).
           scopes: scopesUnchanged ? originalScopes : parseScopes(scopesText),
         }
@@ -292,7 +324,7 @@ export function IntegrationEditorSheet({
       if (effectiveAuth === 'bearer' && bearerToken.trim()) {
         secrets.bearer_token = bearerToken.trim();
       }
-      if (effectiveAuth === 'oauth_manual_client' && clientSecret.trim()) {
+      if (effectiveAuth === 'oauth_manual_client' && !reuseGoogleCredentialsFrom && clientSecret.trim()) {
         secrets.oauth_client_secret = clientSecret.trim();
       }
       if (transportKind === 'remote_http') {
@@ -345,6 +377,7 @@ export function IntegrationEditorSheet({
           policy,
           pinned,
           projects,
+          ...(reuseGoogleCredentialsFrom ? { reuse_google_credentials_from: reuseGoogleCredentialsFrom } : {}),
           ...(hasSecrets ? { secrets } : {}),
         };
         const created = await createIntegration(server, body);
@@ -367,7 +400,7 @@ export function IntegrationEditorSheet({
       {preset?.setup_guide ? (
         <>
           <MachineHelp>{m.integrations_setup_guide_title()}</MachineHelp>
-          <SetupGuideBlock guide={preset.setup_guide} showGoogleTestingHint={preset.id.startsWith('google-')} />
+          <SetupGuideBlock guide={preset.setup_guide} />
         </>
       ) : null}
 
@@ -529,27 +562,56 @@ export function IntegrationEditorSheet({
         ))}
       </MachineGroup>
 
+      {googleCredentialSources.length > 0 || googleCredentialSourceMissing ? (
+        <>
+          <MachineHelp>{m.integrations_google_credential_source()}</MachineHelp>
+          <MachineGroup>
+            <MachineRow
+              title={m.integrations_google_credential_manual()}
+              selected={reuseGoogleCredentialsFrom === null}
+              disabled={busy}
+              onPress={() => selectGoogleCredentials(null)}
+            />
+            {googleCredentialSources.map((source) => (
+              <MachineRow
+                key={source.id}
+                title={source.name}
+                accessibilityLabel={`${source.name} (${source.id})`}
+                description={source.id}
+                selected={reuseGoogleCredentialsFrom === source.id}
+                disabled={busy}
+                onPress={() => selectGoogleCredentials(source.id)}
+              />
+            ))}
+          </MachineGroup>
+        </>
+      ) : null}
+
       {effectiveAuth === 'oauth_manual_client' ? (
         <MachineGroup>
-          <MachineField
-            label={m.integrations_field_client_id()}
-            value={clientId}
-            onChangeText={(t) => {
-              clearValidation();
-              setClientId(t);
-            }}
-            editable={!busy}
-          />
-          <MachineField
-            label={m.integrations_field_client_secret()}
-            value={clientSecret}
-            onChangeText={setClientSecret}
-            editable={!busy}
-            secureTextEntry
-            autoComplete="off"
-            textContentType="none"
-            placeholder={editing ? m.integrations_secret_kept_hint() : m.integrations_optional()}
-          />
+          {!reuseGoogleCredentialsFrom ? (
+            <>
+              <MachineField
+                label={m.integrations_field_client_id()}
+                value={clientId}
+                onChangeText={(t) => {
+                  clearValidation();
+                  setClientId(t);
+                }}
+                editable={!busy}
+              />
+              <MachineField
+                label={m.integrations_field_client_secret()}
+                value={clientSecret}
+                onChangeText={setClientSecret}
+                editable={!busy}
+                secureTextEntry
+                autoComplete="off"
+                textContentType="none"
+                placeholder={editing ? m.integrations_secret_kept_hint() : m.integrations_optional()}
+              />
+            </>
+          ) : null}
           <MachineField
             label={m.integrations_field_scopes()}
             value={scopesText}
@@ -604,13 +666,13 @@ export function IntegrationEditorSheet({
       </MachineGroup>
       <MachineHelp>{m.integrations_field_projects_hint()}</MachineHelp>
 
-      <Notice text={validationError || apiError} error />
+      <Notice text={googleCredentialSourceMissing ? m.integrations_google_credentials_unavailable() : validationError || apiError} error />
 
       <MachineGroup>
         <MachineRow
           title={busy ? m.integrations_saving() : editing ? m.integrations_save() : isOAuth ? m.integrations_connect() : m.integrations_save()}
           action
-          disabled={busy}
+          disabled={busy || googleCredentialSourceMissing}
           onPress={() => void submit()}
         />
         <MachineRow title={m.integrations_cancel()} disabled={busy} onPress={onClose} />

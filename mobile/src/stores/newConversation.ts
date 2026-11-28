@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import {
-  basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory, placementElsewhereBody,
+  basename, createSessionForServer, fetchSessionsForServer, getCreationProgress, getHistory, isInputRefusal, placementElsewhereBody,
   sanitizeSessionName, sendInputForServer, transitionFirstConversation, uniqueSessionName,
 } from '@hangar/core';
 import type {
@@ -134,6 +134,13 @@ function statusOf(cause: unknown): number | null {
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error && cause.message ? cause.message : m.criar_sessao_erro();
+}
+
+// O porteiro da subida responde só o código: a pessoa lê a frase, não o "503: server_starting".
+function refusalOf(cause: unknown): string {
+  return (cause as { code?: unknown } | null)?.code === 'server_starting'
+    ? m.nova_conversa_envio_servidor_subindo()
+    : m.nova_conversa_envio_recusado({ erro: messageOf(cause) });
 }
 
 function newId(): string {
@@ -361,8 +368,8 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
         setIssue(serverId, { kind: 'local', message: messageOf(cause) });
         return;
       }
-      const status = statusOf(cause);
-      const rejected = status !== null && status >= 400 && status < 500 && status !== 408;
+      // Mesmo portão do rascunho (`submitConversationDraft`): regras diferentes deixariam o envio recusado e incerto.
+      const rejected = isInputRefusal(cause);
       try {
         if (!apply(sending, { type: rejected ? 'send_rejected' : 'send_unknown' })) return;
       } catch {
@@ -370,7 +377,7 @@ export function sendFirstInput(serverId: string, attemptId: string): Promise<voi
         return;
       }
       setIssue(serverId, rejected
-        ? { kind: 'rejected', message: m.nova_conversa_envio_recusado({ erro: messageOf(cause) }) }
+        ? { kind: 'rejected', message: refusalOf(cause) }
         : { kind: 'unknown', message: m.nova_conversa_envio_incerto() });
       return;
     }

@@ -19,6 +19,9 @@ pub(super) enum Acted {
     /// Aberta, com o estado de antes: até a nota "consertando" chegar a linha não volta ao botão.
     FixOpened(Option<FixState>),
     FixFailed(String),
+    /// Cancelar da nota do continuar sozinho: pedido e aceito, até a nota trocada pelo desfecho chegar.
+    Cancelling,
+    CancelFailed(String),
 }
 
 /// O botão que o servidor deu ao aviso.
@@ -76,6 +79,46 @@ pub(super) fn notice_key(event: &ChatEvent) -> Option<&str> { meta(event, "key")
 
 /// Resposta que a CLI gravou no lugar da do modelo quando a API falhou: o turno parou.
 pub(super) fn is_api_error(event: &ChatEvent) -> bool { meta(event, "level") == Some("error") }
+
+/// Nota do continuar sozinho (`kind: "auto_continue"`): a espera pela rede e o desfecho, trocados no lugar.
+pub(super) fn is_auto_continue(event: &ChatEvent) -> bool { meta(event, "kind") == Some("auto_continue") }
+
+/// Horário local (HH:MM) de um campo em segundos do meta.
+fn meta_clock(event: &ChatEvent, field: &str) -> Option<String> {
+    let at = event.notice_meta.as_ref()?.get(field)?.as_f64()?;
+    chrono::DateTime::from_timestamp(at as i64, 0).map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string())
+}
+
+/// O texto da nota pelas chaves, com os horários do meta; estado que este app não conhece fica com o texto do servidor.
+pub(super) fn auto_continue_text(event: &ChatEvent) -> String {
+    let code = meta(event, "code").unwrap_or_default();
+    let text = if meta(event, "cause") == Some(REBOOT_CAUSE) {
+        match meta(event, "state") {
+            Some("continued") => meta_clock(event, "continued_at").map(|continued| tr_shared("auto_continue_reboot_line", &[("continued", &continued)])),
+            Some("failed") => Some(tr_shared("auto_continue_reboot_failed_line", &[("code", code)])),
+            _ => None,
+        }
+    } else {
+        meta_clock(event, "stopped_at").and_then(|stopped| match meta(event, "state")? {
+            "waiting" => Some(tr_shared("auto_continue_waiting_line", &[("stopped", &stopped)])),
+            "continued" => meta_clock(event, "continued_at")
+                .map(|continued| tr_shared("auto_continue_line", &[("stopped", &stopped), ("continued", &continued)])),
+            "failed" => Some(tr_shared("auto_continue_failed_line", &[("stopped", &stopped), ("code", code)])),
+            "cancelled" => Some(tr_shared("auto_continue_cancelled_line", &[("stopped", &stopped)])),
+            "skipped" => Some(tr_shared("auto_continue_skipped_line", &[("stopped", &stopped)])),
+            _ => None,
+        })
+    };
+    text.unwrap_or_else(|| plain(event).trim().to_owned())
+}
+
+/// O `cause` da nota do turno cortado pelo reboot (`hangar_auto_continue::CAUSE_REBOOT`).
+const REBOOT_CAUSE: &str = "reboot";
+
+/// Só a espera tem Cancelar: o desfecho já saiu, e a nota do reboot nasce com ele.
+pub(super) fn auto_continue_cancellable(event: &ChatEvent) -> bool {
+    is_auto_continue(event) && meta(event, "state") == Some("waiting") && meta(event, "cause").is_none()
+}
 
 /// O texto do aviso sem o `⚙️` que o servidor põe para o cliente antigo.
 fn plain(event: &ChatEvent) -> &str {
@@ -229,6 +272,39 @@ impl Hangar {
             });
     }
 
+    /// Cancelar da nota que espera a rede: a nota trocada por "não continuei (cancelado)" chega pela conversa.
+    fn cancel_auto_continue(&mut self, event_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(api), Some(name)) = (self.session_api(), self.selected.as_ref().map(|s| s.name.clone())) else { return };
+        self.notice_acted.insert(event_id.clone(), Acted::Cancelling);
+        self.redraw_notice_lines(cx);
+        run(&self.runtime, async move { api.server_send(reqwest::Method::DELETE, &["sessions", &name, "auto-continue"], None, 15).await },
+            window, cx, move |this, result, _, cx| {
+                match result {
+                    // Cancelou: o giro fica até a nota trocada chegar, e o botão sai com ela.
+                    Ok(body) if body["cancelled"].as_bool() == Some(true) => {}
+                    // Nada esperando (o desfecho já saiu): a nota chega trocada sozinha.
+                    Ok(_) => { this.notice_acted.remove(&event_id); }
+                    Err(error) => { this.notice_acted.insert(event_id, Acted::CancelFailed(Hangar::fetch_failure(&error))); }
+                }
+                this.redraw_notice_lines(cx);
+            });
+    }
+
+    /// A nota do continuar sozinho: linha neutra entre fios, com o Cancelar enquanto espera a rede.
+    fn render_auto_continue(&self, event: &ChatEvent, cx: &mut Context<Self>) -> AnyElement {
+        let id = event.id.clone();
+        let cancel = auto_continue_cancellable(event).then(|| match self.notice_acted.get(&id) {
+            Some(Acted::Cancelling) => notice_spin(&id, small(tr_shared("auto_continue_cancel", &[]), theme::muted())).into_any_element(),
+            acted => div().flex().items_center().gap(px(7.))
+                .when_some(match acted { Some(Acted::CancelFailed(why)) => Some(why.clone()), _ => None },
+                    |el, why| el.child(small(tr_shared("auto_continue_cancel_failed", &[("why", &why)]), theme::warning())))
+                .child(notice_action_button(&id, tr_shared("auto_continue_cancel", &[]))
+                    .on_click(cx.listener({ let id = id.clone(); move |this, _, window, cx| this.cancel_auto_continue(id.clone(), window, cx) })))
+                .into_any_element(),
+        });
+        notice_rule_line(auto_continue_row(auto_continue_text(event), cancel)).into_any_element()
+    }
+
     fn open_fix_child(&mut self, child: String, window: &mut Window, cx: &mut Context<Self>) {
         let target = super::sidebar::Target::new(&self.open_server(), &child);
         let _ = self.select_target(&target, window, cx);
@@ -351,6 +427,7 @@ impl Hangar {
 
     pub(super) fn render_notice_line(&self, event_index: usize, row: &str, cx: &mut Context<Self>) -> AnyElement {
         let Some(event) = self.chat.events.get(event_index) else { return div().into_any_element(); };
+        if is_auto_continue(event) { return self.render_auto_continue(event, cx); }
         if is_api_error(event) { return api_error_box(plain(event).trim().to_owned()).into_any_element(); }
         if fix_of(event).is_some() { return self.render_fix_result(event, cx); }
         let (id, key) = (event.id.clone(), notice_key(event).map(str::to_owned));
@@ -409,6 +486,14 @@ pub(crate) fn notice_head(id: SharedString, title: String, count: Option<String>
 /// Peças da ação na linha, sem estado: a conversa e a animação da novidade usam as mesmas.
 pub(crate) fn notice_action_button(id: &str, label: String) -> Button {
     Button::new(SharedString::from(format!("notice-act-{id}"))).outline().xsmall().label(label)
+}
+
+/// A linha da nota do continuar sozinho: o texto neutro e, enquanto espera a rede, o Cancelar.
+pub(crate) fn auto_continue_row(text: String, cancel: Option<AnyElement>) -> Div {
+    // Quebra em vez de cortar: a nota não tem detalhe para abrir, e o texto cortado se perderia.
+    div().flex().items_center().gap(px(7.)).min_w_0()
+        .child(div().min_w_0().text_size(px(12.5)).text_color(theme::muted()).child(text))
+        .children(cancel)
 }
 
 /// Andamento: o indicador girando e o texto.
@@ -610,6 +695,45 @@ mod tests {
         assert!(is_fix_running_note(&fix_note("f", 1, "running")));
         assert!(!is_fix_running_note(&fix_note("f", 1, "done")));
         assert!(fix_of(&fix_note("f", 1, "done")).is_some());
+    }
+
+    fn auto_note(state: &str, extra: Value) -> ChatEvent {
+        let mut meta = json!({"kind":"auto_continue","state":state,"stopped_at":at(10, 5),"count":1});
+        meta.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+        notice("texto do servidor", meta)
+    }
+
+    fn at(hour: u32, minute: u32) -> f64 {
+        use chrono::TimeZone;
+        chrono::Local.with_ymd_and_hms(2026, 11, 27, hour, minute, 0).single().unwrap().timestamp() as f64
+    }
+
+    #[test]
+    fn auto_continue_note_reads_its_times_from_the_meta() {
+        crate::i18n::english_in_this_thread(false);
+        assert!(is_auto_continue(&auto_note("waiting", json!({}))));
+        assert_eq!(auto_continue_text(&auto_note("waiting", json!({}))), "A conexão caiu às 10:05; continuo quando a rede voltar.");
+        assert_eq!(auto_continue_text(&auto_note("continued", json!({"continued_at": at(10, 20), "count": 2}))),
+            "A conexão caiu às 10:05; continuei às 10:20.");
+        assert_eq!(auto_continue_text(&auto_note("failed", json!({"code": "erro_envio_falhou"}))),
+            "A conexão caiu às 10:05; não consegui continuar (erro_envio_falhou).");
+        assert_eq!(auto_continue_text(&auto_note("cancelled", json!({}))), "A conexão caiu às 10:05; não continuei (cancelado).");
+        assert_eq!(auto_continue_text(&auto_note("skipped", json!({"code": "user_after_stop"}))), "A conexão caiu às 10:05; não continuei.");
+        // Reboot: `stopped_at` é a hora do boot, o texto diz só quando continuou.
+        assert_eq!(auto_continue_text(&auto_note("continued", json!({"cause": "reboot", "continued_at": at(10, 20)}))),
+            "O computador reiniciou no meio do turno; continuei às 10:20.");
+        assert_eq!(auto_continue_text(&auto_note("de-uma-versao-futura", json!({}))), "texto do servidor", "estado desconhecido fica com o texto do servidor");
+        assert!(!is_auto_continue(&notice("⚙️ x", json!({"state":"waiting"}))));
+    }
+
+    #[test]
+    fn auto_continue_only_the_waiting_note_offers_cancel() {
+        assert!(auto_continue_cancellable(&auto_note("waiting", json!({}))));
+        for state in ["continued", "failed", "cancelled", "skipped"] {
+            assert!(!auto_continue_cancellable(&auto_note(state, json!({}))), "{state}: o desfecho já saiu");
+        }
+        assert!(!auto_continue_cancellable(&auto_note("waiting", json!({"cause": "reboot"}))), "a nota do reboot nasce com o desfecho");
+        assert!(!auto_continue_cancellable(&fix_note("f", 1, "waiting")), "nota de outro tipo");
     }
 
     #[test]

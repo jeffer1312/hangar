@@ -4,12 +4,23 @@ import { integrationsFetchForServer } from './api';
 import type { LanInfo, Server } from './servers';
 import * as m from './paraglide/messages';
 
-export type PresetAuthKind = 'oauth_dcr' | 'oauth_manual_client' | 'oauth_dcr_or_bearer';
+// `oauth_dcr_or_bearer` só chega de servidor anterior ao preset por token.
+export type PresetAuthKind = 'none' | 'bearer' | 'oauth_dcr' | 'oauth_manual_client' | 'oauth_dcr_or_bearer';
 
 export interface IntegrationSetupGuide {
   title: string;
   steps: string[];
   docs_hint?: string | null;
+  /** Página do provedor onde a configuração começa. */
+  docs_url?: string | null;
+  /** Endereço de retorno do OAuth nesta máquina, pronto para copiar. */
+  redirect_uri?: string | null;
+}
+
+/** Marca do serviço que o servidor manda: logo embutido nos clientes (`icon`) e a cor dele (`#RRGGBB`). */
+export interface IntegrationBrand {
+  icon: string;
+  color: string;
 }
 
 export interface IntegrationPreset {
@@ -23,6 +34,7 @@ export interface IntegrationPreset {
   default_scopes: string[];
   requires_loopback_redirect: boolean;
   setup_guide?: IntegrationSetupGuide | null;
+  brand?: IntegrationBrand | null;
 }
 
 export type IntegrationTransport =
@@ -58,6 +70,8 @@ export interface IntegrationView {
   updated_at: number;
   status: IntegrationStatus;
   last_error?: string;
+  brand?: IntegrationBrand | null;
+  can_reuse_google_credentials?: boolean;
 }
 
 export interface IntegrationToolSummary {
@@ -88,6 +102,7 @@ export interface CreateIntegrationInput {
   projects?: string[];
   allowed_tools?: string[];
   secrets?: IntegrationSecretsPatch;
+  reuse_google_credentials_from?: string;
 }
 
 export interface UpdateIntegrationInput {
@@ -401,6 +416,8 @@ const ERROR_TEXT: Record<string, () => string> = {
   integration_owner_only: m.integrations_err_owner_only,
   integration_disabled: m.integrations_err_disabled,
   integration_already_exists: m.integrations_err_already_exists,
+  integration_google_credentials_unavailable: m.integrations_google_credentials_unavailable,
+  integration_client_secret_required: m.integrations_client_secret_required,
   integration_secrets_key_lost: m.integrations_err_keyring,
   integration_secrets_unavailable: m.integrations_err_keyring,
   approval_stale: m.integrations_err_stale,

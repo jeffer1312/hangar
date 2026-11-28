@@ -1620,6 +1620,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-auto-continue"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "hangar-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-boot"
 version = "0.1.0"
 dependencies = [
@@ -1835,6 +1849,16 @@ dependencies = [
  "tracing-subscriber",
  "unicode-width",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "hangar-delegation"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2177,7 +2201,9 @@ dependencies = [
 name = "hangar-psmux"
 version = "0.1.0"
 dependencies = [
+ "sysinfo",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2261,6 +2287,7 @@ dependencies = [
  "hangar-antigravity",
  "hangar-api",
  "hangar-auth",
+ "hangar-auto-continue",
  "hangar-boot",
  "hangar-browser-host",
  "hangar-cliproxy-setup",
@@ -2272,6 +2299,7 @@ dependencies = [
  "hangar-connectors",
  "hangar-conversation-transfer",
  "hangar-core",
+ "hangar-delegation",
  "hangar-deploy",
  "hangar-desktop-theme",
  "hangar-docs",
@@ -2577,6 +2605,7 @@ dependencies = [
  "chrono",
  "hangar-api",
  "libc",
+ "rayon",
  "regex",
  "ring",
  "serde",

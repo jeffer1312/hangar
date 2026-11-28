@@ -18,6 +18,9 @@ const OTHER_ADDRESS: &str = "erro_jev_aux_chave_outro_endereco";
 
 fn log(text: impl AsRef<str>) { tracing::warn!(target: "jev_aux", "{}", text.as_ref()); }
 
+/// Só `session` dispensa o auxiliar por API; vazio segue o auxiliar gravado.
+pub(crate) fn session_helps(mode: &Value) -> bool { mode.as_str().map(str::trim) == Some("session") }
+
 #[derive(Deserialize)]
 struct ModelsBody {
     base_url: String,

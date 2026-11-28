@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"], optional = true }
-chrono = { workspace = true, optional = true }
+chrono = { workspace = true, features = ["serde"], optional = true }
 hangar-core = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "time"], optional = true }
 reqwest = { workspace = true, optional = true }
@@ -25,4 +25,4 @@ test-util = ["runtime"]
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
 tempfile.workspace = true
 # Relógio pausado nas esperas entre tentativas de envio.
-tokio = { workspace = true, features = ["macros", "rt", "time", "test-util"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time", "test-util"] }

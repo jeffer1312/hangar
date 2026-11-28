@@ -82,6 +82,7 @@ vi.mock('../machines/parts', () => ({
   Notice: ({ text }: { text: string }) => (text ? createElement('div', { role: 'alert' }, text) : null),
 }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {}, deleteItemAsync: async () => {} }));
+vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => true) }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {}, remove: () => {} }) }));
 vi.mock('../../ui/Icon', () => ({ Icon: ({ name }: { name: string }) => createElement('i', { 'data-icon': name }) }));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: mocks.toastOk, erro: mocks.toastErro } }));
@@ -372,7 +373,7 @@ it('testIntegration trata 424 auth_expired na folha e libera ferramentas ao apro
   expect(mocks.updateIntegration).toHaveBeenCalledWith(srv, 'notion', { add_allowed_tools: ['create_issue'] });
 });
 
-it('editor de preset Google exibe guia curto e nota dos 7 dias em Testing', async () => {
+it('editor de preset Google exibe guia curto, endereço de retorno com Copiar e link do console', async () => {
   const googlePreset: IntegrationPreset = {
     id: 'google-gmail',
     name: 'Google Gmail',
@@ -387,6 +388,8 @@ it('editor de preset Google exibe guia curto e nota dos 7 dias em Testing', asyn
       title: 'Configurar Client ID do Google Cloud para Gmail MCP',
       steps: ['Passo 1 do console', 'Passo 2 do consentimento'],
       docs_hint: 'Google Cloud Console -> Credenciais',
+      docs_url: 'https://console.cloud.google.com/auth/clients',
+      redirect_uri: 'http://127.0.0.1:8765/api/integrations/oauth/callback',
     },
   };
 
@@ -404,7 +407,68 @@ it('editor de preset Google exibe guia curto e nota dos 7 dias em Testing', asyn
 
   expect(container.textContent).toContain('Configurar Client ID do Google Cloud para Gmail MCP');
   expect(container.textContent).toContain('Passo 1 do console');
-  expect(container.textContent).toContain(m.integrations_google_testing_hint());
+  expect(container.textContent).toContain('http://127.0.0.1:8765/api/integrations/oauth/callback');
+  expect(container.textContent).toContain(m.integrations_copy());
+  expect(container.textContent).toContain(m.integrations_setup_open_docs());
+});
+
+it('Drive reaproveita só a origem escolhida sem impedir o preenchimento manual', async () => {
+  const srv = bucket('a').server;
+  const onSaved = vi.fn();
+  const drive: IntegrationPreset = {
+    id: 'google-drive', name: 'Google Drive', category: 'productivity', description: '',
+    url: 'https://drivemcp.googleapis.com/mcp/v1self', url_editable: false,
+    auth_kind: 'oauth_manual_client', default_scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+    requires_loopback_redirect: true,
+  };
+  const sources = [
+    { id: 'gmail-pessoal', name: 'Gmail pessoal', can_reuse_google_credentials: true },
+    { id: 'agenda-equipe', name: 'Agenda da equipe', can_reuse_google_credentials: true },
+    { id: 'gmail-antigo', name: 'Gmail sem indicador' },
+  ];
+  const button = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  const clientId = () => container.querySelector(`textarea[aria-label="${m.integrations_field_client_id()}"]`);
+
+  const renderEditor = (items: typeof sources) => act(async () => {
+    root.render(<IntegrationEditorSheet server={srv} preset={drive} existingIds={sources.map((source) => source.id)}
+      existingIntegrations={items} onClose={vi.fn()} onSaved={onSaved} />);
+  });
+  await renderEditor(sources);
+  expect(clientId()).not.toBeNull();
+  expect(button('Gmail sem indicador (gmail-antigo)')).toBeNull();
+
+  await act(async () => { button('Gmail pessoal (gmail-pessoal)')!.click(); });
+  expect(clientId()).toBeNull();
+  mocks.createIntegration.mockRejectedValueOnce({ code: 'integration_google_credentials_unavailable' });
+  await act(async () => { button(m.integrations_connect())!.click(); });
+  expect(container.textContent).toContain(m.integrations_google_credentials_unavailable());
+  expect(onSaved).not.toHaveBeenCalled();
+
+  await renderEditor([]);
+  expect(button(m.integrations_connect())!.disabled).toBe(true);
+  await act(async () => { button(m.integrations_google_credential_manual())!.click(); });
+  expect(clientId()).not.toBeNull();
+  await setField(m.integrations_field_client_id(), 'manual-client');
+  mocks.createIntegration.mockRejectedValueOnce(new Error('create-failed'));
+  await act(async () => { button(m.integrations_connect())!.click(); });
+  expect(mocks.createIntegration.mock.lastCall?.[1]).not.toHaveProperty('reuse_google_credentials_from');
+  expect(mocks.createIntegration.mock.lastCall?.[1].auth.client_id).toBe('manual-client');
+
+  await renderEditor(sources);
+  await act(async () => { button('Agenda da equipe (agenda-equipe)')!.click(); });
+  const created = oauthView({
+    id: drive.id, name: drive.name, preset: drive.id,
+    transport: { kind: 'remote_http', url: drive.url, header_names: [] },
+    auth: { kind: 'oauth_manual_client', client_id: 'shared-client', scopes: drive.default_scopes },
+  });
+  mocks.createIntegration.mockResolvedValueOnce(created);
+  await act(async () => { button(m.integrations_connect())!.click(); });
+  expect(mocks.createIntegration).toHaveBeenLastCalledWith(srv, expect.objectContaining({
+    reuse_google_credentials_from: 'agenda-equipe',
+    auth: { kind: 'oauth_manual_client', client_id: '', scopes: ['https://www.googleapis.com/auth/drive.readonly'] },
+  }));
+  expect(mocks.createIntegration.mock.lastCall?.[1]).not.toHaveProperty('secrets');
+  expect(onSaved).toHaveBeenCalledWith(created, { isNew: true });
 });
 
 it('com 2 servidores próprios e identidade pendente não vaza pedido de sessão homônima entre máquinas', async () => {
@@ -491,7 +555,6 @@ it('editar integração com preset preserva url_editable=false, modos de auth pe
   expect(urlField).not.toBeNull();
   expect(urlField!.disabled).toBe(true);
   expect(container.textContent).toContain('Configurar Client ID do Google Cloud para Gmail MCP');
-  expect(container.textContent).toContain(m.integrations_google_testing_hint());
   expect(container.querySelector(`button[aria-label="${m.integrations_auth_oauth_dcr()}"]`)).toBeNull();
   expect(container.querySelector(`button[aria-label="${m.integrations_auth_bearer()}"]`)).toBeNull();
   expect(container.querySelector(`button[aria-label="${m.integrations_auth_none()}"]`)).toBeNull();

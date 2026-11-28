@@ -5,7 +5,16 @@ use super::settings::{section_head, settings_box};
 use super::vault::{alert, chip, muted};
 use gpui_kit::component::switch::Switch;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
+
+/// Quanto o card da integração recém-criada fica aceso, apagando aos poucos.
+const FRESH_GLOW: Duration = Duration::from_millis(2600);
+
+/// Logos embutidos (`assets/integrations`): marca fora desta lista cai na inicial do nome.
+const LOGOS: [&str; 12] = ["gmail", "googledrive", "googlecalendar", "notion", "linear", "slack", "figma", "atlassian", "github",
+    "cloudflare", "sentry", "supabase"];
 
 const READ_SECONDS: u64 = 25;
 const MUTATION_SECONDS: u64 = 30;
@@ -24,10 +33,15 @@ const RESERVED_HTTP_HEADERS: [&str; 5] = [
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(super) enum PresetAuthKind {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "bearer")]
+    Bearer,
     #[serde(rename = "oauth_dcr")]
     OAuthDcr,
     #[serde(rename = "oauth_manual_client")]
     OAuthManualClient,
+    /// Só chega de servidor anterior ao preset por token.
     #[serde(rename = "oauth_dcr_or_bearer")]
     OAuthDcrOrBearer,
 }
@@ -39,6 +53,17 @@ pub(super) struct SetupGuide {
     pub steps: Vec<String>,
     #[serde(default)]
     pub docs_hint: Option<String>,
+    #[serde(default)]
+    pub docs_url: Option<String>,
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
+}
+
+/// Marca do serviço que o servidor manda: o logo embutido (`assets/integrations/<icon>.svg`) e a cor dele.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub(super) struct Brand {
+    pub icon: String,
+    pub color: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -61,6 +86,8 @@ pub(super) struct CatalogPreset {
     pub requires_loopback_redirect: bool,
     #[serde(default)]
     pub setup_guide: Option<SetupGuide>,
+    #[serde(default)]
+    pub brand: Option<Brand>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -161,6 +188,10 @@ pub(super) struct IntegrationItem {
     pub status: IntegrationStatus,
     #[serde(default)]
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub brand: Option<Brand>,
+    #[serde(default)]
+    can_reuse_google_credentials: bool,
 }
 
 #[derive(Deserialize)]
@@ -231,6 +262,7 @@ pub(super) struct FormDraft {
     pub auth_kind: AuthKindChoice,
     pub client_id: String,
     pub client_secret: String,
+    reuse_google_credentials_from: Option<String>,
     pub scopes_raw: String,
     pub bearer_token: String,
     pub policy: PermissionPolicy,
@@ -248,6 +280,15 @@ enum FormMode {
     Preset(CatalogPreset),
     Custom,
     Edit(IntegrationItem, Option<CatalogPreset>),
+}
+
+/// Retorno da última ação numa integração (Testar, Autenticar, Ativa…), mostrado no card dela.
+#[derive(Clone)]
+enum Feedback {
+    Info(String),
+    /// Andamento do login (abrindo, conclua no navegador): some sozinho quando a integração deixa de pedir login.
+    Pending(String),
+    Error(String),
 }
 
 struct PendingHandoff {
@@ -276,7 +317,10 @@ pub(super) struct IntegrationsPage {
     open_tools: HashSet<String>,
     busy: HashSet<String>,
     testing: HashSet<String>,
-    error: Option<String>,
+    feedback: HashMap<String, Feedback>,
+    /// Integração recém-criada: a página rola até ela uma vez e o card acende e apaga.
+    fresh: Option<(String, Instant)>,
+    reveal: Rc<Cell<bool>>,
     notice: Option<String>,
     handoff: Option<PendingHandoff>,
 }
@@ -308,6 +352,8 @@ struct IntegrationForm {
     env_input: Entity<TextareaState>,
     client_id_input: Entity<InputState>,
     client_secret_input: Entity<InputState>,
+    google_credential_sources: Vec<(String, String)>,
+    reuse_google_credentials_from: Option<String>,
     scopes_input: Entity<InputState>,
     bearer_input: Entity<InputState>,
     projects_input: Entity<TextareaState>,
@@ -371,7 +417,9 @@ impl IntegrationsPage {
             open_tools: HashSet::new(),
             busy: HashSet::new(),
             testing: HashSet::new(),
-            error: None,
+            feedback: HashMap::new(),
+            fresh: None,
+            reveal: Rc::new(Cell::new(false)),
             notice: None,
             handoff: None,
         };
@@ -390,7 +438,7 @@ impl IntegrationsPage {
         self.tools_errors.clear();
         self.pending_tools_reload.clear();
         self.tools_seq.clear();
-        self.error = None;
+        self.feedback.clear();
         let api_list = self.api.clone();
         run(
             &self.runtime,
@@ -452,9 +500,21 @@ impl IntegrationsPage {
         self.open_tools.retain(|id| alive.contains(id));
         let open_ids: Vec<String> = self.open_tools.iter().cloned().collect();
         self.items = Some(Ok(list));
+        self.settle_pending_logins();
         for id in open_ids {
             self.load_tools(&id, window, cx);
         }
+    }
+
+    /// Login concluído (Conectada) ou recusado (Erro): a nota de andamento sai de vez, para não voltar quando o token vencer.
+    fn settle_pending_logins(&mut self) {
+        let Some(Ok(list)) = self.items.as_ref() else { return };
+        let settled: HashSet<String> = list
+            .iter()
+            .filter(|it| matches!(it.status, IntegrationStatus::Ready | IntegrationStatus::Error))
+            .map(|it| it.id.clone())
+            .collect();
+        self.feedback.retain(|id, fb| !(matches!(fb, Feedback::Pending(_)) && settled.contains(id)));
     }
 
     fn reload_items(&mut self, reconcile_tools: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -477,7 +537,10 @@ impl IntegrationsPage {
                             .map_err(|_| tr("invalid_response"))
                     }) {
                     Ok(list) if reconcile_tools => this.reconcile_loaded_items(list, window, cx),
-                    Ok(list) => this.items = Some(Ok(list)),
+                    Ok(list) => {
+                        this.items = Some(Ok(list));
+                        this.settle_pending_logins();
+                    }
                     Err(msg) if this.items.is_none() => this.items = Some(Err(msg)),
                     Err(_) => {}
                 }
@@ -543,11 +606,15 @@ impl IntegrationsPage {
     ) {
         // Invalida leituras de lista anteriores à gravação confirmada.
         self.seq += 1;
-        self.error = None;
-        self.notice = Some(tr_shared(
-            if created { "integrations_created" } else { "integrations_saved" },
-            &[],
-        ));
+        self.notice = None;
+        self.feedback.insert(
+            item.id.clone(),
+            Feedback::Info(tr_shared(if created { "integrations_created" } else { "integrations_saved" }, &[])),
+        );
+        if created {
+            self.fresh = Some((item.id.clone(), Instant::now()));
+            self.reveal.set(true);
+        }
         if let Some(Ok(list)) = self.items.as_mut() {
             if let Some(slot) = list.iter_mut().find(|existing| existing.id == item.id) {
                 *slot = item.clone();
@@ -572,7 +639,8 @@ impl IntegrationsPage {
         if !self.busy.insert(id.clone()) {
             return;
         }
-        (self.error, self.notice) = (None, None);
+        self.notice = None;
+        self.feedback.remove(&id);
         let (api, path) = (self.api.clone(), id.clone());
         run(
             &self.runtime,
@@ -608,7 +676,9 @@ impl IntegrationsPage {
                             this.tools_errors.remove(&id);
                         }
                     }
-                    Err(error) => this.error = Some(integrations_failure(&error)),
+                    Err(error) => {
+                        this.feedback.insert(id, Feedback::Error(integrations_failure(&error)));
+                    }
                 }
             },
         );
@@ -642,7 +712,8 @@ impl IntegrationsPage {
         if !self.testing.insert(id.clone()) {
             return;
         }
-        (self.error, self.notice) = (None, None);
+        self.notice = None;
+        self.feedback.remove(&id);
         let (api, path) = (self.api.clone(), id.clone());
         run(
             &self.runtime,
@@ -666,12 +737,13 @@ impl IntegrationsPage {
                         this.bump_tools_seq(&id);
                         this.tools.insert(id.clone(), tools);
                         this.open_tools.insert(id.clone());
-                        this.notice = Some(tr_shared("integrations_test_ok", &[("n", &count)]));
+                        this.feedback
+                            .insert(id.clone(), Feedback::Info(tr_shared("integrations_test_ok", &[("n", &count)])));
                         this.seq += 1;
                         this.reload_items(false, window, cx);
                     }
                     Err(error) => {
-                        this.error = Some(integrations_failure(&error));
+                        this.feedback.insert(id.clone(), Feedback::Error(integrations_failure(&error)));
                         this.seq += 1;
                         this.reload_items(false, window, cx);
                     }
@@ -687,8 +759,9 @@ impl IntegrationsPage {
         }
         self.oauth_start_seq += 1;
         let start_seq = self.oauth_start_seq;
-        self.error = None;
-        self.notice = Some(tr_shared("integrations_oauth_opening", &[]));
+        self.notice = None;
+        self.feedback
+            .insert(id.clone(), Feedback::Pending(tr_shared("integrations_oauth_opening", &[])));
         self.handoff = None;
         let (api, path) = (self.api.clone(), id.clone());
         let start_body = oauth_start_body(&api);
@@ -708,6 +781,10 @@ impl IntegrationsPage {
             move |this: &mut Self, result, _, cx| {
                 this.busy.remove(&id);
                 if start_seq != this.oauth_start_seq {
+                    // Outra tentativa de login começou depois: a nota "abrindo" desta não vale mais.
+                    if matches!(this.feedback.get(&id), Some(Feedback::Pending(_))) {
+                        this.feedback.remove(&id);
+                    }
                     return;
                 }
                 match result {
@@ -715,10 +792,12 @@ impl IntegrationsPage {
                         Ok(OAuthStartResponse::OpenUrl { authorize_url, .. }) => {
                             if let Some(safe) = safe_authorize_url(&authorize_url) {
                                 cx.open_url(&safe);
-                                this.notice = Some(tr_shared("integrations_oauth_started", &[]));
+                                this.feedback.insert(
+                                    id,
+                                    Feedback::Pending(tr_shared("integrations_oauth_started", &[])),
+                                );
                             } else {
-                                this.notice = None;
-                                this.error = Some(tr("invalid_response"));
+                                this.feedback.insert(id, Feedback::Error(tr("invalid_response")));
                             }
                         }
                         Ok(OAuthStartResponse::HandoffDesktop {
@@ -726,7 +805,7 @@ impl IntegrationsPage {
                             reason,
                             ..
                         }) => {
-                            this.notice = None;
+                            this.feedback.remove(&id);
                             this.handoff_seq += 1;
                             this.handoff = Some(PendingHandoff {
                                 handoff_id: this.handoff_seq,
@@ -736,13 +815,11 @@ impl IntegrationsPage {
                             });
                         }
                         Err(_) => {
-                            this.notice = None;
-                            this.error = Some(tr("invalid_response"));
+                            this.feedback.insert(id, Feedback::Error(tr("invalid_response")));
                         }
                     },
                     Err(error) => {
-                        this.notice = None;
-                        this.error = Some(integrations_failure(&error));
+                        this.feedback.insert(id, Feedback::Error(integrations_failure(&error)));
                     }
                 }
             },
@@ -790,12 +867,15 @@ impl IntegrationsPage {
                             this.handoff = None;
                         }
                         if same_handoff || this.handoff.is_none() {
-                            this.notice = Some(tr_shared("integrations_oauth_desktop_opened", &[]));
+                            this.feedback.insert(
+                                id,
+                                Feedback::Pending(tr_shared("integrations_oauth_desktop_opened", &[])),
+                            );
                         }
                     }
                     Err(error) => {
                         if same_handoff || this.handoff.is_none() {
-                            this.error = Some(integrations_failure(&error));
+                            this.feedback.insert(id, Feedback::Error(integrations_failure(&error)));
                         }
                     }
                 }
@@ -895,7 +975,8 @@ impl IntegrationsPage {
         if !self.busy.insert(id.clone()) {
             return;
         }
-        (self.error, self.notice) = (None, None);
+        self.notice = None;
+        self.feedback.remove(&id);
         let (api, path) = (self.api.clone(), id.clone());
         run(
             &self.runtime,
@@ -924,9 +1005,12 @@ impl IntegrationsPage {
                             // Se Atualizar estava em voo e foi invalidado por `this.seq += 1`, dispara leitura substituta.
                             this.reload_items(true, window, cx);
                         }
+                        this.feedback.remove(&id);
                         this.notice = Some(tr_shared("integrations_removed", &[]));
                     }
-                    Err(error) => this.error = Some(integrations_failure(&error)),
+                    Err(error) => {
+                        this.feedback.insert(id, Feedback::Error(integrations_failure(&error)));
+                    }
                 }
             },
         );
@@ -940,7 +1024,7 @@ impl IntegrationsPage {
         }
     }
 
-    fn render_configured(&self, items: &[IntegrationItem], cx: &mut Context<Self>) -> AnyElement {
+    fn render_configured(&self, items: &[IntegrationItem], window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let head = self.mark_section(
             section_head(
                 IconName::Plug,
@@ -965,7 +1049,7 @@ impl IntegrationsPage {
                 .aria_label(tr_shared("integrations_configured_heading", &[]))
                 .children(items.iter().flat_map(|item| {
                     let open = self.open_tools.contains(&item.id);
-                    std::iter::once(self.render_item(item, open, cx))
+                    std::iter::once(self.render_item(item, open, window, cx))
                         .chain(open.then(|| self.render_tools(item, cx)))
                 }))
                 .into_any_element()
@@ -973,7 +1057,13 @@ impl IntegrationsPage {
         div().flex().flex_col().gap_2().child(head).child(body).into_any_element()
     }
 
-    fn render_item(&self, item: &IntegrationItem, tools_open: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_item(
+        &self,
+        item: &IntegrationItem,
+        tools_open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let id = item.id.clone();
         let busy = self.busy.contains(&id);
         let testing = self.testing.contains(&id);
@@ -1086,13 +1176,25 @@ impl IntegrationsPage {
 
         let id_oauth = id.clone();
         let oauth_label = tr_shared(
-            if item.status == IntegrationStatus::AuthExpired {
-                "integrations_reconnect"
-            } else {
+            if item.status == IntegrationStatus::AuthRequired {
                 "integrations_authorize"
+            } else {
+                "integrations_reconnect"
             },
             &[],
         );
+        let feedback = self.feedback.get(&id).cloned();
+        // O erro da ação que a pessoa acabou de fazer explica mais que o `last_error` guardado: um aviso vermelho por vez.
+        let shown_error = match &feedback {
+            Some(Feedback::Error(err)) => Some(err.clone()),
+            _ => item.last_error.clone().filter(|err| !err.is_empty() && item.status != IntegrationStatus::Ready),
+        };
+        let waiting_login = matches!(item.status, IntegrationStatus::AuthRequired | IntegrationStatus::AuthExpired);
+        let info = match feedback {
+            Some(Feedback::Info(text)) => Some(text),
+            Some(Feedback::Pending(text)) if waiting_login => Some(text),
+            _ => None,
+        };
         let oauth_btn = is_oauth.then(|| {
             let btn = Button::new(SharedString::from(format!("integrations-oauth-{id}")))
                 .xsmall()
@@ -1102,6 +1204,20 @@ impl IntegrationsPage {
             btn.on_click(cx.listener(move |this, _, window, cx| {
                 this.start_oauth(id_oauth.clone(), window, cx);
             }))
+        });
+
+        // Token pessoal ainda não salvo: o caminho é a edição, onde fica o campo do token.
+        let token_btn = (item.auth == AuthConfig::Bearer && item.status == IntegrationStatus::AuthRequired).then(|| {
+            let token_item = item.clone();
+            let token_preset = self.preset_for(item.preset.as_deref());
+            Button::new(SharedString::from(format!("integrations-token-{id}")))
+                .primary()
+                .xsmall()
+                .disabled(locked)
+                .label(tr_shared("integrations_add_token", &[]))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_form(FormMode::Edit(token_item.clone(), token_preset.clone()), window, cx);
+                }))
         });
 
         let id_test = id.clone();
@@ -1157,18 +1273,48 @@ impl IntegrationsPage {
                 this.confirm_remove(&remove_item, window, cx);
             }));
 
+        let local = matches!(item.transport, Transport::LocalStdio { .. });
+        let icon = integration_icon(item.brand.as_ref(), &item.name, local, 40.).relative().child(
+            div()
+                .absolute()
+                .right(px(-3.))
+                .bottom(px(-3.))
+                .size(px(12.))
+                .rounded_full()
+                .border_2()
+                .border_color(theme::boxed())
+                .bg(status_dot(item.status)),
+        );
+        // Recém-criada: a página rola até ela uma vez e o fundo acende e apaga, para a pessoa ver onde ela entrou.
+        let glow = self.fresh.as_ref().filter(|(fresh, _)| *fresh == id).map(|(_, at)| {
+            let t = (at.elapsed().as_secs_f32() / FRESH_GLOW.as_secs_f32()).min(1.);
+            if t < 1. { motion::request_frame(window, cx); }
+            // Aceso por inteiro no primeiro terço, para a pessoa achar o card; depois apaga.
+            if t >= 1. { 0. } else if cx.reduce_motion() || t < 0.45 { 1. } else { let x = (t - 0.45) / 0.55; 1. - x * x }
+        });
+        let scroll = self.hangar.upgrade().map(|hangar| hangar.read(cx).settings_ui.scroll.clone());
+        let reveal = (self.fresh.as_ref().is_some_and(|(fresh, _)| *fresh == id)).then(|| self.reveal.clone()).zip(scroll);
+
         div()
             .id(SharedString::from(format!("integrations-row-{id}")))
             .role(Role::ListItem)
             .aria_label(item.name.clone())
+            .relative()
             .mt(px(-1.))
             .border_t_1()
             .border_color(theme::border())
             .px_4()
             .py(px(12.))
             .flex()
-            .flex_col()
-            .gap_2()
+            .items_start()
+            .gap(px(14.))
+            .when_some(glow.filter(|g| *g > 0.), |el, g| {
+                el.bg(theme::accent().opacity(0.24 * g))
+                    .child(div().absolute().inset_0().border_2().border_color(theme::accent().opacity(g)))
+            })
+            .when_some(reveal, |el, (reveal, scroll)| el.child(super::settings::reveal_here(scroll, reveal)))
+            .child(icon)
+            .child(div().flex_1().min_w_0().flex().flex_col().gap_2()
             .child(
                 div()
                     .flex()
@@ -1202,12 +1348,20 @@ impl IntegrationsPage {
                     .truncate()
                     .child(transport_summary),
             )
-            .when_some(
-                item.last_error
-                    .clone()
-                    .filter(|err| !err.is_empty() && item.status != IntegrationStatus::Ready),
-                |el, err| el.child(alert(SharedString::from(format!("integrations-item-err-{id}")), err)),
-            )
+            .when_some(shown_error, |el, err| {
+                el.child(alert(SharedString::from(format!("integrations-item-err-{id}")), err))
+            })
+            .when_some(info, |el, text| {
+                el.child(
+                    div()
+                        .id(SharedString::from(format!("integrations-item-info-{id}")))
+                        .role(Role::Status)
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .whitespace_normal()
+                        .child(text),
+                )
+            })
             .when(is_google_expiring, |el| {
                 el.child(
                     div()
@@ -1228,11 +1382,12 @@ impl IntegrationsPage {
                     .child(pin_check)
                     .child(div().flex_1())
                     .children(oauth_btn)
+                    .children(token_btn)
                     .child(test_btn)
                     .child(tools_btn)
                     .child(edit_btn)
                     .child(remove_btn),
-            )
+            ))
             .into_any_element()
     }
 
@@ -1373,7 +1528,7 @@ impl IntegrationsPage {
             .into_any_element()
     }
 
-    fn render_catalog(&self, existing: &[IntegrationItem], cx: &mut Context<Self>) -> AnyElement {
+    fn render_catalog(&self, existing: &[IntegrationItem], window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let head = self.mark_section(
             section_head(
                 IconName::Globe,
@@ -1401,91 +1556,88 @@ impl IntegrationsPage {
                 .py(px(14.))
                 .child(muted(tr_shared("integrations_catalog_empty", &[])))
                 .into_any_element(),
-            Some(Ok(presets)) => settings_box()
-                .id("integrations-catalog")
-                .role(Role::List)
-                .aria_label(tr_shared("integrations_catalog_heading", &[]))
-                .children(presets.iter().map(|preset| {
-                    let already = existing
-                        .iter()
-                        .any(|item| item.preset.as_deref() == Some(preset.id.as_str()));
-                    let connect_label = tr_shared(
-                        if already {
-                            "integrations_add_account"
-                        } else {
-                            "integrations_connect"
-                        },
-                        &[],
-                    );
-                    let preset_cloned = preset.clone();
-                    div()
-                        .id(SharedString::from(format!("integrations-preset-{}", preset.id)))
-                        .role(Role::ListItem)
-                        .aria_label(preset.name.clone())
-                        .mt(px(-1.))
-                        .border_t_1()
-                        .border_color(theme::border())
-                        .px_4()
-                        .py(px(12.))
-                        .flex()
-                        .items_center()
-                        .gap(px(14.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .gap(px(3.))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_wrap()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(preset.name.clone()),
-                                        )
-                                        .child(chip(
-                                            tr_shared("integrations_badge_official", &[]),
-                                            theme::accent_text(),
-                                            theme::accent_dim(),
-                                        ))
-                                        .child(chip(
-                                            preset_auth_summary(preset.auth_kind),
-                                            theme::muted(),
-                                            theme::inset(),
-                                        )),
-                                )
-                                .when(!preset.description.is_empty(), |el| {
-                                    el.child(
-                                        div()
-                                            .text_size(px(12.5))
-                                            .text_color(theme::muted())
-                                            .whitespace_normal()
-                                            .child(preset.description.clone()),
-                                    )
-                                }),
-                        )
-                        .child(
-                            Button::new(SharedString::from(format!(
-                                "integrations-connect-{}",
-                                preset.id
-                            )))
-                            .primary()
-                            .small()
-                            .label(connect_label)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_form(FormMode::Preset(preset_cloned.clone()), window, cx);
-                            })),
-                        )
-                        .into_any_element()
-                }))
-                .into_any_element(),
+            Some(Ok(presets)) => {
+                // Colunas pela largura do painel ao lado da navegação; cada cartão tem no mínimo ~300px.
+                let room = f32::from(window.viewport_size().width) - 330.;
+                let columns = ((room / 300.).floor() as u16).clamp(1, 4);
+                div()
+                    .id("integrations-catalog")
+                    .role(Role::List)
+                    .aria_label(tr_shared("integrations_catalog_heading", &[]))
+                    .grid()
+                    .grid_cols(columns)
+                    .gap_3()
+                    .children(presets.iter().map(|preset| self.render_preset_card(preset, existing, cx)))
+                    .into_any_element()
+            }
         };
         div().flex().flex_col().gap_2().child(head).child(body).into_any_element()
+    }
+
+    /// Cartão do catálogo: quem é o serviço (logo e nome), como entra (selo do login), o que faz e o botão de conectar.
+    /// Serviço já conectado mostra "Conectada" e o botão vira "Conectar conta", para outra conta do mesmo serviço.
+    fn render_preset_card(&self, preset: &CatalogPreset, existing: &[IntegrationItem], cx: &mut Context<Self>) -> AnyElement {
+        let connected = existing.iter().filter(|item| item.preset.as_deref() == Some(preset.id.as_str())).count();
+        let preset_cloned = preset.clone();
+        let connect = Button::new(SharedString::from(format!("integrations-connect-{}", preset.id)))
+            .small()
+            .label(tr_shared(if connected > 0 { "integrations_add_account" } else { "integrations_connect" }, &[]))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_form(FormMode::Preset(preset_cloned.clone()), window, cx);
+            }));
+        let connect = if connected > 0 { connect.outline() } else { connect.primary() };
+        div()
+            .id(SharedString::from(format!("integrations-preset-{}", preset.id)))
+            .role(Role::ListItem)
+            .aria_label(preset.name.clone())
+            .p_4()
+            .rounded(px(14.))
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::boxed())
+            .hover(|style| style.border_color(theme::accent().opacity(0.6)))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(integration_icon(preset.brand.as_ref(), &preset.name, false, 40.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(div().font_weight(FontWeight::MEDIUM).truncate().child(preset.name.clone()))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap(px(6.))
+                                    .child(chip(preset_auth_summary(preset.auth_kind), theme::muted(), theme::inset()))
+                                    // "Adicionada", não "Conectada": o estado de cada conta (token, login) fica no card dela.
+                                    .when(connected > 0, |el| {
+                                        el.child(chip(tr_shared("integrations_added", &[]), theme::accent_text(), theme::accent_dim()))
+                                    }),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(12.5))
+                    .text_color(theme::muted())
+                    .whitespace_normal()
+                    .line_clamp(3)
+                    .text_ellipsis()
+                    .child(preset.description.clone()),
+            )
+            .child(div().flex().justify_end().child(connect))
+            .into_any_element()
     }
 }
 
@@ -1494,6 +1646,8 @@ impl InitialFormValues {
         match mode {
             FormMode::Preset(p) => {
                 let auth_kind = match p.auth_kind {
+                    PresetAuthKind::None => AuthKindChoice::None,
+                    PresetAuthKind::Bearer => AuthKindChoice::Bearer,
                     PresetAuthKind::OAuthDcr | PresetAuthKind::OAuthDcrOrBearer => {
                         AuthKindChoice::OAuthDcr
                     }
@@ -1580,7 +1734,13 @@ impl InitialFormValues {
                             )
                         }
                     };
+                // Cloudflare criada antes do preset público, ainda na URL padrão: a edição já propõe "Sem autenticação".
+                let public_default = preset_meta.as_ref().is_some_and(|p| {
+                    p.auth_kind == PresetAuthKind::None
+                        && matches!(&item.transport, Transport::RemoteHttp { url, .. } if *url == p.url)
+                });
                 let (auth_kind, client_id, scopes) = match &item.auth {
+                    AuthConfig::OAuthDcr if public_default => (AuthKindChoice::None, String::new(), String::new()),
                     AuthConfig::None => (AuthKindChoice::None, String::new(), String::new()),
                     AuthConfig::Bearer => (AuthKindChoice::Bearer, String::new(), String::new()),
                     AuthConfig::OAuthDcr => (AuthKindChoice::OAuthDcr, String::new(), String::new()),
@@ -1630,6 +1790,10 @@ impl IntegrationForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let google_credential_sources = match &mode {
+            FormMode::Preset(preset) => google_credential_sources(preset, existing),
+            _ => Vec::new(),
+        };
         let initial = InitialFormValues::from_mode(mode, existing);
         let input = |val: String, hint: String, window: &mut Window, cx: &mut Context<Self>| {
             cx.new(|cx| InputState::new(window, cx).default_value(val).placeholder(hint))
@@ -1660,7 +1824,8 @@ impl IntegrationForm {
             cx,
         );
         let url_input = input(initial.url, "https://...".into(), window, cx);
-        let headers_input = area(String::new(), secret_hint.clone(), 2, window, cx);
+        let headers_hint = if initial.existing_headers.is_empty() { String::new() } else { secret_hint.clone() };
+        let headers_input = area(String::new(), headers_hint, 2, window, cx);
         let command_input = area(
             initial.command,
             tr_shared("integrations_field_command_hint", &[]),
@@ -1719,6 +1884,8 @@ impl IntegrationForm {
             env_input,
             client_id_input,
             client_secret_input,
+            google_credential_sources,
+            reuse_google_credentials_from: None,
             scopes_input,
             bearer_input,
             projects_input,
@@ -1755,9 +1922,10 @@ impl IntegrationForm {
             existing_env_keys: self.existing_env_keys.clone(),
             removed_env_keys: self.removed_env_keys.clone(),
             new_env_raw: self.env_input.read(cx).value().to_string(),
-            auth_kind: self.auth_kind,
+            auth_kind: self.effective_auth(),
             client_id: self.client_id_input.read(cx).value().to_string(),
             client_secret: self.client_secret_input.read(cx).value().to_string(),
+            reuse_google_credentials_from: self.reuse_google_credentials_from.clone(),
             scopes_raw: self.scopes_input.read(cx).value().to_string(),
             bearer_token: self.bearer_input.read(cx).value().to_string(),
             policy: self.policy,
@@ -1835,11 +2003,21 @@ impl IntegrationForm {
         cx.notify();
     }
 
+    /// Autenticação salva que o preset não oferece mais (GitHub antigo em OAuth) vira a primeira opção dele.
+    fn effective_auth(&self) -> AuthKindChoice {
+        let options = self.auth_options();
+        if options.is_empty() || options.contains(&self.auth_kind) { self.auth_kind } else { options[0] }
+    }
+
     fn auth_options(&self) -> Vec<AuthKindChoice> {
         if self.transport == TransportKind::LocalStdio {
             return Vec::new();
         }
         match self.preset_auth {
+            // A URL trocada de um preset público pode apontar para um endpoint com login.
+            Some(PresetAuthKind::None) if self.url_editable => vec![AuthKindChoice::None, AuthKindChoice::OAuthDcr],
+            Some(PresetAuthKind::None) => vec![AuthKindChoice::None],
+            Some(PresetAuthKind::Bearer) => vec![AuthKindChoice::Bearer],
             Some(PresetAuthKind::OAuthDcr) => vec![AuthKindChoice::OAuthDcr],
             Some(PresetAuthKind::OAuthManualClient) => vec![AuthKindChoice::OAuthManualClient],
             Some(PresetAuthKind::OAuthDcrOrBearer) => {
@@ -1888,7 +2066,7 @@ impl Hangar {
 }
 
 impl Render for IntegrationsPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let custom_btn = self.mark_section(
             div().child(
                 Button::new("integrations-add-custom")
@@ -1930,6 +2108,7 @@ impl Render for IntegrationsPage {
                     .child(
                         div()
                             .mt(px(6.))
+                            .max_w(px(super::settings::READING_WIDTH))
                             .text_color(theme::muted())
                             .whitespace_normal()
                             .child(tr_shared("integrations_subtitle", &[])),
@@ -1938,9 +2117,6 @@ impl Render for IntegrationsPage {
             .child(div().flex().items_center().gap_2().child(refresh_btn).child(custom_btn));
 
         let mut page = div().flex().flex_col().gap_4().child(header);
-        if let Some(err) = self.error.clone() {
-            page = page.child(alert("integrations-action-error", err));
-        }
         if let Some(notice) = self.notice.clone() {
             page = page.child(
                 div()
@@ -2033,8 +2209,8 @@ impl Render for IntegrationsPage {
             Some(Ok(items)) => items,
         };
 
-        page.child(self.render_configured(items, cx))
-            .child(self.render_catalog(items, cx))
+        page.child(self.render_configured(items, window, cx))
+            .child(self.render_catalog(items, window, cx))
     }
 }
 
@@ -2054,7 +2230,7 @@ impl Render for IntegrationForm {
         let mut body = div().flex().flex_col().gap(px(12.)).text_size(px(13.));
 
         if let Some(guide) = &self.setup_guide {
-            let is_google = self.preset.as_deref().is_some_and(|p| p.starts_with("google-"));
+            let docs_url = guide.docs_url.clone().and_then(|url| safe_authorize_url(&url));
             body = body.child(
                 div()
                     .p_3()
@@ -2092,13 +2268,56 @@ impl Render for IntegrationForm {
                                 .child(hint),
                         )
                     })
-                    .when(is_google, |el| {
+                    .when_some(guide.redirect_uri.clone(), |el, uri| {
+                        let copy = uri.clone();
                         el.child(
                             div()
-                                .text_xs()
-                                .text_color(theme::warning_text())
-                                .whitespace_normal()
-                                .child(tr_shared("integrations_google_testing_hint", &[])),
+                                .mt(px(4.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(muted(tr_shared("integrations_setup_redirect", &[])).text_xs())
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded(px(6.))
+                                                .bg(theme::boxed())
+                                                .font_family(theme::MONO)
+                                                .text_xs()
+                                                .whitespace_normal()
+                                                .child(uri),
+                                        )
+                                        .child(
+                                            Button::new("integrations-copy-redirect")
+                                                .outline()
+                                                .xsmall()
+                                                .icon(IconName::Copy)
+                                                .label(tr_shared("integrations_copy", &[]))
+                                                .on_click(move |_, _, cx| {
+                                                    cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                                                }),
+                                        ),
+                                ),
+                        )
+                    })
+                    .when_some(docs_url, |el, url| {
+                        el.child(
+                            div().mt(px(4.)).child(
+                                Button::new("integrations-open-docs")
+                                    .primary()
+                                    .small()
+                                    .icon(IconName::ExternalLink)
+                                    .label(tr_shared("integrations_setup_open_docs", &[]))
+                                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                            ),
                         )
                     }),
             );
@@ -2175,7 +2394,7 @@ impl Render for IntegrationForm {
                             let id = SharedString::from(format!("integrations-form-auth-{choice:?}"));
                             Radio::new(id)
                                 .label(auth_choice_label(choice))
-                                .checked(self.auth_kind == choice)
+                                .checked(self.effective_auth() == choice)
                                 .disabled(off)
                                 .on_change(cx.listener(move |this, _, _, cx| {
                                     this.auth_kind = choice;
@@ -2190,42 +2409,81 @@ impl Render for IntegrationForm {
                     ));
                 }
 
-                match self.auth_kind {
+                match self.effective_auth() {
                     AuthKindChoice::OAuthManualClient => {
-                        body = body
-                            .child(field(
-                                tr_shared("integrations_field_client_id", &[]),
+                        let manual = self.reuse_google_credentials_from.is_none();
+                        if !self.google_credential_sources.is_empty() {
+                            let choices = div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    Radio::new("integrations-google-manual")
+                                        .label(tr_shared("integrations_google_credential_manual", &[]))
+                                        .checked(manual)
+                                        .disabled(off)
+                                        .on_change(cx.listener(|this, _, _, cx| {
+                                            this.reuse_google_credentials_from = None;
+                                            this.error = None;
+                                            cx.notify();
+                                        })),
+                                )
+                                .children(self.google_credential_sources.iter().map(|(id, name)| {
+                                    let selected = self.reuse_google_credentials_from.as_ref() == Some(id);
+                                    let element_id = SharedString::from(format!("integrations-google-source-{id}"));
+                                    let label = format!("{name} ({id})");
+                                    let source = id.clone();
+                                    Radio::new(element_id)
+                                        .label(label)
+                                        .checked(selected)
+                                        .disabled(off)
+                                        .on_change(cx.listener(move |this, _, _, cx| {
+                                            this.reuse_google_credentials_from = Some(source.clone());
+                                            this.error = None;
+                                            cx.notify();
+                                        }))
+                                }));
+                            body = body.child(field(
+                                tr_shared("integrations_google_credential_source", &[]),
                                 None,
-                                Input::new(&self.client_id_input)
-                                    .small()
-                                    .disabled(off)
-                                    .aria_label(tr_shared("integrations_field_client_id", &[]))
-                                    .into_any_element(),
-                            ))
-                            .child(field(
-                                tr_shared("integrations_field_client_secret", &[]),
-                                self.is_edit
-                                    .then(|| tr_shared("integrations_secret_kept_hint", &[])),
-                                Input::new(&self.client_secret_input)
-                                    .small()
-                                    .mask_toggle()
-                                    .disabled(off)
-                                    .aria_label(tr_shared("integrations_field_client_secret", &[]))
-                                    .into_any_element(),
-                            ))
-                            .child(field(
-                                format!(
-                                    "{} ({})",
-                                    tr_shared("integrations_field_scopes", &[]),
-                                    tr_shared("integrations_optional", &[])
-                                ),
-                                None,
-                                Input::new(&self.scopes_input)
-                                    .small()
-                                    .disabled(off)
-                                    .aria_label(tr_shared("integrations_field_scopes", &[]))
-                                    .into_any_element(),
+                                choices.into_any_element(),
                             ));
+                        }
+                        if manual {
+                            body = body
+                                .child(field(
+                                    tr_shared("integrations_field_client_id", &[]),
+                                    None,
+                                    Input::new(&self.client_id_input)
+                                        .small()
+                                        .disabled(off)
+                                        .aria_label(tr_shared("integrations_field_client_id", &[]))
+                                        .into_any_element(),
+                                ))
+                                .child(field(
+                                    tr_shared("integrations_field_client_secret", &[]),
+                                    self.is_edit.then(|| tr_shared("integrations_secret_kept_hint", &[])),
+                                    Input::new(&self.client_secret_input)
+                                        .small()
+                                        .mask_toggle()
+                                        .disabled(off)
+                                        .aria_label(tr_shared("integrations_field_client_secret", &[]))
+                                        .into_any_element(),
+                                ));
+                        }
+                        body = body.child(field(
+                            format!(
+                                "{} ({})",
+                                tr_shared("integrations_field_scopes", &[]),
+                                tr_shared("integrations_optional", &[])
+                            ),
+                            None,
+                            Input::new(&self.scopes_input)
+                                .small()
+                                .disabled(off)
+                                .aria_label(tr_shared("integrations_field_scopes", &[]))
+                                .into_any_element(),
+                        ));
                     }
                     AuthKindChoice::Bearer => {
                         body = body.child(field(
@@ -2477,6 +2735,12 @@ pub(super) fn integrations_failure(error: &Failure) -> String {
         Some("integration_owner_only") => tr_shared("integrations_err_owner_only", &[]),
         Some("integration_disabled") => tr_shared("integrations_err_disabled", &[]),
         Some("integration_already_exists") => tr_shared("integrations_err_already_exists", &[]),
+        Some("integration_google_credentials_unavailable") => {
+            tr_shared("integrations_google_credentials_unavailable", &[])
+        }
+        Some("integration_client_secret_required") => {
+            tr_shared("integrations_client_secret_required", &[])
+        }
         Some("integration_secrets_key_lost" | "integration_secrets_unavailable") => {
             tr_shared("integrations_err_keyring", &[])
         }
@@ -2490,6 +2754,47 @@ pub(super) fn integrations_failure(error: &Failure) -> String {
             }
         }
         _ => Hangar::fetch_failure(error),
+    }
+}
+
+/// Ícone da integração: o logo do serviço sobre a cor da marca; sem marca, a inicial do nome, ou o terminal se for
+/// processo local.
+fn integration_icon(brand: Option<&Brand>, name: &str, local: bool, size: f32) -> Div {
+    let tile = div().size(px(size)).flex_shrink_0().rounded(px(size * 0.26)).flex().items_center().justify_center();
+    let logo = brand
+        .filter(|b| LOGOS.contains(&b.icon.as_str()))
+        .and_then(|b| brand_color(&b.color).map(|color| (b.icon.clone(), color)));
+    match logo {
+        Some((icon, color)) => tile
+            .bg(color)
+            .child(svg().path(SharedString::from(format!("integrations/{icon}.svg"))).size(px(size * 0.56)).text_color(gpui::white())),
+        None if local => tile
+            .bg(theme::inset())
+            .border_1()
+            .border_color(theme::border())
+            .child(chrome::small_icon(IconName::SquareTerminal, size * 0.5, theme::muted())),
+        None => tile
+            .bg(theme::accent_dim())
+            .text_color(theme::accent_text())
+            .text_size(px(size * 0.44))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_default()),
+    }
+}
+
+/// A cor da marca é dado do catálogo (`#RRGGBB`), não tema: vale igual no claro e no escuro, com o logo em branco por cima.
+fn brand_color(hex: &str) -> Option<Hsla> {
+    let value = u32::from_str_radix(hex.strip_prefix('#')?, 16).ok()?;
+    Some(gpui::rgb(value).into())
+}
+
+/// Cor da bolinha de estado no canto do ícone; o nome do estado continua no selo ao lado.
+fn status_dot(status: IntegrationStatus) -> Hsla {
+    match status {
+        IntegrationStatus::Ready => theme::success(),
+        IntegrationStatus::AuthRequired | IntegrationStatus::AuthExpired => theme::warning(),
+        IntegrationStatus::Error => theme::danger(),
+        IntegrationStatus::Disabled => theme::faint(),
     }
 }
 
@@ -2564,6 +2869,8 @@ pub(super) fn auth_choice_label(choice: AuthKindChoice) -> String {
 
 pub(super) fn preset_auth_summary(kind: PresetAuthKind) -> String {
     match kind {
+        PresetAuthKind::None => tr_shared("integrations_auth_none", &[]),
+        PresetAuthKind::Bearer => tr_shared("integrations_auth_bearer", &[]),
         PresetAuthKind::OAuthDcr => tr_shared("integrations_auth_oauth_dcr", &[]),
         PresetAuthKind::OAuthManualClient => tr_shared("integrations_auth_oauth_manual", &[]),
         PresetAuthKind::OAuthDcrOrBearer => format!(
@@ -2572,6 +2879,23 @@ pub(super) fn preset_auth_summary(kind: PresetAuthKind) -> String {
             tr_shared("integrations_auth_bearer", &[])
         ),
     }
+}
+
+fn google_credential_sources(
+    preset: &CatalogPreset,
+    existing: &[IntegrationItem],
+) -> Vec<(String, String)> {
+    if preset.url_editable
+        || preset.auth_kind != PresetAuthKind::OAuthManualClient
+        || !matches!(preset.id.as_str(), "google-gmail" | "google-drive" | "google-calendar")
+    {
+        return Vec::new();
+    }
+    existing
+        .iter()
+        .filter(|item| item.can_reuse_google_credentials)
+        .map(|item| (item.id.clone(), item.name.clone()))
+        .collect()
 }
 
 pub(super) fn suggest_preset_id(preset_id: &str, existing: &[IntegrationItem]) -> String {
@@ -2793,6 +3117,7 @@ pub(super) fn validate_draft(draft: &FormDraft) -> Result<(), String> {
     }
     if draft.transport == TransportKind::RemoteHttp
         && draft.auth_kind == AuthKindChoice::OAuthManualClient
+        && draft.reuse_google_credentials_from.is_none()
         && draft.client_id.trim().is_empty()
     {
         return Err(tr_shared("integrations_validation_client_id", &[]));
@@ -2815,6 +3140,9 @@ pub(super) fn build_create_body(draft: &FormDraft) -> Result<Value, String> {
         "pinned": draft.pinned,
         "projects": parse_projects(&draft.projects_raw),
     });
+    if let Some(source_id) = &draft.reuse_google_credentials_from {
+        body["reuse_google_credentials_from"] = json!(source_id);
+    }
     if !secrets.is_empty() {
         body["secrets"] = Value::Object(secrets);
     }
@@ -3121,7 +3449,10 @@ fn build_transport_and_secrets(
                 secrets.insert("bearer_token".into(), Value::String(tok.to_owned()));
             }
         }
-        AuthKindChoice::OAuthManualClient if draft.transport == TransportKind::RemoteHttp => {
+        AuthKindChoice::OAuthManualClient
+            if draft.transport == TransportKind::RemoteHttp
+                && draft.reuse_google_credentials_from.is_none() =>
+        {
             let sec = draft.client_secret.trim();
             if !sec.is_empty() {
                 secrets.insert("oauth_client_secret".into(), Value::String(sec.to_owned()));
@@ -3142,7 +3473,11 @@ fn build_auth_config(draft: &FormDraft) -> AuthConfig {
         AuthKindChoice::Bearer => AuthConfig::Bearer,
         AuthKindChoice::OAuthDcr => AuthConfig::OAuthDcr,
         AuthKindChoice::OAuthManualClient => AuthConfig::OAuthManualClient {
-            client_id: draft.client_id.trim().to_owned(),
+            client_id: if draft.reuse_google_credentials_from.is_some() {
+                String::new()
+            } else {
+                draft.client_id.trim().to_owned()
+            },
             scopes: parse_scopes(&draft.scopes_raw),
         },
     }
@@ -3173,6 +3508,7 @@ mod tests {
             auth_kind: AuthKindChoice::OAuthManualClient,
             client_id: "client-123.apps.googleusercontent.com".into(),
             client_secret: "super-secret-value".into(),
+            reuse_google_credentials_from: None,
             scopes_raw: "https://www.googleapis.com/auth/gmail.readonly".into(),
             bearer_token: String::new(),
             policy: PermissionPolicy::ReadFreeAskWrite,
@@ -3182,6 +3518,24 @@ mod tests {
             original_transport: None,
             original_policy: None,
         }
+    }
+
+    #[test]
+    fn google_reuse_sends_the_source_without_the_manually_entered_pair() {
+        let mut draft = sample_draft();
+        draft.url = "https://gmailmcp.googleapis.com/mcp/v1self".into();
+        draft.reuse_google_credentials_from = Some("agenda-pessoal".into());
+
+        let create = build_create_body(&draft).unwrap();
+        assert_eq!(create["reuse_google_credentials_from"], "agenda-pessoal");
+        assert_eq!(create["auth"]["client_id"], "");
+        assert_eq!(create["auth"]["scopes"], json!(["https://www.googleapis.com/auth/gmail.readonly"]));
+        assert!(create.get("secrets").is_none());
+
+        draft.reuse_google_credentials_from = None;
+        let manual = build_create_body(&draft).unwrap();
+        assert!(manual.get("reuse_google_credentials_from").is_none());
+        assert_eq!(manual["auth"]["client_id"], "client-123.apps.googleusercontent.com");
     }
 
     #[test]
@@ -3380,6 +3734,8 @@ mod tests {
             updated_at: 1.0,
             status: IntegrationStatus::Ready,
             last_error: None,
+            brand: None,
+            can_reuse_google_credentials: false,
         };
         let initial = InitialFormValues::from_mode(FormMode::Edit(item, None), &[]);
         let base_draft = FormDraft {
@@ -3401,6 +3757,7 @@ mod tests {
             auth_kind: initial.auth_kind,
             client_id: initial.client_id,
             client_secret: String::new(),
+            reuse_google_credentials_from: None,
             scopes_raw: initial.scopes,
             bearer_token: String::new(),
             policy: initial.policy,
@@ -3484,6 +3841,8 @@ mod tests {
             updated_at: 0.0,
             status: IntegrationStatus::Ready,
             last_error: None,
+            brand: None,
+            can_reuse_google_credentials: false,
         };
         assert_eq!(suggest_preset_id("google-gmail", &[]), "google-gmail");
         assert_eq!(suggest_preset_id("google-gmail", &[item("google-gmail")]), "google-gmail-2");
@@ -3491,6 +3850,19 @@ mod tests {
             suggest_preset_id("google-gmail", &[item("google-gmail"), item("google-gmail-2")]),
             "google-gmail-3"
         );
+
+        let preset: CatalogPreset = serde_json::from_value(json!({
+            "id": "google-drive", "name": "Google Drive", "auth_kind": "oauth_manual_client",
+            "url": "https://drivemcp.googleapis.com/mcp/v1self"
+        })).unwrap();
+        let sources = [
+            IntegrationItem { can_reuse_google_credentials: true, ..item("gmail-pessoal") },
+            item("cadastro-antigo"),
+            IntegrationItem { can_reuse_google_credentials: true, ..item("agenda-trabalho") },
+        ];
+        let ids: Vec<_> = google_credential_sources(&preset, &sources)
+            .into_iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, vec!["gmail-pessoal", "agenda-trabalho"]);
     }
 
     #[test]
@@ -3531,6 +3903,8 @@ mod tests {
             updated_at: 0.0,
             status: IntegrationStatus::AuthRequired,
             last_error: None,
+            brand: None,
+            can_reuse_google_credentials: false,
         };
         let remote = Transport::RemoteHttp {
             url: "https://mcp.figma.com/mcp".into(),

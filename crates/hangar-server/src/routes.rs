@@ -168,6 +168,8 @@ pub struct AppState {
     pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
     /// WhatsApp: leitura e envio de rascunho aprovado (`hangar-whatsapp`); nasce com o roteador, pela pasta pessoal das contas.
     pub whatsapp: std::sync::OnceLock<Arc<hangar_whatsapp::WhatsApp>>,
+    /// Continuar sozinho depois de parada passageira: a agenda e o registro, ligados na subida com o runtime.
+    pub auto_continue: std::sync::OnceLock<Arc<crate::auto_continue::AutoContinue>>,
     /// Tela Status: hub do retrato e amostrador do processo; o teste troca a coleta.
     pub status: Arc<crate::status::Status>,
     /// Revisão do trabalho (`work_review/v1`) das sessões ligadas a um ticket.
@@ -180,7 +182,10 @@ pub struct AppState {
 
 impl AppState {
     /// A telemetria só quando ela conta: desligada, os ganchos nem montam as dimensões.
-    pub fn counting(&self) -> Option<&hangar_telemetry::Telemetry> { self.telemetry.as_deref().filter(|t| t.enabled()) }
+    pub fn counting(&self) -> Option<&hangar_telemetry::Telemetry> {
+        if crate::telemetry_hooks::NO_TELEMETRY.try_with(|_| ()).is_ok() { return None; }
+        self.telemetry.as_deref().filter(|t| t.enabled())
+    }
 
     /// O boot inicializa antes de servir; o lazy permite injetar contas nas provas isoladas.
     pub fn settings_snapshot(&self)->Result<Arc<crate::machine_peers::dotenv::SettingsSnapshot>,String>{
@@ -348,6 +353,7 @@ impl AppState {
             mission_notify,
             ticket_actions: Default::default(),
             whatsapp: Default::default(),
+            auto_continue: Default::default(),
             status: Arc::default(),
             work_review,
             telemetry: None,
@@ -490,6 +496,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _push_watch: Vec<crate::AbortOnDrop> = crate::push::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
     // Assina as transições depois do vigia de avisos, que as publica.
     let _loop_watch: Vec<crate::AbortOnDrop> = crate::loops::watch::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
+    // Antes da troca de conta no limite: ela usa o mesmo registro de continuações.
+    let _auto_continue: Vec<crate::AbortOnDrop> = crate::auto_continue::spawn(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
     let _limit_switch = crate::session_write::limit_switch::spawn(state.clone()).map(crate::AbortOnDrop);
     // A varredura só revoga com ausência confirmada (ver `life::sweep`); o túnel religa já.
     let _share_sweep = state.share.clone().map(|share| crate::AbortOnDrop(tokio::spawn(
@@ -1099,6 +1107,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/plugins/{id}/disable", axum::routing::post(crate::plugins::disable))
         // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
         .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
+        // Continuar sozinho depois de queda: interruptor e Cancelar, só do dono (o Python não tem a rota).
+        .route("/api/sessions/{name}/auto-continue", axum::routing::put(crate::auto_continue::route).delete(crate::auto_continue::route))
         .route("/api/peers", axum::routing::any(crate::machine_peers::handle))
         .route("/api/peers/{*path}", axum::routing::any(crate::machine_peers::handle))
         .route("/api/alcance", axum::routing::any(crate::machine_peers::handle))
@@ -1187,7 +1197,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Consentimento do relatório automático da atualização: só o dono, nunca repassado.
         .route("/api/auto-report", get(crate::diag_report::auto::setting).put(crate::diag_report::auto::setting))
         // Telemetria anônima: a escolha e o dono comum entre as máquinas; só o dono, nunca repassado.
-        .route("/api/telemetry", get(crate::telemetry_routes::setting).put(crate::telemetry_routes::setting))
+        .route("/api/telemetry", get(crate::telemetry_routes::setting).put(crate::telemetry_routes::setting).post(crate::telemetry_routes::snapshot))
         .route("/api/telemetry/owner", get(crate::telemetry_routes::owner))
         // Atualização do pacote e do checkout, com a mesma decisão do dono.
         .route("/api/atualizacao", get(crate::update::http::status).fallback(pass_registered))

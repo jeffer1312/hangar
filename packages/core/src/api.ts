@@ -178,11 +178,11 @@ export async function errorDetail(res: Response): Promise<string> {
 
 // Mensagem traduzida + o CÓDIGO cru do backend (`erro_*`). O código é o que deixa quem chama
 // decidir por identidade e não por texto — a mensagem muda com o idioma.
-async function lerErro(res: Response): Promise<{ msg: string; code?: string; envelope?: Record<string, unknown> }> {
+async function lerErro(res: Response): Promise<{ msg: string; code?: string; envelope?: Record<string, unknown>; detail?: string }> {
   const text = await res.text().catch(() => '');
   try {
     const j = JSON.parse(text);
-    if (j && typeof j.detail === 'string') return { msg: j.detail };
+    if (j && typeof j.detail === 'string') return { msg: j.detail, detail: j.detail };
     const envelope = j?.detail ?? j;
     if (envelope && typeof envelope.code === 'string') {
       return { msg: formataErro(envelope)!, code: envelope.code, envelope };
@@ -192,6 +192,14 @@ async function lerErro(res: Response): Promise<{ msg: string; code?: string; env
   // nao popula statusText) — sem este ultimo fallback, quem le `.message` (TtsBar, ServerSettings)
   // trata string vazia como "sem erro" e desenha a UI de sucesso por cima de uma falha real.
   return { msg: text || res.statusText || `falha ${res.status} sem detalhe do servidor` };
+}
+
+/** Erro "status: detalhe" de uma resposta !ok, com o status e o código do servidor. O `server_starting` do
+ *  porteiro da subida vem como texto no `detail` e vira o código: é ele que o `isInputRefusal` lê. */
+export async function failureWithCode(res: Response): Promise<Error & { status: number; code?: string }> {
+  const { msg, code, detail } = await lerErro(res);
+  return Object.assign(new Error(`${res.status}: ${msg}`), {
+    status: res.status, code: code ?? (detail === 'server_starting' ? detail : undefined) });
 }
 
 // Rotas GET que estão falhando por rede AGORA. O diário ganha uma linha na primeira falha e uma
@@ -1036,7 +1044,7 @@ export async function sendInputForServer(s: Server, name: string, text: string, 
   // Só o servidor anterior ao "Na conversa" vai pela fila comum: ele recusa a chave nova antes de gravar.
   // Outro 422 é recusa de verdade e aparece, sem trocar o modo calado.
   if (delivery && res.status === 422 && await rejectsDeliveryField(res)) { res = await post({ text }); accepted = false; }
-  if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
+  if (!res.ok) throw await failureWithCode(res);
   if (!accepted) return false;
   // Só o `false` dito pelo servidor é fila comum: corpo ilegível não prova nada, e a mensagem segue na conversa.
   const body = await res.json().catch(() => null) as { conversation?: unknown } | null;
@@ -2184,6 +2192,14 @@ export async function deleteSession(name: string): Promise<{ ok: boolean; warnin
   });
 }
 
+// Fechar em sequência (o pai com as filhas) não pode seguir o servidor ativo: ele pode mudar no meio, e o
+// DELETE seguinte iria a outra máquina. O teto cobre o fechamento que espera o processo morrer.
+export function deleteSessionForServer(s: Server, name: string): Promise<{ ok: boolean; warning: unknown | null }> {
+  return apiFetchForServer<{ ok: boolean; warning: unknown | null }>(s, `/api/sessions/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  }, 60_000);
+}
+
 // Renomeia a sessao do tmux. Devolve o nome final (sanitizado pelo backend).
 export async function renameSession(name: string, newName: string, server?: Server | null): Promise<{ ok: boolean; name: string }> {
   return sessionFetch<{ ok: boolean; name: string }>(server, `/api/sessions/${encodeURIComponent(name)}/rename`, {
@@ -2199,14 +2215,44 @@ export function isFallenSession(s: { state?: string | null; problema?: string | 
   return s.state === 'dead' && (FALLEN_PROBLEMS as readonly string[]).includes(s.problema ?? '');
 }
 
-// Reabre a sessão caída pelo spec dela, na mesma conversa.
-export async function reopenFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
-  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/reopen`, { method: 'POST' });
+// Reabre a sessão caída pelo spec dela, na mesma conversa. `continue`: o "Reabrir e continuar", que manda o
+// turno cortado seguir; `continued: false` com `code` diz por que o continue não saiu (a sessão reabriu).
+// `lifecycleId`: a vida que a linha mostrava (órfão do psmux); outra vida é recusada.
+export async function reopenFallenSession(
+  name: string,
+  server?: Server | null,
+  opts?: { continue?: boolean; lifecycleId?: string | null },
+): Promise<{ ok: boolean; continued?: boolean; code?: string }> {
+  return actOnFallenSession(name, 'reopen', server, opts?.lifecycleId, opts?.continue);
 }
 
-// Tira a caída da lista; recusa (404) se o nome já voltou vivo, em vez de fechar a sessão reaberta.
-export async function dismissFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
-  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/dismiss`, { method: 'POST' });
+const autoContinuePath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/auto-continue`;
+
+// Interruptor do continuar sozinho da sessão; a linha muda quando a lista seguinte trouxer o `auto_continue_off` novo.
+export async function setSessionAutoContinue(name: string, enabled: boolean, server?: Server | null): Promise<void> {
+  await sessionFetch<unknown>(server, autoContinuePath(name), {
+    method: 'PUT', body: JSON.stringify({ enabled }), signal: AbortSignal.timeout(15_000),
+  });
+}
+
+// Cancelar da nota que espera a rede. `false`: nada esperava (o desfecho já saiu e a nota chega trocada).
+export async function cancelSessionAutoContinue(name: string, server?: Server | null): Promise<boolean> {
+  const reply = await sessionFetch<{ cancelled?: boolean }>(server, autoContinuePath(name), {
+    method: 'DELETE', signal: AbortSignal.timeout(15_000),
+  });
+  return reply?.cancelled === true;
+}
+
+export async function dismissFallenSession(name: string, server?: Server | null, lifecycleId?: string | null): Promise<{ ok: boolean }> {
+  return actOnFallenSession(name, 'dismiss', server, lifecycleId);
+}
+
+function actOnFallenSession(name: string, action: 'reopen' | 'dismiss', server?: Server | null, lifecycleId?: string | null, continueTurn?: boolean) {
+  const params = new URLSearchParams();
+  if (lifecycleId) params.set('lifecycle_id', lifecycleId);
+  if (continueTurn) params.set('continue', '1');
+  const query = params.size ? `?${params}` : '';
+  return sessionFetch<{ ok: boolean; continued?: boolean; code?: string }>(server, `/api/sessions/${encodeURIComponent(name)}/${action}${query}`, { method: 'POST' });
 }
 
 // Relança uma sessão "sem id" com `claude --resume <uuid>` -> passa a rastreá-la, continuando a
@@ -2253,6 +2299,22 @@ export function isAbortError(e: unknown): boolean {
 const _semResposta = new WeakSet<object>();
 export function isNoResponse(e: unknown): boolean {
   return typeof e === 'object' && e !== null && _semResposta.has(e);
+}
+
+// Os 503 do `/input` que o servidor só dá antes de gravar; a mesma lista do `INPUT_REFUSED_BEFORE_WRITE` do nativo.
+// Lista fechada: a fila da sessão que ainda abre grava e depois pode falhar com o código do ator, e reenviar duplicaria.
+const INPUT_REFUSED_BEFORE_WRITE = new Set(['server_starting', 'runtime_unhealthy', 'runtime_unavailable', 'runtime_watcher',
+  'orq_runs_unavailable', 'codex_terminal_unadopted', 'codex_sidecar_invalid', 'claude_sidecar_invalid',
+  'antigravity_sidecar_invalid', 'erro_lista_indisponivel', 'erro_mux_indisponivel']);
+
+/** O `/input` que com certeza não gravou: recusa 4xx (408 é prazo no meio, incerto) ou 503 de código anterior à
+ *  escrita. `runtime_reply_lost`, 5xx sem código e queda de rede ficam incertos. Regra igual à `settle_input_refusal`
+ *  do nativo: as duas mudam juntas. */
+export function isInputRefusal(error: unknown): boolean {
+  const { status, code } = (error ?? {}) as { status?: unknown; code?: unknown };
+  if (typeof status !== 'number') return false;
+  if (status === 503) return typeof code === 'string' && INPUT_REFUSED_BEFORE_WRITE.has(code);
+  return status >= 400 && status < 500 && status !== 408;
 }
 
 // Estourou o TETO de tempo (AbortSignal.timeout), que NÃO é o mesmo que cancelamento por quem
@@ -2956,16 +3018,41 @@ export async function putAutoReportEm(s: Server, value: boolean, fetcher?: typeo
   return res?.auto_report === true;
 }
 
+/** Os avisos que este app sabe exibir: 3 (opção B e preferências), 2 (só preferências) e, sem escopo, o antigo. */
+export const TELEMETRY_CONSENT_SCOPE = 3;
+export const SETTINGS_CONSENT_SCOPE = 2;
 /** Telemetria anônima da máquina: `consent` `null` = não respondido; `disabled_by` = desligada pelo ambiente. */
-export interface TelemetrySetting { consent: boolean | null; disabled_by: 'env' | 'ci' | null }
+export interface TelemetrySetting {
+  consent: boolean | null;
+  disabled_by: 'env' | 'ci' | null;
+  consent_scope?: number;
+  enabled?: boolean;
+  snapshot_period?: string;
+}
+
+/** Sem `consent_scope` o servidor é anterior aos escopos e recebe o aviso antigo; escopo anunciado que o
+ *  app não conhece nunca recebe um "sim". */
+export function knowsTelemetryScope(scope: number | undefined): boolean {
+  return scope === undefined || scope === TELEMETRY_CONSENT_SCOPE || scope === SETTINGS_CONSENT_SCOPE;
+}
+
+type TelemetryReply = Partial<Record<keyof TelemetrySetting, unknown>>;
 
 // Corpo fora da forma é resposta inválida, nunca "sem telemetria": só 404/503 escondem a tela.
-function telemetryView(res: { consent?: unknown; disabled_by?: unknown } | null | undefined): TelemetrySetting {
-  const raw = res?.consent;
-  if (typeof raw !== 'boolean' && raw !== null) throw new Error(m.atualizar_resposta_invalida());
-  const consent = raw;
+function telemetryView(res: TelemetryReply | null | undefined): TelemetrySetting {
+  const consent = res?.consent;
+  if (typeof consent !== 'boolean' && consent !== null) throw new Error(m.atualizar_resposta_invalida());
   const by = res?.disabled_by;
-  return { consent, disabled_by: by === 'env' || by === 'ci' ? by : null };
+  const scope = res?.consent_scope;
+  if (scope !== undefined && (typeof scope !== 'number' || !Number.isSafeInteger(scope) || scope < 1)) {
+    throw new Error(m.atualizar_resposta_invalida());
+  }
+  const period = res?.snapshot_period;
+  // O retrato do app só tem período com aceite ligado de um aviso que cobre preferências.
+  const snapshots = (scope === SETTINGS_CONSENT_SCOPE || scope === TELEMETRY_CONSENT_SCOPE) && res?.enabled === true && consent === true;
+  return { consent, disabled_by: by === 'env' || by === 'ci' ? by : null,
+    ...(scope === undefined ? {} : { consent_scope: scope, enabled: res?.enabled === true }),
+    ...(snapshots && typeof period === 'string' && /^[a-f0-9]{32}$/.test(period) ? { snapshot_period: period } : {}) };
 }
 
 // 404 = servidor sem telemetria; 503 `telemetry_unavailable` = esta vida dele sem ela. Nos dois, a tela some.
@@ -2977,17 +3064,21 @@ const telemetryMissing = (error: unknown) => {
 /** `undefined` = servidor sem telemetria. */
 export async function getTelemetry(s: Server, fetcher?: typeof fetch): Promise<TelemetrySetting | undefined> {
   try {
-    return telemetryView(await apiFetchForServer<{ consent?: unknown; disabled_by?: unknown }>(s, '/api/telemetry', undefined, 8000, false, fetcher));
+    return telemetryView(await apiFetchForServer<TelemetryReply>(s, '/api/telemetry', undefined, 8000, false, fetcher));
   } catch (error) {
     if (telemetryMissing(error)) return undefined;
     throw error;
   }
 }
 
-export async function putTelemetry(s: Server, consent: boolean, fetcher?: typeof fetch): Promise<TelemetrySetting> {
-  const res = await apiFetchForServer<{ consent?: unknown; disabled_by?: unknown }>(s, '/api/telemetry',
-    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ consent }) }, 8000, false, fetcher);
-  return telemetryView(res);
+/** `scope` vem do aviso mostrado, não de releitura feita depois do clique. */
+export async function putTelemetry(s: Server, consent: boolean, scope: number | undefined, fetcher?: typeof fetch): Promise<TelemetrySetting> {
+  if (consent && !knowsTelemetryScope(scope)) throw new Error(m.telemetry_scope_unknown());
+  const body = { consent, ...(consent && scope !== undefined ? { consent_scope: scope } : {}) };
+  const saved = telemetryView(await apiFetchForServer<TelemetryReply>(s, '/api/telemetry',
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 8000, false, fetcher));
+  if (saved.consent !== consent || (consent && saved.consent_scope !== scope)) throw new Error(m.atualizar_resposta_invalida());
+  return saved;
 }
 
 export function getIdentificadorEm(s: Server, fetcher?: typeof fetch, timeoutMs = 8000): Promise<{ identificador: string; lan_url?: string }> {

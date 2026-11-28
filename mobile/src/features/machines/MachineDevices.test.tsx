@@ -126,6 +126,33 @@ describe('aparelhos desta máquina', () => {
     expect(button(m.mobile_machines_retry())).toBeUndefined();
   });
 
+  it('separa a chave dada a outro computador dos apps e diz quando nunca foi usada', async () => {
+    rows = [
+      { device_id: 'app-used', name: 'fixture-app-used', status: 'approved', created_at: now(), last_seen: now() },
+      { device_id: 'app-new', name: 'fixture-app-new', status: 'approved', created_at: now(), last_seen: null },
+      { device_id: 'peer-b', name: 'fixture-pc-b', status: 'approved', created_at: now(), last_seen: null, peer: 'pc-b' },
+    ];
+    await render();
+    await vi.waitFor(() => expect(button('fixture-pc-b')).toBeTruthy());
+    const text = el.textContent ?? '';
+    const apps = text.indexOf(m.connect_local_apps());
+    const peers = text.indexOf(m.connect_local_peers());
+    expect(apps).toBeGreaterThanOrEqual(0);
+    expect(peers).toBeGreaterThan(apps);
+    expect(text.indexOf('fixture-app-used')).toBeGreaterThan(apps);
+    expect(text.indexOf('fixture-app-new')).toBeLessThan(peers);
+    expect(text.indexOf('fixture-pc-b')).toBeGreaterThan(peers);
+    expect(text).toContain(m.connect_local_peer_caption());
+    expect(text).toContain(m.connect_local_never_used());
+
+    await click('fixture-pc-b');
+    expect(mocks.alert.mock.calls.at(-1)![0]).toBe(m.connect_device_revoke_title({ name: 'fixture-pc-b' }));
+    await answer(m.connect_device_revoke());
+    await vi.waitFor(() => expect(el.textContent).not.toContain('fixture-pc-b'));
+    expect(writes().at(-1)).toBe('DELETE /api/connect/devices/peer-b');
+    expect(el.textContent).not.toContain(m.connect_local_peers());
+  });
+
   it('servidor antigo sem `account_device` mostra todos os aparelhos', async () => {
     rows = local.map(({ account_device: _, ...row }) => row);
     await render();
