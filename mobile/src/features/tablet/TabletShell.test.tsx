@@ -62,6 +62,7 @@ vi.mock('../../chat/useQueueDelivery', () => ({ setQueueDeliveryForeground: () =
 vi.mock('../../net/fatalErrors', () => ({ setFatalErrorRoute: () => {}, takeFatalErrorNotice: () => false }));
 vi.mock('../push/expoPush', () => ({ installNotificationHandler: () => {}, pushRegistrationKey: () => '',
   registerExpoPush: async () => {}, retryExpoPushIfDenied: async () => {}, useNotificationNavigation: () => {} }));
+vi.mock('../tour/TourHost', () => ({ TourHost: () => null }));
 vi.mock('../voice/LiveVoiceRoot', () => ({ LiveVoiceRoot: () => null }));
 vi.mock('../../ui/Toast', () => ({ Toaster: () => null, toast: { aviso: vi.fn(), erro: vi.fn() } }));
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardProvider: ({ children }: { children: ReactNode }) => children }));

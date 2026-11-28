@@ -17,6 +17,7 @@ import { SettingsList } from '../ui/SettingsList';
 import { Icon, type IconName } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 import { reportTourAction } from '../features/tour/anchors';
+import { useTourAnchor } from '../features/tour/TourAnchor';
 import { useModelControl } from '../features/pills/modelControl';
 import { useEffortControl } from '../features/pills/effortControl';
 import { SPEED_TIERS, speedHint, speedLabel, useServiceTierControl } from '../features/pills/serviceTierControl';
@@ -32,6 +33,8 @@ interface Props {
   provider: string | null;
   headless: boolean;
   openRequest?: { which: 'model' | 'effort' | 'mode' | 'account' | 'usage'; n: number } | null;
+  /** Id da peça para o tour: o próprio botão da pílula, sem nó a mais entre ela e o Enviar. */
+  tourAnchor?: string;
 }
 
 const MODE_ICON: Record<string, IconName> = {
@@ -44,7 +47,7 @@ const LEVEL: Record<string, () => string> = {
 };
 const effortLabel = (lv: string) => LEVEL[lv.toLowerCase()]?.() ?? lv.charAt(0).toUpperCase() + lv.slice(1);
 
-export function SessionSettingsButton({ serverId, name, provider, headless, openRequest }: Props) {
+export function SessionSettingsButton({ serverId, name, provider, headless, openRequest, tourAnchor }: Props) {
   const router = useRouter();
   const server = useServers((s) => s.servers.find((row) => row.id === serverId) ?? null);
   const canSwitchAccount = provider === 'claude' && !!server && !server.removed && !server.invite && !server.inviteEnded;
@@ -154,7 +157,7 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
   const featured = model.items.slice(0, 3);
   const selected = model.items.find(it => it.selected);
   if (selected && !featured.includes(selected)) featured.splice(2, 1, selected);
-  return <SessionSettingsControl open={open} onOpen={() => { reportTourAction('model'); setTab('model'); setDetail(null); setOpen(true); }} onClose={close}
+  return <SessionSettingsControl tourAnchor={tourAnchor} open={open} onOpen={() => { reportTourAction('model'); setTab('model'); setDetail(null); setOpen(true); }} onClose={close}
     model={model} effort={effort} fast={fast} plan={plan} icon={icon} modeText={modeText}
     panel={<Sheet open={open} onDismiss={() => {
       const action = afterDismiss.current;
@@ -230,19 +233,23 @@ export type FastView = Pick<ReturnType<typeof useServiceTierControl>, 'tier' | '
   Partial<Pick<ReturnType<typeof useServiceTierControl>, 'hidden' | 'fast' | 'ultrafast' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
 
 // A criação entrega escolhas locais; só o controlador do chat conhece uma sessão viva.
-export function SessionSettingsControl({ open, onOpen, onClose, model, effort, fast, plan = false, icon, glyph, leading, modeText, header, children, panel }: {
+export function SessionSettingsControl({ open, onOpen, onClose, model, effort, fast, plan = false, icon, glyph, leading, modeText, header, children, panel, tourAnchor }: {
   open: boolean; onOpen: () => void; onClose: () => void;
   model: ModelView; effort: EffortView; fast: FastView;
   // `glyph`: o chip mostra só ele e a seta; modelo e esforço seguem no valor lido e no painel.
   // `leading`: vem antes do modelo e do esforço, como o logo do agente na pílula do PC.
   plan?: boolean; icon?: IconName; glyph?: ReactNode; leading?: ReactNode; modeText?: string | null; header?: ReactNode; children?: ReactNode; panel?: ReactNode;
+  tourAnchor?: string;
 }) {
   const { theme } = useUnistyles();
-  const anchor = useRef<View>(null);
+  const anchor = useRef<View | null>(null);
+  const tour = useTourAnchor(tourAnchor ?? null);
+  const tourRef = tour.ref;
+  const setAnchor = useCallback((view: View | null) => { anchor.current = view; tourRef(view); }, [tourRef]);
   const tint = plan ? theme.tokens.accent.base : theme.tokens.text.secondary;
   const effortText = !plan && !effort.hidden && effort.value ? effort.value : null;
   return <>
-    <Pressable ref={anchor} onPress={onOpen} hitSlop={{ top: 7, bottom: 7 }}
+    <Pressable ref={setAnchor} onLayout={tour.onLayout} onPress={onOpen} hitSlop={{ top: 7, bottom: 7 }}
       style={({ pressed }) => [styles.chip, { backgroundColor: plan ? theme.tokens.accent.dim : pressed ? theme.tokens.bg.hover : theme.tokens.fillSubtle }]}
       accessibilityRole="button" accessibilityLabel={m.composer_session_settings()} accessibilityHint={m.composer_session_settings_hint()}
       accessibilityValue={{ text: [modeText, model.display, effortText, fast.tier !== 'default' ? speedLabel(fast.tier) : null].filter(Boolean).join(', ') }}>

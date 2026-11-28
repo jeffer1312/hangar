@@ -39,6 +39,7 @@ vi.mock('../../stores/sessions', () => ({
 }));
 vi.mock('../../stores/aparencia', () => ({ aplicarTemaSalvo: () => {}, setTabletTextScale: () => {}, useAparencia: Object.assign((select: (s: object) => unknown) => select({}), { getState: () => ({}) }) }));
 vi.mock('../../theme/aplicarMaterial', () => ({ aplicarMaterial: () => {} }));
+vi.mock('../../features/tour/TourHost', () => ({ TourHost: () => null }));
 vi.mock('../../features/voice/LiveVoiceRoot', () => ({ LiveVoiceRoot: () => null }));
 vi.mock('../../features/vault/VaultRequests', () => ({ VaultRequestSheet: () => null }));
 vi.mock('../../features/integrations/IntegrationRequests', () => ({ IntegrationRequestSheet: () => null }));
