@@ -487,7 +487,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   internos `orq/*` foram removidos. [Contrato](docs/decisoes/plataforma.md#provedores-e-orquestração-no-rust).
 - **Worktrees mescladas usam a origem e a base publicada.** Base explícita vence; sem ela,
   referência nomeada de criação no reflog, com fallback para a branch principal. Base local usa
-  seu upstream ou o único remoto correspondente. Ambiguidade e falha de leitura impedem marcar
+  seu upstream ou o único remoto correspondente. Worktree sem branch compara com a branch
+  principal do remoto (`origin/HEAD`; sem `origin`, a do único remoto que a publica); sem ela, não
+  há base.
+  Ambiguidade e falha de leitura impedem marcar
   mesclada; upstream apagado nunca comprova merge. Pontas iguais continuam protegidas. Evidência
   e limites em [plataforma.md](docs/decisoes/plataforma.md#worktrees-mescladas-usam-a-origem-e-a-base-publicada).
 - **Worktree registrada com pasta existente sem `.git` é residual.** A identidade vem da
