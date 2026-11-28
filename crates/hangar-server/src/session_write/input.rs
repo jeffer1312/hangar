@@ -113,7 +113,7 @@ pub fn was_steered(operation_id: &str, kimi: bool, promoted: &Result<RuntimeRepl
 /// O resultado da escolha do Jev. No Kimi, entregue sem orientar é a mensagem esperando na fila da TUI.
 pub fn timing_outcome(steer: bool, kimi: bool, body: &Value, note: &'static str) -> &'static str {
     if steer && body["delivered"] != true { "refused" }
-    else if steer && kimi && body["steered"] != true { "queue" }
+    else if kimi && body["steered"] != true { if steer { "queue" } else { note } }
     else if !steer && body["delivered"] == true { "delivered" } else { note }
 }
 
@@ -351,7 +351,7 @@ async fn send_with_entry(st: &AppState, name: &str, target: &WriteTarget, text: 
     let uncertain = include_uncertain && unproven(&sent);
     let (sent, diary) = classify(&params, &sent);
     report(st, name, diary);
-    let mut steered = false;
+    let (mut steered, mut unconfirmed) = (false, false);
     if wants_steer_queue(&params, &sent) {
         let mut payload = json!({"entry_id": operation_id});
         if let Some(expected) = expected_turn { payload["expected_turn"] = expected; }
@@ -366,8 +366,11 @@ async fn send_with_entry(st: &AppState, name: &str, target: &WriteTarget, text: 
         // O recado já está na fila: falha de orientação nunca desfaz nem repete o envio.
         if let Err(error) = &promoted { tracing::warn!(session = %name, code = %error.code, "orientação do recado falhou; ele segue na fila"); }
         steered = was_steered(&operation_id, params.kimi, &promoted);
+        // Ctrl+S do Kimi sem confirmação: a mensagem pode estar esperando na fila da TUI, não no turno.
+        unconfirmed = params.kimi && !steered && !matches!(&promoted, Ok(reply) if reply.disposition == Disposition::Accepted);
     }
     let mut answer=input_answer(&sent, steered);
+    if unconfirmed { answer.1["delivered"] = json!(false); }
     if uncertain {answer.1["uncertain"]=json!(true);}
     (answer, operation_id)
 }
@@ -818,7 +821,9 @@ pub async fn steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         }
         // O Ctrl+S do Kimi não leva texto: a mensagem é digitada na fila da TUI e então orientada, como no Direto.
         crate::runtime::gateway::EntryHandle::OtherTerminal { .. } if text.is_some() && ctx.target.provider == "kimi" => {
-            send_with_receipt(&ctx.st, &ctx.name, &ctx.target, text.as_deref().unwrap_or_default(), true, false, None, false).await
+            let sent = send_with_receipt(&ctx.st, &ctx.name, &ctx.target, text.as_deref().unwrap_or_default(), true, false, None, false).await;
+            // Como no `/steer` sem terminal: sem chegar ao turno, a orientação é incerta (409), nunca um 200.
+            if sent.0.is_success() && sent.1["delivered"] != true { sem_turno(MSG_STEER_UNKNOWN) } else { sent }
         }
         headless => {
             let (kind, payload) = match &text {
@@ -926,7 +931,8 @@ mod broadcast_tests {
         assert_eq!(timing_outcome(true, true, &json!({"delivered": true, "steered": true}), "direct"), "direct");
         assert_eq!(timing_outcome(true, false, &json!({"delivered": true, "steered": false}), "direct"), "direct");
         assert_eq!(timing_outcome(true, true, &json!({"delivered": false}), "direct"), "refused");
-        assert_eq!(timing_outcome(false, true, &json!({"delivered": true}), "queue"), "delivered");
+        assert_eq!(timing_outcome(false, true, &json!({"delivered": true}), "queue"), "queue", "na fila da TUI, não no turno");
+        assert_eq!(timing_outcome(false, false, &json!({"delivered": true}), "queue"), "delivered");
     }
 
     #[test]
