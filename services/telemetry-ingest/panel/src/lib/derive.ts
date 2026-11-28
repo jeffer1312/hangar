@@ -2,6 +2,7 @@
 import { AGENT_ORDER, agentKey, type AgentKey } from "./agents";
 import { BAD, BUCKET_LABEL, BUCKETS, EFFORTS, EVENTS, FIELD_LABEL, FLAGS, KEYS, SETTING_GROUPS, SETTINGS, SETTING_VALUES, AGENTS, VALUES } from "./labels";
 import { fmt, quantity } from "./format";
+import { SPEED_EVENTS } from "./speed";
 import type { Dims, FailureRecord, Summary } from "./types";
 
 const has = (o: object, k: string) => Object.hasOwn(o, k);
@@ -144,7 +145,8 @@ export function derive(data: Summary) {
       speed.push({ event, title, explain, sentence: timeSentence(counts), total: [...counts.values()].reduce((s, n) => s + n, 0),
         bars: order.map(b => ({ key: b, label: bucketLabel(b), ...e.buckets.get(b)! })) });
     }
-    if (BAD.has(event) || event === "settings" || event === "feature_used" || event === "mcp_tool" || !e.dims.length) continue;
+    // As medidas do bloco Velocidade têm cartão próprio lá.
+    if (BAD.has(event) || event === "settings" || event === "feature_used" || event === "mcp_tool" || SPEED_EVENTS.includes(event) || !e.dims.length) continue;
     const bars = [...e.dims].sort((x, y) => y.value - x.value);
     if (group === "saude") { if (has(EVENTS, event)) health.push({ event, title, explain, bars }); }
     else usage.push({ event, title, explain, bars });

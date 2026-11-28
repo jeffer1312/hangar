@@ -15,7 +15,7 @@ const TEXT: Record<string, { title: string; explain: string; icon: LucideIcon; u
   session_ready: { title: "Abrir uma conversa nova", explain: "Do toque em \"Nova conversa\" até o agente estar pronto para receber a mensagem.",
     icon: Plus, unit: ["abertura", "aberturas"], by: "Por sistema", tech: "opened_by=person" },
   session_first_send: { title: "Um agente abrindo outra sessão", explain: "Do pedido da sessão por outro agente até a primeira mensagem dele chegar nela.",
-    icon: Bot, unit: ["abertura", "aberturas"], by: "Por agente aberto", tech: "opened_by=agent" },
+    icon: Bot, unit: ["abertura", "aberturas"], by: "Por agente aberto", tech: "provider" },
   first_reply: { title: "Primeira resposta do agente", explain: "Da mensagem entregue ao agente até a resposta começar a aparecer.",
     icon: MessageSquare, unit: ["mensagem", "mensagens"], by: "Por agente", tech: "provider" },
   app_ready: { title: "Abrir o app", explain: "Do app começar a abrir até a lista de sessões aparecer.",

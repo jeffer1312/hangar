@@ -65,14 +65,17 @@ fn provider_of(list: &ListBridge, sid: &str) -> Provider {
 
 /// O relógio e a época de consentimento em que ele começou: aceite novo zera o que ficou pendente.
 static SPEED: LazyLock<Mutex<(u64, SpeedClock)>> = LazyLock::new(Default::default);
-/// O instante e a hora de parede da âncora: a hora do envio gravada na fila vira o mesmo relógio.
-static ANCHOR: LazyLock<(Instant, f64)> = LazyLock::new(|| (Instant::now(), epoch_now()));
+static ANCHOR: LazyLock<Instant> = LazyLock::new(Instant::now);
 /// Desde quando o `Monitor` de cada sessão lê a tela: sinal dele só vale para o que aconteceu depois.
 static WATCHERS: LazyLock<Mutex<HashMap<String, (Instant, u64)>>> = LazyLock::new(Default::default);
 
 fn epoch_now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()) }
-fn since_anchor(at: Instant) -> Duration { at.saturating_duration_since(ANCHOR.0) }
-fn epoch_to_anchor(epoch: f64) -> Duration { Duration::try_from_secs_f64(epoch - ANCHOR.1).unwrap_or(Duration::ZERO) }
+fn since_anchor(at: Instant) -> Duration { at.saturating_duration_since(*ANCHOR) }
+/// A hora de parede gravada na fila vira o relógio monotônico pela idade dela agora: a suspensão da máquina não
+/// anda o `Instant` e deixaria a âncora fixa no futuro.
+fn epoch_to_anchor(epoch: f64, now: Duration) -> Duration {
+    now.saturating_sub(Duration::try_from_secs_f64(epoch_now() - epoch).unwrap_or(Duration::ZERO))
+}
 
 fn speed(change: impl FnOnce(&mut SpeedClock, Duration) -> Option<Measure>) {
     let Some(telemetry) = installed() else { return };
@@ -123,7 +126,7 @@ pub(crate) fn speed_ready(name: &str) { speed(|clock, now| clock.ready(name, Dur
 pub(crate) fn speed_delivered(name: &str, text: &str, steered: bool, sent: Option<f64>) {
     if text.trim_start().starts_with('/') { return; }
     speed(|clock, now| {
-        let sent = sent.map_or(now, epoch_to_anchor);
+        let sent = sent.map_or(now, |epoch| epoch_to_anchor(epoch, now));
         clock.delivered(name, message_mark(text), crate::session_write::input::is_relay(text), steered, sent, now)
     });
 }
