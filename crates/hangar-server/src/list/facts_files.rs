@@ -416,6 +416,21 @@ pub fn native_pids(dirs: &[PathBuf], sid: &str) -> Vec<i64> {
     out
 }
 
+/// Apaga os registros nativos da conversa deixados por agentes que já saíram sem limpá-los (`SIGKILL`).
+pub fn forget_native(dirs: &[PathBuf], sid: &str, pids: &[i64]) {
+    for d in unique(dirs, NATIVE_DIR) {
+        for e in entries(&d, NATIVE_DIR).unwrap_or_default() {
+            if !e.file_name().to_str().is_some_and(is_native_name) {
+                continue;
+            }
+            if let Ok((found, native)) = read_native(&e.path()) && found == sid && pids.contains(&native.pid)
+                && let Err(error) = std::fs::remove_file(e.path()) && error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(code = "native_record_unremoved", kind = ?error.kind(), "o registro nativo do agente encerrado ficou");
+            }
+        }
+    }
+}
+
 /// Session id do arquivo lido: o nome do marcador, o `sessionId` do registro nativo.
 fn parsed_sid(path: &Path, parsed: &Parsed) -> Option<String> {
     match parsed {
@@ -692,6 +707,19 @@ mod tests {
 
     /// Dois processos vivos na mesma conversa (um esquecido num multiplexador que ninguém alcança): o
     /// registro nativo não diz qual é o da sessão, e escolher pela ordem do mapa fazia a lista alternar.
+    /// Só sai o registro do pid encerrado e da conversa dele.
+    #[test]
+    fn forget_native_removes_only_the_ended_agents_records() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join(".claude");
+        write(&cfg.join("sessions/7.json"), r#"{"sessionId": "s1", "pid": 7, "status": "busy", "updatedAt": 10000}"#);
+        write(&cfg.join("sessions/8.json"), r#"{"sessionId": "s1", "pid": 8, "status": "idle", "updatedAt": 10000}"#);
+        write(&cfg.join("sessions/9.json"), r#"{"sessionId": "s2", "pid": 9, "status": "idle", "updatedAt": 10000}"#);
+        forget_native(std::slice::from_ref(&cfg), "s1", &[7, 9]);
+        assert_eq!(native_pids(std::slice::from_ref(&cfg), "s1"), [8]);
+        assert_eq!(native_pids(std::slice::from_ref(&cfg), "s2"), [9]);
+    }
+
     #[test]
     fn two_live_native_records_of_one_conversation_fall_back_to_the_marker() {
         let tmp = tempfile::tempdir().unwrap();

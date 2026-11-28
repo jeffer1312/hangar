@@ -6007,9 +6007,14 @@ antigo, preso num servidor tmux que ninguém mais alcançava.
   antiga, sem ele, o acha pelo nascimento perto do `#{start_time}`, nunca contando o servidor de
   agora. Antigo vivo e nada no socket: `SIGUSR1` (até 3 vezes), sem reabrir nada. Antigo vivo com
   outro no socket, ou dúvida sobre qual é: nada reaberto por cima, e o servidor de agora passa a ser o
-  da fotografia, para as sessões novas seguirem guardadas. Antes de cada `--resume`, só sai o agente
-  `claude` da conversa cujo servidor tmux (a variável `TMUX` dele) já acabou, com `SIGTERM` e,
-  passado o prazo, `SIGKILL`; dentro do servidor de agora ou fora do tmux, a restauração recua
-  (`restore_conversation_open`). Pid reaproveitado por outro programa não conta.
+  da fotografia, para as sessões novas seguirem guardadas; as do antigo ficam à parte (`stranded`),
+  seguras para a varredura de grupos e fora da contagem de ausência, e voltam a ser restauradas quando
+  ele acabar. Com o pid gravado, o antigo só conta se nasceu perto do `#{start_time}` (pid
+  reaproveitado depois do reboot, ou cliente tmux no macOS, não é ele). Antes de cada `--resume`, só sai o agente
+  `claude` da conversa cujo servidor tmux (a variável `TMUX` dele) já acabou e cujo pai é o init
+  ou o `systemd` do usuário (a `TMUX` é herdada por um terminal aberto de dentro do pane), junto
+  com os processos abaixo dele, com `SIGTERM` e, passado o prazo, `SIGKILL`; o registro nativo que
+  o `SIGKILL` deixa é apagado. Já aberta no servidor de agora, a restauração é pulada
+  (`restore_already_open`); fora do tmux, ela recua (`restore_conversation_open`). Pid reaproveitado por outro programa não conta.
 - **Não confirmado:** por que o servidor tmux parou de atender naquela janela. A memória da máquina
   estava sob pressão, e os comandos ao tmux já falhavam por tempo antes da restauração.

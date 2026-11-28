@@ -38,7 +38,7 @@ async fn a_real_psmux_orphan_can_be_recovered_and_dismissed() {
         let entry = restore::Entry { name: name.into(), provider: AgentProvider::Claude, conversation: Some(conversation.into()),
             transcript: Some(transcript.to_string_lossy().into_owned()), permission_mode: Some("acceptEdits".into()), missing_since: None, unit: None,
             turn_open: false, last_line: None };
-        let snapshot = restore::Snapshot { mux_started: None, mux_pid: None, sessions: [(key.into(), entry)].into() };
+        let snapshot = restore::Snapshot { mux_started: None, mux_pid: None, stranded: Vec::new(), sessions: [(key.into(), entry)].into() };
         let key_env = format!("CP_SESSION_KEY={key}");
         let launch = [
             OsStr::new("new-session"), OsStr::new("-d"), OsStr::new("-s"), OsStr::new(name),
