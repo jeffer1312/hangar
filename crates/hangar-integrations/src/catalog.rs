@@ -141,3 +141,15 @@ fn registrable(host: &str) -> String {
 pub fn find_preset(id: &str) -> Option<&'static CatalogPreset> {
     catalog().iter().find(|preset| preset.id == id)
 }
+
+/// A URL decide, não o `preset`: editar só o rótulo não pode tirar a integração das regras do Google.
+pub fn is_google_workspace_client(config: &crate::IntegrationConfig) -> bool {
+    let crate::Transport::RemoteHttp { url, .. } = &config.transport else {
+        return false;
+    };
+    matches!(config.auth, crate::AuthConfig::OAuthManualClient { .. })
+        && ["google-gmail", "google-drive", "google-calendar"]
+            .into_iter()
+            .filter_map(find_preset)
+            .any(|preset| preset.url.as_str() == url.as_str())
+}
