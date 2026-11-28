@@ -92,7 +92,7 @@ pub(crate) fn machine_unknown(server: &str) -> OpenError {
 }
 
 /// Lá respondeu: nada abriu, ou não está no `peers.json`. O resto (rede, prazo, corpo ilegível) é incerto.
-fn certain(error: &PeerError) -> bool { matches!(error, PeerError::Refused { .. } | PeerError::Unknown) }
+pub(crate) fn certain(error: &PeerError) -> bool { matches!(error, PeerError::Refused { .. } | PeerError::Unknown) }
 
 fn uncertain_text(server: &str) -> String {
     format!("{server} não respondeu à abertura: a sessão pode ter nascido lá. Confira em {server} (`hangar-send --list`) antes de tentar de novo")

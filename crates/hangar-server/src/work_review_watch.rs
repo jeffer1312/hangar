@@ -34,6 +34,11 @@ struct DiagSink(DiagClient);
 
 impl hangar_work_review::Diag for DiagSink {
     fn report(&self, code: &str, session: &str, detail: &str) {
+        // O engine já limitou a repetição; `detail` é o `Failure::code()`, fechado pela lista de HEALTH.
+        if code == "work_review_refresh_failed" {
+            crate::telemetry_hooks::report_health("work_review_refresh_failed", detail, hangar_usage_diary::Severity::Warn,
+                Some(session).filter(|s| !s.is_empty()), Vec::new(), None);
+        }
         let code = if detail.is_empty() { code.to_owned() } else { format!("{code}:{detail}") };
         self.0.report(EVENT, session, &code, "releitura da revisão do trabalho falhou; vale o resumo anterior");
     }

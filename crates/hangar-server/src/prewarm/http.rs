@@ -57,7 +57,7 @@ async fn reserve(st: &Arc<AppState>, req: Request) -> Response {
     let result = tokio::spawn(async move {
         let launcher = super::ServerLauncher::new(st.clone());
         st.prewarm.reserve(&launcher, &request, &client_id).await
-    }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a reserva não terminou")));
+    }).await.unwrap_or_else(|_| Err(OpenError::unfinished("a reserva não terminou")));
     match result {
         Ok(ticket) => crate::session_write::json_response(StatusCode::OK,
             json!({"id": ticket.id, "fingerprint": ticket.fingerprint, "name": ticket.name})),

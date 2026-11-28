@@ -18,6 +18,11 @@ const FILL_SECRET: &str = "fill-secret";
 /// Capacidade que o app anuncia no `focus`: app sem ela não conhece o `fill-secret` e não pode receber o valor.
 pub const FILL_SECRET_CAP: &str = "fill_secret";
 const NOT_ALLOWED: &str = "browser_host_not_allowed";
+/// A causa vem do app e vai num cabeçalho: só nome curto em minúsculas, dígitos e `_`.
+fn is_code(code: &str) -> bool {
+    !code.is_empty() && code.len() <= 64 && code.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
 /// Os nomes de sessão vêm do app: sem teto, um anfitrião encheria a memória.
 const MAX_SESSIONS: usize = 1024;
 
@@ -26,6 +31,8 @@ const MAX_SESSIONS: usize = 1024;
 pub enum Reply {
     /// Texto do `/cmd` (`ok: …` ou `erro: …`).
     Text(String),
+    /// O `erro: …` com a causa fechada que o app deu (`page_gone`, `ref_invalid`…), já no formato de nome.
+    Error(String, String),
     /// O PNG do `shot`; quem grava é o servidor.
     Png(Vec<u8>),
 }
@@ -402,7 +409,13 @@ impl Connection {
             return;
         }
         let result = match msg.get("ok").and_then(Value::as_bool) {
-            Some(true) => Ok(Reply::Text(msg.get("text").and_then(Value::as_str).unwrap_or_default().to_owned())),
+            Some(true) => {
+                let text = msg.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
+                match msg.get("code").and_then(Value::as_str).filter(|code| is_code(code)) {
+                    Some(code) if text.starts_with("erro:") => Ok(Reply::Error(code.to_owned(), text)),
+                    _ => Ok(Reply::Text(text)),
+                }
+            }
             Some(false) => {
                 let error = msg.get("error").and_then(Value::as_str).unwrap_or_default();
                 if error == NOT_ALLOWED {

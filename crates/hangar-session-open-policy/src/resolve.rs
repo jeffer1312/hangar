@@ -687,12 +687,12 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
     if request.service_tier.is_some_and(ServiceTier::is_fast) && provider != AgentProvider::Codex
         && !(claude && facts.supports_fast(request.engine.as_deref(), request.model.as_deref()))
     {
-        return Err(OpenError::new(400, "erro_criacao_sessao", "Fast exige Codex ou Claude com GPT no CLIProxyAPI local"));
+        return Err(OpenError::new(400, "erro_criacao_sessao", "Fast exige Codex ou Claude com GPT no CLIProxyAPI local").because("fast_unsupported"));
     }
     if request.service_tier == Some(ServiceTier::Ultrafast) && claude
         && !facts.supports_ultrafast(request.engine.as_deref(), request.model.as_deref(), request.engine_account.as_deref())
     {
-        return Err(OpenError::new(400, "erro_criacao_sessao", ULTRAFAST_REFUSED));
+        return Err(OpenError::new(400, "erro_criacao_sessao", ULTRAFAST_REFUSED).because("ultrafast_refused"));
     }
     // Antes de qualquer outra coisa da pasta: o convidado nem fica sabendo se ela existe fora da dele.
     if let OpenCaller::Guest { root } = caller && !facts.real_path(&request.cwd).starts_with(root) {
@@ -765,7 +765,7 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
         }
     }
     if request.new_branch && request.branch.is_none() {
-        return Err(OpenError::new(400, "erro_criacao_sessao", "branch nova sem nome"));
+        return Err(OpenError::new(400, "erro_criacao_sessao", "branch nova sem nome").because("branch_name_missing"));
     }
     Ok(model)
 }
@@ -833,28 +833,28 @@ fn validate_name(raw: &str, provider: AgentProvider, headless: bool, request: &S
     let name = sanitize_session_name(raw);
     // Um status só para o nome inválido, com ou sem `branch`.
     if name.is_empty() {
-        return Err(conflict("nome invalido"));
+        return Err(conflict("nome invalido").because("name_invalid"));
     }
     if name.len() > NAME_MAX {
-        return Err(conflict(format!("nome invalido: use até {NAME_MAX} caracteres")));
+        return Err(conflict(format!("nome invalido: use até {NAME_MAX} caracteres")).because("name_invalid"));
     }
     if facts.transfer_busy(&name)? {
         return Err(OpenError::new(409, "session_transfer_busy", "A sessão está trocando de agente; tente novamente quando terminar."));
     }
     if headless {
         if !matches!(provider, AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity) {
-            return Err(conflict("sessao sem terminal so vale para provider claude, codex ou antigravity"));
+            return Err(conflict("sessao sem terminal so vale para provider claude, codex ou antigravity").because("headless_provider_unsupported"));
         }
         // O prompt inicial é entregue em todo provedor; só leitura continua exigindo terminal.
         if request.read_only {
-            return Err(conflict("sessao sem terminal nao aceita read_only"));
+            return Err(conflict("sessao sem terminal nao aceita read_only").because("headless_read_only"));
         }
     }
     if provider == AgentProvider::Omp && let Some(profile) = request.omp_profile.as_deref().filter(|p| !p.is_empty()) {
         // A mesma regra do omp: o valor vai para o ambiente do pane como `OMP_PROFILE`.
         let profile = profile.trim();
         if !(profile.is_empty() || profile == "default" || valid_omp_profile(profile)) {
-            return Err(conflict("Nome de perfil OMP inválido"));
+            return Err(conflict("Nome de perfil OMP inválido").because("omp_profile_invalid"));
         }
     }
     if facts.name_in_use(&name)? {
@@ -864,7 +864,7 @@ fn validate_name(raw: &str, provider: AgentProvider, headless: bool, request: &S
         && PermissionMode::codex(mode).is_none()
     {
         let names: Vec<_> = PermissionMode::CODEX.iter().map(|m| m.name()).collect();
-        return Err(conflict(format!("permission_mode: use um de {}", names.join(", "))));
+        return Err(conflict(format!("permission_mode: use um de {}", names.join(", "))).because("permission_mode_invalid"));
     }
     Ok(name)
 }

@@ -59,7 +59,8 @@ async fn reply(st: &AppState, peer: SocketAddr, req: Request, base: Option<PathB
         let telemetry = st.telemetry.clone().filter(|_| !guest && crate::telemetry_hooks::eligible_request(&req))
             .and_then(screen_telemetry);
         let telemetry = if telemetry.is_some() && matches!(st.edge().gate(peer, &req).await, Ok((_, true))) { telemetry } else { None };
-        return record_screen_events(base, req, telemetry, now).await;
+        let ctx = telemetry.is_some().then(|| crate::telemetry_ctx::machine_later(st));
+        return record_screen_events(base, req, telemetry, ctx, now).await;
     }
     // O pedido não atravessa a espera: `&Request` tiraria o `Send` do handler.
     let (headers, query) = (req.headers().clone(), req.uri().query().map(str::to_owned));
@@ -87,17 +88,20 @@ fn screen_telemetry(telemetry: Arc<Telemetry>) -> Option<(Arc<Telemetry>, hangar
     (telemetry.consent_epoch() == epoch).then_some((telemetry, period, epoch))
 }
 
+/// `ctx`: lê o retrato da máquina que acompanha as falhas do dono, fora da thread do runtime.
 async fn record_screen_events(base: Option<PathBuf>, req: Request, telemetry: Option<(Arc<Telemetry>, hangar_telemetry::Collection, u64)>,
-                              now: chrono::DateTime<chrono::FixedOffset>) -> Response {
+                              ctx: Option<impl FnOnce() -> Vec<(&'static str, String)> + Send + 'static>, now: chrono::DateTime<chrono::FixedOffset>) -> Response {
     let body = match hangar_core::http_body_limit::read(req.into_body()).await {
         Ok(body) => body,
         Err(error) if hangar_core::http_body_limit::is_limit(&error) => return hangar_core::http_body_limit::rejected(),
         // Cliente que desistiu no meio do corpo: como corpo ilegível, nunca erro.
         Err(_) => return hangar_core::http_cors::json_guarded(StatusCode::OK, json!({"gravadas": 0})),
     };
+    let started = now - chrono::TimeDelta::from_std(crate::telemetry_hooks::uptime()).unwrap_or_default();
     let written = tokio::task::spawn_blocking(move || {
+        let ctx = ctx.map(|read| read()).unwrap_or_default();
         let written = match base {
-            Some(base) => hangar_usage_diary::record_screen_with_owner(&base, &body, now, telemetry.as_ref().map(|(_, period, _)| period.id.as_str())),
+            Some(base) => hangar_usage_diary::record_screen_with_owner(&base, &body, now, telemetry.as_ref().map(|(_, period, _)| (period.id.as_str(), &ctx[..], started))),
             None => Ok(0),
         };
         // Só o que o diário confirmou: o cliente reenvia o lote recusado.
@@ -549,7 +553,10 @@ mod telemetry_tests {
         assert_eq!(rows[0]["evento"], "guest_fixture");
         assert!(rows[0].get("telemetry_origin").is_none());
         assert_eq!(rows[1]["telemetry_origin"], "owner_screen");
-        let projection = crate::telemetry_routes::diary_detail(diary.path(), "2026-11-27", &collection, now.to_utc()).unwrap();
+        assert!(rows[0].get("ctx").is_none(), "o convidado não leva o retrato");
+        assert!(rows[1]["ctx"]["up"].is_string(), "a falha do dono leva o retrato da máquina: {}", rows[1]);
+        let build = rows[1]["telemetry_build"].as_str().unwrap_or_default();
+        let projection = crate::telemetry_routes::diary_detail(diary.path(), "2026-11-27", build, &collection, now.to_utc()).unwrap();
         assert_eq!(projection.records.len(), 1);
         assert_eq!((projection.trail[0].t.as_str(), projection.records[0].event.as_str()), ("00:00:30", "sse.caiu"));
         let wire = serde_json::to_string(&projection).unwrap();

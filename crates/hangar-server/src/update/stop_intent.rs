@@ -362,12 +362,46 @@ pub(crate) fn mark_this_process_running(hangar_dir: &Path, now: &str) -> u32 {
 pub fn record_previous(hangar_dir: &Path, update_state: &Path, previous: Option<&Previous>, pid: Option<u32>,
     errors: impl FnOnce() -> String) -> Vec<Value> {
     let now = now_secs();
+    let panic = take_panic(hangar_dir, previous.map_or(pid, |previous| previous.pid));
+    let _ = crate::PANIC_MARKER.set(hangar_dir.join(PANIC_FILE));
     let lines = previous_exit(hangar_dir, previous, pid, errors, &SystemdJournal, now, || match crate::update::running_package() {
         Some(package) => update_run(update_state, &package.version, now),
         None => Ok(None),
     });
-    remember_exits(&lines);
+    remember_exits(&lines, panic.as_deref(), exit_at(previous, now));
     lines
+}
+
+/// Quando a vida anterior saiu, para o registro de saúde: a parada gravada; sem ela, esta subida, que viu a saída.
+/// O começo da vida, que o `quando` do diário usa na falta das duas, pode ser dias antes da queda.
+fn exit_at(previous: Option<&Previous>, now: u64) -> Option<DateTime<chrono::FixedOffset>> {
+    let secs = previous.and_then(|previous| previous.stop.as_ref()).and_then(|stop| stop.at).unwrap_or(now);
+    DateTime::from_timestamp(i64::try_from(secs).ok()?, 0).map(|at| at.fixed_offset())
+}
+
+/// O lugar do último pânico de uma vida (`crate::panic_site`), gravado pelo gancho de pânico.
+pub const PANIC_FILE: &str = "server-panic.json";
+
+/// Lê e apaga o pânico gravado; vale só o da vida `pid`.
+fn take_panic(hangar_dir: &Path, pid: Option<u32>) -> Option<String> {
+    let path = hangar_dir.join(PANIC_FILE);
+    let raw = std::fs::read(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    let pid = pid?;
+    let value: Value = serde_json::from_slice(&raw).ok()?;
+    if value["pid"].as_u64() != Some(u64::from(pid)) { return None; }
+    value["at"].as_str().map(str::to_owned)
+}
+
+/// A causa fechada da queda (`events::HEALTH` de `server_exit`) e o lugar do pânico que a explica. O journal vê o
+/// pânico como sinal, core dump ou código de saída; falta de memória, prazo e watchdog vencem um pânico que a
+/// vida capturou antes.
+pub fn crash_cause(cause: Option<&str>, panic_at: Option<&str>) -> (&'static str, Option<String>) {
+    use hangar_telemetry::events::{Code, HEALTH};
+    let cause = cause.unwrap_or("none");
+    if let Some(site) = panic_at.filter(|_| matches!(cause, "none" | "signal" | "core_dump" | "exit_code")) { return ("panic", Some(site.to_owned())); }
+    let causes = HEALTH.iter().find(|health| health.code == "server_exit").map_or(&[][..], |health| health.causes);
+    (Code::known(cause, causes).as_str(), None)
 }
 
 const EXIT_KINDS: &[&str] = &["crash", "update", "requested"];
@@ -375,23 +409,35 @@ const EXIT_KINDS: &[&str] = &["crash", "update", "requested"];
 const EXIT_CAUSES: &[&str] = &["none", "package", "rollback", "checkout", "migrate", "restart_only", "dev_mode", "sigterm", "sigint",
     "serve_failed", "out_of_memory", "timeout", "signal", "exit_code", "core_dump", "watchdog", "resources", "start_limit_hit"];
 
-/// A saída da vida anterior espera a telemetria, que só abre depois da subida.
-static PREVIOUS_EXITS: std::sync::Mutex<Vec<(hangar_telemetry::events::Code, hangar_telemetry::events::Code)>> = std::sync::Mutex::new(Vec::new());
+/// A queda para o registro de saúde: causa, lugar do pânico e quando a vida saiu.
+type Crash = (&'static str, Option<String>, Option<chrono::DateTime<chrono::FixedOffset>>);
 
-fn remember_exits(lines: &[Value]) {
+/// A saída da vida anterior espera a telemetria, que só abre depois da subida.
+static PREVIOUS_EXITS: std::sync::Mutex<Vec<(hangar_telemetry::events::Code, hangar_telemetry::events::Code, Option<Crash>)>> = std::sync::Mutex::new(Vec::new());
+
+fn remember_exits(lines: &[Value], panic: Option<&str>, at: Option<DateTime<chrono::FixedOffset>>) {
     use hangar_telemetry::events::Code;
     let exits = lines.iter().filter(|line| line["evento"] == "hangar_server.saida").map(|line| {
-        (Code::known(line["tipo"].as_str().unwrap_or_default(), EXIT_KINDS), Code::known(line["causa"].as_str().unwrap_or("none"), EXIT_CAUSES))
+        let crash = (line["tipo"] == "crash").then(|| {
+            let (cause, panic_at) = crash_cause(line["causa"].as_str(), panic);
+            (cause, panic_at, at)
+        });
+        (Code::known(line["tipo"].as_str().unwrap_or_default(), EXIT_KINDS), Code::known(line["causa"].as_str().unwrap_or("none"), EXIT_CAUSES), crash)
     });
     PREVIOUS_EXITS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(exits);
 }
 
-/// `server_exit` da vida anterior, uma vez: a lista se esvazia ao contar.
+/// `server_exit` da vida anterior, uma vez: a lista se esvazia ao contar. A queda também vira registro de saúde,
+/// com a hora em que a vida saiu.
 pub fn count_previous_exits(telemetry: &hangar_telemetry::Telemetry) {
     use hangar_telemetry::events::{Dims, Event};
     let exits = std::mem::take(&mut *PREVIOUS_EXITS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-    for (kind, cause) in exits {
+    for (kind, cause, crash) in exits {
         telemetry.count(Event::ServerExit, Dims::new().with("kind", kind).with("cause", cause), 1);
+        if let Some((cause, panic_at, at)) = crash {
+            let extra = panic_at.map(|site| ("panic_at", site)).into_iter().collect();
+            crate::telemetry_hooks::report_health("server_exit", cause, hangar_usage_diary::Severity::Error, None, extra, at);
+        }
     }
 }
 
@@ -449,6 +495,32 @@ mod tests {
     use super::*;
     use hangar_boot::life::Stop;
 
+    #[test]
+    fn telemetry_a_crash_is_the_panic_only_when_the_journal_saw_the_abort() {
+        let site = "crates.hangar-server.src.side:12";
+        assert_eq!(crash_cause(Some("out_of_memory"), None), ("out_of_memory", None));
+        assert_eq!(crash_cause(None, None), ("none", None));
+        assert_eq!(crash_cause(Some("algo_novo"), None), ("other", None));
+        for seen in [None, Some("signal"), Some("core_dump"), Some("exit_code")] {
+            assert_eq!(crash_cause(seen, Some(site)), ("panic", Some(site.to_owned())), "{seen:?}");
+        }
+        for won in ["out_of_memory", "watchdog", "timeout"] {
+            assert_eq!(crash_cause(Some(won), Some(site)).0, won, "um pânico capturado antes não explica {won}");
+        }
+    }
+
+    #[test]
+    fn telemetry_the_panic_mark_is_read_once_and_only_for_its_life() {
+        let dir = tempfile::tempdir().unwrap();
+        let mark = |pid: u32| std::fs::write(dir.path().join(PANIC_FILE), json!({"pid": pid, "at": "crates.x:1"}).to_string()).unwrap();
+        mark(7);
+        assert_eq!(take_panic(dir.path(), Some(7)).as_deref(), Some("crates.x:1"));
+        assert_eq!(take_panic(dir.path(), Some(7)), None, "uma vez");
+        mark(8);
+        assert_eq!(take_panic(dir.path(), Some(7)), None, "pânico de outra vida");
+        assert!(!dir.path().join(PANIC_FILE).exists());
+    }
+
     const NOW: u64 = 1_800_000_000;
     /// O `started` de `life` em UTC.
     const STARTED: &str = "2026-11-17T13:00:00Z";
@@ -464,6 +536,17 @@ mod tests {
 
     fn started() -> Option<String> {
         Some(STARTED.into())
+    }
+
+    /// A queda sem parada gravada não leva o começo da vida como hora: leva a da subida que a viu.
+    #[test]
+    fn health_exit_time_is_the_recorded_stop_or_this_boot() {
+        let unix = |secs: u64| DateTime::from_timestamp(i64::try_from(secs).unwrap(), 0).map(|at| at.fixed_offset());
+        assert_eq!(exit_at(Some(&life(41, true, None)), NOW), unix(NOW), "sem parada: nunca o começo da vida");
+        let mut stopped = life(41, true, Some(("serve_failed", true)));
+        stopped.stop.as_mut().unwrap().at = Some(NOW - 50);
+        assert_eq!(exit_at(Some(&stopped), NOW), unix(NOW - 50));
+        assert_eq!(exit_at(None, NOW), unix(NOW));
     }
 
     #[test]

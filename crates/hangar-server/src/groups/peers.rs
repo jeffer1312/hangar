@@ -134,6 +134,17 @@ pub enum PeerError {
 
 impl PeerError {
     pub fn is_transport(&self) -> bool { matches!(self, PeerError::Transport(_)) }
+
+    /// O tipo da falha num código fechado, para a telemetria.
+    pub fn code(&self) -> &'static str {
+        match self {
+            PeerError::Unknown => "peer_unknown",
+            PeerError::Refused { .. } => "peer_refused",
+            PeerError::Transport(_) => "peer_transport",
+            PeerError::OldVersion => "peer_old_version",
+            PeerError::IdentityMismatch { .. } => "peer_identity_mismatch",
+        }
+    }
     /// 404 sem `code`: a rota não existe lá (versão antiga); 404 com código é recusa comum.
     pub fn missing_route(&self) -> bool { matches!(self, PeerError::Refused { status: 404, detail } if detail.get("code").is_none()) }
 

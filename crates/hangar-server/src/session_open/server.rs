@@ -187,7 +187,7 @@ impl ServerHost {
         self.st.list.forget(&name);
         self.st.list.invalidate();
         if let Some(undo) = opened.undo { undo.undo().await?; }
-        Err(OpenError::new(500, "erro_criacao_sessao", format!("o dono da sessão não foi registrado: {cause}")))
+        Err(OpenError::new(500, "erro_criacao_sessao", format!("o dono da sessão não foi registrado: {cause}")).because("owner_unregistered"))
     }
 }
 
@@ -417,7 +417,7 @@ async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller
             }
             decision => decision,
         }
-    }).await.unwrap_or_else(|_| Decision::Refused(OpenError::new(500, "erro_criacao_sessao", "a abertura não terminou")))
+    }).await.unwrap_or_else(|_| Decision::Refused(OpenError::unfinished("a abertura não terminou")))
 }
 
 /// O pai cuja linha a filha recebe (`LinkPlan::line_parent`), com o grupo dele lido agora.
@@ -482,12 +482,12 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
         let facts = super::facts::LocalFacts::shared(facts_env, &accounts, runtime);
         super::resolve_open(&request_for_facts, &caller_for_facts, &facts)
     }).await;
-    let mut resolved = match resolved.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou"))) {
+    let mut resolved = match resolved.unwrap_or_else(|_| Err(OpenError::unfinished("a resolução da abertura não terminou"))) {
         Ok(resolved) => resolved,
         Err(error) => {
             if let Some(events) = super::open::refusal_diary(crate::mods::state::random_hex(8), request.name.as_deref().unwrap_or(""), super::open::requested_provider(request), &error) {
                 host.diary(events);
-                super::open::count_open_failed(host.telemetry(), caller, super::open::requested_provider(request), error.code);
+                super::open::count_open_failed(host.telemetry(), caller, super::open::requested_provider(request), &error, request.name.as_deref().unwrap_or(""), Vec::new());
             }
             return Decision::Refused(error);
         }
@@ -561,7 +561,7 @@ pub(crate) async fn creator_here(st: &Arc<AppState>, name: &str) -> Result<Optio
     tokio::task::spawn_blocking(move || {
         use super::OpenFacts;
         super::facts::LocalFacts::shared(accounts.env.clone(), &accounts, runtime).creator(&name)
-    }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a leitura da sessão criadora não terminou")))
+    }).await.unwrap_or_else(|_| Err(OpenError::unfinished("a leitura da sessão criadora não terminou")))
 }
 
 /// A abertura que a escolha mandou a outra máquina: a resposta é a de lá, com `target`, `placement` e, com
@@ -730,13 +730,13 @@ pub async fn bastao(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         Err(mut response) => { crate::http_cors::apply(&headers,&mut response); return response; }
     };
     let mut response = match SessionOpenRequest::parse(prepared.body["open"].to_string().as_bytes()) {
-        Err(_) => reply(&OpenError::new(502, "erro_criacao_sessao", "o preparo do bastão não devolveu um pedido de abertura")),
+        Err(_) => reply(&OpenError::new(502, "erro_criacao_sessao", "o preparo do bastão não devolveu um pedido de abertura").because("baton_invalid")),
         Ok(request) => match decide_detached(&st, request, OpenCaller::Owner, None, Some(prepared._ingress.clone())).await {
             Decision::Opened(opened) => crate::session_write::json_response(StatusCode::OK, json!({"name": opened.body["name"],
                 "dossie": prepared.body["dossie"], "texto": prepared.body["texto"], "kickoff": prepared.body["kickoff"], "aviso": prepared.body["aviso"],
                 "avisos": opened.body["avisos"]})),
             Decision::Refused(error) => reply(&error),
-            Decision::NotOurs => reply(&OpenError::new(500, "erro_criacao_sessao", "a sucessora do bastão não abre com terminal no Rust")),
+            Decision::NotOurs => reply(&OpenError::new(500, "erro_criacao_sessao", "a sucessora do bastão não abre com terminal no Rust").because("baton_invalid")),
         },
     };
     crate::routes::cors(&headers, response.headers_mut());
@@ -773,12 +773,12 @@ pub async fn resume_archived(st: &Arc<AppState>, project: &str, sid: &str, body:
             let plan = super::archive::plan(&w, &facts, &p, &s, body)?;
             let resolved = super::resolve_open(&plan.request, &OpenCaller::Owner, &facts)?;
             Ok::<_, OpenError>((plan, resolved))
-        }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da retomada não terminou")));
+        }).await.unwrap_or_else(|_| Err(OpenError::unfinished("a resolução da retomada não terminou")));
         let (plan, resolved) = planned?;
         let _progress = super::open::Progress::track(&resolved.spec.name);
         let project = plan.project.clone();
         super::archive::open(&host, plan, resolved, &project, &sid).await
-    }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a retomada não terminou")))
+    }).await.unwrap_or_else(|_| Err(OpenError::unfinished("a retomada não terminou")))
 }
 
 /// A rota pública do Arquivo: só o dono; o resto segue ao Python, que recusa.

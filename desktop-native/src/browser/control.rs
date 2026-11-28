@@ -16,6 +16,8 @@ pub trait Page {
     fn hold_size(&self, _held: bool) {}
     /// Trabalho pesado de CPU (decodificar e recodificar imagem) fora da thread de quem espera; sem executor, ali mesmo.
     fn background<T: Send + 'static>(&self, work: impl FnOnce() -> T + Send + 'static) -> impl Future<Output = T> { std::future::ready(work()) }
+    /// O navegador saiu: o erro do CDP no meio do verbo é ele ter fechado, não a página ter recusado.
+    fn closed(&self) -> bool { false }
 }
 
 /// `fut`, ou `None` quando a página não responde em `ms`.
@@ -41,7 +43,8 @@ pub fn screenshot_bytes(r: &Value) -> Result<Vec<u8>, String> {
     base64::engine::general_purpose::STANDARD.decode(r["data"].as_str().unwrap_or("")).map_err(|e| e.to_string())
 }
 
-pub enum Reply { Text(String), Png(Vec<u8>) }
+/// `Error`: o texto `erro: …` com o código fechado da causa, decidido onde o erro nasce (vai no cabeçalho do `/cmd`).
+pub enum Reply { Text(String), Png(Vec<u8>), Error(&'static str, String) }
 
 /// Agente do layout de desktop. O Chromium do Linux roda headless e se apresenta como "HeadlessChrome", que Google,
 /// GitHub e afins recusam no login: vira o de um Chrome comum, com as marcas dos client hints, que a troca sem
@@ -230,6 +233,8 @@ pub struct Controller<P: Page> {
     secret_sent: Cell<bool>,
     /// Texto ou tecla já mandados à página: cortado depois disso, a resposta diz que o efeito pode ter acontecido.
     input_sent: Cell<Option<&'static str>>,
+    /// Código da recusa que o verbo vai devolver, marcado onde ela nasce (`failed`); o fim do verbo o põe na resposta.
+    failure: Cell<Option<&'static str>>,
 }
 
 fn push(list: &mut VecDeque<String>, line: String) {
@@ -253,7 +258,7 @@ fn without_query(url: &str) -> &str { url.split(['?', '#']).next().unwrap_or(url
 
 impl<P: Page> Controller<P> {
     pub fn new(page: P, hidden: bool) -> Self {
-        Self { page, turn: Mutex::new(()), watching: Cell::new(false), wanted_hidden: Cell::new(hidden), paused: Cell::new(false), picking: Cell::new(false), on_activity: RefCell::new(None), on_layout: RefCell::new(None), on_page_error: RefCell::new(None), dialog_open: RefCell::new(None), strip_shown: Cell::new(false), settle: Cell::new(false), dialog_answered: Cell::new(false), dialog_signal: RefCell::new(None), on_dialog_answer: RefCell::new(None), in_flight: RefCell::new(None), pressed: RefCell::new(None), secret_sent: Cell::new(false), input_sent: Cell::new(None), state: RefCell::new(State { refs: HashMap::new(), console: VecDeque::new(),
+        Self { page, turn: Mutex::new(()), watching: Cell::new(false), wanted_hidden: Cell::new(hidden), paused: Cell::new(false), picking: Cell::new(false), on_activity: RefCell::new(None), on_layout: RefCell::new(None), on_page_error: RefCell::new(None), dialog_open: RefCell::new(None), strip_shown: Cell::new(false), settle: Cell::new(false), dialog_answered: Cell::new(false), dialog_signal: RefCell::new(None), on_dialog_answer: RefCell::new(None), in_flight: RefCell::new(None), pressed: RefCell::new(None), secret_sent: Cell::new(false), input_sent: Cell::new(None), failure: Cell::new(None), state: RefCell::new(State { refs: HashMap::new(), console: VecDeque::new(),
             network: VecDeque::new(), inflight: HashSet::new(), requests: HashMap::new(), dialog: None, last_network: Instant::now(), noise: HashSet::new(), theme: "sistema", layout: Layout::Desktop,
             hidden: false, scale: None, navigated: false, navs: 0, enabled: HashSet::new(), marked: HashSet::new(), secrets: Vec::new() }) }
     }
@@ -475,8 +480,17 @@ impl<P: Page> Controller<P> {
     pub async fn run_until(&self, verb: &str, args: &[String], secret: Option<Secret>, deadline: Option<Instant>) -> Reply {
         match self.run_inner(verb, args, secret, deadline).await {
             Reply::Text(text) => Reply::Text(self.masked(text)),
+            Reply::Error(code, text) => Reply::Error(code, self.masked(text)),
             png => png,
         }
+    }
+
+    /// `text`, a recusa do verbo, com a causa `code` guardada para a resposta.
+    fn no_ref(&self, r: &str) -> String { self.failed("ref_invalid", format!("erro: ref {r} nao existe (rode snapshot de novo)")) }
+
+    fn failed(&self, code: &'static str, text: String) -> String {
+        self.failure.set(Some(code));
+        text
     }
 
     fn masked(&self, text: String) -> String {
@@ -492,6 +506,7 @@ impl<P: Page> Controller<P> {
         self.pressed.borrow_mut().take();
         self.secret_sent.set(false);
         self.input_sent.set(None);
+        self.failure.set(None);
         if let Some(why) = self.blocked().filter(|_| ACTING.contains(&verb)) { return Reply::Text(why.into()); }
         for _ in 0..20 {
             if !(self.dialog_answered.get() && self.dialog_open.borrow().is_some()) { break; }
@@ -499,11 +514,11 @@ impl<P: Page> Controller<P> {
         }
         let open = self.dialog_open.borrow().is_some();
         if let Some((kind, message, _)) = self.dialog_open.borrow().clone() && !WITH_DIALOG.contains(&verb) {
-            return Reply::Text(format!("erro: a pagina esta com um dialogo {kind} aberto: “{message}”. Responda antes: {}", Self::dialog_hint(&kind)));
+            return Reply::Error("dialog_open", format!("erro: a pagina esta com um dialogo {kind} aberto: “{message}”. Responda antes: {}", Self::dialog_hint(&kind)));
         }
         // Prazo vencido na fila: quem pediu já desistiu, e o verbo não mexe na página por ele.
         let left = deadline.map(|d| d.saturating_duration_since(Instant::now()).as_millis() as u64);
-        if left == Some(0) { return Reply::Text(format!("erro: {verb} não começou: o prazo de quem pediu venceu na fila")); }
+        if left == Some(0) { return Reply::Error("queue_deadline", format!("erro: {verb} não começou: o prazo de quem pediu venceu na fila")); }
         let (signal, opened) = futures::channel::oneshot::channel();
         *self.dialog_signal.borrow_mut() = Some(signal);
         let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or("");
@@ -570,17 +585,22 @@ impl<P: Page> Controller<P> {
                 let release = self.pressed.borrow_mut().take();
                 if let Some((method, release)) = release { let _ = within(&self.page, 500, self.page.call(method, release)).await; }
                 let _ = within(&self.page, 500, self.unmark()).await;
-                Ok(Reply::Text(if self.secret_sent.get() {
-                    format!("erro: erro_cofre_incerto: {verb} não confirmou em {ms} ms; o valor pode ter sido digitado{}", stuck_at(stuck.as_deref()))
+                Ok(if self.secret_sent.get() {
+                    Reply::Text(format!("erro: erro_cofre_incerto: {verb} não confirmou em {ms} ms; o valor pode ter sido digitado{}", stuck_at(stuck.as_deref())))
                 } else if let Some(effect) = self.input_sent.get() {
-                    format!("erro: {verb} não confirmou em {ms} ms; {effect}{}", stuck_at(stuck.as_deref()))
+                    Reply::Error("verb_unconfirmed", format!("erro: {verb} não confirmou em {ms} ms; {effect}{}", stuck_at(stuck.as_deref())))
                 } else {
-                    format!("erro: {}", stuck_text(verb, ms, stuck.as_deref()))
-                }))
+                    Reply::Error("verb_unconfirmed", format!("erro: {}", stuck_text(verb, ms, stuck.as_deref())))
+                })
             }
         };
         self.dialog_signal.borrow_mut().take();
-        result.unwrap_or_else(|e| Reply::Text(format!("erro: {e}")))
+        match (result, self.failure.take()) {
+            (Ok(Reply::Text(text)), Some(code)) => Reply::Error(code, text),
+            (Ok(reply), _) => reply,
+            (Err(e), _) if self.page.closed() => Reply::Error("cdp_closed", format!("erro: {e}")),
+            (Err(e), _) => Reply::Text(format!("erro: {e}")),
+        }
     }
 
     async fn after_navigation(&self) {
@@ -731,17 +751,17 @@ impl<P: Page> Controller<P> {
         if result["subtype"] == "node" && let Some(object) = result["objectId"].as_str() {
             let node = self.call("DOM.describeNode", json!({"objectId": object})).await?;
             let Some(id) = node["node"]["backendNodeId"].as_i64() else {
-                return Ok(Err(format!("erro: {verb}: o elemento de “{r}” sumiu antes da ação; tente de novo")));
+                return Ok(Err(self.failed("target_missing", format!("erro: {verb}: o elemento de “{r}” sumiu antes da ação; tente de novo"))));
             };
             self.state.borrow_mut().refs.insert(r.to_owned(), id);
             return Ok(Ok(()));
         }
         let said = result["value"].as_str().unwrap_or("");
         Ok(Err(if said == "nenhum" {
-            format!("erro: {verb}: nenhum elemento visível com “{r}” (aceita @eN do snapshot, texto visível ou css=seletor)")
+            self.failed("target_missing", format!("erro: {verb}: nenhum elemento visível com “{r}” (aceita @eN do snapshot, texto visível ou css=seletor)"))
         } else if let Some(rest) = said.strip_prefix("varios:") {
             let (n, list) = rest.split_once(':').unwrap_or((rest, ""));
-            format!("erro: {verb}: “{r}” casa com {n} elementos visíveis ({list}): use o @eN do snapshot --refs ou um texto mais exato")
+            self.failed("target_ambiguous", format!("erro: {verb}: “{r}” casa com {n} elementos visíveis ({list}): use o @eN do snapshot --refs ou um texto mais exato"))
         } else if !said.is_empty() {
             format!("erro: {verb}: {said}")
         } else {
@@ -800,7 +820,10 @@ impl<P: Page> Controller<P> {
                 None => format!(" — a página mudou de rota{said}"),
             };
         }
-        match within(&self.page, NAV_IN_ACTION_MS, self.settle(verb, before)).await {
+        let settled = within(&self.page, NAV_IN_ACTION_MS, self.settle(verb, before)).await;
+        // A carga que não terminou vira nota da ação que já deu certo, não a recusa dela.
+        self.failure.set(None);
+        match settled {
             Some(Ok(t)) if t.starts_with("ok:") => format!(" — a página navegou para {}", super::server::without_token(t.trim_start_matches(&format!("ok: {verb} ")))),
             Some(Ok(t)) => format!(" — a página navegou, mas {}", t.trim_start_matches("erro: ")),
             Some(Err(e)) => format!(" — a página navegou, mas a carga não foi conferida ({e})"),
@@ -832,7 +855,7 @@ impl<P: Page> Controller<P> {
         if let Err(why) = self.resolve(verb, r).await? { return Ok(why); }
         self.mark(verb, r).await;
         if let Some(why) = self.blocked() { self.unmark().await; return Ok(why.into()); }
-        let Some((x, y)) = self.measured(r).await? else { return Ok(format!("erro: ref {r} nao existe (rode snapshot de novo)")) };
+        let Some((x, y)) = self.measured(r).await? else { return Ok(self.no_ref(r)) };
         // A medida esperou a página: o modo de escolha pode ter ligado nesse meio-tempo.
         if let Some(why) = self.blocked() { self.unmark().await; return Ok(why.into()); }
         let base = |t: &str| json!({"type": t, "x": x, "y": y, "button": "left", "clickCount": 1});
@@ -903,7 +926,7 @@ impl<P: Page> Controller<P> {
         if let Some(focus) = self.not_editable().await? {
             return Ok(format!("erro: fill-secret {r}: o clique nao deixou um campo de texto com foco (foco em {focus}) — rode snapshot"));
         }
-        let Some(id) = self.state.borrow().refs.get(r).copied() else { return Ok(format!("erro: ref {r} nao existe (rode snapshot de novo)")) };
+        let Some(id) = self.state.borrow().refs.get(r).copied() else { return Ok(self.no_ref(r)) };
         self.enable("DOM").await?;
         let node = self.call("DOM.resolveNode", json!({"backendNodeId": id})).await?;
         let object = node["object"]["objectId"].as_str().ok_or("fill-secret: o alvo nao tem objeto na pagina")?;
@@ -992,7 +1015,7 @@ impl<P: Page> Controller<P> {
         if let Err(why) = self.resolve("hover", r).await? { return Ok(why); }
         self.mark("hover", r).await;
         if let Some(why) = self.blocked() { self.unmark().await; return Ok(why.into()); }
-        let Some((x, y)) = self.measured(r).await? else { return Ok(format!("erro: ref {r} nao existe (rode snapshot de novo)")) };
+        let Some((x, y)) = self.measured(r).await? else { return Ok(self.no_ref(r)) };
         self.call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": x, "y": y})).await?;
         self.frame().await;
         Ok(format!("ok: hover {r}"))
@@ -1083,10 +1106,10 @@ impl<P: Page> Controller<P> {
             self.page.sleep(POLL_MS).await;
             waited += POLL_MS + spent;
         }
-        Ok(match cross.get() {
+        Ok(self.failed("wait_timeout", match cross.get() {
             0 => format!("erro: wait {joined} nao aconteceu em {limit}ms"),
             n => format!("erro: wait {joined} nao aconteceu em {limit}ms {}", cross_note(n, "wait --text")),
-        })
+        }))
     }
 
     /// Navegação pedida por verbo: as refs antigas morrem já, e a resposta só sai com o documento novo carregado.
@@ -1107,7 +1130,7 @@ impl<P: Page> Controller<P> {
             self.page.sleep(POLL_MS).await;
             waited += POLL_MS + t0.elapsed().as_millis() as u64;
         }
-        Ok(format!("erro: {verb}: a pagina nao terminou de carregar em {WAIT_MS}ms"))
+        Ok(self.failed("wait_timeout", format!("erro: {verb}: a pagina nao terminou de carregar em {WAIT_MS}ms")))
     }
 
     async fn goto(&self, url: &str) -> Result<String, String> {
@@ -1349,6 +1372,10 @@ impl Page for CdpPage {
     fn panel_size(&self) -> Option<(u32, u32, f32)> { self.cdp.viewport.panel.get() }
     #[cfg(target_os = "linux")]
     fn hold_size(&self, held: bool) { self.cdp.viewport.held.set(held) }
+    #[cfg(target_os = "linux")]
+    fn closed(&self) -> bool { !self.cdp.browser().alive() }
+    #[cfg(target_os = "windows")]
+    fn closed(&self) -> bool { self.cdp.closed() }
     fn background<T: Send + 'static>(&self, work: impl FnOnce() -> T + Send + 'static) -> impl Future<Output = T> {
         self.executor.spawn(async move { work() })
     }
@@ -1364,7 +1391,7 @@ mod tests {
     /// `stuck`: método (ou função do `callFunctionOn`) que nunca responde, como página presa num laço de JS.
     /// `panel`/`held`: o lado do motor do painel, que guarda o tamanho aplicado e obedece ao layout pedido.
     struct Fake { calls: RefCell<Vec<(String, Value)>>, answer: Box<dyn Fn(&str, &Value) -> Result<Value, String>>, stuck: &'static str,
-        panel: Cell<Option<(u32, u32, f32)>>, held: Cell<bool> }
+        panel: Cell<Option<(u32, u32, f32)>>, held: Cell<bool>, gone: Cell<bool> }
     /// A espera depois da ação responde como numa página que assentou, salvo quando o teste responde ela mesma.
     fn fake(answer: impl Fn(&str, &Value) -> Result<Value, String> + 'static, stuck: &'static str) -> Fake {
         let answer = move |m: &str, p: &Value| {
@@ -1376,11 +1403,12 @@ mod tests {
                 _ => said,
             })
         };
-        Fake { calls: RefCell::default(), answer: Box::new(answer), stuck, panel: Cell::new(None), held: Cell::new(false) }
+        Fake { calls: RefCell::default(), answer: Box::new(answer), stuck, panel: Cell::new(None), held: Cell::new(false), gone: Cell::new(false) }
     }
     impl Page for Fake {
         fn panel_size(&self) -> Option<(u32, u32, f32)> { self.panel.get() }
         fn hold_size(&self, held: bool) { self.held.set(held) }
+        fn closed(&self) -> bool { self.gone.get() }
         fn call(&self, method: &str, params: Value) -> impl Future<Output = Result<Value, String>> {
             self.calls.borrow_mut().push((method.into(), params.clone()));
             // `stuck` também casa a função de um `Runtime.callFunctionOn`: só aquela chamada fica presa.
@@ -1392,7 +1420,8 @@ mod tests {
     fn ctl(answer: impl Fn(&str, &Value) -> Result<Value, String> + 'static) -> Controller<Fake> {
         Controller::new(fake(answer, ""), false)
     }
-    fn text(r: Reply) -> String { match r { Reply::Text(t) => t, Reply::Png(_) => "png".into() } }
+    fn text(r: Reply) -> String { match r { Reply::Text(t) | Reply::Error(_, t) => t, Reply::Png(_) => "png".into() } }
+    fn code(r: &Reply) -> Option<&'static str> { match r { Reply::Error(code, _) => Some(code), _ => None } }
     fn methods(c: &Controller<Fake>) -> Vec<String> { c.page.calls.borrow().iter().map(|(m, _)| m.clone()).collect() }
     fn s(v: &[&str]) -> Vec<String> { v.iter().map(|x| x.to_string()).collect() }
 
@@ -1424,7 +1453,7 @@ mod tests {
         let c = ctl(move |m, _| Ok(if m == "Page.captureScreenshot" { json!({"data": data}) } else { json!({}) }));
         match block_on(c.run("shot", &s(&["/tmp/x.png", "--max", "1568"]))) {
             Reply::Png(png) => assert_eq!(size_of(&png), (1568, 980)),
-            Reply::Text(t) => panic!("{t}"),
+            Reply::Text(t) | Reply::Error(_, t) => panic!("{t}"),
         }
         assert!(text(block_on(c.run("shot", &s(&["/tmp/x.png", "--max", "0"])))).starts_with("erro: shot: --max"));
         assert!(text(block_on(c.run("shot", &s(&["/tmp/x.png", "--max", "abc"])))).starts_with("erro: shot: --max"));
@@ -2096,6 +2125,34 @@ fn finder(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.contai
 
     fn in_ms(ms: u64) -> Instant { Instant::now() + std::time::Duration::from_millis(ms) }
 
+    /// Cada recusa sai com o código da causa, decidido onde nasceu: é ele que vai no cabeçalho do `/cmd`.
+    #[test]
+    fn refusals_carry_the_code_of_their_cause() {
+        let c = stuck_click();
+        block_on(c.run("snapshot", &[]));
+        assert_eq!(code(&block_on(c.run("hover", &s(&["@e9"])))), Some("ref_invalid"));
+        assert_eq!(code(&block_on(c.run("click", &s(&["@e1"])))), Some("verb_unconfirmed"));
+        assert_eq!(code(&block_on(c.run("url", &[]))), None, "resposta boa não leva código");
+        c.set_dialog(Some(("confirm".into(), "Excluir?".into(), String::new())));
+        assert_eq!(code(&block_on(c.run("click", &s(&["@e1"])))), Some("dialog_open"));
+
+        let missing = ctl(|m, p| Ok(if m == "Runtime.evaluate" && finder(p) { json!({"result": {"type": "string", "value": "nenhum"}}) } else { json!({}) }));
+        assert_eq!(code(&block_on(missing.run("click", &s(&["Salvar"])))), Some("target_missing"));
+        let many = ctl(|m, p| Ok(if m == "Runtime.evaluate" && finder(p) { json!({"result": {"type": "string", "value": "varios:2:a, b"}}) } else { json!({}) }));
+        assert_eq!(code(&block_on(many.run("hover", &s(&["Salvar"])))), Some("target_ambiguous"));
+        let waiting = ctl(|_, _| Ok(json!({"result": {"value": "http://a/"}})));
+        assert_eq!(code(&block_on(waiting.run("wait", &s(&["--url", "/done"])))), Some("wait_timeout"));
+        assert_eq!(code(&block_on(waiting.run("goto", &s(&["http://b/"])))), Some("wait_timeout"), "carga que não termina");
+    }
+
+    #[test]
+    fn a_cdp_error_after_the_browser_left_is_cdp_closed() {
+        let c = ctl(|_, _| Err("chromium_exited: o Chromium fechou".into()));
+        assert_eq!(code(&block_on(c.run("text", &[]))), None, "erro da página com o navegador vivo não é queda");
+        c.page.gone.set(true);
+        assert_eq!(code(&block_on(c.run("text", &[]))), Some("cdp_closed"));
+    }
+
     /// O teto que a resposta do verbo cortado cita (`… em N ms …`).
     fn ceiling_in(said: &str) -> u64 {
         said.split(" em ").nth(1).and_then(|rest| rest.split(' ').next()).and_then(|n| n.parse().ok()).unwrap_or_else(|| panic!("{said}"))
@@ -2133,6 +2190,7 @@ fn finder(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.contai
         let (first, second) = block_on(futures::future::join(c.run("click", &s(&["@e1"])),
             c.run_until("click", &s(&["@e1"]), None, Some(expired))));
         assert!(text(first).starts_with("erro: click não respondeu"));
+        assert_eq!(code(&second), Some("queue_deadline"));
         assert_eq!(text(second), "erro: click não começou: o prazo de quem pediu venceu na fila");
         let input = c.page.calls.borrow().iter().filter(|(m, _)| m.starts_with("Input.")).count();
         assert_eq!(input, 2, "só o botão apertado e solto pelo primeiro");

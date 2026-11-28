@@ -321,7 +321,10 @@ async fn serve(mut stream: TcpStream, token: Arc<str>, requests: async_channel::
         Ok(Err(fail)) => fail,
         Ok(Ok((head, body))) => match check(&head, &token, stream.local_addr().map_or(0, |a| a.port())) {
             Err(fail) => fail,
-            Ok(Route::Cmd) => (200, answer(&body, &requests).await),
+            Ok(Route::Cmd) => {
+                let (code, text) = answer(&body, &requests).await;
+                return respond_with(&mut stream, 200, &text, code).await;
+            }
             Ok(Route::Cdp(key)) => {
                 let ws_key = head.ws_key.unwrap_or_default();
                 return super::relay::serve(stream, &ws_key, key, requests).await;
@@ -373,7 +376,10 @@ async fn open_local(name: String, requests: &async_channel::Sender<Request>) -> 
 }
 
 /// Resposta HTTP de texto, uma por conexão, como o servidor do Electron.
-pub(super) async fn respond(stream: &mut TcpStream, status: u16, text: &str) {
+pub(super) async fn respond(stream: &mut TcpStream, status: u16, text: &str) { respond_with(stream, status, text, None).await }
+
+/// `code`: a causa fechada do `erro:` do `/cmd`, em `x-hangar-browser-code`; o texto segue igual para quem o lê.
+async fn respond_with(stream: &mut TcpStream, status: u16, text: &str, code: Option<&str>) {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -386,7 +392,8 @@ pub(super) async fn respond(stream: &mut TcpStream, status: u16, text: &str) {
         431 => "Request Header Fields Too Large",
         _ => "Internal Server Error",
     };
-    let response = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len());
+    let code = code.map(|c| format!("x-hangar-browser-code: {c}\r\n")).unwrap_or_default();
+    let response = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\n{code}Content-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len());
     let _ = stream.write_all(response.as_bytes()).await;
 }
 
@@ -412,29 +419,30 @@ async fn read_request(stream: &mut TcpStream) -> Result<(Head, Vec<u8>), (u16, S
     Ok((head, body))
 }
 
-async fn answer(bytes: &[u8], requests: &async_channel::Sender<Request>) -> String {
+async fn answer(bytes: &[u8], requests: &async_channel::Sender<Request>) -> (Option<&'static str>, String) {
     // O prazo de quem pediu corre desde aqui, não desde a vez do verbo no navegador.
     let arrived = std::time::Instant::now();
-    let body = match parse_body(bytes) { Ok(b) => b, Err(e) => return e };
+    let body = match parse_body(bytes) { Ok(b) => b, Err(e) => return (None, e) };
     let path = (body.verb == "shot").then(|| body.args.first().cloned()).flatten();
-    if body.verb == "shot" && path.is_none() { return "erro: shot precisa de um caminho de arquivo".into(); }
+    if body.verb == "shot" && path.is_none() { return (None, "erro: shot precisa de um caminho de arquivo".into()); }
     let verb_is_login = body.verb == "login";
     let rx = if let Some(cdp) = body.cdp {
-        if body.tab.is_some() { return "erro: --cdp nao tem abas: escolha a pagina com --alvo <trecho da url>".into(); }
-        match super::external::submit(&cdp, body.alvo, body.verb, body.args) { Ok(rx) => rx, Err(e) => return e }
+        if body.tab.is_some() { return (None, "erro: --cdp nao tem abas: escolha a pagina com --alvo <trecho da url>".into()); }
+        match super::external::submit(&cdp, body.alvo, body.verb, body.args) { Ok(rx) => rx, Err(e) => return (None, e) }
     } else {
         let (tx, rx) = oneshot::channel();
         if requests.send(Request::Command { key: body.key, verb: body.verb, args: body.args, tab: body.tab, secret: body.secret, deadline: body.deadline.map(|ms| arrived + Duration::from_millis(ms)), reply: tx }).await.is_err() {
-            return "erro: o app nativo esta fechando".into();
+            return (Some("app_closing"), "erro: o app nativo esta fechando".into());
         }
         rx
     };
     // `login` espera a pessoa aprovar no painel e, às vezes, escolher o perfil.
     let secs = if verb_is_login { LOGIN_SECS } else { REPLY_SECS };
-    match tokio::time::timeout(Duration::from_secs(secs), rx).await {
+    let text = match tokio::time::timeout(Duration::from_secs(secs), rx).await {
         Err(_) if verb_is_login => format!("erro: o login nao terminou no painel em {secs}s (aprovacao ou escolha de perfil pendente)"),
-        Err(_) => format!("erro: o app nao respondeu em {secs}s"),
-        Ok(Err(_)) => "erro: o navegador fechou no meio do comando".into(),
+        Err(_) => return (Some("app_no_answer"), format!("erro: o app nao respondeu em {secs}s")),
+        Ok(Err(_)) => return (Some("cdp_closed"), "erro: o navegador fechou no meio do comando".into()),
+        Ok(Ok(Reply::Error(code, text))) => return (Some(code), text),
         Ok(Ok(Reply::Text(text))) => text,
         Ok(Ok(Reply::Png(png))) => {
             let path = path.unwrap_or_default();
@@ -445,7 +453,8 @@ async fn answer(bytes: &[u8], requests: &async_channel::Sender<Request>) -> Stri
                 Err(e) => format!("erro: shot {path}: {e}"),
             }
         }
-    }
+    };
+    (None, text)
 }
 
 #[cfg(test)]
@@ -842,8 +851,8 @@ mod tests {
             reply.send(Reply::Text("ok: click @e1".into())).ok().unwrap();
             deadline
         };
-        let (said, deadline) = futures::join!(answer(br#"{"chave":"k","verbo":"click","deadline_ms":8000}"#, &requests), app);
-        assert_eq!(said, "ok: click @e1");
+        let ((code, said), deadline) = futures::join!(answer(br#"{"chave":"k","verbo":"click","deadline_ms":8000}"#, &requests), app);
+        assert_eq!((code, said.as_str()), (None, "ok: click @e1"));
         let deadline = deadline.expect("o prazo chega ao controlador");
         assert!(deadline >= before + Duration::from_millis(8000) && deadline <= std::time::Instant::now() + Duration::from_millis(8000));
     }
@@ -851,9 +860,33 @@ mod tests {
     #[tokio::test]
     async fn external_cdp_outside_loopback_is_refused_before_any_connection() {
         let (requests, ui) = async_channel::unbounded();
-        let text = answer(br#"{"cdp":"http://192.168.77.142:9222","verbo":"snapshot"}"#, &requests).await;
+        let (_, text) = answer(br#"{"cdp":"http://192.168.77.142:9222","verbo":"snapshot"}"#, &requests).await;
         assert!(text.starts_with("erro: --cdp so aceita"), "{text}");
         assert!(ui.is_empty(), "nada vai ao navegador da sessao");
+    }
+
+    /// A recusa do verbo sai com a causa no cabeçalho; o texto continua o mesmo.
+    #[tokio::test]
+    async fn cmd_refusal_carries_its_code_in_a_header() {
+        let body = r#"{"chave":"s::a","verbo":"click","args":["@e1"]}"#;
+        let request = format!("POST /cmd HTTP/1.1\r\nAuthorization: Bearer component-proof\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let (mut client, ui, task) = component_request(&request).await;
+        let Ok(Request::Command { reply, .. }) = ui.recv().await else { panic!("esperava comando") };
+        reply.send(Reply::Error("page_gone", "erro: a pagina caiu".into())).ok().unwrap();
+        let head = response_head(&mut client).await;
+        assert!(head.starts_with("HTTP/1.1 200 ") && head.contains("\r\nx-hangar-browser-code: page_gone\r\n"), "{head}");
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn closing_app_and_lost_reply_have_their_codes() {
+        let (requests, ui) = async_channel::unbounded();
+        drop(ui);
+        assert_eq!(answer(br#"{"chave":"k","verbo":"url"}"#, &requests).await.0, Some("app_closing"));
+        let (requests, ui) = async_channel::unbounded();
+        let app = async { let Ok(Request::Command { reply, .. }) = ui.recv().await else { panic!("esperava comando") }; drop(reply); };
+        let ((code, _), ()) = futures::join!(answer(br#"{"chave":"k","verbo":"url"}"#, &requests), app);
+        assert_eq!(code, Some("cdp_closed"));
     }
 
     #[test]

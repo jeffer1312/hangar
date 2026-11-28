@@ -1348,6 +1348,25 @@ fn names_longer_than_the_terminal_accepts_are_refused() {
     assert!(resolve_fixture(&fixture).is_ok());
 }
 
+/// Toda recusa de criação da resolução leva a causa fechada da telemetria (`events::HEALTH`).
+#[test]
+fn telemetry_every_creation_refusal_of_the_resolution_has_its_cause() {
+    let causes = hangar_telemetry::events::HEALTH.iter().find(|h| h.code == "erro_criacao_sessao").unwrap().causes;
+    let mut seen = std::collections::BTreeSet::new();
+    for (name, fixture) in create_fixtures() {
+        let Ok(request) = SessionOpenRequest::parse(&request_body(&fixture)) else { continue };
+        let Err(error) = resolve::resolve_open(&request, &OWNER, &FixtureFacts::of(&fixture)) else { continue };
+        if error.code != Some("erro_criacao_sessao") { continue; }
+        let cause = error.cause.unwrap_or_else(|| panic!("{name}: {} sem causa", error.msg));
+        assert!(causes.contains(&cause), "{name}: {cause}");
+        seen.insert(cause);
+    }
+    let (_, mut fixture) = create_fixtures().into_iter().find(|(n, _)| n == "create_claude_terminal_default").unwrap();
+    fixture["scenario"]["steps"][0]["json"]["name"] = json!("a".repeat(65));
+    assert_eq!(resolve_fixture(&fixture).unwrap_err().cause, Some("name_invalid"));
+    assert!(seen.len() >= 3, "{seen:?}");
+}
+
 /// Settings da conta ilegível sem modo pedido: recusa com código, nunca o modo mais permissivo
 /// calado. Com o modo pedido, abre.
 #[test]

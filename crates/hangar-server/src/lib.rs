@@ -89,6 +89,7 @@ pub mod stats;
 pub mod status;
 pub mod telemetry_routes;
 pub mod telemetry_hooks;
+mod telemetry_ctx;
 pub mod usage_cli;
 pub mod send_cli;
 pub mod subagents;
@@ -431,7 +432,29 @@ pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let t = std::thread::current();
         tracing::error!("{}", panic_line(info.location(), t.name()));
+        // Para a subida seguinte dizer onde a vida caiu: só o lugar, nunca a mensagem.
+        // Só o pânico da thread principal derruba o servidor; o de uma tarefa o runtime captura e a vida segue.
+        if t.name() == Some("main") && let (Some(path), Some(at)) = (PANIC_MARKER.get(), info.location())
+            && let Err(error) = std::fs::write(path, serde_json::json!({"pid": std::process::id(), "at": panic_site(at.file(), at.line())}).to_string()) {
+            tracing::warn!(code = "panic_marker_write_failed", kind = ?error.kind(), "lugar do pânico não gravado");
+        }
     }));
+}
+
+/// O arquivo do pânico desta vida (`update::stop_intent::PANIC_FILE`), marcado na subida; sem ele (testes) o gancho
+/// não grava nada.
+pub(crate) static PANIC_MARKER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// O lugar do pânico no formato da telemetria (`events::Kind::Site`): o arquivo do workspace sem `.rs`, com `.`
+/// no lugar das pastas, e a linha, em até 64 caracteres. Fora do workspace é `dependency`.
+pub fn panic_site(file: &str, line: u32) -> String {
+    let file = file.replace('\\', "/");
+    let file = file.strip_prefix("crates/").unwrap_or(&file);
+    // Caminho absoluto (registro do cargo, `/rustc`) ou fora da pasta é de dependência.
+    if file.starts_with('/') || file.starts_with("..") || file.contains(':') { return "dependency".to_owned(); }
+    let line = format!(":{line}");
+    let site: String = format!("crates.{}", file.trim_end_matches(".rs").replace('/', ".")).chars().take(64 - line.len()).collect();
+    site + &line
 }
 
 use hangar_core::log_rotate::{LOG_MAX_BYTES, rotate_log};
@@ -467,6 +490,21 @@ pub fn init_log(path: Option<&std::path::Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn telemetry_panic_site_is_the_workspace_file_or_dependency() {
+        assert_eq!(panic_site("crates/hangar-server/src/runtime/claude.rs", 12), "crates.hangar-server.src.runtime.claude:12");
+        assert_eq!(panic_site("hangar-server/src/side.rs", 3), "crates.hangar-server.src.side:3", "o workspace mora em crates/");
+        assert_eq!(panic_site("hangar-server\\src\\side.rs", 3), "crates.hangar-server.src.side:3");
+        assert_eq!(panic_site("/home/u/.cargo/registry/src/index/tokio-1.0/src/lib.rs", 9), "dependency");
+        assert_eq!(panic_site("/rustc/abc/library/core/src/option.rs", 9), "dependency");
+        assert_eq!(panic_site("../vendor/gpui/src/x.rs", 9), "dependency");
+        let long = panic_site(&format!("hangar-server/src/{}.rs", "a".repeat(80)), 1234);
+        assert!(long.len() <= 64 && long.ends_with(":1234") && long.starts_with("crates.hangar-server.src.a"), "{long}");
+        let here = std::panic::Location::caller();
+        let site = panic_site(here.file(), here.line());
+        assert_eq!(hangar_telemetry::events::closed(hangar_telemetry::events::CONTEXT, "panic_at", &site).as_deref(), Some(site.as_str()));
+    }
 
     #[test]
     fn panic_line_has_location_and_thread_only() {

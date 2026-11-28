@@ -32,12 +32,20 @@ pub struct Config {
     /// Commit do pacote, só quando ele é de release.
     pub release_commit: Option<String>,
     pub channel: String,
+    /// `package` (pacote de release) ou `checkout` (desenvolvimento).
+    pub install: String,
 }
 
 pub struct Telemetry {
     pub(crate) home: PathBuf,
     backend: Option<PathBuf>,
     pub(crate) batch_env: Env,
+    /// `versão-commit` deste binário: carimba as linhas do diário e nomeia o arquivo do dia.
+    pub(crate) build: String,
+    /// Ambiente da máquina em valores fechados, renovado pelo servidor.
+    machine: Mutex<BTreeMap<String, String>>,
+    /// O binário da vida anterior do servidor, quando era outro: a queda dela vai no lote dela.
+    previous_build: Option<String>,
     pub(crate) lookup: EnvLookup,
     pub(crate) clock: Clock,
     enabled: AtomicBool,
@@ -95,7 +103,7 @@ impl Day {
 
     fn to_counters(&self) -> Vec<Counter> {
         self.counters.iter()
-            .map(|((event, dims, bucket), count)| Counter { event: event.clone(), dims: dims.clone(), bucket: bucket.clone(), count: *count })
+            .map(|((event, dims, bucket), count)| Counter { event: event.clone(), dims: dims.clone(), bucket: bucket.clone(), count: *count, capped: *count >= MAX_COUNT })
             .collect()
     }
 
@@ -166,8 +174,14 @@ impl Telemetry {
     pub fn with(config: Config, clock: Clock, lookup: EnvLookup) -> io::Result<Telemetry> {
         let now = clock();
         let (state, recovered) = state::load(&config.home, now)?;
+        let batch_env = Env::new(&config.version, config.release_commit.as_deref(), &config.channel, &config.install);
+        let build = format!("{}-{}", batch_env.version, batch_env.commit);
+        let previous_build = queue::swap_build(&config.home, &build);
         let telemetry = Telemetry {
-            batch_env: Env::new(&config.version, config.release_commit.as_deref(), &config.channel),
+            previous_build: previous_build.as_ref().ok().cloned().flatten().filter(|previous| *previous != build),
+            build,
+            machine: Mutex::new(BTreeMap::new()),
+            batch_env,
             home: config.home,
             backend: config.backend,
             lookup,
@@ -177,7 +191,7 @@ impl Telemetry {
             live: Mutex::new(Live::new(Day::new(day_of(now)), false)),
             io: Mutex::new(()),
             post_gate: Mutex::new(None),
-            notes: Mutex::new(recovered.into_iter().map(Failure::Disk).collect()),
+            notes: Mutex::new(recovered.into_iter().chain(previous_build.err()).map(Failure::Disk).collect()),
             unreachable_day: Mutex::new(None),
             detail: OnceLock::new(),
             refusal_post: OnceLock::new(),
@@ -196,6 +210,7 @@ impl Telemetry {
             version: "0.42.0".into(),
             release_commit: None,
             channel: "latest".into(),
+            install: "package".into(),
         };
         Telemetry::with(config, clock, Arc::new(|_: &str| -> Option<String> { None })).expect("telemetria de teste")
     }
@@ -336,6 +351,21 @@ impl Telemetry {
         self.enabled().then_some(())?;
         settings.state.collection.clone()
     }
+
+    /// `versão-commit` deste binário, o carimbo que o diário põe nas linhas da coleta.
+    pub fn build(&self) -> &str { &self.build }
+
+    /// O carimbo da vida anterior do servidor; o deste binário quando era o mesmo ou não se sabe.
+    pub fn previous_build(&self) -> &str { self.previous_build.as_deref().unwrap_or(&self.build) }
+
+    /// Troca o ambiente da máquina que sai nos próximos pacotes; chave ou valor fora de `events::MACHINE` fica fora.
+    pub fn set_machine(&self, facts: impl IntoIterator<Item = (&'static str, String)>) {
+        let facts = facts.into_iter().filter_map(|(key, value)| Some((key.to_owned(), crate::events::closed(crate::events::MACHINE, key, &value)?)))
+            .collect();
+        if let Ok(mut machine) = self.machine.lock() { *machine = facts; }
+    }
+
+    pub(crate) fn machine(&self) -> BTreeMap<String, String> { self.machine.lock().map(|m| m.clone()).unwrap_or_default() }
 
     /// Liga a projeção de falhas e trilha do diário no pacote; só a primeira vale.
     pub fn set_detail(&self, source: DetailSource) { let _ = self.detail.set(source); }
@@ -481,6 +511,8 @@ impl Telemetry {
                 day: latest.day.clone(), collection: period.id.clone(), ..DayFile::default()
             });
             if !file.sealed {
+                file.build.clone_from(&self.build);
+                file.env = Some(self.batch_env.clone());
                 file.counters.clone_from(&latest.counters);
                 file.snapshot_keys.clone_from(&latest.snapshot_keys);
                 if !file.counters.is_empty() || !file.detail.is_empty() || !file.snapshot_keys.is_empty() {
@@ -569,6 +601,12 @@ impl Telemetry {
         }
         if !self.enabled() {
             let period = settings.state.collection.as_ref().expect("coleta ativa tem período");
+            match queue::rotate(&self.home, &self.build) {
+                Ok(0) => {}
+                Ok(removed) => self.note(Failure::Legacy(removed)),
+                // O dia do binário anterior ainda não foi congelado: ligada, a coleta o leria como deste binário.
+                Err(e) => return Err(e),
+            }
             let file = match queue::read_day(&self.home, &today) {
                 Ok(file) => file.filter(|file| file.collection == period.id && file.day == today && !file.sealed),
                 Err(e) if e.kind() == io::ErrorKind::InvalidData => {
@@ -633,15 +671,21 @@ pub(crate) mod tests {
         pub(crate) fn start_as_is(&self) -> Telemetry { self.start_with(Arc::new(|_: &str| -> Option<String> { None })) }
 
         /// Como `start_as_is`, com o ambiente do processo de `lookup`.
-        pub(crate) fn start_with(&self, lookup: EnvLookup) -> Telemetry {
+        pub(crate) fn start_with(&self, lookup: EnvLookup) -> Telemetry { self.start_version("0.42.0", lookup) }
+
+        /// Como `start_with`, num binário de outra versão.
+        pub(crate) fn start_version(&self, version: &str, lookup: EnvLookup) -> Telemetry { self.try_start_version(version, lookup).unwrap() }
+
+        pub(crate) fn try_start_version(&self, version: &str, lookup: EnvLookup) -> io::Result<Telemetry> {
             let config = Config {
                 home: self.home.path().to_owned(),
                 backend: None,
-                version: "0.42.0".into(),
+                version: version.into(),
                 release_commit: None,
                 channel: "latest".into(),
+                install: "package".into(),
             };
-            Telemetry::with(config, self.clock(), lookup).unwrap()
+            Telemetry::with(config, self.clock(), lookup)
         }
 
         pub(crate) fn next_day(&self) { *self.now.lock().unwrap() += chrono::TimeDelta::days(1); }
@@ -854,6 +898,38 @@ pub(crate) mod tests {
         telemetry.save().unwrap();
         let file = queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap();
         assert_eq!(file.counters, counters);
+    }
+
+    #[test]
+    fn telemetry_knows_the_build_of_the_previous_server_life() {
+        let fx = Fixture::new();
+        let none: EnvLookup = Arc::new(|_: &str| -> Option<String> { None });
+        assert_eq!(fx.start_version("0.42.0", none.clone()).previous_build(), "0.42.0-dev", "primeira vida: o próprio");
+        let next = fx.start_version("0.43.0", none.clone());
+        assert_eq!((next.build(), next.previous_build()), ("0.43.0-dev", "0.42.0-dev"));
+        assert_eq!(fx.start_version("0.43.0", none).previous_build(), "0.43.0-dev");
+    }
+
+    /// Sem a cópia congelada do dia do binário anterior, a coleta não liga: ligada, leria aquele arquivo e
+    /// gravaria por cima dele os contadores deste binário. O erro sai, como o da leitura do dia.
+    #[test]
+    fn telemetry_stays_off_while_the_previous_build_day_is_not_frozen() {
+        let fx = Fixture::new();
+        let none: EnvLookup = Arc::new(|_: &str| -> Option<String> { None });
+        let before = fx.start();
+        before.count(Event::MessageSent, message(), 2);
+        before.save().unwrap();
+        drop(before);
+        let frozen = fx.queue().join("2026-11-26_0.42.0-dev.json");
+        std::fs::create_dir_all(&frozen).unwrap();
+        assert!(fx.try_start_version("0.43.0", none.clone()).is_err(), "a rotação falhou: a coleta não liga");
+        let kept = queue::read_day(fx.home.path(), "2026-11-26").unwrap().unwrap();
+        assert_eq!((kept.build.as_str(), kept.counters.len()), ("0.42.0-dev", 1), "o dia do binário anterior fica intacto");
+        std::fs::remove_dir(&frozen).unwrap();
+        let next = fx.start_version("0.43.0", none);
+        assert!(next.enabled(), "com o dia congelado, liga");
+        assert!(next.counters().is_empty(), "os contadores do anterior não passam a este binário");
+        assert_eq!(queue::read_day(fx.home.path(), "2026-11-26_0.42.0-dev").unwrap().unwrap().counters.len(), 1);
     }
 
     #[test]

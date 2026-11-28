@@ -155,11 +155,11 @@ pub fn require_launcher(server_env: &BTreeMap<String, String>, launcher: Option<
     let program = launcher.and_then(<[String]>::first).map_or(SERVER, String::as_str);
     if missing(program) {
         return Err(OpenError::new(409, "erro_criacao_sessao", format!("{program} nao esta no PATH deste servidor — sem o lancador a \
-            sessao Codex nasce e morre na hora, sem erro. Instale o Hangar: no Linux, scripts/install-claude-wrapper.sh; no Windows, install.ps1.")));
+            sessao Codex nasce e morre na hora, sem erro. Instale o Hangar: no Linux, scripts/install-claude-wrapper.sh; no Windows, install.ps1.")).because("launcher_missing"));
     }
     if missing("codex") {
         return Err(OpenError::new(409, "erro_criacao_sessao", "codex nao esta no PATH deste servidor — o lancador sobe o app-server com \
-            ele, e sem isso a sessao Codex nasce e morre na hora, sem erro. Instale o CLI do Codex."));
+            ele, e sem isso a sessao Codex nasce e morre na hora, sem erro. Instale o CLI do Codex.").because("launcher_missing"));
     }
     Ok(())
 }

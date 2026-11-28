@@ -6228,6 +6228,20 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   desconhecido só a revogação. Um sim gravado sem escopo ou com o escopo 2 sai do `telemetry.json`
   na subida: o servidor com B pergunta de novo. A recusa apaga também as filas `telemetry/` e
   `telemetry-scope-2/` das versões anteriores.
+- **Falha com causa, versão e estado da máquina (28/11/2026).** Pedido do dono: a telemetria tem de
+  servir para resolver as falhas que mostra, e com dado válido. A triagem do banco real mostrou falhas
+  marcadas na versão do pacote de envio (12238, publicada horas depois da falha), `tool_failed` sem o
+  porquê, e as falhas do servidor (`state_facts_unavailable`, `limit_switch_no_room`…) fora da opção B
+  desde que o filtro tirou os contadores sem horário. Regras: cada binário grava o próprio arquivo do
+  dia e manda o próprio lote (`<dia>_<versão>-<commit>.json` quando já não roda), e cada linha do diário
+  da coleta leva `telemetry_build`; arquivo de antes da divisão sai sem reenvio. As falhas do servidor
+  voltam como registros `server_health`, gravados no ponto onde nascem com o horário da ocorrência,
+  por `telemetry_hooks::report_health` e a tabela `HEALTH`. Toda falha ganha `causa` de lista
+  fechada, retrato da máquina e da sessão na primeira e na última vez, a trilha antes de cada uma e o
+  desfecho (`after`). O pacote leva `machine` (sistema, faixas de hardware, versões das CLIs e do
+  multiplexador, contas, Connect e Tailscale), `env.install` e `sent_at`. Decisão do dono sobre o
+  aceite: fica o escopo 3, sem perguntar de novo a quem já aceitou; o texto do aviso passou a citar o
+  estado da máquina e as falhas que o servidor percebe sozinho para quem ainda vai responder.
 - **Aviso anônimo de recusa (28/11/2026).** Decisão do dono: contar quantas pessoas respondem "Não
   enviar". O `PUT {"consent":false}` do dono (`Telemetry::refuse`) grava a recusa e, se a máquina nunca
   mandou o aviso e nenhum desligamento do ambiente vale, grava `refusal_reported` antes de mandar um

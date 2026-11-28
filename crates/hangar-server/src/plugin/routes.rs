@@ -147,22 +147,36 @@ fn local(state: &RouteState, peer: SocketAddr, headers: &HeaderMap) -> bool {
     is_loopback(&client)
 }
 async fn admit<T>(state: &RouteState, envelope: &Envelope<T>) -> Result<Identity, ServiceError> {
-    if !session_token_ok(&state.secret, &envelope.sessao, &envelope.token) { return Err(ServiceError("plugin_token_invalid")); }
+    admit_explained(state, envelope).await.map_err(|(error, _)| error)
+}
+
+/// `admit` e, quando a identidade falta, a causa fechada dela (`events::HEALTH`).
+async fn admit_explained<T>(state: &RouteState, envelope: &Envelope<T>) -> Result<Identity, (ServiceError, &'static str)> {
+    if !session_token_ok(&state.secret, &envelope.sessao, &envelope.token) { return Err((ServiceError("plugin_token_invalid"), "other")); }
     // O liga/desliga (`claude_function_hooks`) vale para o processo que nasce (`whoami`); a sessão já aberta
     // com o plugin segue atendida, como no Python, que só conferia o token aqui.
     let mut key = envelope.token.split_once('.').map(|(key, _)| key);
+    let lookup = |error| (error, "name_lookup_failed");
     let identity = match state.sources.resolve(&envelope.sessao, key).await {
         // Chave que nenhuma sessão conhece (emitida pelo Python ou por um servidor anterior) cai no nome, que o token
         // assina; chave de outra sessão continua vencendo o nome.
-        Err(ServiceError("plugin_identity_missing")) if key.is_some() => { key = None; state.sources.resolve(&envelope.sessao, None).await? }
-        resolved => resolved?,
+        Err(ServiceError("plugin_identity_missing")) if key.is_some() => { key = None; state.sources.resolve(&envelope.sessao, None).await.map_err(lookup)? }
+        resolved => resolved.map_err(lookup)?,
     };
-    if identity.binding.key.is_empty() || identity.binding.conversation.is_empty() || identity.plugin_key.is_empty()
-        || key.is_none() && identity.name != envelope.sessao
-        || key.is_some_and(|key| key != identity.plugin_key && key != identity.binding.key) {
-        return Err(ServiceError("plugin_identity_missing"));
-    }
+    if let Some(cause) = identity_refusal(&identity, &envelope.sessao, key) { return Err((ServiceError("plugin_identity_missing"), cause)); }
     Ok(identity)
+}
+
+/// Por que a identidade achada não vale para o pedido em nome de `asked` com a chave `key` do token.
+fn identity_refusal(identity: &Identity, asked: &str, key: Option<&str>) -> Option<&'static str> {
+    if identity.binding.key.is_empty() || identity.binding.conversation.is_empty() || identity.plugin_key.is_empty() {
+        return Some("identity_incomplete");
+    }
+    match key {
+        None if identity.name != asked => Some("name_mismatch"),
+        Some(key) if key != identity.plugin_key && key != identity.binding.key => Some("key_mismatch"),
+        _ => None,
+    }
 }
 
 /// Pane ambíguo não escolhe o primeiro. No psmux a conversa e o PID vencem o `%1` repetido.
@@ -218,20 +232,25 @@ async fn whoami(State(st): State<Arc<RouteState>>, ConnectInfo(peer): ConnectInf
 }
 /// Só o `/pull` do dono (não só `agent_message`, que é o de um `claude -p` filho com outra conversa) e com a chave
 /// no token: sem chave, o nome assinado não liga o pedido a um processo.
-async fn adopt_by_pull(st: &RouteState, body: &Envelope<Pull>) -> Result<Identity, ServiceError> {
-    let missing = ServiceError("plugin_identity_missing");
-    let key = body.token.split_once('.').map(|(key, _)| key).filter(|key| !key.is_empty()).ok_or(missing)?;
-    let conversation = body.body.session_id.as_deref().filter(|sid| !sid.is_empty()).ok_or(missing)?;
+async fn adopt_by_pull(st: &RouteState, body: &Envelope<Pull>) -> Result<Identity, (ServiceError, &'static str)> {
+    let missing = |cause| (ServiceError("plugin_identity_missing"), cause);
+    let key = body.token.split_once('.').map(|(key, _)| key).filter(|key| !key.is_empty()).ok_or(missing("token_without_key"))?;
+    let conversation = body.body.session_id.as_deref().filter(|sid| !sid.is_empty()).ok_or(missing("pull_without_conversation"))?;
     let owner = body.body.modos.is_empty() || body.body.modos.iter().any(|mode| mode != super::AGENT_MESSAGE_MODE);
-    if !owner || !st.sources.adopt(&body.sessao, key, conversation).await? { return Err(missing); }
-    admit(st, body).await
+    if !owner { return Err(missing("pull_not_owner")); }
+    // ponytail: a espera entre adoções recusadas (`ADOPTION_RETRY`) também sai `adoption_refused`; separar pede o `adopt` dizer qual foi.
+    if !st.sources.adopt(&body.sessao, key, conversation).await.map_err(|error| (error, "other"))? { return Err(missing("adoption_refused")); }
+    admit_explained(st, body).await
 }
 /// O `/pull` é o que prova a conversa sem o registro nativo: recusa dele vai ao log, uma vez por sessão e código,
 /// para o relatório dizer se o plugin tentou e foi recusado ou se parou de tentar.
 /// `session` só depois de autenticado: o nome que chega sem token aceito não ocupa vaga do limitador.
-fn pull_refused(session: Option<&str>, error: ServiceError) -> Response {
+fn pull_refused(session: Option<&str>, error: ServiceError, cause: &'static str) -> Response {
     if crate::warn_limit::allow(session, &format!("plugin_pull:{}", error.0)) {
         tracing::warn!(session, code = error.0, "plugin: /pull recusado");
+        if error.0 == "plugin_identity_missing" {
+            crate::telemetry_hooks::report_health(error.0, cause, hangar_usage_diary::Severity::Warn, session, Vec::new(), None);
+        }
     }
     fail(error)
 }
@@ -243,13 +262,13 @@ async fn pull(State(st): State<Arc<RouteState>>, Json(body): Json<Envelope<Pull>
         // adoção esperava uma prova que só este `/pull` traz. Ele pede a adoção com a conversa dele e entra.
         Err(ServiceError("plugin_identity_missing")) => match adopt_by_pull(&st, &body).await {
             Ok(identity) => identity,
-            Err(error) => return pull_refused(Some(&session), error),
+            Err((error, cause)) => return pull_refused(Some(&session), error, cause),
         },
-        Err(error) => return pull_refused(None, error),
+        Err(error) => return pull_refused(None, error, "other"),
     };
-    let present = match st.sources.band_present(&identity).await { Ok(present) => present, Err(error) => return pull_refused(Some(&session), error) };
+    let present = match st.sources.band_present(&identity).await { Ok(present) => present, Err(error) => return pull_refused(Some(&session), error, "other") };
     let instance = body.body.instance.clone();
-    let poll = match st.store.begin_pull(&identity.binding, body.body, Instant::now()) { Ok(poll) => poll, Err(error) => return pull_refused(Some(&session), error) };
+    let poll = match st.store.begin_pull(&identity.binding, body.body, Instant::now()) { Ok(poll) => poll, Err(error) => return pull_refused(Some(&session), error, "other") };
     // Sem o espelho (servidor reiniciado), o plugin só reenvia o `/ui` ao ler `faixa:false`: não espera o long-poll.
     let poll = if present { poll } else { poll.cap(MIRROR_MISSING_POLL) };
     // A conversa conferida acima tem esta vida desde o nascimento da instância.
@@ -354,4 +373,22 @@ async fn rate(State(st): State<Arc<RouteState>>, Json(body): Json<Envelope<Rate>
     let identity = match admit(&st, &body).await { Ok(identity) => identity, Err(error) => return fail(error) };
     if body.body.session_id != identity.binding.conversation { return fail(ServiceError("plugin_conversation_mismatch")); }
     match st.sources.rate(&identity, body.body.tokens, body.body.seconds).await { Ok(()) => ok(), Err(error) => fail(error) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn telemetry_identity_refusal_names_the_check_that_failed() {
+        let identity = |key: &str, conversation: &str, plugin_key: &str| Identity { name: "s".into(), plugin_key: plugin_key.into(),
+            binding: InteractionBinding { key: key.into(), conversation: conversation.into(), generation: 1 } };
+        assert_eq!(identity_refusal(&identity("k", "sid", "p"), "s", None), None);
+        assert_eq!(identity_refusal(&identity("k", "sid", "p"), "s", Some("p")), None);
+        assert_eq!(identity_refusal(&identity("k", "sid", "p"), "s", Some("k")), None, "a chave do vínculo também vale");
+        assert_eq!(identity_refusal(&identity("k", "", "p"), "s", None), Some("identity_incomplete"));
+        assert_eq!(identity_refusal(&identity("k", "sid", ""), "s", Some("p")), Some("identity_incomplete"));
+        assert_eq!(identity_refusal(&identity("k", "sid", "p"), "outra", None), Some("name_mismatch"));
+        assert_eq!(identity_refusal(&identity("k", "sid", "p"), "s", Some("x")), Some("key_mismatch"));
+    }
 }

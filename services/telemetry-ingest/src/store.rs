@@ -31,12 +31,14 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
     let mut tx = pool.begin().await?;
     let env = &batch.env;
     let inserted = sqlx::query(
-        r#"INSERT INTO batches (batch_id, machine_id, owner_id, day, version, "commit", os, arch, channel, partial)
-           SELECT $1, $2, $3, $4::date, $5, $6, $7, $8, $9, $11
+        r#"INSERT INTO batches (batch_id, machine_id, owner_id, day, version, "commit", os, arch, channel, partial, install, clock_skew_s, machine)
+           SELECT $1, $2, $3, $4::date, $5, $6, $7, $8, $9, $11, $12,
+                  extract(epoch FROM now() - $13::timestamptz)::int, $14
            WHERE $4::date <= (now() AT TIME ZONE 'utc')::date + $10
            ON CONFLICT (batch_id) DO UPDATE SET owner_id = EXCLUDED.owner_id, version = EXCLUDED.version,
                "commit" = EXCLUDED."commit", os = EXCLUDED.os, arch = EXCLUDED.arch, channel = EXCLUDED.channel,
-               partial = EXCLUDED.partial, received_at = now()
+               partial = EXCLUDED.partial, install = EXCLUDED.install, clock_skew_s = EXCLUDED.clock_skew_s,
+               machine = EXCLUDED.machine, received_at = now()
            WHERE batches.machine_id = EXCLUDED.machine_id AND batches.day = EXCLUDED.day
              AND batches.partial"#,
     )
@@ -51,6 +53,9 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
     .bind(&env.channel)
     .bind(FUTURE_SLACK_DAYS)
     .bind(batch.partial)
+    .bind(env.install.as_deref())
+    .bind(batch.sent_at.as_deref())
+    .bind(Json(&batch.machine))
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -75,16 +80,18 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
     let dims: Vec<_> = counters.iter().map(|c| Json(&c.dims)).collect();
     let buckets: Vec<Option<&str>> = counters.iter().map(|c| c.bucket.as_deref()).collect();
     let counts: Vec<i64> = counters.iter().map(|c| c.count as i64).collect();
+    let capped: Vec<bool> = counters.iter().map(|c| c.capped).collect();
     sqlx::query(
-        "INSERT INTO counters (batch_id, event, dims, bucket, count)
-         SELECT $1, event, dims, bucket, count
-         FROM UNNEST($2::text[], $3::jsonb[], $4::text[], $5::bigint[]) AS c(event, dims, bucket, count)",
+        "INSERT INTO counters (batch_id, event, dims, bucket, count, capped)
+         SELECT $1, event, dims, bucket, count, capped
+         FROM UNNEST($2::text[], $3::jsonb[], $4::text[], $5::bigint[], $6::bool[]) AS c(event, dims, bucket, count, capped)",
     )
     .bind(&batch.batch_id)
     .bind(events)
     .bind(dims)
     .bind(buckets)
     .bind(counts)
+    .bind(capped)
     .execute(&mut *tx)
     .await?;
     if !batch.logs.is_empty() {
@@ -115,11 +122,17 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
         let lasts: Vec<&str> = records.iter().map(|r| r.last.as_str()).collect();
         let fields: Vec<_> = records.iter().map(|r| Json(&r.fields)).collect();
         let trails: Vec<_> = records.iter().map(|r| Json(&r.trail)).collect();
+        let trails_last: Vec<_> = records.iter().map(|r| Json(&r.trail_last)).collect();
+        let ctx_firsts: Vec<_> = records.iter().map(|r| Json(&r.ctx_first)).collect();
+        let ctx_lasts: Vec<_> = records.iter().map(|r| Json(&r.ctx_last)).collect();
+        let afters: Vec<Option<&str>> = records.iter().map(|r| r.after.as_deref()).collect();
+        let capped: Vec<bool> = records.iter().map(|r| r.capped).collect();
         sqlx::query(
-            "INSERT INTO records (batch_id, level, event, count, first_at, last_at, fields, trail)
-             SELECT $1, level, event, count, first_at::time, last_at::time, fields, trail
-             FROM UNNEST($2::text[], $3::text[], $4::bigint[], $5::text[], $6::text[], $7::jsonb[], $8::jsonb[])
-                  AS r(level, event, count, first_at, last_at, fields, trail)",
+            "INSERT INTO records (batch_id, level, event, count, first_at, last_at, fields, trail, trail_last, ctx_first, ctx_last, after, capped)
+             SELECT $1, level, event, count, first_at::time, last_at::time, fields, trail, trail_last, ctx_first, ctx_last, after, capped
+             FROM UNNEST($2::text[], $3::text[], $4::bigint[], $5::text[], $6::text[], $7::jsonb[], $8::jsonb[], $9::jsonb[],
+                         $10::jsonb[], $11::jsonb[], $12::text[], $13::bool[])
+                  AS r(level, event, count, first_at, last_at, fields, trail, trail_last, ctx_first, ctx_last, after, capped)",
         )
         .bind(&batch.batch_id)
         .bind(levels)
@@ -129,6 +142,11 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
         .bind(lasts)
         .bind(fields)
         .bind(trails)
+        .bind(trails_last)
+        .bind(ctx_firsts)
+        .bind(ctx_lasts)
+        .bind(afters)
+        .bind(capped)
         .execute(&mut *tx)
         .await?;
     }
@@ -139,11 +157,12 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
         let levels: Vec<&str> = steps.iter().map(|s| s.level.as_str()).collect();
         let screens: Vec<Option<&str>> = steps.iter().map(|s| s.screen.as_deref()).collect();
         let counts: Vec<i64> = steps.iter().map(|s| s.count as i64).collect();
+        let capped: Vec<bool> = steps.iter().map(|s| s.capped).collect();
         sqlx::query(
-            "INSERT INTO trail_steps (batch_id, seq, t, event, level, screen, count)
-             SELECT $1, s.seq::int, s.t::time, s.event, s.level, s.screen, s.count
-             FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::bigint[]) WITH ORDINALITY
-                  AS s(t, event, level, screen, count, seq)",
+            "INSERT INTO trail_steps (batch_id, seq, t, event, level, screen, count, capped)
+             SELECT $1, s.seq::int, s.t::time, s.event, s.level, s.screen, s.count, s.capped
+             FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::bigint[], $7::bool[]) WITH ORDINALITY
+                  AS s(t, event, level, screen, count, capped, seq)",
         )
         .bind(&batch.batch_id)
         .bind(times)
@@ -151,6 +170,7 @@ pub async fn insert(pool: &PgPool, batch: &Batch) -> Result<Insert, sqlx::Error>
         .bind(levels)
         .bind(screens)
         .bind(counts)
+        .bind(capped)
         .execute(&mut *tx)
         .await?;
     }
@@ -179,14 +199,15 @@ pub fn is_bad_value(error: &sqlx::Error) -> bool {
 }
 
 /// Assinatura de falha agregada: nível, evento, codigo, etapa, erro_tipo, vezes, máquinas, versões,
-/// sistemas, primeira e última vez, horário/campos/passos da amostra, ação e total de assinaturas antes do corte.
+/// sistemas, primeira e última vez, a amostra (horário, campos, passos, retratos, desfecho e lote), ação, total de
+/// assinaturas antes do corte, se alguma contagem bateu no teto e a causa.
 type RecordRow = (
     String, String, Option<String>, Option<String>, Option<String>, i64, i64, Vec<String>, Vec<String>, String, String,
-    Json<serde_json::Value>, Option<String>, i64,
+    Json<serde_json::Value>, Option<String>, i64, bool, Option<String>,
 );
 
-/// Assinatura de uma falha: evento, codigo, etapa, erro_tipo e ação.
-type RecordKey = (String, Option<String>, Option<String>, Option<String>, Option<String>);
+/// Assinatura de uma falha: evento, codigo, etapa, erro_tipo, ação e causa.
+type RecordKey = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
 
 /// Hoje e os `days - 1` dias antes dele, em UTC; dia à frente (relógio adiantado) só conta quando chegar.
 /// `concat!` porque o sqlx só aceita SQL estático.
@@ -298,46 +319,54 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     let records: Vec<RecordRow> = sqlx::query_as(concat!(
         "WITH r AS (
              SELECT r.level, r.event, r.count, r.fields, r.trail, b.machine_id, b.version, b.os, b.batch_id,
+                    r.trail_last, r.ctx_first, r.ctx_last, r.after, r.capped, b.\"commit\", b.install, b.clock_skew_s, b.machine,
                     b.day + r.first_at AS first_ts, b.day + r.last_at AS last_ts,
                     r.fields->>'codigo' AS codigo, r.fields->>'etapa' AS etapa, r.fields->>'erro_tipo' AS erro_tipo,
-                    r.fields->>'action' AS action
+                    r.fields->>'action' AS action, r.fields->>'causa' AS causa
              FROM records r JOIN batches b ON b.batch_id = r.batch_id
              WHERE ", in_period!("b.day"), "),
          g AS (
              SELECT CASE WHEN bool_or(level = 'error') THEN 'error' ELSE 'warn' END AS level, event, codigo, etapa, erro_tipo,
                     LEAST(sum(count), 9223372036854775807)::bigint AS count, count(DISTINCT machine_id) AS machines,
                     array_agg(DISTINCT version ORDER BY version) AS versions, array_agg(DISTINCT os ORDER BY os) AS os,
-                    min(first_ts) AS first_ts, max(last_ts) AS last_ts, action, count(*) OVER () AS total
-             FROM r GROUP BY event, codigo, etapa, erro_tipo, action
-             ORDER BY machines DESC, count DESC, event, action LIMIT 300),
+                    min(first_ts) AS first_ts, max(last_ts) AS last_ts, action, causa, count(*) OVER () AS total, bool_or(capped) AS capped
+             FROM r GROUP BY event, codigo, etapa, erro_tipo, action, causa
+             ORDER BY machines DESC, count DESC, event, action, causa LIMIT 300),
          s AS (
-             SELECT DISTINCT ON (r.event, r.codigo, r.etapa, r.erro_tipo, r.action)
-                    r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.first_ts, r.fields, r.trail
+             SELECT DISTINCT ON (r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.causa)
+                    r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.causa, r.first_ts, r.fields, r.trail,
+                    r.trail_last, r.ctx_first, r.ctx_last, r.after, r.version, r.\"commit\", r.install, r.os, r.clock_skew_s, r.machine
              FROM r JOIN g ON g.event = r.event AND g.codigo IS NOT DISTINCT FROM r.codigo AND g.etapa IS NOT DISTINCT FROM r.etapa
                   AND g.erro_tipo IS NOT DISTINCT FROM r.erro_tipo AND g.action IS NOT DISTINCT FROM r.action
-             ORDER BY r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.first_ts DESC, r.batch_id, r.fields, r.trail)
+                  AND g.causa IS NOT DISTINCT FROM r.causa
+             ORDER BY r.event, r.codigo, r.etapa, r.erro_tipo, r.action, r.causa, r.first_ts DESC, r.batch_id, r.fields, r.trail)
          SELECT g.level, g.event, g.codigo, g.etapa, g.erro_tipo, g.count, g.machines, g.versions, g.os,
                 to_char(g.first_ts, 'YYYY-MM-DD HH24:MI:SS'), to_char(g.last_ts, 'YYYY-MM-DD HH24:MI:SS'),
-                jsonb_build_object('at', to_char(s.first_ts, 'YYYY-MM-DD HH24:MI:SS'), 'fields', s.fields, 'trail', s.trail),
-                g.action, g.total
+                jsonb_build_object('at', to_char(s.first_ts, 'YYYY-MM-DD HH24:MI:SS'), 'fields', s.fields, 'trail', s.trail,
+                    'trail_last', s.trail_last, 'ctx_first', coalesce(s.ctx_first, '{}'), 'ctx_last', coalesce(s.ctx_last, '{}'),
+                    'after', s.after, 'batch', jsonb_build_object('version', s.version, 'commit', s.\"commit\", 'install', s.install,
+                        'os', s.os, 'clock_skew_s', s.clock_skew_s, 'machine', s.machine)),
+                g.action, g.total, g.capped, g.causa
          FROM g JOIN s ON s.event = g.event AND s.codigo IS NOT DISTINCT FROM g.codigo AND s.etapa IS NOT DISTINCT FROM g.etapa
               AND s.erro_tipo IS NOT DISTINCT FROM g.erro_tipo AND s.action IS NOT DISTINCT FROM g.action
-         ORDER BY g.machines DESC, g.count DESC, g.event, g.action"
+              AND s.causa IS NOT DISTINCT FROM g.causa
+         ORDER BY g.machines DESC, g.count DESC, g.event, g.action, g.causa"
     ))
     .bind(days)
     .fetch_all(&mut *pool)
     .await?;
     let records_total = records.first().map_or(0, |r| r.13);
     // Vezes por dia no período de cada assinatura devolvida acima (só as do corte), para a minibarra da lista de problemas.
-    let record_days: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>, String, i64)> = sqlx::query_as(concat!(
-        "WITH s AS (SELECT * FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::text[]) AS s(event, codigo, etapa, erro_tipo, action))
-         SELECT s.event, s.codigo, s.etapa, s.erro_tipo, s.action, to_char(b.day, 'YYYY-MM-DD'), LEAST(sum(r.count), 9223372036854775807)::bigint
+    let record_days: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, String, i64)> = sqlx::query_as(concat!(
+        "WITH s AS (SELECT * FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
+                    AS s(event, codigo, etapa, erro_tipo, action, causa))
+         SELECT s.event, s.codigo, s.etapa, s.erro_tipo, s.action, s.causa, to_char(b.day, 'YYYY-MM-DD'), LEAST(sum(r.count), 9223372036854775807)::bigint
          FROM s JOIN records r ON r.event = s.event AND r.fields->>'codigo' IS NOT DISTINCT FROM s.codigo
                   AND r.fields->>'etapa' IS NOT DISTINCT FROM s.etapa AND r.fields->>'erro_tipo' IS NOT DISTINCT FROM s.erro_tipo
-                  AND r.fields->>'action' IS NOT DISTINCT FROM s.action
+                  AND r.fields->>'action' IS NOT DISTINCT FROM s.action AND r.fields->>'causa' IS NOT DISTINCT FROM s.causa
               JOIN batches b ON b.batch_id = r.batch_id
          WHERE ", in_period!("b.day"), "
-         GROUP BY s.event, s.codigo, s.etapa, s.erro_tipo, s.action, b.day ORDER BY b.day"
+         GROUP BY s.event, s.codigo, s.etapa, s.erro_tipo, s.action, s.causa, b.day ORDER BY b.day"
     ))
     .bind(days)
     .bind(records.iter().map(|r| r.1.as_str()).collect::<Vec<_>>())
@@ -345,11 +374,12 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     .bind(records.iter().map(|r| r.3.as_deref()).collect::<Vec<_>>())
     .bind(records.iter().map(|r| r.4.as_deref()).collect::<Vec<_>>())
     .bind(records.iter().map(|r| r.12.as_deref()).collect::<Vec<_>>())
+    .bind(records.iter().map(|r| r.15.as_deref()).collect::<Vec<_>>())
     .fetch_all(&mut *pool)
     .await?;
     let mut daily_of: HashMap<RecordKey, Vec<serde_json::Value>> = HashMap::new();
-    for (event, codigo, etapa, erro_tipo, action, day, count) in record_days {
-        daily_of.entry((event, codigo, etapa, erro_tipo, action)).or_default().push(serde_json::json!({"day": day, "count": count}));
+    for (event, codigo, etapa, erro_tipo, action, causa, day, count) in record_days {
+        daily_of.entry((event, codigo, etapa, erro_tipo, action, causa)).or_default().push(serde_json::json!({"day": day, "count": count}));
     }
     // Passagens de um passo ao seguinte dentro de cada pacote: pacotes do mesmo dia vêm de aceites
     // diferentes da máquina, e ligar o fim de um ao começo do outro inventaria uma passagem.
@@ -389,11 +419,13 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
     use serde_json::json;
     Ok(json!({
         "records": records.into_iter().map(|r| {
-            let daily = daily_of.remove(&(r.1.clone(), r.2.clone(), r.3.clone(), r.4.clone(), r.12.clone())).unwrap_or_default();
+            let daily = daily_of.remove(&(r.1.clone(), r.2.clone(), r.3.clone(), r.4.clone(), r.12.clone(), r.15.clone())).unwrap_or_default();
             json!({
                 "level": r.0, "event": r.1, "codigo": r.2, "etapa": r.3, "erro_tipo": r.4, "action": r.12, "count": r.5, "machines": r.6,
                 "versions": r.7, "os": r.8, "first": r.9, "last": r.10,
                 "sample_at": r.11.0["at"], "fields": r.11.0["fields"], "trail": r.11.0["trail"], "daily": daily,
+                "trail_last": r.11.0["trail_last"], "ctx_first": r.11.0["ctx_first"], "ctx_last": r.11.0["ctx_last"],
+                "after": r.11.0["after"], "batch": r.11.0["batch"], "capped": r.14,
             })
         }).collect::<Vec<_>>(),
         "records_total": records_total,

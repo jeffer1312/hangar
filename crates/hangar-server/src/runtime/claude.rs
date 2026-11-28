@@ -1214,6 +1214,7 @@ impl ClaudeEngine {
             "conversation_reset" => { self.reset_conversation(effects); self.changed(effects,true); }
             "cano_saiu" => {
                 let working = self.in_progress || !self.pending.is_empty() || self.question.is_some();
+                super::actor::report_crash("headless_processo_caiu",&self.state.session,&event,working);
                 self.alive = false; self.in_progress = false; self.initializing = false;
                 self.turn_start = None; self.label_deadline = None; self.init_warning = None; self.effort_deadline = None;
                 self.pending.clear(); self.question = None; self.steer_now = None; self.gentle.clear(); self.clear_streams(effects);

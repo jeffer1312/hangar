@@ -277,11 +277,21 @@ pub struct OpenError {
     pub code: Option<&'static str>,
     pub msg: String,
     pub params: Value,
+    /// A causa fechada da recusa (`events::HEALTH` de `erro_criacao_sessao`), só para a telemetria.
+    pub cause: Option<&'static str>,
 }
 
 impl OpenError {
     pub fn new(status: u16, code: &'static str, msg: impl Into<String>) -> Self {
-        Self { status, code: Some(code), msg: msg.into(), params: json!({}) }
+        Self { status, code: Some(code), msg: msg.into(), params: json!({}), cause: None }
+    }
+
+    /// A tarefa da abertura caiu antes de responder.
+    pub fn unfinished(msg: &'static str) -> Self { Self::new(500, "erro_criacao_sessao", msg).because("task_panic") }
+
+    pub fn because(mut self, cause: &'static str) -> Self {
+        self.cause = Some(cause);
+        self
     }
 
     pub fn with_params(mut self, params: Value) -> Self {
@@ -290,7 +300,7 @@ impl OpenError {
     }
 
     pub fn plain(status: u16, msg: impl Into<String>) -> Self {
-        Self { status, code: None, msg: msg.into(), params: json!({}) }
+        Self { status, code: None, msg: msg.into(), params: json!({}), cause: None }
     }
 
     pub fn invalid_body(detail: &str) -> Self {

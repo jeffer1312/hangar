@@ -28,6 +28,11 @@ pub const MAX_RECORD_TRAIL: usize = 10;
 /// Teto de passos da trilha do dia; repetições seguidas do mesmo passo viram um com `count`.
 pub const MAX_TRAIL_STEPS: usize = 5000;
 pub const RECORD_LEVELS: &[&str] = &["warn", "error"];
+/// O que houve depois da última vez de uma falha: o mesmo passo deu certo em até 2 min, a pessoa fez
+/// outra coisa, ou nada mais aconteceu no dia.
+pub const AFTER: &[&str] = &["recovered", "other_action", "none"];
+/// De onde o binário subiu: pacote de release instalado ou checkout de desenvolvimento.
+pub const INSTALLS: &[&str] = &["package", "checkout", "other"];
 pub const STEP_LEVELS: &[&str] = &["ok", "warn", "error"];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,10 +58,16 @@ pub struct Batch {
     /// Cada passo do dia no diário de uso, só pelo nome; campo opcional do `schema: 1`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trail: Vec<Step>,
+    /// Hora UTC do envio (`AAAA-MM-DDTHH:MM:SSZ`): o receptor calcula a diferença do relógio da máquina.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at: Option<String>,
+    /// Ambiente da máquina no envio, em valores fechados (`events::MACHINE`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub machine: BTreeMap<String, String>,
 }
 
 /// Uma falha ou aviso do diário de uso, agrupado pela assinatura (evento, código, etapa, tipo do erro).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     /// `warn` ou `error`.
     pub level: String,
@@ -68,13 +79,27 @@ pub struct Record {
     /// Campos do diário que passam, já limpos na máquina: nome do campo → valor.
     #[serde(default)]
     pub fields: BTreeMap<String, String>,
-    /// Nomes dos passos logo antes da primeira vez, do mais antigo ao mais novo.
+    /// Passos logo antes da primeira vez, do mais antigo ao mais novo: `acao` ou `acao:tela`.
     #[serde(default)]
     pub trail: Vec<String>,
+    /// Passos logo antes da última vez, no mesmo formato.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trail_last: Vec<String>,
+    /// Estado da máquina e da sessão na primeira e na última vez (`events::CONTEXT`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ctx_first: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ctx_last: BTreeMap<String, String>,
+    /// Um de `AFTER`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    /// A contagem bateu no teto `MAX_COUNT`: o número real é maior.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub capped: bool,
 }
 
 /// Um passo da trilha do dia.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
     /// Hora UTC `HH:MM:SS` da primeira vez desta sequência.
     pub t: String,
@@ -86,6 +111,8 @@ pub struct Step {
     pub screen: Option<String>,
     /// Vezes seguidas.
     pub count: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub capped: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +131,9 @@ pub struct Env {
     pub os: String,
     pub arch: String,
     pub channel: String,
+    /// Um de `INSTALLS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<String>,
 }
 
 /// Canais de pacote publicados; branch de checkout ou de pré-release é nome escolhido e sai `other`.
@@ -112,8 +142,9 @@ pub const CHANNELS: &[&str] = &["latest", "beta"];
 impl Env {
     /// Sistema e arquitetura deste processo. Versão fora do formato e canal fora de `CHANNELS` saem
     /// `other`; o commit só vai quando o pacote em uso é de release e é hex curto, senão `dev`.
-    pub fn new(version: &str, release_commit: Option<&str>, channel: &str) -> Env {
+    pub fn new(version: &str, release_commit: Option<&str>, channel: &str, install: &str) -> Env {
         Env {
+            install: Some(Code::known(install, INSTALLS).as_str().to_owned()),
             version: DimValue::version(version).as_str().to_owned(),
             commit: release_commit.filter(|c| is_commit(c)).unwrap_or(DEV_COMMIT).to_owned(),
             os: std::env::consts::OS.to_owned(),
@@ -172,11 +203,13 @@ pub struct Counter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bucket: Option<String>,
     pub count: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub capped: bool,
 }
 
 impl Counter {
     pub fn new(event: Event, dims: Dims, bucket: Option<Bucket>, count: u64) -> Counter {
-        Counter { event: event.as_str().to_owned(), dims: dims.into_wire(), bucket: bucket.map(|b| b.as_str().to_owned()), count }
+        Counter { event: event.as_str().to_owned(), dims: dims.into_wire(), bucket: bucket.map(|b| b.as_str().to_owned()), count, capped: false }
     }
 }
 
@@ -190,6 +223,9 @@ impl Batch {
         if !is_day(&self.day) { return Err("day"); }
         let env = &self.env;
         if ![&env.version, &env.commit, &env.os, &env.arch, &env.channel].iter().all(|v| is_name(v)) { return Err("env"); }
+        if env.install.as_deref().is_some_and(|i| !INSTALLS.contains(&i)) { return Err("env_install"); }
+        if self.sent_at.as_deref().is_some_and(|t| !is_instant(t)) { return Err("sent_at"); }
+        if !is_closed_map(&self.machine) { return Err("machine"); }
         for counter in &self.counters {
             if !is_name(&counter.event) { return Err("event"); }
             if !counter.dims.iter().all(|(key, value)| is_name(key) && is_name(value)) { return Err("dims"); }
@@ -212,7 +248,9 @@ impl Batch {
             if !is_time(&record.first) || !is_time(&record.last) { return Err("record_time"); }
             if record.fields.len() > MAX_RECORD_FIELDS { return Err("record_fields"); }
             if !record.fields.iter().all(|(key, value)| is_name(key) && is_text(value, MAX_FIELD_CHARS)) { return Err("record_field"); }
-            if record.trail.len() > MAX_RECORD_TRAIL || !record.trail.iter().all(|s| is_name(s)) { return Err("record_trail"); }
+            if [&record.trail, &record.trail_last].iter().any(|t| t.len() > MAX_RECORD_TRAIL || !t.iter().all(|s| is_name(s))) { return Err("record_trail"); }
+            if !is_closed_map(&record.ctx_first) || !is_closed_map(&record.ctx_last) { return Err("record_ctx"); }
+            if record.after.as_deref().is_some_and(|a| !AFTER.contains(&a)) { return Err("record_after"); }
         }
         if self.trail.len() > MAX_TRAIL_STEPS { return Err("trail"); }
         for step in &self.trail {
@@ -259,6 +297,16 @@ pub(crate) fn is_id(value: &str) -> bool { value.len() == 32 && is_hex(value) }
 
 fn is_commit(value: &str) -> bool { (7..=40).contains(&value.len()) && is_hex(value) }
 
+/// Mapa de valores fechados: até `MAX_RECORD_FIELDS` pares no formato de nome.
+fn is_closed_map(map: &BTreeMap<String, String>) -> bool {
+    map.len() <= MAX_RECORD_FIELDS && map.iter().all(|(key, value)| is_name(key) && is_name(value))
+}
+
+/// `AAAA-MM-DDTHH:MM:SSZ`.
+pub(crate) fn is_instant(value: &str) -> bool {
+    value.len() == 20 && value.as_bytes()[10] == b'T' && value.ends_with('Z') && is_day(&value[..10]) && is_time(&value[11..19])
+}
+
 /// Texto livre já limpo: 1 a `max` caracteres, nenhum invisível.
 fn is_text(value: &str, max: usize) -> bool { (1..=max).contains(&value.chars().count()) && !value.chars().any(is_invisible) }
 
@@ -293,7 +341,7 @@ mod tests {
             machine_id: "11111111111111111111111111111111".into(),
             owner_id: "22222222222222222222222222222222".into(),
             day: "2026-11-26".into(),
-            env: Env { version: "0.42.0".into(), commit: DEV_COMMIT.into(), os: "linux".into(), arch: "x86_64".into(), channel: "latest".into() },
+            env: Env { version: "0.42.0".into(), commit: DEV_COMMIT.into(), os: "linux".into(), arch: "x86_64".into(), channel: "latest".into(), install: None },
             counters: vec![
                 Counter::new(
                     Event::MessageSent,
@@ -313,6 +361,8 @@ mod tests {
             partial: false,
             records: Vec::new(),
             trail: Vec::new(),
+            sent_at: None,
+            machine: BTreeMap::new(),
         }
     }
 
@@ -321,6 +371,7 @@ mod tests {
             level: "error".into(), event: "sessao.abrir".into(), count: 2, first: "10:00:01".into(), last: "11:30:00".into(),
             fields: [("codigo".to_owned(), "erro_pasta".to_owned()), ("detalhe".to_owned(), "pasta <caminho> fora do permitido".to_owned())].into(),
             trail: vec!["app.visivel".into(), "sessao.nova".into()],
+            trail_last: Vec::new(), ctx_first: BTreeMap::new(), ctx_last: BTreeMap::new(), after: None, capped: false,
         }
     }
 
@@ -329,7 +380,7 @@ mod tests {
         let mut batch = sample();
         batch.partial = true;
         batch.records = vec![record()];
-        batch.trail = vec![Step { t: "10:00:00".into(), event: "app.visivel".into(), level: "ok".into(), screen: Some("chat".into()), count: 3 }];
+        batch.trail = vec![Step { t: "10:00:00".into(), event: "app.visivel".into(), level: "ok".into(), screen: Some("chat".into()), count: 3, capped: false }];
         assert_eq!(batch.validate(), Ok(()));
         let value = serde_json::to_value(&batch).unwrap();
         assert_eq!(value["partial"], json!(true));
@@ -347,6 +398,35 @@ mod tests {
         assert_eq!(bad(|b| b.trail[0].count = 0), Err("step_count"));
         assert_eq!(bad(|b| b.trail[0].screen = Some("Tela X".into())), Err("step_screen"));
         assert_eq!(bad(|b| b.records = vec![record(); MAX_RECORDS + 1]), Err("records"));
+    }
+
+    #[test]
+    fn context_machine_and_clock_follow_the_contract() {
+        let mut batch = sample();
+        batch.env.install = Some("checkout".into());
+        batch.sent_at = Some("2026-11-26T23:59:01Z".into());
+        batch.machine = [("os".to_owned(), "linux".to_owned()), ("ram_total".to_owned(), "16-32g".to_owned())].into();
+        let mut rec = record();
+        rec.ctx_first = [("mem_free".to_owned(), "lt10".to_owned())].into();
+        rec.ctx_last = rec.ctx_first.clone();
+        rec.trail_last = vec!["session.browser:chat".into()];
+        rec.after = Some("recovered".into());
+        rec.capped = true;
+        batch.records = vec![rec];
+        assert_eq!(batch.validate(), Ok(()));
+        let value = serde_json::to_value(&batch).unwrap();
+        assert_eq!(value["records"][0]["after"], json!("recovered"));
+        assert_eq!(value["env"]["install"], json!("checkout"));
+        assert_eq!(serde_json::from_value::<Batch>(value).unwrap(), batch);
+        let bad = |change: fn(&mut Batch)| { let mut b = batch.clone(); change(&mut b); b.validate() };
+        assert_eq!(bad(|b| b.env.install = Some("source".into())), Err("env_install"));
+        assert_eq!(bad(|b| b.sent_at = Some("2026-11-26 23:59:01".into())), Err("sent_at"));
+        assert_eq!(bad(|b| { b.machine.insert("os".into(), "Ubuntu 24.04".into()); }), Err("machine"));
+        assert_eq!(bad(|b| { b.records[0].ctx_last.insert("model".into(), "Meu Motor".into()); }), Err("record_ctx"));
+        assert_eq!(bad(|b| b.records[0].after = Some("gave_up".into())), Err("record_after"));
+        assert_eq!(bad(|b| b.records[0].trail_last = vec!["/home/x".into()]), Err("record_trail"));
+        assert_eq!(Env::new("0.42.0", None, "latest", "checkout").install.as_deref(), Some("checkout"));
+        assert_eq!(Env::new("0.42.0", None, "latest", "x").install.as_deref(), Some("other"));
     }
 
     fn log(message: &str) -> LogLine {
@@ -388,14 +468,14 @@ mod tests {
 
     #[test]
     fn env_checks_every_field() {
-        assert_eq!(Env::new("0.42.0", None, "latest").commit, "dev");
-        assert_eq!(Env::new("0.42.0", Some("abc1234"), "latest").commit, "abc1234");
-        assert_eq!(Env::new("0.42.0", Some("main"), "latest").commit, "dev");
-        assert_eq!(Env::new("0.42.0", Some("ABC1234"), "latest").commit, "dev");
-        assert_eq!(Env::new("0.42.0", None, "feat/x").channel, "other");
-        assert_eq!(Env::new("0.42.0", None, "beta").channel, "beta");
-        assert_eq!(Env::new("minha versão", None, "latest").version, "other");
-        assert_eq!(Env::new("0.42.0", None, "latest").os, std::env::consts::OS);
+        assert_eq!(Env::new("0.42.0", None, "latest", "package").commit, "dev");
+        assert_eq!(Env::new("0.42.0", Some("abc1234"), "latest", "package").commit, "abc1234");
+        assert_eq!(Env::new("0.42.0", Some("main"), "latest", "package").commit, "dev");
+        assert_eq!(Env::new("0.42.0", Some("ABC1234"), "latest", "package").commit, "dev");
+        assert_eq!(Env::new("0.42.0", None, "feat/x", "package").channel, "other");
+        assert_eq!(Env::new("0.42.0", None, "beta", "package").channel, "beta");
+        assert_eq!(Env::new("minha versão", None, "latest", "package").version, "other");
+        assert_eq!(Env::new("0.42.0", None, "latest", "package").os, std::env::consts::OS);
     }
 
     #[test]
@@ -469,7 +549,7 @@ mod tests {
 
     #[test]
     fn refusal_carries_only_kind_version_os_and_channel() {
-        let env = Env::new("0.42.0", None, "latest");
+        let env = Env::new("0.42.0", None, "latest", "package");
         let wire = serde_json::to_value(Refusal::new(RefusalKind::Revoked, &env)).unwrap();
         assert_eq!(wire, json!({"kind": "revoked", "version": "0.42.0", "os": std::env::consts::OS, "channel": "latest"}));
         let with_id = json!({"kind": "declined", "version": "0.42.0", "os": "linux", "channel": "latest", "machine_id": "1".repeat(32)});

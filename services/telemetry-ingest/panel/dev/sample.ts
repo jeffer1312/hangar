@@ -93,25 +93,55 @@ const SETTINGS: [string, [string, number][]][] = [
   ["dictation_provider", [["groq", 13], ["openai", 9], ["whisper_cpp", 4], ["none", 20]]],
 ];
 
+// Retrato e ambiente da amostra, nas faixas fechadas que a máquina manda.
+const CTX: Record<string, string>[] = [
+  { up: "ge1d", mem_free: "lt5", disk_free: "ge20g", load: "lt2", sessions: "4-9", working: "2-3", "sessions.claude.terminal": "2-3",
+    "sessions.codex.headless": "1", provider: "claude", surface: "terminal", model: "opus", state: "working", cli: "2.1.195" },
+  { up: "lt1d", mem_free: "ge40", disk_free: "ge20g", load: "lt0_5", sessions: "2-3", working: "1", provider: "claude", surface: "headless",
+    model: "sonnet", state: "working", cli: "2.1.195" },
+  { client: "ios", client_version: "1.4.2", resumed: "lt5s" },
+  { up: "ge1d", mem_free: "lt5", disk_free: "lt5g", load: "ge2", sessions: "ge10", working: "4-9", exit: "sigkill" },
+];
+const MACHINE_ENV: Record<string, string>[] = [
+  { os: "linux", os_name: "cachyos", os_version: "absent", cpus: "9-16", ram_total: "16-32g", mux: "tmux", mux_version: "3.5a",
+    "cli.claude": "2.1.195", "cli.codex": "0.120.0", "cli.pi": "absent", "accounts.claude": "2-3", "accounts.codex": "1", connect: "on", tailscale: "on" },
+  { os: "windows", os_name: "windows_11", os_version: "26100", cpus: "5-8", ram_total: "8-16g", mux: "psmux", mux_version: "0.4.1",
+    "cli.claude": "2.1.190", "cli.codex": "absent", "accounts.claude": "1", connect: "off", tailscale: "on" },
+];
 const RECORDS = ((): Omit<FailureRecord, "daily" | "count" | "first" | "last">[] => [
-  ["error", "sessao.abrir", "erro_pasta", "abrir", null, null, "A pasta /home/x/projeto não existe mais nesta máquina."],
-  ["error", "browser.agir", "erro_navegador_pausado", null, "cdp", "browser_click", "o usuario pausou o navegador"],
-  ["warn", "fila.entregar", "queue_redelivered", "confirmar", null, null, "entrega confirmada depois de 2 leituras"],
-  ["error", "atualizacao.reiniciar", "update_health_timeout", "reiniciar", "timeout", null, "a versão nova não respondeu à saúde em 90 s"],
-  ["warn", "lista.fatos", "state_facts_unavailable", null, "io", null, null],
-  ["error", "codex.composer", "codex_composer_busy", "digitar", null, null, "o campo do Codex não estava vazio"],
-  ["warn", "ditado.organizar", "dictation_org_failed", "organizar", "http_429", null, "o provedor recusou por limite; ficou o texto cru"],
-  ["error", "terminal.ws", "terminal_origin_blocked", "abrir", null, null, null],
-  ["warn", "peer.conferir", "peer_unreachable", null, "timeout", null, "notebook fora do ar por 4 s"],
-  ["error", "cofre.preencher", "vault_entry_missing", "preencher", null, "vault_fill", "entrada github removida"],
-  ["warn", "app.voltar", "resume_stale_list", null, null, null, null],
-  ["error", "sessao.renomear", "rename_target_taken", "reservar", null, null, "já existe uma sessão com esse nome"],
-].map(([level, event, codigo, etapa, erro_tipo, action, detalhe], k) => ({
+  ["warn", "health.state", "terminal_observacao_falhou", "health", null, null, "A tela do terminal da sessão não pôde ser lida.", "capture_timeout"],
+  ["error", "mcp.tool", "tool_failed", "dispatch", null, "browser", "A ferramenta informou que não concluiu a operação.", "desktop_app_closed"],
+  ["error", "api.sem_rede", "http_5xx", "connect", null, null, "O aplicativo não conseguiu conectar ao servidor.", null],
+  ["error", "health.server_exit", "server_exit", "health", null, null, "O servidor do Hangar parou.", "out_of_memory"],
+  ["warn", "health.state", "state_facts_unavailable", "health", null, null, "O estado da sessão não pôde ser lido; ficou o último valor.", "binding_missing"],
+  ["warn", "sse.caiu", "silencio", "stream", null, null, "O fluxo de eventos do servidor foi interrompido.", null],
+  ["error", "http.action", "http_409", "request", null, "session.rename", "O estado atual do recurso impediu a operação.", null],
+  ["error", "mcp.tool", "tool_failed", "dispatch", null, "new_session", "A ferramenta informou que não concluiu a operação.", "erro_nome_em_uso"],
+  ["warn", "health.limit_switch", "limit_switch_no_room", "health", null, null, "A sessão bateu o limite e nenhuma outra conta tinha folga.", "all_full"],
+  ["error", "health.headless", "headless_processo_caiu", "health", null, null, "O processo da sessão sem terminal terminou sozinho.", "sigkill"],
+  ["error", "health.session_open", "erro_criacao_sessao", "health", null, null, "A sessão pedida não pôde ser criada.", "root_not_allowed"],
+  ["warn", "servidor.parado", "other", "other", null, null, null, null],
+  ["error", "lista.falhou", "json_invalido", "request", null, null, "O aplicativo não conseguiu carregar a lista de sessões.", null],
+  ["warn", "health.plugin", "plugin_identity_missing", "health", null, null, "O plugin da sessão Claude não foi reconhecido pelo servidor.", "key_mismatch"],
+  ["warn", "health.work_review", "work_review_refresh_failed", "health", null, null, "A revisão do trabalho não pôde ser relida no conector.", "timeout"],
+  ["warn", "other", "other", "other", null, null, null, null],
+].map(([level, event, codigo, etapa, erro_tipo, action, detalhe, causa], k) => ({
   level: level as "error" | "warn", event: event as string, codigo, etapa, erro_tipo, action,
-  machines: [9, 6, 14, 3, 11, 4, 5, 2, 8, 1, 7, 2][k], versions: k % 3 ? ["0.45.0"] : ["0.44.1", "0.45.0"], os: k % 4 ? ["linux"] : ["linux", "windows"],
+  machines: [16, 12, 10, 3, 9, 6, 14, 3, 11, 4, 5, 2, 8, 1, 7, 2][k], versions: k % 3 ? ["0.45.0"] : ["0.44.1", "0.45.0"], os: k % 4 ? ["linux"] : ["linux", "windows"],
   sample_at: null,
-  fields: { codigo, etapa, erro_tipo, action, detalhe, tela: k % 2 ? "chat" : "lista", ms: k % 3 === 0 ? String(int(80, 9000)) : undefined, provider: k % 2 ? "claude" : "codex" },
-  trail: k % 5 === 4 ? [] : ["app.visivel", "lista.abrir", pick(["chat.abrir", "busca.abrir", "sessao.nova"]), pick(["mensagem.enviar", "pergunta.responder"]), "chat.rolar"].slice(0, int(2, 5)),
+  fields: { codigo, etapa, erro_tipo, action, detalhe, causa: causa ?? undefined, tela: k % 2 ? "chat" : "lista", ms: k % 3 === 0 ? String(int(80, 9000)) : undefined, provider: k % 2 ? "claude" : "codex" },
+  trail: k < 4 ? [["app.visivel", "tela.ver:lista", "chat.opened:chat", "session.answer"], ["tela.ver:chat", "session.browser", "browser_open", "browser"],
+    ["app.oculto", "app.visivel", "sse.abrir:lista"], []][k]
+    : k % 5 === 4 ? [] : ["app.visivel", "lista.abrir", pick(["chat.abrir", "busca.abrir", "sessao.nova"]), pick(["mensagem.enviar", "pergunta.responder"]), "chat.rolar"].slice(0, int(2, 5)),
+  // As quatro primeiras são do contrato novo; as outras vêm como de pacote antigo, sem retrato.
+  ...(k < 4 ? {
+    trail_last: [["tela.ver:chat", "session.interrupt", "app.oculto", "app.visivel"], ["tela.ver:chat", "browser", "send", "browser"], ["app.oculto", "app.visivel"], []][k],
+    ctx_first: k === 0 ? { ...CTX[0], mem_free: "lt20", load: "lt1" } : CTX[k], ctx_last: CTX[k],
+    after: ["recovered", "other_action", "recovered", "none"][k], capped: false,
+    batch: { version: "0.45.0", commit: k === 2 ? "dev" : "a1b2c3d", install: k === 2 ? "checkout" : "package", os: k === 2 ? "windows" : "linux",
+      clock_skew_s: [3, -15, 185, null][k], machine: MACHINE_ENV[k === 2 ? 1 : 0] },
+  } : { trail_last: [], ctx_first: {}, ctx_last: {}, after: null, capped: false,
+    batch: { version: "0.44.1", commit: "dev", install: null, os: "linux", clock_skew_s: null, machine: {} } }),
 })))();
 
 const LOGS: [string, string, string][] = [

@@ -43,6 +43,9 @@ pub enum Failure {
     Unreachable { status: Option<u16> },
     /// Dias que saíram da fila pelo teto, sem ter sido enviados.
     Pruned(usize),
+    /// Arquivos de dia de antes da divisão por versão: saem sem ser enviados de novo, porque não dizem
+    /// de que binário vieram; o receptor fica com o último retrato que o binário antigo mandou.
+    Legacy(usize),
     Disk(io::Error),
 }
 
@@ -120,8 +123,9 @@ impl Telemetry {
         let today = now.date_naive();
         let earliest = period.since.date_naive().max(today - TimeDelta::days(queue::MAX_DAYS as i64 - 1));
         let first = earliest.format("%Y-%m-%d").to_string();
-        for day in queue::days(&self.home)?.into_iter().take_while(|day| day < &first) {
-            self.capture_held(&day, period, now, true, false)?;
+        let stems = queue::days(&self.home)?;
+        for stem in stems.iter().take_while(|stem| queue::day_of(stem) < first.as_str()) {
+            self.capture_held(stem, period, now, true, false)?;
         }
         let mut day = earliest;
         while day <= today {
@@ -129,6 +133,9 @@ impl Telemetry {
             if period.sealed_through.as_ref().is_none_or(|sealed| name > *sealed) {
                 let sealed = day < today;
                 self.capture_held(&name, period, now, sealed, true)?;
+                for frozen in stems.iter().filter(|stem| queue::day_of(stem) == name && queue::build_of(stem).is_some()) {
+                    self.capture_held(frozen, period, now, sealed, true)?;
+                }
                 if sealed { self.seal_through_held(name)?; }
             }
             day = day.succ_opt().ok_or_else(|| io::Error::other("dia da telemetria fora do intervalo"))?;
@@ -138,21 +145,24 @@ impl Telemetry {
         Ok(())
     }
 
-    fn capture_held(&self, day: &str, period: &Collection, now: DateTime<Utc>, sealed: bool, read_diary: bool) -> io::Result<()> {
-        let mut file = match queue::read_day(&self.home, day) {
-            Ok(file) => file.filter(|file| file.collection == period.id && file.day == day)
-                .unwrap_or_else(|| DayFile { day: day.into(), collection: period.id.clone(), ..DayFile::default() }),
+    /// `stem` é o nome do arquivo: o dia deste binário, ou `<dia>_<build>` de um binário que já não roda.
+    fn capture_held(&self, stem: &str, period: &Collection, now: DateTime<Utc>, sealed: bool, read_diary: bool) -> io::Result<()> {
+        let (day, build) = (queue::day_of(stem), queue::build_of(stem).unwrap_or(&self.build));
+        let fresh = || DayFile { day: day.into(), collection: period.id.clone(), build: self.build.clone(), env: Some(self.batch_env.clone()), ..DayFile::default() };
+        let mut file = match queue::read_day(&self.home, stem) {
+            Ok(file) => file.filter(|file| file.collection == period.id && file.stem() == stem).unwrap_or_else(fresh),
             // Recomeça pelo diário: retornar aqui deixaria o dia ser selado sem a reconstrução.
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
-                queue::remove_day(&self.home, day)?;
+                queue::remove_day(&self.home, stem)?;
                 self.note(Failure::Disk(e));
-                DayFile { day: day.into(), collection: period.id.clone(), ..DayFile::default() }
+                if queue::build_of(stem).is_some() { return Ok(()); }
+                fresh()
             }
             Err(e) => return Err(e),
         };
         if file.sealed { return Ok(()); }
         if read_diary && let Some(source) = self.detail.get() {
-            let detail = source(day, period, now)?;
+            let detail = source(day, build, period, now)?;
             // Se o diário já rodou a poda, o último retrato gravado ainda pode fechar o lote.
             if !detail.is_empty() { file.detail = detail; }
         }
@@ -172,7 +182,7 @@ impl Telemetry {
     fn closed_days(&self) -> io::Result<Vec<String>> {
         if !self.enabled() { return Ok(Vec::new()); }
         let (today, pending) = self.pending_days()?;
-        Ok(queue::days(&self.home)?.into_iter().filter(|day| *day < today && !pending.contains(day)).collect())
+        Ok(queue::days(&self.home)?.into_iter().filter(|stem| queue::day_of(stem) < today.as_str() && !pending.contains(stem)).collect())
     }
 
     /// Manda cada dia fechado, do mais antigo ao mais novo.
@@ -272,7 +282,7 @@ impl Telemetry {
         self.refresh_held()?;
         if self.collection().is_none_or(|current| current.id != collection) || (partial && self.today() != day) { return Ok(None); }
         let Some(mut file) = queue::read_day(&self.home, day)?.filter(|file| {
-            file.day == day && file.collection == collection && file.sealed != partial && file.batch_id.is_some()
+            file.stem() == day && file.collection == collection && file.sealed != partial && file.batch_id.is_some()
                 && expected.is_none_or(|expected| file.batch_id.as_deref() == Some(expected))
         }) else { return Ok(None) };
         let mut batch = self.batch(&file)?;
@@ -291,12 +301,14 @@ impl Telemetry {
             machine_id: state.state.machine_id.clone(),
             owner_id: state.state.owner_id.clone(),
             day: file.day.clone(),
-            env: self.batch_env.clone(),
+            env: file.env.clone().unwrap_or_else(|| self.batch_env.clone()),
             counters: file.counters.clone(),
             logs: Vec::new(),
             partial: !file.sealed,
             records: Vec::new(),
             trail: Vec::new(),
+            sent_at: Some((self.clock)().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            machine: self.machine(),
         })
     }
 
@@ -305,7 +317,7 @@ impl Telemetry {
         self.refresh_held()?;
         if self.collection().is_some_and(|current| current.id == collection)
             && queue::read_day(&self.home, day)?.is_some_and(|file| {
-                file.day == day && file.sealed && file.collection == collection && file.batch_id.as_deref() == Some(id)
+                file.stem() == day && file.sealed && file.collection == collection && file.batch_id.as_deref() == Some(id)
             }) {
             queue::remove_day(&self.home, day)?;
         }
@@ -499,9 +511,9 @@ mod tests {
         use crate::wire::Step;
         let fx = Fixture::new();
         let day = "2026-11-26";
-        let source: crate::diary::DetailSource = Arc::new(|day: &str, _: &Collection, _: DateTime<Utc>| -> io::Result<DayDetail> {
+        let source: crate::diary::DetailSource = Arc::new(|day: &str, _: &str, _: &Collection, _: DateTime<Utc>| -> io::Result<DayDetail> {
             Ok(if day == "2026-11-26" { DayDetail { trail: vec![Step { t: "10:01:00".into(), event: "app.abriu".into(),
-                level: "ok".into(), screen: None, count: 1 }], ..DayDetail::default() } } else { DayDetail::default() })
+                level: "ok".into(), screen: None, count: 1, capped: false }], ..DayDetail::default() } } else { DayDetail::default() })
         });
         let telemetry = fx.start();
         telemetry.count(Event::MessageSent, message(), 1);
@@ -576,10 +588,10 @@ mod tests {
         let count = Arc::new(Mutex::new(1));
         let source = {
             let count = count.clone();
-            Arc::new(move |day: &str, _: &Collection, _: DateTime<Utc>| -> io::Result<DayDetail> {
+            Arc::new(move |day: &str, _: &str, _: &Collection, _: DateTime<Utc>| -> io::Result<DayDetail> {
                 if day != "2026-11-26" { return Ok(DayDetail::default()); }
                 Ok(DayDetail { trail: vec![Step { t: "10:01:00".into(), event: "app.abriu".into(),
-                    level: "ok".into(), screen: None, count: *count.lock().unwrap() }], ..DayDetail::default() })
+                    level: "ok".into(), screen: None, count: *count.lock().unwrap(), capped: false }], ..DayDetail::default() })
             })
         };
         telemetry.set_detail(source.clone());
@@ -598,7 +610,7 @@ mod tests {
         telemetry.save().unwrap();
         drop(telemetry);
         let telemetry = fx.start_as_is();
-        telemetry.set_detail(Arc::new(|_, _, _| panic!("o envio relê o diário depois de congelar")));
+        telemetry.set_detail(Arc::new(|_, _, _, _| panic!("o envio relê o diário depois de congelar")));
         assert!(telemetry.send_closed(&post).await.is_empty());
         let seen = seen.lock().unwrap();
         assert_eq!(seen.iter().map(|b| (b.partial, b.trail[0].count)).collect::<Vec<_>>(), [(true, 1), (true, 2), (false, 3)]);
@@ -649,7 +661,7 @@ mod tests {
         let counter = Counter::new(Event::MessageSent, message(), None, 7);
         let file = DayFile { day: telemetry.today(), batch_id: Some("f".repeat(32)), counters: vec![counter.clone()], ..DayFile::default() };
         let record = Record { level: "error".into(), event: "http.action".into(), count: 1, first: "10:00:00".into(), last: "10:00:00".into(),
-            fields: (0..22).map(|n| (format!("field{n}"), "é\"\\".repeat(150))).collect(), trail: Vec::new() };
+            fields: (0..22).map(|n| (format!("field{n}"), "é\"\\".repeat(150))).collect(), ..Record::default() };
         let mut detail = DayDetail { records: vec![record; MAX_RECORDS], ..DayDetail::default() };
         let mut batch = telemetry.batch(&file).unwrap();
         let body = encode_fit(&mut batch, &mut detail, MAX_BODY).unwrap();
@@ -706,5 +718,31 @@ mod tests {
         telemetry.save().unwrap();
         assert!(telemetry.send_closed(&up).await.is_empty());
         assert_eq!(seen.lock().unwrap()[0].counters[0].count, 2);
+    }
+
+    use std::collections::BTreeMap;
+
+    #[tokio::test(start_paused = true)]
+    async fn telemetry_each_binary_of_the_day_goes_in_its_own_batch_with_its_own_version() {
+        let fx = Fixture::new();
+        let old = fx.start();
+        old.count(Event::MessageSent, message(), 2);
+        old.save().unwrap();
+        drop(old);
+        let new = fx.start_version("0.43.0", Arc::new(|_: &str| -> Option<String> { None }));
+        new.set_machine([("os", "linux".to_owned()), ("os_name", "Distro Inventada".to_owned()), ("nome", "x".to_owned())]);
+        new.count(Event::MessageSent, message(), 3);
+        fx.next_day();
+        new.save().unwrap();
+        let (post, sent) = receiver(Some(200));
+        assert!(new.send_closed(&post).await.is_empty());
+        let sent = sent.lock().unwrap();
+        let mut seen: Vec<_> = sent.iter().map(|b| (b.env.version.clone(), b.counters[0].count, b.day.clone())).collect();
+        seen.sort();
+        assert_eq!(seen, [("0.42.0".to_owned(), 2, "2026-11-26".to_owned()), ("0.43.0".to_owned(), 3, "2026-11-26".to_owned())]);
+        assert_ne!(sent[0].batch_id, sent[1].batch_id);
+        assert!(sent.iter().all(|b| b.validate().is_ok() && b.sent_at.as_deref() == Some("2026-11-27T10:00:00Z")));
+        assert_eq!(sent[0].machine, BTreeMap::from([("os".into(), "linux".into()), ("os_name".into(), "other".into())]));
+        assert!(queue::days(fx.home.path()).unwrap().iter().all(|stem| stem.starts_with("2026-11-27")));
     }
 }

@@ -151,19 +151,16 @@ impl ServerHandler for Handler {
         let start = std::time::Instant::now();
         // Em debug o futuro de todas as tools junto estoura a pilha de 2 MiB do worker do tokio.
         let call = Box::pin(self.tools.call(name, args, &headers, draft.clone(), external_started.clone()));
-        let call = tools::ARGUMENTS_REJECTED.scope(std::cell::Cell::new(false), async move {
-            let result = crate::telemetry_hooks::NO_TELEMETRY.scope((), call).await;
-            (result, tools::ARGUMENTS_REJECTED.with(std::cell::Cell::get))
-        });
+        let call = tools::observed(crate::telemetry_hooks::NO_TELEMETRY.scope((), call));
         // O rmcp só cancela o token no `notifications/cancelled`: largar o futuro é o que cancela o pedido na dona do cofre
         // e o que recusa o rascunho do WhatsApp, que mora no binário. O `select!` larga o futuro antes do braço rodar.
-        let ((result, invalid_arguments), cancelled) = if name == "request_secret" || name.starts_with("vault_") || draft.is_some() {
+        let ((result, invalid_arguments, failure), cancelled) = if name == "request_secret" || name.starts_with("vault_") || draft.is_some() {
             tokio::select! {
                 result = call => (result, false),
                 () = context.ct.cancelled() => ((match draft {
                     Some(draft) => CallToolResult::error(vec![ContentBlock::text(draft.cancelled().await)]),
                     None => CallToolResult::error(vec![ContentBlock::text("erro_cofre_cancelado: a chamada foi cancelada")]),
-                }, false), true),
+                }, false, None), true),
             }
         // O cancelamento MCP dropa o futuro e o `ApprovalWaiter::drop` remove o cartão pendente na UI.
         // Quando o envio externo já começou, `CancelWarningGuard` grava o aviso de efeito desconhecido
@@ -174,7 +171,7 @@ impl ServerHandler for Handler {
                 result = call => (result, false),
                 () = context.ct.cancelled() => {
                     let msg = integration_cancel_message(external_started.load(Ordering::SeqCst));
-                    ((CallToolResult::error(vec![ContentBlock::text(msg)]), false), true)
+                    ((CallToolResult::error(vec![ContentBlock::text(msg)]), false, None), true)
                 }
             }
         } else { (call.await, false) };
@@ -187,7 +184,8 @@ impl ServerHandler for Handler {
                 else if result.is_error != Some(true) { ("dispatch", None) }
                 else if !is_integration && !tool_names().contains(&name) { ("dispatch", Some("unknown_tool")) }
                 else { ("dispatch", Some("tool_failed")) };
-            self.tools.observe(period, epoch, name, stage, code, took).await;
+            let cause = failure.filter(|_| code == Some("tool_failed"));
+            self.tools.observe(period, epoch, name, stage, code, cause, &owner.0, took).await;
         }
         Ok(CallToolResponse::Complete(result))
     }

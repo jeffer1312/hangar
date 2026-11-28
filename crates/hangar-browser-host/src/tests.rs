@@ -295,3 +295,18 @@ fn the_secret_frame_keeps_its_text_and_never_grows() {
     }
     assert_eq!(*frame(Map::new(), None), "{}");
 }
+
+/// O app diz por que o verbo deu `erro:`; código fora do formato de nome não atravessa (vai num cabeçalho).
+#[tokio::test]
+async fn the_app_refusal_keeps_its_cause() {
+    let registry = Arc::new(Registry::default());
+    let (mut host, mut rx) = registry.attach();
+    host.text(r#"{"type":"focus","session":"s"}"#);
+    for (code, expected) in [("page_gone", Reply::Error("page_gone".into(), "erro: a pagina caiu".into())),
+        ("x\r\nset-cookie: a", Reply::Text("erro: a pagina caiu".into()))] {
+        let call = spawn(&registry, "s", json!({"verbo": "click", "args": ["@e1"]}));
+        let sent = request(&mut rx).await;
+        host.text(&json!({"id": sent["id"], "ok": true, "text": "erro: a pagina caiu", "code": code}).to_string());
+        assert_eq!(call.await.unwrap(), Ok(expected), "{code}");
+    }
+}

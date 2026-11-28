@@ -341,6 +341,216 @@ pub const FEATURE_ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/push/mute", "push.mute"),
 ];
 
+
+// ---- Contexto das falhas: ambiente da máquina, retrato na hora e causa específica ----
+
+/// Faixa de quantidade (sessões, contas).
+pub const COUNT_BANDS: &[&str] = &["0", "1", "2-3", "4-9", "ge10"];
+/// Faixa de idade (servidor de pé, sessão).
+pub const AGE_BANDS: &[&str] = &["lt1m", "lt10m", "lt1h", "lt1d", "ge1d"];
+const UP_VALUES: &[&str] = &["lt1m", "lt10m", "lt1h", "lt1d", "ge1d", "down"];
+const MEM_BANDS: &[&str] = &["lt5", "lt10", "lt20", "lt40", "ge40"];
+const DISK_BANDS: &[&str] = &["lt1g", "lt5g", "lt20g", "ge20g"];
+const LOAD_BANDS: &[&str] = &["lt0_5", "lt1", "lt2", "ge2"];
+const CPU_PCT_BANDS: &[&str] = &["lt50", "lt80", "ge80"];
+const CPU_BANDS: &[&str] = &["1-2", "3-4", "5-8", "9-16", "17-32", "ge33"];
+const RAM_BANDS: &[&str] = &["lt4g", "4-8g", "8-16g", "16-32g", "32-64g", "ge64g"];
+const STATES: &[&str] = &["working", "idle", "awaiting_input", "other"];
+const RESUMED: &[&str] = &["no", "lt5s", "lt30s"];
+const OS_KINDS: &[&str] = &["linux", "windows", "macos", "other"];
+/// Distribuições conhecidas pelo `ID` do `/etc/os-release`; Windows e macOS levam o próprio nome.
+const OS_NAMES: &[&str] = &[
+    "arch", "cachyos", "manjaro", "endeavouros", "ubuntu", "debian", "linuxmint", "pop", "fedora", "nixos",
+    "opensuse-tumbleweed", "opensuse-leap", "rhel", "centos", "rocky", "almalinux", "alpine", "gentoo", "void", "kali",
+    "elementary", "zorin", "garuda", "windows_10", "windows_11", "macos",
+];
+const MUXES: &[&str] = &["tmux", "psmux", "none"];
+/// Tipos de `io::ErrorKind` que distinguem a causa sem texto.
+pub const IO_KINDS: &[&str] = &[
+    "not_found", "permission_denied", "connection_refused", "connection_reset", "broken_pipe", "already_exists",
+    "would_block", "invalid_input", "invalid_data", "timed_out", "write_zero", "interrupted", "unexpected_eof",
+    "out_of_memory", "storage_full", "other",
+];
+
+/// `io::ErrorKind` no nome fechado.
+pub fn io_kind(kind: std::io::ErrorKind) -> Code {
+    use std::io::ErrorKind as K;
+    Code::fixed(match kind {
+        K::NotFound => "not_found", K::PermissionDenied => "permission_denied", K::ConnectionRefused => "connection_refused",
+        K::ConnectionReset => "connection_reset", K::BrokenPipe => "broken_pipe", K::AlreadyExists => "already_exists",
+        K::WouldBlock => "would_block", K::InvalidInput => "invalid_input", K::InvalidData => "invalid_data",
+        K::TimedOut => "timed_out", K::WriteZero => "write_zero", K::Interrupted => "interrupted",
+        K::UnexpectedEof => "unexpected_eof", K::OutOfMemory => "out_of_memory", K::StorageFull => "storage_full",
+        _ => "other",
+    })
+}
+
+/// Como o valor de uma chave do ambiente ou do retrato é conferido.
+#[derive(Clone, Copy, Debug)]
+pub enum Kind {
+    List(&'static [&'static str]),
+    /// Número de versão público: 1 a 4 segmentos numéricos, com letra final opcional, ou `absent`.
+    Number,
+    /// Lugar de um pânico no código do Hangar (`crates.hangar-server.src.x:12`) ou `dependency`.
+    Site,
+}
+
+/// O ambiente da máquina que vai em `Batch::machine`.
+pub const MACHINE: &[(&str, Kind)] = &[
+    ("os", Kind::List(OS_KINDS)), ("os_name", Kind::List(OS_NAMES)), ("os_version", Kind::Number),
+    ("cpus", Kind::List(CPU_BANDS)), ("ram_total", Kind::List(RAM_BANDS)),
+    ("mux", Kind::List(MUXES)), ("mux_version", Kind::Number),
+    ("cli.claude", Kind::Number), ("cli.codex", Kind::Number), ("cli.pi", Kind::Number), ("cli.omp", Kind::Number),
+    ("cli.kimi", Kind::Number), ("cli.antigravity", Kind::Number),
+    ("accounts.claude", Kind::List(COUNT_BANDS)), ("accounts.codex", Kind::List(COUNT_BANDS)),
+    ("accounts.pi", Kind::List(COUNT_BANDS)), ("accounts.omp", Kind::List(COUNT_BANDS)),
+    ("accounts.kimi", Kind::List(COUNT_BANDS)), ("accounts.antigravity", Kind::List(COUNT_BANDS)),
+    ("connect", Kind::List(ON_OFF)), ("tailscale", Kind::List(ON_OFF)),
+];
+
+/// O retrato de cada falha (`Record::ctx_first`/`ctx_last`). `sessions.<provider>.<surface>` também vale.
+pub const CONTEXT: &[(&str, Kind)] = &[
+    ("up", Kind::List(UP_VALUES)), ("mem_free", Kind::List(MEM_BANDS)), ("disk_free", Kind::List(DISK_BANDS)),
+    ("load", Kind::List(LOAD_BANDS)), ("cpu", Kind::List(CPU_PCT_BANDS)),
+    ("sessions", Kind::List(COUNT_BANDS)), ("working", Kind::List(COUNT_BANDS)),
+    ("provider", Kind::List(&["claude", "codex", "pi", "omp", "kimi", "antigravity", "other"])),
+    ("surface", Kind::List(&["terminal", "headless"])), ("model", Kind::List(ALL_MODELS)),
+    ("age", Kind::List(AGE_BANDS)), ("state", Kind::List(STATES)), ("cli", Kind::Number),
+    ("client", Kind::List(&["ios", "android", "pwa", "native", "server", "other"])), ("client_version", Kind::Number),
+    ("resumed", Kind::List(RESUMED)),
+    ("accounts", Kind::List(COUNT_BANDS)), ("no_login", Kind::List(COUNT_BANDS)), ("spent", Kind::List(COUNT_BANDS)),
+    ("quota_unread", Kind::List(COUNT_BANDS)), ("full", Kind::List(COUNT_BANDS)),
+    ("io", Kind::List(IO_KINDS)), ("panic_at", Kind::Site),
+    ("exit", Kind::List(&["code_0", "code_1", "code_other", "sigkill", "sigterm", "sigsegv", "sigabrt", "signal_other", "none"])),
+];
+
+const ALL_MODELS: &[&str] = &[
+    "default", "best", "opus", "opusplan", "sonnet", "haiku", "fable",
+    "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "kimi-k3", "gemini-4-neon", "gemini-3.8-flash", "engine", "other",
+];
+
+/// O valor que sai para `key` numa das tabelas: `None` para chave desconhecida (fica fora), `other` para
+/// valor fora da lista.
+pub fn closed(table: &[(&str, Kind)], key: &str, value: &str) -> Option<String> {
+    let kind = table.iter().find(|(known, _)| *known == key).map(|(_, kind)| *kind)
+        .or_else(|| table.iter().any(|(known, _)| *known == "sessions").then(|| sessions_key(key)).flatten())?;
+    Some(match kind {
+        Kind::List(values) => Code::known(value, values).as_str().to_owned(),
+        Kind::Number => if value == "absent" || is_number(value) { value.to_owned() } else { "other".to_owned() },
+        Kind::Site => if value == "dependency" || (value.starts_with("crates.") && is_name(value)) { value.to_owned() } else { "other".to_owned() },
+    })
+}
+
+fn sessions_key(key: &str) -> Option<Kind> {
+    let mut parts = key.strip_prefix("sessions.")?.split('.');
+    let (provider, surface) = (parts.next()?, parts.next()?);
+    (parts.next().is_none() && Provider::parse(provider).is_some() && Surface::parse(surface).is_some()).then_some(Kind::List(COUNT_BANDS))
+}
+
+fn is_number(value: &str) -> bool {
+    let digits = value.strip_suffix(|c: char| c.is_ascii_lowercase()).unwrap_or(value);
+    let parts: Vec<&str> = digits.split('.').collect();
+    value.len() <= 24 && (1..=4).contains(&parts.len()) && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Faixas: os limites são os do nome (`lt1m` = menos de um minuto).
+pub fn count_band(n: u64) -> Code { Code::fixed(match n { 0 => "0", 1 => "1", 2..=3 => "2-3", 4..=9 => "4-9", _ => "ge10" }) }
+pub fn age_band(secs: u64) -> Code {
+    Code::fixed(match secs { 0..60 => "lt1m", 60..600 => "lt10m", 600..3600 => "lt1h", 3600..86_400 => "lt1d", _ => "ge1d" })
+}
+pub fn mem_free_band(available: u64, total: u64) -> Option<Code> {
+    let pct = (total > 0).then(|| available.saturating_mul(100) / total)?;
+    Some(Code::fixed(match pct { 0..5 => "lt5", 5..10 => "lt10", 10..20 => "lt20", 20..40 => "lt40", _ => "ge40" }))
+}
+pub fn disk_free_band(bytes: u64) -> Code {
+    const G: u64 = 1 << 30;
+    Code::fixed(match bytes { b if b < G => "lt1g", b if b < 5 * G => "lt5g", b if b < 20 * G => "lt20g", _ => "ge20g" })
+}
+/// Carga de 1 min dividida pelos núcleos.
+pub fn load_band(load1: f64, cpus: u32) -> Option<Code> {
+    let per = (cpus > 0 && load1.is_finite()).then(|| load1 / f64::from(cpus))?;
+    Some(Code::fixed(if per < 0.5 { "lt0_5" } else if per < 1.0 { "lt1" } else if per < 2.0 { "lt2" } else { "ge2" }))
+}
+pub fn cpu_pct_band(pct: f32) -> Code { Code::fixed(if pct < 50.0 { "lt50" } else if pct < 80.0 { "lt80" } else { "ge80" }) }
+pub fn cpus_band(n: u32) -> Code { Code::fixed(match n { 0..=2 => "1-2", 3..=4 => "3-4", 5..=8 => "5-8", 9..=16 => "9-16", 17..=32 => "17-32", _ => "ge33" }) }
+pub fn ram_band(bytes: u64) -> Code {
+    const G: u64 = 1 << 30;
+    Code::fixed(match bytes / G { 0..4 => "lt4g", 4..8 => "4-8g", 8..16 => "8-16g", 16..32 => "16-32g", 32..64 => "32-64g", _ => "ge64g" })
+}
+
+/// Falha que o servidor percebe sozinho: código, evento do diário, causas possíveis e descrição fixa.
+pub struct Health { pub code: &'static str, pub event: &'static str, pub causes: &'static [&'static str], pub description: &'static str }
+
+/// As falhas de saúde do servidor. Causa fora da lista do código sai `other`.
+pub const HEALTH: &[Health] = &[
+    Health { code: "state_facts_unavailable", event: "health.state", description: "O estado da sessão não pôde ser lido; ficou o último valor.",
+        causes: &["runtime_unbound", "binding_missing", "binding_changed", "plugin_store_unavailable", "plugin_facts_invalid",
+            "permission_store_poisoned", "askq_sidecar_unreadable", "askq_sidecar_malformed", "askq_race", "askq_lock_poisoned",
+            "askq_frame_missing", "askq_timeout", "plan_notice_missing", "interaction_id_missing", "files_dirs_missing",
+            "files_timeout", "task_panic", "dead_unproven", "plugin_question_invalid", "feed_binding_changed"] },
+    Health { code: "terminal_observacao_falhou", event: "health.state", description: "A tela do terminal da sessão não pôde ser lida.",
+        causes: &["runtime_unbound", "binding_missing", "binding_changed", "permission_store_poisoned", "observer_spawn_failed",
+            "startup_timeout", "command_timeout", "capture_timeout", "observer_died", "observer_io", "mux_command_failed",
+            "protocol_error", "target_changed", "target_invalid", "pool_saturated", "mux_unavailable", "mux_process_failed"] },
+    Health { code: "permission_observe_failed", event: "health.state", description: "O modo de permissão da sessão não pôde ser confirmado.",
+        causes: &["runtime_unbound", "binding_missing", "binding_changed", "frame_lock_poisoned", "store_poisoned",
+            "capture_stale", "mode_unconfirmed", "mode_unknown"] },
+    Health { code: "plugin_identity_missing", event: "health.plugin", description: "O plugin da sessão Claude não foi reconhecido pelo servidor.",
+        causes: &["no_runtime_entry", "duplicate_entry", "terminal_target_stale", "headless_unbound", "name_lookup_failed",
+            "key_not_found", "identity_incomplete", "name_mismatch", "key_mismatch", "token_without_key",
+            "pull_without_conversation", "pull_not_owner", "adoption_cooldown", "adoption_refused"] },
+    Health { code: "work_review_refresh_failed", event: "health.work_review", description: "A revisão do trabalho não pôde ser relida no conector.",
+        causes: &["timeout", "unavailable", "auth_required", "permission_denied", "protocol_error", "invalid_params",
+            "connector_disabled", "registry_invalid", "registry_unavailable", "mission_unavailable", "mission_unreadable"] },
+    Health { code: "limit_switch_no_room", event: "health.limit_switch", description: "A sessão bateu o limite e nenhuma outra conta tinha folga.",
+        causes: &["no_other_account", "no_login", "all_spent", "quota_unread", "quota_no_window", "all_full"] },
+    Health { code: "headless_processo_caiu", event: "health.headless", description: "O processo da sessão sem terminal terminou sozinho.",
+        causes: &["sigkill", "exit_nonzero", "signal_other", "exit_while_working", "cano_died_socket_down", "pipe_closed_no_rc",
+            "respawn_failed", "not_logged_in"] },
+    Health { code: "headless_caiu", event: "health.headless", description: "O processo da sessão sem terminal terminou sozinho.",
+        causes: &["sigkill", "exit_nonzero", "signal_other", "exit_while_working", "cano_died_socket_down", "pipe_closed_no_rc",
+            "respawn_failed", "not_logged_in"] },
+    Health { code: "server_exit", event: "health.server_exit", description: "O servidor do Hangar parou.",
+        causes: &["out_of_memory", "timeout", "signal", "exit_code", "core_dump", "watchdog", "resources", "start_limit_hit",
+            "serve_failed", "panic", "none"] },
+    Health { code: "erro_criacao_sessao", event: "health.session_open", description: "A sessão pedida não pôde ser criada.",
+        causes: &["name_invalid", "headless_provider_unsupported", "headless_read_only", "omp_profile_invalid",
+            "permission_mode_invalid", "fast_unsupported", "ultrafast_refused", "branch_name_missing", "root_not_allowed",
+            "read_only_unavailable", "read_only_refused", "worktree_undo_failed", "worktree_failed", "git_status_failed",
+            "account_invalid", "account_lock_io", "engine_missing", "launcher_missing", "choices_unwritten", "prewarm_unwritten",
+            "record_unwritten", "sidecar_unwritten", "first_message_unqueued", "service_tier_unchecked",
+            "tmux_new_session_failed", "terminal_died_at_birth", "session_id_invalid", "resume_transcript_missing",
+            "provider_not_here", "transfer_index_invalid", "owner_unregistered", "task_panic", "baton_invalid", "prewarm_failed"] },
+];
+
+/// Causas de `mcp.tool` com código `tool_failed`: o lugar onde a ferramenta parou.
+pub const MCP_CAUSES: &[&str] = &[
+    "caller_unknown", "voice_needs_session", "self_target", "invalid_verb_args", "unknown_verb", "shot_dir_failed",
+    "desktop_registry_unreadable", "desktop_app_restarting", "desktop_app_closed", "desktop_app_dead", "desktop_app_unreachable",
+    "desktop_app_timeout", "browser_not_open", "browser_not_ready", "browser_paused", "browser_verb_refused", "jev_off", "jev_unconfigured",
+    "browser_host_none", "browser_host_stale", "browser_host_not_allowed", "browser_host_gone", "browser_host_timeout",
+    "browser_host_verb_unsupported", "browser_host_app_outdated",
+    "page_gone", "browser_starting", "browser_start_failed", "app_closing", "app_no_answer", "cdp_closed", "dialog_open",
+    "queue_deadline", "verb_unconfirmed", "target_missing", "target_ambiguous", "ref_invalid", "wait_timeout",
+    "voice_has_no_child", "child_remote_unsupported", "groups_unavailable", "group_file_unreadable", "erro_nao_ligada",
+    "erro_permissao_do_dono", "erro_sem_resposta", "erro_resposta_nao_entregue", "erro_envio_falhou",
+    "erro_interacao_desatualizada", "erro_sessao_inexistente", "runtime_unhealthy", "erro_corpo_invalido", "locate_timeout",
+    "erro_aguarde_clear", "erro_sem_turno", "erro_par_endereco_ambiguo", "erro_par_encerrado", "session_transfer_busy",
+    "server_id_missing", "peer_unknown", "peer_refused", "peer_transport", "peer_old_version", "peer_identity_mismatch",
+    "headless_provider_unsupported", "invalid_target_name", "target_conflict", "remote_inherit_refused", "remote_account_unknown",
+    "placement_forward_refused", "placement_machine_unknown", "placement_uncertain", "erro_nome_em_uso", "erro_cwd_inexistente",
+    "erro_conta_sem_login", "erro_provedor_offline", "link_failed",
+    "http_400", "http_403", "http_404", "http_409", "http_410", "http_422", "http_429", "http_500", "http_502", "http_503", "http_504",
+];
+
+/// Códigos que os apps mandam nas falhas de rede e de lista; status HTTP vira `http_4xx`/`http_5xx`.
+pub const CLIENT_CODES: &[&str] = &[
+    "route_timeout", "aborted", "type_error", "panic", "rede", "timeout", "silencio", "servidor_fechou", "abertura",
+    "http_4xx", "http_5xx", "primeiro_quadro_timeout", "stream_fechado", "stream_interrompido", "json_invalido",
+    "produtor_falhou", "conexao", "sincronia", "par_attach",
+];
+
 /// O código de recurso de um pedido; `None` quando ele não conta.
 pub fn feature(method: &str, route: &str) -> Option<Code> {
     FEATURE_ROUTES.iter().find(|(m, template, _)| *m == method && *template == route).map(|(_, _, code)| Code(*code))
@@ -349,6 +559,51 @@ pub fn feature(method: &str, route: &str) -> Option<Code> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_values_pass_only_through_their_table() {
+        assert_eq!(closed(CONTEXT, "mem_free", "lt10").as_deref(), Some("lt10"));
+        assert_eq!(closed(CONTEXT, "mem_free", "12%").as_deref(), Some("other"));
+        assert_eq!(closed(CONTEXT, "nome_da_sessao", "x"), None, "chave fora da tabela fica fora");
+        assert_eq!(closed(CONTEXT, "sessions.claude.headless", "2-3").as_deref(), Some("2-3"));
+        assert_eq!(closed(CONTEXT, "sessions.meu-motor.headless", "2-3"), None);
+        assert_eq!(closed(CONTEXT, "model", "meu-motor").as_deref(), Some("other"));
+        assert_eq!(closed(MACHINE, "sessions.claude.terminal", "1"), None, "o padrão de sessões só vale no retrato");
+        assert_eq!(closed(MACHINE, "cli.claude", "2.1.195").as_deref(), Some("2.1.195"));
+        assert_eq!(closed(MACHINE, "mux_version", "3.5a").as_deref(), Some("3.5a"));
+        assert_eq!(closed(MACHINE, "cli.codex", "absent").as_deref(), Some("absent"));
+        assert_eq!(closed(MACHINE, "cli.codex", "codex-cli 0.120.0").as_deref(), Some("other"));
+        assert_eq!(closed(MACHINE, "os_version", "24.04").as_deref(), Some("24.04"));
+        assert_eq!(closed(MACHINE, "os_name", "Minha Distro").as_deref(), Some("other"));
+        assert_eq!(closed(CONTEXT, "panic_at", "crates.hangar-server.src.runtime.claude:12").as_deref(), Some("crates.hangar-server.src.runtime.claude:12"));
+        assert_eq!(closed(CONTEXT, "panic_at", "home.jefferson.cargo:1").as_deref(), Some("other"));
+        for (table, _) in [(MACHINE, 0), (CONTEXT, 1)] {
+            for (key, kind) in table {
+                assert!(is_name(key), "{key}");
+                if let Kind::List(values) = kind { assert!(values.iter().all(|v| is_name(v)), "{key}"); }
+            }
+        }
+        for health in HEALTH {
+            assert!(is_name(health.code) && is_name(health.event) && health.causes.iter().all(|c| is_name(c)), "{}", health.code);
+        }
+        assert!(MCP_CAUSES.iter().chain(CLIENT_CODES).all(|c| is_name(c)));
+    }
+
+    #[test]
+    fn bands_follow_their_names() {
+        assert_eq!(count_band(0).as_str(), "0");
+        assert_eq!(count_band(3).as_str(), "2-3");
+        assert_eq!(count_band(10).as_str(), "ge10");
+        assert_eq!(age_band(59).as_str(), "lt1m");
+        assert_eq!(age_band(3600).as_str(), "lt1d");
+        assert_eq!(mem_free_band(9, 100).map(Code::as_str), Some("lt10"));
+        assert_eq!(mem_free_band(1, 0), None);
+        assert_eq!(disk_free_band(4 << 30).as_str(), "lt5g");
+        assert_eq!(load_band(6.0, 4).map(Code::as_str), Some("lt2"));
+        assert_eq!(cpus_band(12).as_str(), "9-16");
+        assert_eq!(ram_band(31 << 30).as_str(), "16-32g");
+        assert_eq!(io_kind(std::io::ErrorKind::TimedOut).as_str(), "timed_out");
+    }
 
     #[test]
     fn unknown_code_is_other() {

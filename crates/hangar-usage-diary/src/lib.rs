@@ -52,6 +52,7 @@ const FIELDS: &[(&str, Kind)] = &[
     ("causa_interna", Text), ("campo", Text), ("pasta", Text), ("raise_site", Text),
     ("falhas", Int), ("sessoes", Text), ("entradas", Int), ("importadas", Int),
     ("preservadas", Int), ("api", Int), ("requires_api", Int), ("rota", Text), ("saida", Text),
+    ("cliente", Text),
 ];
 
 /// Por que um lote não chegou ao disco. `Disk` vira `gravadas: 0`, os outros um 500. O tipo do
@@ -78,7 +79,9 @@ pub fn record_screen(base: &Path, body: &[u8], now: DateTime<FixedOffset>) -> Re
 ///
 /// # Errors
 /// Devolve `WriteError` se não puder preparar a pasta. Falha no append mantém o contrato de reenvio.
-pub fn record_screen_with_owner(base: &Path, body: &[u8], now: DateTime<FixedOffset>, owner_collection: Option<&str>) -> Result<usize, WriteError> {
+pub fn record_screen_with_owner(base: &Path, body: &[u8], now: DateTime<FixedOffset>,
+                                owner: Option<(&str, &[(&'static str, String)], DateTime<FixedOffset>)>) -> Result<usize, WriteError> {
+    let owner_collection = owner.map(|(collection, _, _)| collection);
     let Some(batch) = parse_body(body) else { return Ok(0) };
     let batch = match batch {
         Value::Object(mut fields) => fields.shift_remove("eventos").unwrap_or(Value::Null),
@@ -94,6 +97,19 @@ pub fn record_screen_with_owner(base: &Path, body: &[u8], now: DateTime<FixedOff
             && at <= now {
             // O diário local pode corrigir o horário para a chegada; a coleta nunca usa esse substituto.
             line.insert("telemetry_at".into(), json!(at.to_rfc3339()));
+            if line.get("nivel").and_then(Value::as_str).is_some_and(|level| level != "ok") {
+                let (ctx, started) = owner.map_or((&[][..], at), |(_, ctx, started)| (ctx, started));
+                // O retrato é o do servidor na chegada: falha de antes da subida dele aconteceu com ele fora, e a de
+                // mais de meio minuto atrás leva só isso, porque memória e sessões já seriam as de outra hora.
+                let recent = now - at <= TimeDelta::seconds(30);
+                let up = || match u64::try_from((at - started).num_seconds()) {
+                    Ok(secs) => hangar_telemetry::events::age_band(secs).as_str().to_owned(),
+                    Err(_) => "down".to_owned(),
+                };
+                let ctx: Vec<_> = ctx.iter().filter(|(key, _)| recent || *key == "up")
+                    .map(|(key, value)| (*key, if *key == "up" { up() } else { value.clone() })).collect();
+                put_ctx(&mut line, &ctx);
+            }
             mark_telemetry(&mut line, "owner_screen", collection);
         }
         Some(line)
@@ -119,26 +135,69 @@ pub fn screen_exportable(item: &Value) -> bool {
 #[derive(Clone, Copy)]
 pub enum OwnerAction { Http, Mcp }
 
+/// Nível de uma falha que o servidor percebeu sozinho.
+#[derive(Clone, Copy)]
+pub enum Severity { Warn, Error }
+
+static BUILD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// O binário (`versão-commit` da telemetria) que carimba as linhas da coleta; só a primeira vale.
+pub fn set_build(build: &str) { let _ = BUILD.set(build.to_owned()); }
+
 /// Acrescenta ao diário apenas os campos técnicos da ação, sem corpo, argumentos nem resposta.
 ///
 /// # Errors
 /// Devolve `WriteError` se a pasta não puder ser preparada ou o append falhar.
 pub fn record_owner_action(base: &Path, origin: OwnerAction, collection: &str, now: DateTime<FixedOffset>,
-                           action: &str, stage: &'static str, code: Option<&str>, ms: u64) -> Result<(), WriteError> {
+                           action: &str, stage: &'static str, code: Option<&str>, ms: u64,
+                           cause: Option<&str>, ctx: &[(&'static str, String)]) -> Result<(), WriteError> {
     let (event, source) = match origin { OwnerAction::Http => ("http.action", "owner_http"), OwnerAction::Mcp => ("mcp.tool", "owner_mcp") };
     let mut line = Map::from_iter([
         ("ts".into(), json!(now.to_rfc3339())), ("origem".into(), json!("servidor")),
         ("evento".into(), json!(event)), ("action".into(), json!(action)), ("etapa".into(), json!(stage)),
         ("nivel".into(), json!(if code.is_some() { "erro" } else { "ok" })), ("ms".into(), json!(ms)),
     ]);
-    if let Some(code) = code { line.insert("codigo".into(), json!(code)); }
+    if let Some(code) = code {
+        line.insert("codigo".into(), json!(code));
+        if let Some(cause) = cause { line.insert("causa".into(), json!(cause)); }
+        put_ctx(&mut line, ctx);
+    }
     mark_telemetry(&mut line, source, collection);
     write(base, vec![line], now)
+}
+
+/// Falha que o servidor percebeu sozinho (`server_health`): código e causa fechados, retrato da hora.
+/// `at` é quando aconteceu, se não foi agora (a saída da vida anterior do servidor), e `build` o binário
+/// em que aconteceu, quando não foi este.
+///
+/// # Errors
+/// Devolve `WriteError` se a pasta não puder ser preparada ou o append falhar.
+#[allow(clippy::too_many_arguments)]
+pub fn record_health(base: &Path, collection: &str, now: DateTime<FixedOffset>, at: Option<DateTime<FixedOffset>>, event: &str,
+                     code: &str, cause: &str, severity: Severity, ctx: &[(&'static str, String)], build: Option<&str>) -> Result<(), WriteError> {
+    let mut line = Map::from_iter([
+        ("ts".into(), json!(now.to_rfc3339())), ("origem".into(), json!("servidor")), ("evento".into(), json!(event)),
+        ("nivel".into(), json!(match severity { Severity::Warn => "aviso", Severity::Error => "erro" })),
+        ("codigo".into(), json!(code)), ("causa".into(), json!(cause)),
+    ]);
+    if let Some(at) = at { line.insert("telemetry_at".into(), json!(at.to_rfc3339())); }
+    put_ctx(&mut line, ctx);
+    mark_telemetry(&mut line, "server_health", collection);
+    if let Some(build) = build { line.insert("telemetry_build".into(), json!(build)); }
+    write(base, vec![line], now)
+}
+
+/// O retrato da hora vai num objeto próprio, fora dos campos da tela.
+fn put_ctx(line: &mut Map<String, Value>, ctx: &[(&'static str, String)]) {
+    if !ctx.is_empty() {
+        line.insert("ctx".into(), Value::Object(ctx.iter().map(|(key, value)| ((*key).to_owned(), json!(value))).collect()));
+    }
 }
 
 fn mark_telemetry(line: &mut Map<String, Value>, source: &'static str, collection: &str) {
     line.insert("telemetry_origin".into(), json!(source));
     line.insert("telemetry_collection".into(), json!(collection));
+    if let Some(build) = BUILD.get() { line.insert("telemetry_build".into(), json!(build)); }
 }
 
 /// O `request.json()`: UTF-8 com ou sem BOM, espaço JSON em volta, surrogate solto aceito.
