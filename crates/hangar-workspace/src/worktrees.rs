@@ -884,7 +884,8 @@ fn scan_repositories(locations: &[String], roots: &[String]) -> Discovery {
     Discovery { repos, partial: walk.partial.into_inner() }
 }
 
-/// Pasta dentro de outra raiz já é alcançada por ela, salvo atrás de uma pasta de artefato.
+/// Pasta dentro de outra raiz já é alcançada por ela, salvo atrás de uma pasta de artefato. A que não existe fica:
+/// a leitura dela falha e marca a busca como incompleta.
 fn outermost(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths.sort();
     paths.dedup();
@@ -896,7 +897,7 @@ fn outermost(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
                 })
         })
     };
-    paths.iter().filter(|p| !reached(p)).cloned().collect()
+    paths.iter().filter(|p| !(p.is_dir() && reached(p))).cloned().collect()
 }
 
 fn skipped_artifact(name: &str) -> bool {
@@ -1477,6 +1478,15 @@ mod tests {
             discovery_problem(&[text(&invalid_root)]),
             Some("worktree_discovery_incomplete")
         );
+    }
+
+    #[test]
+    fn missing_root_inside_another_still_marks_the_discovery_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("projects");
+        std::fs::create_dir(&root).unwrap();
+        let scan = discover_repositories(&[text(&root), text(&root.join("ausente"))]);
+        assert!(scan.partial, "raiz configurada que não existe deixa a busca incompleta");
     }
 
     #[test]
