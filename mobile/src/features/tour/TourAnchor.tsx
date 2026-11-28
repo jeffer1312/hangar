@@ -3,13 +3,13 @@ import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { WorkingMarkPaused } from '../../ui/WorkingMark';
 import { anchorMoved, registerAnchor, unregisterAnchor } from './anchors';
 
+/** Peças montadas mas escondidas por outra camada da mesma tela (a lista sob o formulário de nova conversa). */
+export const TourHidden = createContext(false);
+
 /**
  * Registra uma peça que o tour aponta; `id` nulo não registra (a mesma peça fora da tela real ou escondida).
  * Tela sem foco (a inicial por baixo da conversa) tira as peças dela: o balão não pode apontar o que está coberto.
  */
-/** Peças montadas mas escondidas por outra camada da mesma tela (a lista sob o formulário de nova conversa). */
-export const TourHidden = createContext(false);
-
 export function useTourAnchor(id: string | null) {
   // `WorkingMarkPaused` é o "esta tela perdeu o foco" que a inicial e a conversa já publicam.
   const paused = useContext(WorkingMarkPaused);
