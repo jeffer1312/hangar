@@ -332,6 +332,70 @@ async fn join_keeps_fed_and_linked_by() {
     peers_become(&n.lab, "s3", &["casa::s0", "casa::s1", "casa::s2"]).await;
 }
 
+/// Filha ligada noutra máquina: o vínculo vai pela dona até a máquina da filha, só o pai interrompe, e o pai
+/// saindo do grupo o desfaz lá pela fila.
+#[tokio::test(flavor = "multi_thread")]
+async fn linked_child_on_another_machine() {
+    let n = net().await;
+    assert_eq!(pair(&n.casa, "s0", json!({"peers": ["s1"]})).await.0, 200);
+    let (status, body) = pair(&n.casa, "s0", json!({"peer": "lab::s3", "link": true})).await;
+    assert_eq!(status, 200, "{body}");
+    let gid = body["gid"].as_str().unwrap().to_owned();
+    assert_eq!(record(&n.casa, &gid).unwrap()["links"], json!({"lab::s3": "casa::s0"}));
+    let child = sidecar(&n.lab, "s3").expect("lab grava a filha");
+    assert_eq!(child["linked_by"], "casa::s0", "{child}");
+    let returns = hangar_server::groups::link_state::read(&n.lab.state.hangar_dir).unwrap();
+    assert!(returns["s3"].linked_at > 0.0, "a máquina da filha guarda quando ela foi ligada");
+    assert_eq!(sidecar(&n.casa, "s0").unwrap()["linked_children"], json!(["lab::s3"]), "o pai sabe da filha de fora");
+    assert!(sidecar(&n.casa, "s1").unwrap().get("linked_children").is_none());
+    // Só o pai interrompe: lá a ligação é conferida.
+    let not_parent = json!({"parent": "casa::s1"});
+    let (status, refused) = call(n.lab.addr, "POST", "/api/sessions/s3/linked-interrupt", Some(&not_parent)).await;
+    assert_eq!((status, refused["detail"]["code"].clone()), (403, json!("erro_interromper_nao_ligada")), "{refused}");
+    // O pai sai: a filha em lab perde o vínculo pela fila, e ele não interrompe mais.
+    let (status, left) = call(n.casa.addr, "DELETE", "/api/sessions/s0/pair", None).await;
+    assert_eq!(status, 200, "{left}");
+    assert!(record(&n.casa, &gid).unwrap().get("links").is_none(), "o registro esquece a ligação de quem saiu");
+    peers_become(&n.lab, "s3", &["casa::s1"]).await;
+    assert!(sidecar(&n.lab, "s3").unwrap().get("linked_by").is_none());
+    let parent = json!({"parent": "casa::s0"});
+    let (status, refused) = call(n.lab.addr, "POST", "/api/sessions/s3/linked-interrupt", Some(&parent)).await;
+    assert_eq!((status, refused["detail"]["code"].clone()), (403, json!("erro_interromper_nao_ligada")), "{refused}");
+}
+
+/// No envio da dona, vínculo com outra máquina vale como está no registro; o daqui fica sem ele.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_push_without_the_remote_link_drops_it_and_keeps_the_local_one() {
+    let n = net().await;
+    let all = json!([member("casa", "s0"), member("lab", "s1"), member("lab", "s2"), member("lab", "s3")]);
+    let links = json!({"lab::s1": "casa::s0", "lab::s2": "lab::s3"});
+    let (status, answer) = push(&n.lab, "g1", json!({"protocol": 1, "owner": "casa", "version": 1, "members": all, "joining": ["s1", "s2", "s3"], "links": links})).await;
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(sidecar(&n.lab, "s1").unwrap()["linked_by"], "casa::s0");
+    assert_eq!(sidecar(&n.lab, "s2").unwrap()["linked_by"], "s3");
+    let (status, answer) = push(&n.lab, "g1", json!({"protocol": 1, "owner": "casa", "version": 2, "members": all})).await;
+    assert_eq!(status, 200, "{answer}");
+    assert!(sidecar(&n.lab, "s1").unwrap().get("linked_by").is_none(), "o registro não tem mais a ligação de fora");
+    assert_eq!(sidecar(&n.lab, "s2").unwrap()["linked_by"], "s3", "a ligação daqui fica");
+    assert_eq!(sidecar(&n.lab, "s3").unwrap()["linked_children"], json!(["s2"]));
+}
+
+/// O pai de outra máquina trocou de nome: a filha segue ligada a ele sem ganhar `linked_at` novo.
+#[tokio::test(flavor = "multi_thread")]
+async fn renaming_the_remote_parent_keeps_linked_at() {
+    use hangar_server::groups::link_state;
+    let n = net().await;
+    let body = |version: u64, parent: &str| json!({"protocol": 1, "owner": "casa", "version": version,
+        "members": [member("casa", parent), member("lab", "s1")], "joining": ["s1"], "links": {"lab::s1": format!("casa::{parent}")}});
+    assert_eq!(push(&n.lab, "g1", body(1, "s0")).await.0, 200);
+    let dir = n.lab.state.hangar_dir.clone();
+    link_state::update(&dir, |all| { all.get_mut("s1").expect("ligada ganha registro").linked_at = 1.0; }).unwrap();
+    let (status, answer) = push(&n.lab, "g1", body(2, "s9")).await;
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(sidecar(&n.lab, "s1").unwrap()["linked_by"], "casa::s9");
+    assert_eq!(link_state::read(&dir).unwrap()["s1"].linked_at, 1.0, "renomear não religa");
+}
+
 /// Quem inicia não é a dona: a dona (lab) empurra para casa, que não segura o passe de `s0`.
 #[tokio::test(flavor = "multi_thread")]
 async fn join_from_participant_does_not_deadlock() {

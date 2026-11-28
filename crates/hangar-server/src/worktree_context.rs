@@ -35,6 +35,9 @@ pub(crate) fn roots(st: &AppState) -> Result<Vec<String>, &'static str> {
     Ok(roots)
 }
 
+/// A janela de "pasta recente": a lista de worktrees e os fatos do balanceamento.
+pub(crate) const RECENT_SECS: f64 = 30.0 * 86400.0;
+
 pub(crate) fn project_bases(st: &AppState) -> Result<Vec<PathBuf>, &'static str> {
     let env = &st.accounts.env;
     let active = crate::list::links::resolve_lenient(&env.claude_base);
@@ -97,7 +100,7 @@ fn collect(st: &AppState, rows: &[hangar_api::session::SessionRow], now: f64) ->
     let bases = project_bases(st)?;
     let folders = crate::archive_list::worktree_activities(st, &bases, now);
     let cwds = sessions.iter().filter_map(|session| session.cwd.clone())
-        .chain(folders.iter().filter(|(_, mtime)| *mtime >= now - 30.0 * 86400.0).map(|(cwd, _)| cwd.clone()))
+        .chain(folders.iter().filter(|(_, mtime)| *mtime >= now - RECENT_SECS).map(|(cwd, _)| cwd.clone()))
         .filter(|cwd| !cwd.is_empty() && roots.iter().any(|root| hangar_workspace::real(Path::new(cwd)).starts_with(root)))
         .collect();
     Ok(Context { roots, cwds, sessions, project_bases: bases.into_iter().map(|path| path.to_string_lossy().into_owned()).collect(),

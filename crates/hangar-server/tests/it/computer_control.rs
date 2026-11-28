@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use axum::body::{Body, to_bytes};
 use axum::extract::ConnectInfo;
@@ -68,6 +68,8 @@ impl Scene {
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
         let mut state = AppState::new(config(""));
+        // Units do pacote em /usr/lib são da máquina, não da cena.
+        state.cliproxy_units = |home| vec![home.join(".config/systemd/user/cli-proxy-api.service")];
         let mut env = BTreeMap::from([
             ("HOME".into(), home.to_string_lossy().into_owned()),
             ("USERPROFILE".into(), home.to_string_lossy().into_owned()),
@@ -102,15 +104,12 @@ impl Scene {
     async fn assert_group_dead(&self) {
         for name in ["main.pid", "child.pid"] {
             let pid = std::fs::read_to_string(self.pid_file(name)).unwrap();
-            let mut alive = true;
-            for _ in 0..50 {
-                alive = process_alive(pid.trim());
-                if !alive {
-                    break;
+            let died = tokio::time::timeout(Duration::from_secs(10), async {
+                while process_alive(pid.trim()) {
+                    tokio::task::yield_now().await;
                 }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            assert!(!alive, "{name} ({pid}) sobreviveu ao prazo");
+            });
+            assert!(died.await.is_ok(), "{name} ({pid}) sobreviveu ao prazo");
         }
     }
 
@@ -733,16 +732,23 @@ async fn rot43_ssh_config_variants() {
 #[tokio::test]
 async fn rot05_slow_ssh_does_not_block_get() {
     let s = Arc::new(Scene::new().await);
-    s.ssh("/bin/sleep 3; printf 'ok\\n'");
+    // O ssh só termina quando o teste soltar: o GET que voltar antes não esperou por ele.
+    let release = s.root.path().join("release");
+    s.ssh(&format!("while [ ! -e '{}' ]; do :; done; printf 'ok\\n'", release.display()));
     let slow = {
         let s = s.clone();
         tokio::spawn(async move { s.test_host(json!({"host": "h"})).await })
     };
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let started = Instant::now();
-    assert_eq!(s.get().await.0, StatusCode::OK);
-    assert!(started.elapsed() < Duration::from_secs(2), "o GET esperou o ssh");
+    let ssh_started = tokio::time::timeout(Duration::from_secs(10), async {
+        while s.ssh_argv().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    });
+    assert!(ssh_started.await.is_ok(), "o ssh não começou");
+    let got = tokio::time::timeout(Duration::from_secs(10), s.get()).await.expect("o GET esperou o ssh");
+    assert_eq!(got.0, StatusCode::OK);
     assert!(!slow.is_finished());
+    std::fs::write(&release, "").unwrap();
     assert_eq!(slow.await.unwrap(), (StatusCode::OK, json!({"ok": true, "detail": ""})));
 }
 
@@ -1112,9 +1118,8 @@ async fn his59_test_host_without_ssh() {
 async fn rot56_test_host_deadline() {
     let s = Scene::new().await;
     s.hanging_ssh();
-    let started = Instant::now();
-    assert_eq!(s.test_host(json!({"host": "h"})).await, (StatusCode::OK, json!({"ok": false, "detail": "sem resposta em 20 s"})));
-    assert!(started.elapsed() < Duration::from_secs(60));
+    let got = tokio::time::timeout(Duration::from_secs(60), s.test_host(json!({"host": "h"}))).await.expect("o prazo de 20 s não cortou o ssh");
+    assert_eq!(got, (StatusCode::OK, json!({"ok": false, "detail": "sem resposta em 20 s"})));
     s.assert_group_dead().await;
 }
 
@@ -1207,9 +1212,8 @@ async fn rot61_windows_setup_resolve_deadline() {
     let s = Scene::new().await;
     s.write(".ssh/id_ed25519.pub", KEY);
     s.hanging_ssh();
-    let started = Instant::now();
-    s.assert_error(&s.windows("?host=h").await, 504, "erro_computer_control_ssh_timeout", json!({"host": "h"}));
-    assert!(started.elapsed() < Duration::from_secs(60));
+    let got = tokio::time::timeout(Duration::from_secs(60), s.windows("?host=h")).await.expect("o prazo de 10 s não cortou o ssh -G");
+    s.assert_error(&got, 504, "erro_computer_control_ssh_timeout", json!({"host": "h"}));
     s.assert_group_dead().await;
 }
 

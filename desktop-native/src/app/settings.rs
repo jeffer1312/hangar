@@ -23,15 +23,15 @@ pub(crate) use guide::{group_heading as news_group_heading, kind_icon as news_ki
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
     General, Appearance, Sessions, Beta, Updates, Manual, Diary, About,
-    Servers, Sync, Guests, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, Integrations, WhatsApp, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    Servers, Sync, Guests, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, Integrations, WhatsApp, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Placement, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
     const DEVICE: [Page; 7] = [Page::General, Page::Appearance, Page::Sessions, Page::Beta, Page::Updates, Page::Manual, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 25] = [Page::Diary, Page::Servers, Page::Sync, Page::Guests, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Integrations, Page::WhatsApp, Page::Orchestration, Page::Harnesses,
-        Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
+    const SERVER: [Page; 26] = [Page::Diary, Page::Servers, Page::Sync, Page::Guests, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Integrations, Page::WhatsApp, Page::Orchestration, Page::Harnesses,
+        Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Placement, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
     pub(super) fn sections() -> impl Iterator<Item = Page> { Self::DEVICE.into_iter().chain(Self::SERVER) }
@@ -47,7 +47,7 @@ impl Page {
             Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Beta => "beta", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about",
             Page::Servers => "servers", Page::Sync => "sync", Page::Guests => "guests", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Integrations => "integrations", Page::WhatsApp => "whatsapp", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
-            Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
+            Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Placement => "placement", Page::Advanced => "advanced",
         }
     }
 
@@ -58,7 +58,7 @@ impl Page {
             Page::About => IconName::Info, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Guests => IconName::UserPlus, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
             Page::Accounts => IconName::User, Page::Status => IconName::Gauge, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Integrations => IconName::Plug, Page::WhatsApp => IconName::MessageCircle, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
-            Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
+            Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Placement => IconName::Workflow, Page::Advanced => IconName::SlidersHorizontal,
         }
     }
 
@@ -961,6 +961,7 @@ impl Hangar {
             Page::Orchestration => self.render_orchestration(cx),
             Page::Shortcuts => self.render_shortcuts_page(cx),
             Page::Worktrees => self.render_worktree_settings(window, cx),
+            Page::Placement => self.render_placement(window, cx),
             Page::Harnesses => self.render_harness(cx),
             Page::Voice | Page::Jev | Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
             Page::Servers => self.render_machines(window.viewport_size().width, cx),

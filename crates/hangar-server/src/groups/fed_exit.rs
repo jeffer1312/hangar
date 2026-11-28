@@ -125,12 +125,15 @@ fn owner_rename(dir: &PairDir, outbox: &Outbox, me: &str, gid: &str, from: &Memb
     let Some(m) = record.members.iter_mut().find(|m| m.same(from)) else { return Ok(record.version) };
     m.name = to.to_owned();
     let renamed = m.clone();
+    let (old_key, new_key) = (from.key(), renamed.key());
+    let moved = |k: String| if k == old_key { new_key.clone() } else { k };
+    record.links = std::mem::take(&mut record.links).into_iter().map(|(c, p)| (moved(c), moved(p))).collect();
     record.version += 1;
     dir.write_record(&record).map_err(store_refusal)?;
     let (old_view, new_view) = (from.view(me), renamed.view(me));
     for m in record.members.iter().filter(|m| m.server == me) {
         let Some(mut s) = read(dir, &m.name).filter(|s| s.gid == gid) else { continue };
-        for p in s.peers.iter_mut().filter(|p| **p == old_view) { p.clone_from(&new_view); }
+        for p in s.peers.iter_mut().chain(s.linked_children.iter_mut()).chain(s.linked_by.iter_mut()).filter(|p| **p == old_view) { p.clone_from(&new_view); }
         if let Some(provider) = s.harness.remove(&old_view) { s.harness.insert(new_view.clone(), provider); }
         s.fed = Some(Fed { owner: me.into(), local: true, version: record.version });
         dir.write_sidecar(&m.name, &s).map_err(store_refusal)?;
@@ -210,6 +213,7 @@ fn dissolve_here(dir: &PairDir, outbox: &Outbox, me: &str, gid: &str, outside: &
             let Some(mut s) = read(dir, &m.name).filter(|s| s.gid == gid) else { continue };
             s.fed = None;
             s.peers.retain(|p| !is_remote(p) || outside.contains(p));
+            s.drop_stale_links();
             if s.peers.is_empty() && !s.orq {
                 dir.clear_sidecar(&m.name, why).map_err(store_refusal)?;
                 dropped.push(m.name.clone());
@@ -251,7 +255,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = PairDir::new(tmp.path().to_path_buf(), tmp.path().join("archive"));
         let record = GroupRecord { protocol: PROTOCOL, gid: "g".into(), owner: "casa".into(), version: 3, task: String::new(),
-            members: vec![Member::new("casa", "s0", "claude"), Member::new("casa", "s3", "claude")], outside: Vec::new() };
+            members: vec![Member::new("casa", "s0", "claude"), Member::new("casa", "s3", "claude")], outside: Vec::new(), links: Default::default() };
         dir.write_record(&record).unwrap();
         let fed = Some(Fed { owner: "casa".into(), local: true, version: 3 });
         for (name, peer) in [("s0", "s3"), ("s3", "s0")] {

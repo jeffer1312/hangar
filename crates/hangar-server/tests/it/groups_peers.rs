@@ -101,6 +101,25 @@ async fn network_failure_is_transport() {
     assert!(err.is_transport() && err.text("lab").starts_with("lab inacessível: "), "{err:?}");
 }
 
+/// Só a conexão que nem abriu diz "nada chegou lá"; a que caiu depois de enviar pode ter entregue.
+#[tokio::test]
+async fn call_unsent_tells_a_request_that_never_left() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let dir = tempfile::tempdir().unwrap();
+    let err = client_for(dir.path(), crate::refused_address()).call_unsent("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap_err();
+    assert!(matches!(err, (PeerError::Transport(_), true)), "{err:?}");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = [0u8; 4096];
+        let _ = socket.read(&mut buffer).await;
+        let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{").await;
+    });
+    let err = client_for(dir.path(), addr).call_unsent("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap_err();
+    assert!(matches!(err, (PeerError::Transport(_), false)), "{err:?}");
+}
+
 /// O redirect segue; para outro host (aqui, outra porta) ele vai sem o token de dono.
 #[tokio::test]
 async fn redirect_follows_without_authorization_to_another_host() {

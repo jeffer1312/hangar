@@ -739,6 +739,14 @@ describe('contratos de conversa com servidor explícito', () => {
       .rejects.toMatchObject({ status: 409, code: 'erro_conversa_viva', envelope: { params: { sessao: 'web' } } });
   });
 
+  it('criação com machine espera o pior caso da outra máquina; sem machine, o prazo de sempre', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{"name":"repo"}', { status: 200 }));
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await createSessionForServer(target, { name: 'repo', cwd: '/repo', machine: 'nb' });
+    await createSessionForServer(target, { name: 'repo', cwd: '/repo' });
+    expect(timeout.mock.calls.map(([ms]) => ms)).toEqual([900_000, 120_000]);
+  });
+
   it('criação com transporte incerto não inventa status nem tenta de novo', async () => {
     const error = new TypeError('rede interrompida');
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(error);

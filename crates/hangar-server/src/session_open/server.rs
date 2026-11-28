@@ -405,11 +405,11 @@ async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller
         };
         match decision {
             Decision::Opened(mut opened) => {
-                if let Some(error) = link_child(&st, link, &opened.body).await {
+                let child = opened.body["name"].as_str().unwrap_or_default().to_owned();
+                if let Some(error) = link_child(&st, link, &child).await {
                     // A filha já leu que a resposta volta sozinha; sem a ligação ela não volta.
                     if line_parent.is_some() {
-                        let child = opened.body["name"].as_str().unwrap_or_default();
-                        crate::groups::link_return::line_unlinked(&st, child, error["detail"].as_str().unwrap_or_default());
+                        crate::groups::link_return::line_unlinked(&st, &child, error["detail"].as_str().unwrap_or_default());
                     }
                     if let Some(body) = opened.body.as_object_mut() { body.insert("link_error".into(), error); }
                 }
@@ -430,15 +430,14 @@ async fn child_line_parent(st: &AppState, link: &super::LinkPlan) -> Option<Stri
     link.line_parent(parent_orq).map(str::to_owned)
 }
 
-/// Põe a sessão aberta no grupo da criadora pela rota de grupo. Falhar não fecha a sessão: devolve o
-/// `link_error` da resposta.
-async fn link_child(st: &Arc<AppState>, link: super::LinkPlan, opened: &Value) -> Option<Value> {
+/// Põe a sessão aberta (`child`, `srv::nome` quando abriu noutra máquina) no grupo da criadora pela rota
+/// de grupo. Falhar não fecha a sessão: devolve o `link_error` da resposta.
+async fn link_child(st: &Arc<AppState>, link: super::LinkPlan, child: &str) -> Option<Value> {
     let parent = match link {
         super::LinkPlan::No => return None,
         super::LinkPlan::Unlinked(code, detail) => return Some(json!({"code": code, "detail": detail})),
         super::LinkPlan::Join(parent) => parent,
     };
-    let child = opened["name"].as_str().unwrap_or_default();
     let code = match crate::groups::bridge::route(st.clone(), "POST", &parent, "pair", json!({"peer": child, "link": true})).await {
         Ok(reply) if reply["status"] == 200 => return None,
         Ok(reply) => {
@@ -556,6 +555,49 @@ pub(crate) fn reply(error: &OpenError) -> Response {
     }
 }
 
+/// A criadora como ela é lida aqui (`None`: não achada), para a abertura noutra máquina, onde ela não existe.
+pub(crate) async fn creator_here(st: &Arc<AppState>, name: &str) -> Result<Option<super::resolve::CreatorFacts>, OpenError> {
+    let (name, accounts, runtime) = (name.to_owned(), st.accounts.clone(), tokio::runtime::Handle::current());
+    tokio::task::spawn_blocking(move || {
+        use super::OpenFacts;
+        super::facts::LocalFacts::shared(accounts.env.clone(), &accounts, runtime).creator(&name)
+    }).await.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a leitura da sessão criadora não terminou")))
+}
+
+/// A abertura que a escolha mandou a outra máquina: a resposta é a de lá, com `target`, `placement` e, com
+/// `link`, a ligação feita daqui (a criadora é daqui; lá a filha nasce sem ela). A pasta só fica reservada para
+/// lá (`reserve`) quando lá confirmou: abertura recusada ou incerta não prende a próxima.
+async fn forwarded(st: &Arc<AppState>, server: &str, body: &Value, placement: Option<Value>, cloned: bool, reserve: Option<(String, String)>,
+    mut warnings: Vec<String>, link: super::LinkPlan) -> Response {
+    use crate::groups::peers::PeerError;
+    let opened = crate::placement::forward::open(&st.peers, server, body, true).await
+        .and_then(|info| if info["name"].is_string() { Ok(info) } else { Err(PeerError::Transport(format!("{server}: resposta da abertura sem o nome"))) });
+    match opened {
+        Ok(mut info) => {
+            if let Some((root, id)) = reserve { st.placement_reservations.reserve(&root, &id); }
+            let target = format!("{server}::{}", info["name"].as_str().unwrap_or_default());
+            let link_error = link_child(st, link, &target).await;
+            if let Some(fields) = info.as_object_mut() {
+                if let Some(error) = link_error { fields.insert("link_error".into(), error); }
+                fields.insert("target".into(), json!(target));
+                if let Some(placement) = placement { fields.insert("placement".into(), placement); }
+            }
+            if cloned { warnings.push(super::baton::FRESH_CLONE_NOTE.to_owned()); }
+            crate::placement::forward::add_avisos(&mut info, warnings);
+            crate::session_write::json_response(StatusCode::OK, info)
+        }
+        Err(error) => {
+            let (status, body) = crate::placement::forward::failure(server, &error);
+            let code = match error {
+                PeerError::Refused { .. } => "placement_forward_refused",
+                PeerError::Unknown => "placement_machine_unknown",
+                _ => "placement_uncertain",
+            };
+            crate::diag::coded(crate::session_write::json_response(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), body), code)
+        }
+    }
+}
+
 /// `POST /api/sessions`: o dono e o convidado com login abrem Claude com terminal no Rust (o do
 /// convidado na pasta dele, com o dono registrado no `guests.json`). Corpo que não é pedido válido é o 422
 /// do Rust, e o que não abre aqui recebe a recusa que o Python dava; quem não é dono nem convidado segue
@@ -581,26 +623,35 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let Ok(request) = SessionOpenRequest::parse(&bytes) else { return crate::session_write::invalid_body(&parts.headers) };
     let _progress = super::open::Progress::track(request.name.as_deref().unwrap_or(""));
     let caller = guest.as_ref().map_or(OpenCaller::Owner, |g| OpenCaller::Guest { root: g.root.clone() });
+    let done = |mut response: Response| {
+        crate::routes::cors(&parts.headers, response.headers_mut());
+        access_diary("POST /api/sessions", &response, started, &diag);
+        response
+    };
+    use crate::placement::suggest::Step;
+    // Ligação recusada não chega a escolher máquina nem a clonar; a abertura aqui confere de novo.
+    let link = match request.link_plan(&caller) {
+        Ok(link) => link,
+        Err(error) => return done(reply(&error)),
+    };
+    let placement = match crate::placement::suggest::step(&st, &request, &caller).await {
+        Step::Here(placement) => placement,
+        Step::Refused(error) => return done(reply(&error)),
+        Step::There { server, body, placement, cloned, reserve, warnings } => return done(forwarded(&st, &server, &body, placement, cloned, reserve, warnings, link).await),
+    };
     match decide_detached(&st, request, caller, guest, None).await {
-        Decision::Opened(opened) => {
-            let mut response = crate::session_write::json_response(StatusCode::OK, opened.body);
-            crate::routes::cors(&parts.headers, response.headers_mut());
-            access_diary("POST /api/sessions", &response, started, &diag);
-            response
+        Decision::Opened(mut opened) => {
+            // O nome que vale em recado e fechamento: aqui, o próprio.
+            if let Some(placement) = placement && let Some(fields) = opened.body.as_object_mut() {
+                let target = fields.get("name").cloned().unwrap_or(Value::Null);
+                fields.insert("placement".into(), placement);
+                fields.insert("target".into(), target);
+            }
+            done(crate::session_write::json_response(StatusCode::OK, opened.body))
         }
-        Decision::Refused(error) => {
-            let mut response = reply(&error);
-            crate::routes::cors(&parts.headers, response.headers_mut());
-            access_diary("POST /api/sessions", &response, started, &diag);
-            response
-        }
+        Decision::Refused(error) => done(reply(&error)),
         // Só Pi, omp e Kimi sem terminal chegam aqui (`opens_here`): a combinação não existe, o servidor está de pé.
-        Decision::NotOurs => {
-            let mut response = reply(&OpenError::new(400, "erro_orq_headless_provider", "sem terminal só vale para claude ou codex"));
-            crate::routes::cors(&parts.headers, response.headers_mut());
-            access_diary("POST /api/sessions", &response, started, &diag);
-            response
-        }
+        Decision::NotOurs => done(reply(&OpenError::new(400, "erro_orq_headless_provider", "sem terminal só vale para claude ou codex"))),
     }
 }
 

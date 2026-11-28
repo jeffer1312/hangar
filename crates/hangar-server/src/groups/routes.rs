@@ -50,6 +50,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/sessions/{name}/pair-remote", post(super::legacy::pair_remote).fallback(pass_any))
         .route("/api/sessions/{name}/unpair-remote", post(super::legacy::unpair_remote).fallback(pass_any))
         .route("/api/sessions/{name}/group", get(super::federation::session_group).fallback(pass_any))
+        .route("/api/sessions/{name}/linked-interrupt", post(linked_interrupt).fallback(pass_any))
         .route("/api/groups/{gid}", get(super::federation::get_record).put(super::federation::put_record))
         .route("/api/groups/{gid}/ops", post(super::federation::ops))
         .route("/api/groups/{gid}/deliver", post(super::fed_notice::deliver))
@@ -251,10 +252,7 @@ pub(super) async fn pair(State(st): State<Arc<AppState>>, ConnectInfo(peer): Con
         }
     }
     if federated {
-        if body.link {
-            return asked.refuse(StatusCode::BAD_REQUEST, "erro_link_remoto", "a ligação só vale entre sessões desta máquina", json!({}));
-        }
-        return super::federation::pair(asked, held, others, body.task, body.replace_task, body.orq).await;
+        return super::federation::pair(asked, held, others, body.task, body.replace_task, body.orq, body.link).await;
     }
     let harness = match providers(&asked.st, &everyone).await {
         Ok(h) => h,
@@ -331,7 +329,7 @@ pub(super) fn access_warning(denied: &[String]) -> Value {
 pub(super) const ACCESS_FAILED: &str = "erro_grupo_acesso_externo_falhou";
 
 /// `linked_at` das filhas em `link-returns.json`. Falhar não desfaz a ligação, que já está no grupo.
-async fn record_linked(st: &AppState, children: Vec<String>) {
+pub(super) async fn record_linked(st: &AppState, children: Vec<String>) {
     let dir = st.hangar_dir.clone();
     let now = crate::state::monitor::wall_now();
     let first = children.first().cloned().unwrap_or_default();
@@ -341,6 +339,28 @@ async fn record_linked(st: &AppState, children: Vec<String>) {
         // Sem `linked_at` o retorno da filha não acha o começo: a falha vai ao diário, visível.
         st.diag.report("rust.groups_link_record_failed", &first, "erro_link_registro", "linked_at da filha não gravado; a ligação vale");
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LinkedInterruptBody { parent: String }
+
+/// `POST /api/sessions/{name}/linked-interrupt`: o pai de outra máquina (`srv::nome`) para o turno da filha
+/// daqui. Só o arquivo de grupo desta máquina diz se ela é filha dele; passou, é o `/interrupt` de sempre.
+pub(super) async fn linked_interrupt(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let asked = match Asked::take(st, peer, req).await { Ok(a) => a, Err(response) => return response };
+    let body = match asked.body::<LinkedInterruptBody>() { Ok(body) => body, Err(refused) => return refused };
+    let link = match asked.groups.link(&asked.name).await { Ok(link) => link, Err(error) => return asked.store_failed(&error) };
+    // O pai só vale ainda no grupo da filha (`linked_parent`).
+    if link.as_ref().and_then(super::model::Sidecar::linked_parent) != Some(body.parent.as_str()) {
+        return asked.refuse(StatusCode::FORBIDDEN, "erro_interromper_nao_ligada",
+            &format!("'{}' não é filha ligada a '{}' (aberta por ela com new_session `link`)", asked.name, body.parent), json!({}));
+    }
+    let mut forward = Request::builder().method(axum::http::Method::POST)
+        .uri(format!("/api/sessions/{}/interrupt", super::exit::segment(&asked.name)));
+    for (key, value) in &asked.parts.headers { forward = forward.header(key, value); }
+    let Ok(forward) = forward.body(axum::body::Body::empty()) else { return invalid_body(&asked.parts.headers) };
+    crate::session_write::control::interrupt(State(asked.st.clone()), ConnectInfo(peer), forward).await
 }
 
 pub(super) async fn unpair(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {

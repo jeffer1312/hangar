@@ -1,6 +1,7 @@
 //! Operações de arquivos e Git compartilhadas pelo servidor e pelo desktop.
 pub mod citations;
 pub mod files;
+pub mod folder_state;
 pub mod git;
 pub mod process;
 pub mod repo_layout;

@@ -662,6 +662,15 @@ fn export_item(
                 data["hashes"]["worktrees"] = json!(bundle::hash(&settings));
                 data["worktrees"] = settings;
             }
+            if item == "hangar_prefs" && selected("placement") {
+                // Sem marcador de caminho: cada pasta de clone é da máquina que a chave nomeia, não do destino.
+                let config = hangar_placement::store::load(Path::new(&ctx.roots.home))
+                    .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
+                let config = serde_json::to_value(config)
+                    .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
+                data["hashes"]["placement"] = json!(bundle::hash(&config));
+                data["placement"] = config;
+            }
             Ok(data)
         }
         "claude_mcp" => {

@@ -40,6 +40,7 @@ import { WhatsAppReadonlyAnimation } from './WhatsAppReadonlyAnimation';
 import { WhatsAppDraftAnimation } from './WhatsAppDraftAnimation';
 import { PortsAnimation } from './PortsAnimation';
 import { TelemetryConsentAnimation } from './TelemetryConsentAnimation';
+import { PlacementSuggestAnimation } from './PlacementSuggestAnimation';
 import { AutoContinueAnimation } from './AutoContinueAnimation';
 import { LinkedChildrenAnimation } from './LinkedChildrenAnimation';
 
@@ -86,6 +87,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'whatsapp-draft': WhatsAppDraftAnimation,
   'portas-da-sessao': PortsAnimation,
   'contagens-anonimas': TelemetryConsentAnimation,
+  'maquina-sugerida': PlacementSuggestAnimation,
   'continuar-depois-da-queda': AutoContinueAnimation,
   'filhas-ligadas': LinkedChildrenAnimation,
 };

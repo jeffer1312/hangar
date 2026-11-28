@@ -380,6 +380,7 @@ impl Hangar {
             Page::Orchestration => self.orchestration_opened(cx),
             Page::Scheduled => self.scheduled_opened(cx),
             Page::Worktrees => self.worktree_settings_opened(cx),
+            Page::Placement => self.placement_opened(cx),
             Page::Sessions => self.auto_hide_opened(cx),
             Page::Updates => self.updates_opened(cx),
             Page::Manual => self.manual_opened(cx),

@@ -112,6 +112,16 @@ fn command(binary: &Path, arg: &str) -> tokio::process::Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Executável gravado por um `install` à parte: gravado aqui, um filho de outro teste nascido nesse
+    /// instante herdaria o descritor de escrita, e rodar o arquivo daria "Text file busy" (ETXTBSY).
+    #[cfg(unix)]
+    fn exec_script(path: &std::path::Path, body: &str) {
+        let source = path.with_extension("src");
+        std::fs::write(&source, body).unwrap();
+        let status = std::process::Command::new("install").arg("-m").arg("755").arg(&source).arg(path).status().unwrap();
+        assert!(status.success(), "install {}", path.display());
+    }
     use serde_json::json;
 
     #[test]
@@ -154,8 +164,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let program = dir.path().join("hangar-whatsapp");
         for (api, ok) in [(0, false), (1, true)] {
-            std::fs::write(&program, format!("#!/bin/sh\necho 'hangar-whatsapp 0.1.0 (api {api})'\n")).unwrap();
-            std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            exec_script(&program, &format!("#!/bin/sh\necho 'hangar-whatsapp 0.1.0 (api {api})'\n"));
             let got = check(&program).await;
             if ok {
                 assert_eq!(got.unwrap(), "0.1.0");
@@ -177,8 +186,7 @@ mod tests {
             ("echo 2; exit 1", None),
         ];
         for (script, want) in cases {
-            std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
-            std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            exec_script(&program, &format!("#!/bin/sh\n{script}\n"));
             assert_eq!(schema_of(&program).await, want, "{script}");
         }
     }
@@ -200,8 +208,7 @@ mod tests {
             ("echo dois".to_owned(), None),
         ];
         for (script, want) in cases {
-            std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
-            std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            exec_script(&program, &format!("#!/bin/sh\n{script}\n"));
             assert_eq!(data_schema_of(&program, &data).await, want, "{script}");
         }
     }

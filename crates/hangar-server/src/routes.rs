@@ -118,6 +118,8 @@ pub struct AppState {
     pub artifacts: Arc<crate::artifacts::Catalogs>,
     /// Onde está o Chromium do servidor, perguntado a cada medição; o teste força "ausente".
     pub chromium: fn() -> Option<std::path::PathBuf>,
+    /// Units do CLIProxy que o sistema pode ter, a partir da HOME; o teste troca por uma lista sem as do sistema.
+    pub cliproxy_units: fn(&std::path::Path) -> Vec<std::path::PathBuf>,
     /// Quanto uma escrita espera a porta de entrada da sessão reabrir (os testes encurtam).
     pub write_gate_wait: std::time::Duration,
     /// O `claude` e o `hangar-engine` do fork do `/btw` (os testes trocam por falsos).
@@ -174,6 +176,8 @@ pub struct AppState {
     pub work_review: Arc<hangar_work_review::Engine>,
     /// Telemetria anônima; só a subida real (`main.rs`) liga, e `None` quando o estado não se lê.
     pub telemetry: Option<Arc<hangar_telemetry::Telemetry>>,
+    /// Pasta → máquina das aberturas balanceadas dos últimos 30 s.
+    pub placement_reservations: Arc<crate::placement::context::Reservations>,
 }
 
 impl AppState {
@@ -353,6 +357,7 @@ impl AppState {
             status: Arc::default(),
             work_review,
             telemetry: None,
+            placement_reservations: Arc::default(),
             hangar_dir, device_install,
             upload_naming: Default::default(),
             upload_media: Default::default(),
@@ -364,6 +369,7 @@ impl AppState {
             mermaid: Arc::new(crate::mermaid::cache::Cache::new(crate::mermaid::cache::Cache::default_root())),
             artifacts: Arc::default(),
             chromium: crate::pages::chrome::find,
+            cliproxy_units: hangar_cliproxy_setup::detect::system_units,
             write_gate_wait: std::time::Duration::from_secs(30),
             btw_programs: Default::default(),
             voice: Arc::new(crate::voice::hub::VoiceHub::new()),
@@ -1077,6 +1083,11 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/claude/code-mode", get(crate::claude_defaults::code_mode).fallback(pass_registered))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         .route("/api/session-options", axum::routing::get(crate::session_defaults::handle_options).put(crate::session_defaults::handle_options))
+        // Regras do balanceamento: só o dono, nunca repassadas (o Python não tem a rota).
+        .route("/api/placement/config", axum::routing::get(crate::placement::routes::config).put(crate::placement::routes::config))
+        .route("/api/placement/facts", get(crate::placement::facts::facts))
+        .route("/api/placement/suggest", axum::routing::post(crate::placement::suggest::suggest))
+        .route("/api/placement/clone", axum::routing::post(crate::placement::clone::clone))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .merge(crate::scheduled_tasks::router())
         .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))

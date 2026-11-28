@@ -65,6 +65,7 @@ pub mod search_context;
 pub mod session_open;
 pub mod session_rename;
 pub mod session_defaults;
+pub mod placement;
 pub mod session_sleep;
 pub mod session_visibility;
 pub mod notice_ignores;

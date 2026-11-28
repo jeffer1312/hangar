@@ -248,9 +248,16 @@ pub struct SessionOpenRequest {
     /// A conta pedida (`config_dir`/`codex_account`) fica mesmo com 95% ou mais de uso.
     #[serde(default, skip_serializing_if = "is_false")]
     pub force_account: bool,
+    /// `auto`: o servidor escolhe a máquina (`placement`); id de máquina: abre nela. Omitido, abre aqui.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     /// A reserva pré-aquecida (`PUT /api/sessions/prewarm`) que esta abertura adota se couber.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prewarm: Option<String>,
+    /// O corpo que outra máquina encaminhou pela escolha (`placement::forward::body`): a worktree nasce do remoto
+    /// e não abre por cima de mudança local. `machine` igual ao id daqui, pedido direto, não é isso.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub placed: bool,
     /// Fora do fio: o nome derivado da pasta que só uma reserva pré-aquecida segura fica para esta
     /// abertura (a reserva sai). A abertura do dono liga; a resolução da própria reserva não.
     #[serde(skip)]
@@ -284,7 +291,7 @@ impl SessionOpenRequest {
         let request: Self = serde_json::from_value(value).map_err(|e| OpenError::invalid_body(&e.to_string()))?;
         // `min_length=1` do Pydantic: só o texto vazio cai, espaço passa.
         let short = [("name", request.name.as_ref()), ("cwd", Some(&request.cwd)), ("branch", request.branch.as_ref()),
-            ("base", request.base.as_ref()), ("creator", request.creator.as_ref())]
+            ("base", request.base.as_ref()), ("creator", request.creator.as_ref()), ("machine", request.machine.as_ref())]
             .into_iter().find(|(_, value)| value.is_some_and(|v| v.is_empty()));
         if let Some((field, _)) = short {
             return Err(OpenError::invalid_body(&format!("{field}: texto vazio")));
@@ -295,9 +302,9 @@ impl SessionOpenRequest {
     /// O vínculo pedido, decidido antes de abrir; `Err` recusa a abertura.
     pub fn link_plan(&self, caller: &OpenCaller) -> Result<LinkPlan, OpenError> {
         if !self.link { return Ok(LinkPlan::No); }
-        // O grupo é local: do outro lado, a criadora seria uma sessão homônima de lá.
+        // A ligação sai da máquina da criadora; a filha vai a outra por `machine`, nunca por `srv::` no nome.
         if [self.name.as_deref(), self.creator.as_deref()].into_iter().flatten().any(crate::groups::local::is_remote) {
-            return Err(OpenError::new(400, "erro_link_remoto", "a ligação só vale entre sessões desta máquina"));
+            return Err(OpenError::new(400, "erro_link_remoto", "a criadora é desta máquina; para a filha abrir noutra, use `machine`"));
         }
         // O convidado nunca entra no grupo de uma sessão do dono.
         if matches!(caller, OpenCaller::Guest { .. }) {
@@ -396,6 +403,10 @@ pub struct WorktreeSpec {
     pub new_branch: bool,
     pub base: Option<String>,
     pub path: Option<String>,
+    /// Pedida com `machine` desta máquina (a abertura que outra encaminhou): a worktree parte do remoto
+    /// recém-buscado, nunca de uma branch velha daqui nem de pasta com trabalho daqui.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fresh: bool,
 }
 
 /// A sessão decidida: nada fica implícito. Ausente em `model`, `effort` e `service_tier` quer dizer

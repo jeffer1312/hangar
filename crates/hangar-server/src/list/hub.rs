@@ -180,6 +180,13 @@ impl InternalSubscription {
         if p.error.is_some() { return None; }
         p.rows.as_ref().map(|r| r.rows.clone())
     }
+
+    /// Como `rows`, esperando até `timeout` pela primeira produção boa.
+    pub(crate) async fn wait_rows(&self, timeout: std::time::Duration) -> Option<Arc<Vec<SessionRow>>> {
+        let mut rx = self.0.rx.clone();
+        let ready = tokio::time::timeout(timeout, rx.wait_for(|p| p.error.is_none() && p.rows.is_some())).await.ok()?.ok()?;
+        ready.rows.as_ref().map(|r| r.rows.clone())
+    }
 }
 
 /// O que o produtor guarda entre tiques para só publicar mudança.

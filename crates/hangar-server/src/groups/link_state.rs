@@ -27,6 +27,10 @@ pub struct LinkReturn {
     /// Linha do aviso na fila do pai: some a pergunta, ela sai se ainda espera.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_queue_id: Option<String>,
+    /// Criada por `ensure_linked`, sem a ligação gravada: `linked_at` é a hora da recuperação, e resposta de antes
+    /// dela não volta.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recovered: bool,
 }
 
 pub type LinkReturns = BTreeMap<String, LinkReturn>;
@@ -78,7 +82,7 @@ pub fn ensure_linked(hangar_dir: &Path, children: &[String], now: f64) -> io::Re
     modify(hangar_dir, |all| {
         for child in children {
             if !all.contains_key(child) {
-                all.insert(child.clone(), LinkReturn { linked_at: now, ..LinkReturn::default() });
+                all.insert(child.clone(), LinkReturn { linked_at: now, recovered: true, ..LinkReturn::default() });
                 created.push(child.clone());
             }
         }
@@ -168,7 +172,9 @@ mod tests {
         assert_eq!(created, ["b"]);
         let all = read(dir.path()).unwrap();
         assert_eq!(all["a"], old);
-        assert_eq!(all["b"], LinkReturn { linked_at: 50.0, ..LinkReturn::default() });
+        assert_eq!(all["b"], LinkReturn { linked_at: 50.0, recovered: true, ..LinkReturn::default() });
+        let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(path(dir.path())).unwrap()).unwrap();
+        assert_eq!((&raw["b"]["recovered"], raw["a"].get("recovered")), (&serde_json::json!(true), None), "a ligação real não grava o campo");
         assert!(ensure_linked(dir.path(), &["b".to_owned()], 60.0).unwrap().is_empty(), "a segunda vez não recria");
         assert_eq!(read(dir.path()).unwrap()["b"].linked_at, 50.0);
         std::fs::write(path(dir.path()), "{torto").unwrap();

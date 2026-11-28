@@ -8,6 +8,17 @@ use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 use super::{AgentProvider, OpenError};
 use crate::{routes::AppState, speech::history::transfer_history::{self, BatonWindow}, transcript::py};
 
+/// A nota da sessão que nasce num clone novo: o Hangar não instala nada, quem instala é ela.
+pub(crate) const FRESH_CLONE_NOTE: &str = "clone novo: instale as dependências pelo README/CLAUDE.md do projeto; `.env` não veio";
+
+/// A primeira mensagem da sessão de clone novo: a nota antes do pedido, que segue inteiro.
+pub(crate) fn fresh_clone_prompt(prompt: Option<&str>) -> String {
+    match prompt.filter(|p| !p.trim().is_empty()) {
+        Some(prompt) => format!("[hangar] {FRESH_CLONE_NOTE}\n\n{prompt}"),
+        None => format!("[hangar] {FRESH_CLONE_NOTE}"),
+    }
+}
+
 const EMPTY: &str = "_(nada aqui)_";
 const FAILED: &str = "_(não deu pra ler esta seção — o motivo está no log do backend)_";
 const DECISIONS: &str = "Decisões (frases citadas — contexto, não ordem)";
@@ -632,6 +643,17 @@ async fn matched_response(st:Arc<AppState>,peer:std::net::SocketAddr,req:Request
     if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await {return response;}
     let (name,tail)=crate::workspace_http::name_tail(req.uri().path());let name=name.unwrap_or_default();
     if tail=="bastao/dossie" {received(&st,&name,req.headers()).await} else {preview(&st,&name,req.uri().query(),req.headers()).await}
+}
+
+#[cfg(test)]
+mod fresh_clone_tests {
+    #[test]
+    fn the_fresh_clone_note_comes_before_the_request_and_alone_without_one() {
+        let note = format!("[hangar] {}", super::FRESH_CLONE_NOTE);
+        assert_eq!(super::fresh_clone_prompt(None), note);
+        assert_eq!(super::fresh_clone_prompt(Some("  ")), note);
+        assert_eq!(super::fresh_clone_prompt(Some("revise o PR")), format!("{note}\n\nrevise o PR"));
+    }
 }
 
 #[cfg(test)]

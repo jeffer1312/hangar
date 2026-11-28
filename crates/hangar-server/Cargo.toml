@@ -44,6 +44,7 @@ path = "tests/other_terminal_lifecycle.rs"
 [dependencies]
 hangar-scheduled-tasks.workspace = true
 hangar-dream.workspace = true
+hangar-placement.workspace = true
 chrono-tz.workspace = true
 iana-time-zone.workspace = true
 hangar-conversation-transfer.workspace = true

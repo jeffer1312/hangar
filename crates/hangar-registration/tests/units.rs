@@ -401,7 +401,7 @@ proptest! {
         let entry_ok = value.as_object().is_some_and(|map| map.get("mcpServers").is_none_or(serde_json::Value::is_object));
         if entry_ok {
             prop_assert_eq!(code, 0, "{}", err);
-            prop_assert_eq!(after["mcpServers"]["hangar"]["timeout"].as_u64(), Some(660_000));
+            prop_assert_eq!(after["mcpServers"]["hangar"]["timeout"].as_u64(), Some(900_000));
         } else {
             prop_assert_eq!(code, 1);
             prop_assert_eq!(after, value);
@@ -444,7 +444,7 @@ fn agy_gets_the_stdio_bridge_only_where_it_was_used() {
     let entry = &config["mcpServers"]["hangar"];
     assert_eq!(entry["command"], home.join(".local").join("bin").join("hangar-mcp-stdio").to_string_lossy().as_ref());
     assert_eq!(entry["args"], serde_json::json!([]));
-    assert_eq!(entry["timeoutSeconds"], 660);
+    assert_eq!(entry["timeoutSeconds"], 900);
     let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(home.join(".gemini/antigravity-cli/settings.json")).unwrap()).unwrap();
     let allowed = settings["permissions"]["allow"].as_array().unwrap();
     assert!(allowed.contains(&serde_json::json!("mcp(hangar/send)")) && allowed.contains(&serde_json::json!("command(hangar-send --list)")));

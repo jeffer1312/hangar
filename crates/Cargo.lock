@@ -2128,6 +2128,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-placement"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "hangar-core",
+ "hangar-workspace",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-plugins"
 version = "0.1.0"
 dependencies = [
@@ -2305,6 +2318,7 @@ dependencies = [
  "hangar-open-cli",
  "hangar-opencode-cookie",
  "hangar-package",
+ "hangar-placement",
  "hangar-plugins",
  "hangar-port-preview",
  "hangar-port-stop",

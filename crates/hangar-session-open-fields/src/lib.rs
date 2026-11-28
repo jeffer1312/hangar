@@ -54,6 +54,8 @@ pub const FIELDS: &[OpenField] = &[
     field("headless", "headless", &["--headless"], true),
     field("inherit", "inherit", &["--inherit"], false),
     field("link", "link", &["--link"], false),
+    // `auto` pede a escolha da máquina; omitido, abre nesta.
+    field("machine", "machine", &["--machine", "nb"], false),
 ];
 
 /// Os campos que uma tarefa agendada guarda para abrir a conversa a cada rodada: sem nome, branch,
@@ -68,6 +70,7 @@ pub const SERVER_ONLY: &[(&str, &str)] = &[
     ("creator", "quem abre sai da identidade de quem chama (pane, chave), nunca do que ele escreve"),
     ("prewarm", "a reserva pré-aquecida existe só com a tela de criar aberta"),
     ("engine_binding", "confere o vínculo da conta do motor que a tela de criar mostrou; CLI e MCP não mostram vínculo"),
+    ("placed", "marca o corpo que outra máquina encaminhou pela escolha de máquina; só o servidor o põe"),
 ];
 
 #[cfg(test)]
