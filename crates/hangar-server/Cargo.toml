@@ -34,14 +34,12 @@ name = "diag_client"
 path = "tests/diag_client.rs"
 
 [[test]]
-name = "other_terminal_drive"
-path = "tests/other_terminal_drive.rs"
-
-[[test]]
 name = "other_terminal_lifecycle"
 path = "tests/other_terminal_lifecycle.rs"
 
 [dependencies]
+hangar-interactions.workspace = true
+hangar-terminal-drive.workspace = true
 hangar-scheduled-tasks.workspace = true
 hangar-dream.workspace = true
 hangar-placement.workspace = true

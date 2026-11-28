@@ -3,13 +3,12 @@ use super::{
     OtherFrame, OtherIo, OtherTarget, OtherWriteGuard, PendingInteraction, kimi_approval_open,
     kimi_picker_open, menu_interaction, read_pending_interaction,
 };
-use crate::interactions::{
+use hangar_interactions::{
     ExpectedInteraction, InteractionBinding, InteractionError, InteractionKind, InteractionStore,
 };
-use crate::runtime::protocol::{Disposition as RuntimeDisposition, RuntimeError, RuntimeReply};
-use crate::terminal_input::{
-    Cleanup, ComposerSnapshot, DeliveryResult, DeliveryStage, Disposition, Proof,
-};
+use hangar_core::runtime_reply::{Disposition as RuntimeDisposition, RuntimeError, RuntimeReply};
+use hangar_core::terminal_delivery::{Cleanup, DeliveryResult, DeliveryStage, Disposition};
+use hangar_other_terminal_policy::{ComposerSnapshot, Proof};
 use hangar_other_terminal_policy::{
     CapturedPane, KimiPermissionMenu, allowed_key, codex_menu_open, compact, kimi_permission_menu,
     menu_cursor, multiple_choice, own_residue, pi_cursor, same_question, screen,
@@ -53,7 +52,7 @@ fn failure(code: &str) -> RuntimeError {
     )
 }
 fn interaction_error(error: InteractionError) -> RuntimeError {
-    crate::interactions::runtime_error(error)
+    RuntimeError::new(error.code(), error.message())
 }
 fn binding(target: &OtherTarget) -> InteractionBinding {
     InteractionBinding {
@@ -72,16 +71,7 @@ fn result(
     cleanup: Cleanup,
     code: &str,
 ) -> DeliveryResult {
-    DeliveryResult {
-        disposition,
-        stage,
-        cleanup,
-        native: false,
-        message_id: None,
-        code: code.into(),
-        draft: None,
-        consumed: false,
-    }
+    DeliveryResult { cleanup, ..DeliveryResult::new(disposition, stage, code) }
 }
 async fn life(target: &OtherTarget, io: &dyn OtherIo) -> Result<(), RuntimeError> {
     if io.prove(target).await? {
@@ -120,14 +110,14 @@ async fn write_io(
 ) -> Result<(), RuntimeError> {
     io.write(target, value, literal, guard).await
 }
-pub(super) fn blocked(target: &OtherTarget, frame: &OtherFrame) -> bool {
+pub fn blocked(target: &OtherTarget, frame: &OtherFrame) -> bool {
     let analysis = screen(target.provider, &frame.text);
     analysis.overlay || analysis.state == "awaiting_input"
 }
 fn codex(target: &OtherTarget) -> bool {
     target.provider == hangar_transcript::Provider::Codex
 }
-pub(super) fn ready(target: &OtherTarget, frame: &OtherFrame) -> bool {
+pub fn ready(target: &OtherTarget, frame: &OtherFrame) -> bool {
     hangar_other_terminal_policy::ready(target.provider, &frame.text)
 }
 
@@ -267,7 +257,7 @@ pub async fn prompt(
     prompt_inner(target, io, text, initial, None).await
 }
 
-pub(super) async fn prompt_with_episode(
+pub async fn prompt_with_episode(
     target: &OtherTarget, io: &dyn OtherIo, text: &str, initial: Option<&OtherFrame>,
     composer_checked: &mut (dyn FnMut(bool) + Send),
 ) -> DeliveryResult {
@@ -990,7 +980,7 @@ async fn fallback(
     let open = if control.target.provider == hangar_transcript::Provider::Kimi {
         kimi_picker_open(&frame.text)
     } else {
-        crate::terminal_state::analyze(&frame.text).overlay
+        hangar_core::terminal_state::analyze(&frame.text).overlay
     };
     if !open {
         return Ok(control.unknown("erro_sem_confirmacao_resposta"));
@@ -999,7 +989,7 @@ async fn fallback(
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         let frame = control.frame(false, true).await?;
-        let analysis = crate::terminal_state::analyze(&frame.text);
+        let analysis = hangar_core::terminal_state::analyze(&frame.text);
         if !kimi_picker_open(&frame.text) && !analysis.overlay && !frame.text.trim().is_empty() {
             return Ok(OtherControlOutcome {
                 reply: RuntimeReply {
@@ -1170,7 +1160,7 @@ async fn pi_answer(
         .parse()
         .map_err(|_| failure("invalid_answers"))?;
     let mut frame = control.frame(true, false).await?;
-    if !crate::terminal_state::analyze(&frame.text).overlay
+    if !hangar_core::terminal_state::analyze(&frame.text).overlay
         || pi_cursor(control.target.provider, &frame.text).is_none()
     {
         return Err(failure("other_terminal_picker_unavailable"));
@@ -1208,7 +1198,7 @@ async fn pi_answer(
     if after.text.trim().is_empty() {
         return Ok(control.unknown("erro_sem_confirmacao_resposta"));
     }
-    if crate::terminal_state::analyze(&after.text).overlay
+    if hangar_core::terminal_state::analyze(&after.text).overlay
         && pi_cursor(control.target.provider, &after.text).is_some()
     {
         control.submitted = false;
@@ -1293,13 +1283,13 @@ async fn generic_select(
             .map_err(interaction_error)?;
         // Os Termos do Google não têm opção numerada: as teclas saem da caixa e do foco na tela.
         if !submit && control.target.provider == hangar_transcript::Provider::Antigravity
-            && crate::terminal_state::agy_terms(&frame.text).is_some()
+            && hangar_core::terminal_state::agy_terms(&frame.text).is_some()
         {
             return agy_terms_answer(control, option.unwrap()).await;
         }
         // A lista do primeiro uso (cores) tem cursor sem número: a linha dele vem da leitura da tela.
         if !submit && control.target.provider == hangar_transcript::Provider::Antigravity
-            && let Some((_, _, row)) = crate::terminal_state::agy_onboarding_list(&frame.text)
+            && let Some((_, _, row)) = hangar_core::terminal_state::agy_onboarding_list(&frame.text)
         {
             let want = option.unwrap() - 1;
             if row == want {
@@ -1358,7 +1348,7 @@ async fn generic_select(
             json!({"ok":true,"submitted":false}),
         ));
     }
-    if frame.text.trim().is_empty() || crate::terminal_state::analyze(&frame.text).overlay {
+    if frame.text.trim().is_empty() || hangar_core::terminal_state::analyze(&frame.text).overlay {
         return Ok(control.unknown("erro_sem_confirmacao_resposta"));
     }
     Ok(control.reply(RuntimeDisposition::Accepted, json!({"ok":true})))
@@ -1367,7 +1357,7 @@ async fn generic_select(
 /// A opção que a pessoa tocou no cartão dos Termos (`AGY_TERMS_OPTIONS`): a caixa de dados como ela escolheu e
 /// o botão. Uma tecla por vez, relendo a tela; o Hangar nunca escolhe pela pessoa.
 async fn agy_terms_answer(control: &mut Control<'_>, option: usize) -> Result<OtherControlOutcome, RuntimeError> {
-    use crate::terminal_state::{AgyTermsFocus as Focus, AgyTermsKey as Key, agy_terms, agy_terms_key};
+    use hangar_core::terminal_state::{AgyTermsFocus as Focus, AgyTermsKey as Key, agy_terms, agy_terms_key};
     for _ in 0..8 {
         let frame = control.frame(false, false).await?;
         let terms = agy_terms(&frame.text).ok_or_else(|| failure("erro_interacao_desatualizada"))?;
@@ -1401,7 +1391,7 @@ const AGY_MODE_POLL: Duration = Duration::from_millis(150);
 
 /// Lê ou troca o modo do `agy` pelo rodapé; cada BTab só conta com o rodapé novo na tela.
 async fn agy_permission(context: &mut Control<'_>, payload: &Value, set: bool) -> Result<OtherControlOutcome, RuntimeError> {
-    let mode_of = |frame: &OtherFrame| crate::terminal_state::agy_footer(&frame.text).and_then(|footer| footer.mode);
+    let mode_of = |frame: &OtherFrame| hangar_core::terminal_state::agy_footer(&frame.text).and_then(|footer| footer.mode);
     let frame = context.frame(false, false).await?;
     let Some(initial) = mode_of(&frame) else {
         return Ok(context.reply(RuntimeDisposition::Rejected, json!({"ok":false,"current":null,"error_code":"erro_permissao_leitura"})));
@@ -1422,7 +1412,7 @@ async fn agy_permission(context: &mut Control<'_>, payload: &Value, set: bool) -
             json!({"ok":true,"mode":initial,"current":initial,"requested":requested,"changed":false,"previous_non_plan":null})));
     }
     // Como no Claude: a tecla seria resposta de um menu, e o rascunho é de quem está digitando.
-    let analysis = crate::terminal_state::agy_analyze(&frame.text);
+    let analysis = hangar_core::terminal_state::agy_analyze(&frame.text);
     if analysis.overlay || analysis.state == "awaiting_input" { return Ok(refuse(context, "permission_menu_open")); }
     if analysis.state == "working" { return Ok(refuse(context, "erro_sessao_trabalhando")); }
     match composer_for(hangar_transcript::Provider::Antigravity, &frame) {
@@ -1738,9 +1728,9 @@ mod codex_screens {
     #[test]
     fn composer_with_paragraphs_is_read_whole_and_proves_the_text() {
         let text = "Oi, tudo bem?\n\nSegue o plano completo.";
-        let empty = codex_composer(&frame(include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_idle.txt"))).unwrap();
+        let empty = codex_composer(&frame(include_str!("../../hangar-server/tests/it/fixtures/raw_codex/pane_codex_idle.txt"))).unwrap();
         assert_eq!(empty.content, "");
-        let typed = codex_composer(&frame(include_str!("../../../../hangar-other-terminal-policy/tests/fixtures/pane_codex_paragraphs.txt"))).unwrap();
+        let typed = codex_composer(&frame(include_str!("../../hangar-other-terminal-policy/tests/fixtures/pane_codex_paragraphs.txt"))).unwrap();
         assert_eq!(typed.content, text);
         assert!(typed.proves(text, &empty) == Proof::Present);
     }

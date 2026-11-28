@@ -43,6 +43,8 @@ pub mod qr;
 pub mod query;
 pub mod session_dirs;
 pub mod queue_row;
+pub mod runtime_reply;
+pub mod terminal_delivery;
 pub mod terminal_lock;
 // Grupo de processos e job object do Windows: chamadas de `libc` e `windows-sys`.
 #[allow(unsafe_code)]

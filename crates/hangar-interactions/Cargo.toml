@@ -1,0 +1,14 @@
+[package]
+name = "hangar-interactions"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+http.workspace = true
+ring.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+
+[dev-dependencies]
+hangar-api.workspace = true
+serde.workspace = true

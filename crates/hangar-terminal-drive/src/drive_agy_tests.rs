@@ -1,9 +1,8 @@
-//! Ciclo de modo do Antigravity pelo rodapé, com telas medidas. Fora do `drive.rs` porque o teste de
-//! integração inclui aquele arquivo sozinho e não tem o alvo de teste do módulo.
+//! Ciclo de modo do Antigravity pelo rodapé, com telas medidas.
 use super::drive::control;
 use super::{OtherFrame, OtherIo, OtherTarget, OtherWriteGuard};
-use crate::interactions::InteractionStore;
-use crate::runtime::protocol::{Disposition as RuntimeDisposition, RuntimeError, RuntimeReply};
+use hangar_interactions::InteractionStore;
+use hangar_core::runtime_reply::{Disposition as RuntimeDisposition, RuntimeError, RuntimeReply};
 use serde_json::{Value, json};
 use futures_util::future::BoxFuture;
 use std::{collections::VecDeque, sync::Mutex};
@@ -47,7 +46,7 @@ impl OtherIo for Screens {
     fn release<'a>(&'a self) -> BoxFuture<'a, ()> { Box::pin(async {}) }
 }
 fn target() -> OtherTarget {
-    let mut target = super::tests::target();
+    let mut target = super::drive_tests::target(std::path::Path::new("home"));
     target.provider = hangar_transcript::Provider::Antigravity;
     target
 }
@@ -127,9 +126,9 @@ async fn the_terms_card_unchecks_the_data_box_and_presses_done_only_for_the_chos
     let io = Screens::new(&["terms.txt", "terms.txt", "terms-unchecked.txt", "terms-unchecked-previous.txt", "terms-unchecked-done.txt", "idle.txt"]);
     let store = InteractionStore::default();
     let target = target();
-    let binding = crate::interactions::InteractionBinding { key: target.key.clone(), conversation: target.binding.conversation.clone(), generation: target.generation };
+    let binding = hangar_interactions::InteractionBinding { key: target.key.clone(), conversation: target.binding.conversation.clone(), generation: target.generation };
     store.bind(&binding).unwrap();
-    let analysis = crate::terminal_state::agy_analyze(&screen("terms.txt"));
+    let analysis = hangar_core::terminal_state::agy_analyze(&screen("terms.txt"));
     let pending = super::menu_interaction(analysis.question, analysis.options.unwrap());
     let id = store.observe(&binding, &pending.target, Some(pending.semantic)).unwrap().unwrap();
     let reply = control(&target, &io, &store, "op", "select", &json!({"option": 2, "interaction_id": id}), None).await.unwrap().reply;
@@ -140,7 +139,7 @@ async fn the_terms_card_unchecks_the_data_box_and_presses_done_only_for_the_chos
 /// O quadro guardado pode ser de antes de a mensagem entrar na fila da TUI do Kimi: o Ctrl+S espera a dica aparecer.
 #[tokio::test(start_paused = true)]
 async fn kimi_steer_waits_for_the_queued_hint_before_giving_up() {
-    let mut kimi = super::tests::target();
+    let mut kimi = super::drive_tests::target(std::path::Path::new("home"));
     kimi.provider = hangar_transcript::Provider::Kimi;
     let io = Screens::texts(&[
         "  ⠋ Working for 6s\n ╭──╮\n │ > │\n ╰──╯\n",
@@ -162,8 +161,8 @@ async fn run_kimi(io: &Screens, kind: &str, payload: Value) -> RuntimeReply {
     assert!(result.is_ok(), "o controle do Kimi precisa atender {kind}: {:?}", result.as_ref().err());
     result.unwrap().reply }
 }
-const KIMI_APPROVAL: &str = include_str!("../../../../hangar-other-terminal-policy/tests/fixtures/kimi_approval.txt");
-const KIMI_IDLE: &str = include_str!("../../../../hangar-other-terminal-policy/tests/fixtures/kimi_idle.txt");
+const KIMI_APPROVAL: &str = include_str!("../../hangar-other-terminal-policy/tests/fixtures/kimi_approval.txt");
+const KIMI_IDLE: &str = include_str!("../../hangar-other-terminal-policy/tests/fixtures/kimi_idle.txt");
 const KIMI_MENU: &str = " ────────────────────────────────────\nSelect permission mode\n   Always Ask\n   Auto-read only; everything else needs your approval first.\n ❯ Ask When Needed ← current\n   Routine edits and commands run automatically.\n   Never Ask\n   Everything runs and is decided automatically.\n ↑/↓ navigate · ↵ choose · esc cancel\n ────────────────────────────────────";
 
 #[tokio::test(start_paused = true)]

@@ -27,3 +27,12 @@ pub fn sha256_hex(raw: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
+
+/// `share_life.session_life` sem a parte de transferência (vem dos fatos): a chave do sidecar
+/// vence; sem ela, o nascimento do terminal.
+pub fn session_life(key: Option<&str>, birth: Option<u64>) -> Option<String> {
+    if let Some(key) = key.filter(|k| !k.is_empty()) {
+        return Some(format!("k:{key}"));
+    }
+    birth.filter(|b| *b > 0).map(|b| format!("t:{b}"))
+}

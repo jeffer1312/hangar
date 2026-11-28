@@ -1,0 +1,22 @@
+[package]
+name = "hangar-terminal-drive"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+futures-util.workspace = true
+hangar-core.workspace = true
+hangar-interactions.workspace = true
+hangar-other-terminal-policy.workspace = true
+hangar-transcript.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+sha1_smol.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber.workspace = true

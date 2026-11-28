@@ -1,12 +1,14 @@
 [workspace]
 resolver = "3"
-members =["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-runtime-queue", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-notice-actions", "hangar-workflows", "hangar-other-terminal-policy", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-delegation", "hangar-ticket-actions", "hangar-work-review", "hangar-agent-hooks", "hangar-send", "hangar-registration", "hangar-open-cli", "hangar-install-setup", "hangar-status", "hangar-local-server", "hangar-cliproxy-setup", "hangar-managed-binary", "hangar-video", "hangar-whatsapp", "hangar-guest-accounts", "hangar-connect-client", "hangar-session-open-fields", "hangar-session-open-policy", "hangar-port-tunnel","hangar-session-ports", "hangar-port-stop", "hangar-browser-host", "hangar-antigravity", "hangar-mcp-stdio", "hangar-integrations", "hangar-telemetry", "hangar-auto-continue", "hangar-placement"]
+members =["hangar-interactions", "hangar-terminal-drive", "hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-runtime-queue", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-notice-actions", "hangar-workflows", "hangar-other-terminal-policy", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-delegation", "hangar-ticket-actions", "hangar-work-review", "hangar-agent-hooks", "hangar-send", "hangar-registration", "hangar-open-cli", "hangar-install-setup", "hangar-status", "hangar-local-server", "hangar-cliproxy-setup", "hangar-managed-binary", "hangar-video", "hangar-whatsapp", "hangar-guest-accounts", "hangar-connect-client", "hangar-session-open-fields", "hangar-session-open-policy", "hangar-port-tunnel","hangar-session-ports", "hangar-port-stop", "hangar-browser-host", "hangar-antigravity", "hangar-mcp-stdio", "hangar-integrations", "hangar-telemetry", "hangar-auto-continue", "hangar-placement"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+hangar-interactions = { path = "hangar-interactions" }
+hangar-terminal-drive = { path = "hangar-terminal-drive" }
 chrono-tz = "=0.10.4"
 iana-time-zone = "=0.1.65"
 hangar-scheduled-tasks = { path = "hangar-scheduled-tasks" }
@@ -69,6 +71,7 @@ form_urlencoded = "=1.2.2"
 futures-util = "=0.3.34"
 hyper = { version = "=1.11.1", features = ["client", "http1"] }
 hyper-util = { version = "=0.1.20", features = ["client-legacy", "http1", "tokio"] }
+http = "=1.5.0"
 reqwest = { version = "=0.13.4", default-features = false, features = ["stream"] }
 subtle = "=2.6.1"
 tracing = "=0.1.44"

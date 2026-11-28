@@ -1,12 +1,15 @@
 //! O mesmo módulo do produto, com E/S controlada e leitores/identidade reais.
-pub use hangar_server::runtime::other_terminal::*;
-pub use hangar_server::{interactions, runtime, terminal_input, terminal_state};
-#[path = "../src/runtime/other_terminal/drive.rs"]
-mod drive;
+use super::{
+    OtherFrame, OtherIo, OtherTarget, OtherWriteGuard, PendingInteraction, drive, menu_interaction,
+    read_pending_interaction,
+};
+use hangar_core::{runtime_reply, terminal_delivery, terminal_state};
+use hangar_interactions as interactions;
 use futures_util::future::BoxFuture;
 use interactions::{InteractionBinding, InteractionStore};
-use runtime::protocol::RuntimeError;
+use runtime_reply::RuntimeError;
 use serde_json::{Value, json};
+use tracing::instrument::WithSubscriber;
 use std::{
     collections::VecDeque,
     sync::{
@@ -15,14 +18,14 @@ use std::{
     },
 };
 
-fn target(dir: &std::path::Path) -> OtherTarget {
+pub(super) fn target(dir: &std::path::Path) -> OtherTarget {
     let home = dir.to_owned();
     OtherTarget {
         key: "life-a".into(),
         generation: 1,
         name: "kimi-a".into(),
         provider: hangar_transcript::Provider::Kimi,
-        binding: terminal_input::TerminalBinding {
+        binding: terminal_delivery::TerminalBinding {
             name: "kimi-a".into(),
             pane: "%1".into(),
             conversation: "sid".into(),
@@ -33,7 +36,7 @@ fn target(dir: &std::path::Path) -> OtherTarget {
             clipboard_lock_path: None,
         },
         pane_address: "%1".into(),
-        dirs: hangar_server::list::discover_other::Dirs {
+        dirs: hangar_core::session_dirs::SessionDirectories {
             home: home.clone(),
             claude: home.join(".claude"),
             codex_home: home.join(".codex"),
@@ -197,7 +200,7 @@ async fn drive_prompt_proves_own_input_before_enter_and_cleared_composer_afterwa
     let initial = composer("");
     let io = Io::frames(vec![composer(text), composer("")]);
     let result = drive::prompt(&target, &io, text, Some(&initial)).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Accepted);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Accepted);
     assert_eq!(
         io.writes(),
         vec![(text.into(), true), ("Enter".into(), false)]
@@ -274,8 +277,8 @@ async fn drive_prompt_rejects_controls_before_any_effect() {
     let io = Io::default();
     for text in ["teste\0", "teste\u{1b}", ""] {
         let result = drive::prompt(&target, &io, text, None).await;
-        assert_eq!(result.disposition, terminal_input::Disposition::Rejected);
-        assert_eq!(result.stage, terminal_input::DeliveryStage::Validate);
+        assert_eq!(result.disposition, terminal_delivery::Disposition::Rejected);
+        assert_eq!(result.stage, terminal_delivery::DeliveryStage::Validate);
     }
     assert!(io.writes().is_empty());
     assert_eq!(io.proofs.load(Ordering::SeqCst), 0);
@@ -293,7 +296,7 @@ async fn drive_prompt_defers_a_real_draft_without_erasing_it() {
         Some(&composer("rascunho do usuário")),
     )
     .await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Deferred);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Deferred);
     assert_eq!(result.code, "composer_busy");
     assert!(io.writes().is_empty());
 }
@@ -305,7 +308,7 @@ async fn drive_prompt_new_placeholder_proves_own_paste_without_looking_at_histor
     let io = Io::frames(vec![composer("[paste #2 400 chars]"), composer("")]);
     let text = "conteúdo longo que ficou recolhido pela interface";
     let result = drive::prompt(&target, &io, text, Some(&composer(""))).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Accepted);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Accepted);
     assert_eq!(
         io.writes(),
         vec![(text.into(), true), ("Enter".into(), false)]
@@ -320,8 +323,8 @@ async fn drive_prompt_transport_failure_never_submits_even_if_text_looks_present
     let io = Io::frames(vec![composer("rascunho alheio")]);
     io.fail_write.store(1, Ordering::SeqCst);
     let result = drive::prompt(&target, &io, text, Some(&composer(""))).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Unknown);
-    assert_eq!(result.cleanup, terminal_input::Cleanup::Unproved);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Unknown);
+    assert_eq!(result.cleanup, terminal_delivery::Cleanup::Unproved);
     assert_eq!(io.writes(), vec![(text.into(), true)]);
 }
 #[tokio::test(start_paused = true)]
@@ -333,8 +336,8 @@ async fn drive_prompt_cleans_only_proved_own_partial_input_before_allowing_retry
     let io = Io::frames(vec![composer("esta é a mensagem"), composer("")]);
     io.fail_write.store(1, Ordering::SeqCst);
     let result = drive::prompt(&target, &io, text, Some(&composer(""))).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Deferred);
-    assert_eq!(result.cleanup, terminal_input::Cleanup::Proved);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Deferred);
+    assert_eq!(result.cleanup, terminal_delivery::Cleanup::Proved);
     assert_eq!(
         io.writes(),
         vec![(text.into(), true), ("C-u".into(), false)]
@@ -348,8 +351,8 @@ async fn drive_prompt_after_possible_enter_stays_unknown_without_cleanup_or_rety
     let text = "texto completo ainda visível";
     let io = Io::frames(vec![composer(text)]);
     let result = drive::prompt(&target, &io, text, Some(&composer(""))).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Unknown);
-    assert_eq!(result.stage, terminal_input::DeliveryStage::SubmitProof);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Unknown);
+    assert_eq!(result.stage, terminal_delivery::DeliveryStage::SubmitProof);
     assert_eq!(
         io.writes(),
         vec![(text.into(), true), ("Enter".into(), false)]
@@ -365,7 +368,7 @@ async fn drive_prompt_loss_of_life_after_text_prevents_enter() {
     let dead = io.dead.clone();
     io.after_write = Some(Arc::new(move |_, _, _| dead.store(true, Ordering::SeqCst)));
     let result = drive::prompt(&target, &io, text, Some(&composer(""))).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Unknown);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Unknown);
     assert_eq!(io.writes(), vec![(text.into(), true)]);
 }
 #[tokio::test(start_paused = true)]
@@ -375,7 +378,7 @@ async fn drive_prompt_native_question_blocks_input_even_outside_visible_picker()
     let _pending = pending(&target, qs());
     let io = Io::default();
     let result = drive::prompt(&target, &io, "outra mensagem", Some(&composer(""))).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Deferred);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Deferred);
     assert_eq!(result.code, "question_open");
     assert!(io.writes().is_empty());
 }
@@ -405,7 +408,7 @@ async fn drive_answer_number_then_review_is_confirmed_by_the_same_tool_id() {
     let response = response.ok().unwrap();
     assert_eq!(
         response.reply.disposition,
-        runtime::protocol::Disposition::Accepted
+        runtime_reply::Disposition::Accepted
     );
     assert_eq!(response.reply.payload["fallback"], false);
     assert!(response.fallback_text.is_none());
@@ -437,7 +440,7 @@ async fn drive_answer_numeric_free_text_is_text_after_the_other_option() {
     assert!(response.is_ok());
     assert_eq!(
         response.ok().unwrap().reply.disposition,
-        runtime::protocol::Disposition::Accepted
+        runtime_reply::Disposition::Accepted
     );
     assert_eq!(
         io.writes(),
@@ -471,7 +474,7 @@ async fn drive_answer_multi_select_uses_tab_instead_of_enter() {
     assert!(response.is_ok());
     assert_eq!(
         response.ok().unwrap().reply.disposition,
-        runtime::protocol::Disposition::Accepted
+        runtime_reply::Disposition::Accepted
     );
     assert_eq!(
         io.writes(),
@@ -509,7 +512,7 @@ async fn drive_answer_result_of_another_id_does_not_confirm_or_trigger_duplicate
     let response = response.ok().unwrap();
     assert_eq!(
         response.reply.disposition,
-        runtime::protocol::Disposition::Unknown
+        runtime_reply::Disposition::Unknown
     );
     assert!(response.fallback_text.is_none());
     assert_eq!(io.writes(), vec![("2".into(), true), ("1".into(), true)]);
@@ -539,7 +542,7 @@ async fn drive_answer_drift_before_submit_returns_only_an_intention_for_the_same
     let response = response.ok().unwrap();
     assert_eq!(
         response.reply.disposition,
-        runtime::protocol::Disposition::Deferred
+        runtime_reply::Disposition::Deferred
     );
     assert_eq!(
         response.fallback_text.as_deref(),
@@ -619,7 +622,7 @@ async fn drive_approval_literal_digit_requires_matching_wire_resolution() {
     assert!(response.is_ok());
     assert_eq!(
         response.ok().unwrap().reply.disposition,
-        runtime::protocol::Disposition::Accepted
+        runtime_reply::Disposition::Accepted
     );
     assert_eq!(io.writes(), vec![("1".into(), true)]);
 }
@@ -643,7 +646,7 @@ async fn drive_approval_feedback_is_confirmed_by_the_text_field_for_that_request
     let response = response.ok().unwrap();
     assert_eq!(
         response.reply.disposition,
-        runtime::protocol::Disposition::Accepted
+        runtime_reply::Disposition::Accepted
     );
     assert_eq!(response.reply.payload["feedback_pendente"], true);
     assert_eq!(io.writes(), vec![("3".into(), true)]);
@@ -691,7 +694,7 @@ async fn drive_raw_keys_use_the_io_vocabulary_and_reject_arbitrary_controls() {
         assert!(response.is_ok());
         assert_eq!(
             response.ok().unwrap().reply.disposition,
-            runtime::protocol::Disposition::Accepted
+            runtime_reply::Disposition::Accepted
         );
     }
     let response = drive::control(
@@ -755,7 +758,7 @@ async fn drive_steer_keeps_the_legacy_key_on_capture_failure_without_retrying_it
     let response = drive::control(&target, &io, &InteractionStore::default(), "steer-unreadable", "steer_queue",
         &json!({}), None).await.unwrap();
     assert_eq!(io.writes(), vec![("C-s".into(), false)]);
-    assert_eq!(response.reply.disposition, runtime::protocol::Disposition::Unknown);
+    assert_eq!(response.reply.disposition, runtime_reply::Disposition::Unknown);
     assert!(response.fallback_text.is_none());
 }
 
@@ -769,7 +772,7 @@ async fn drive_windows_multiline_uses_the_same_complete_text_and_never_a_second_
     let text = "primeira linha completa\nsegunda linha completa";
     let io = Io::frames(vec![composer(text), composer("")]);
     let result = drive::prompt(&target, &io, text, Some(&composer(""))).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Accepted);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Accepted);
     assert_eq!(
         io.writes(),
         vec![(text.into(), true), ("Enter".into(), false)]
@@ -782,7 +785,7 @@ async fn drive_slash_preserves_two_enters_only_while_the_same_composer_is_safe()
     std::fs::write(&target.transcript, "").unwrap();
     let io = Io::frames(vec![composer("/help"), composer(""), composer("")]);
     let result = drive::prompt(&target, &io, "/help", Some(&composer(""))).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Accepted);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Accepted);
     assert_eq!(
         io.writes(),
         vec![
@@ -802,7 +805,7 @@ async fn drive_pi_warning_is_not_a_user_draft_in_the_physical_fallback() {
     let text = "mensagem após aviso de subagente";
     let io = Io::frames(vec![composer(text), composer("")]);
     let result = drive::prompt(&target, &io, text, Some(&composer(notice))).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Accepted);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Accepted);
     assert_eq!(io.writes().first(), Some(&(text.into(), true)));
 }
 #[derive(Clone)]
@@ -820,58 +823,60 @@ impl std::io::Write for Trace {
 async fn drive_readiness_timeout_attempts_input_and_warns_once_until_the_exact_life_is_forgotten() {
     let bytes = Trace(Arc::default());
     let writer = bytes.clone();
-    tracing::subscriber::set_global_default(
-        tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_max_level(tracing::Level::WARN)
-            .with_writer(move || writer.clone())
-            .finish(),
-    )
-    .unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let mut target = target(dir.path());
-    target.key = "readiness-unique".into();
-    std::fs::write(&target.transcript, "").unwrap();
-    drive::forget(&target);
-    for _ in 0..2 {
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || writer.clone())
+        .finish();
+
+    async {
+        let dir = tempfile::tempdir().unwrap();
+        let mut target = target(dir.path());
+        target.key = "readiness-unique".into();
+        std::fs::write(&target.transcript, "").unwrap();
+        drive::forget(&target);
+        for _ in 0..2 {
+            let io = Io::frames(vec![composer("mensagem de prontidão"), composer("")]);
+            io.booting.store(true, Ordering::SeqCst);
+            let result = drive::prompt(
+                &target,
+                &io,
+                "mensagem de prontidão",
+                Some(&frame("iniciando")),
+            )
+            .await;
+            assert_eq!(result.disposition, terminal_delivery::Disposition::Unknown);
+            assert_eq!(
+                io.writes(),
+                vec![
+                    ("mensagem de prontidão".into(), true),
+                    ("Enter".into(), false)
+                ]
+            );
+        }
+        let output = String::from_utf8(bytes.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(output.matches("other_terminal_ready_timeout").count(), 1);
+        let mut other = target.clone();
+        other.binding.conversation = "outra".into();
+        drive::forget(&other);
+        drive::forget(&target);
         let io = Io::frames(vec![composer("mensagem de prontidão"), composer("")]);
         io.booting.store(true, Ordering::SeqCst);
-        let result = drive::prompt(
+        drive::prompt(
             &target,
             &io,
             "mensagem de prontidão",
             Some(&frame("iniciando")),
         )
         .await;
-        assert_eq!(result.disposition, terminal_input::Disposition::Unknown);
-        assert_eq!(
-            io.writes(),
-            vec![
-                ("mensagem de prontidão".into(), true),
-                ("Enter".into(), false)
-            ]
-        );
+        let output = String::from_utf8(bytes.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(output.matches("other_terminal_ready_timeout").count(), 2);
+        assert!(!output.contains("mensagem de prontidão"));
+        drive::forget(&target);
     }
-    let output = String::from_utf8(bytes.0.lock().unwrap().clone()).unwrap();
-    assert_eq!(output.matches("other_terminal_ready_timeout").count(), 1);
-    let mut other = target.clone();
-    other.binding.conversation = "outra".into();
-    drive::forget(&other);
-    drive::forget(&target);
-    let io = Io::frames(vec![composer("mensagem de prontidão"), composer("")]);
-    io.booting.store(true, Ordering::SeqCst);
-    drive::prompt(
-        &target,
-        &io,
-        "mensagem de prontidão",
-        Some(&frame("iniciando")),
-    )
+    .with_subscriber(subscriber)
     .await;
-    let output = String::from_utf8(bytes.0.lock().unwrap().clone()).unwrap();
-    assert_eq!(output.matches("other_terminal_ready_timeout").count(), 2);
-    assert!(!output.contains("mensagem de prontidão"));
-    drive::forget(&target);
 }
 
 proptest::proptest! {
@@ -890,7 +895,7 @@ proptest::proptest! {
                 assert!(io.writes().is_empty());
             } else {
                 let result=result.expect("a escolha foi tentada, mas não houve Review nem recibo");
-                assert_eq!(result.reply.disposition,runtime::protocol::Disposition::Unknown);
+                assert_eq!(result.reply.disposition,runtime_reply::Disposition::Unknown);
                 assert!(result.fallback_text.is_none());
             }
         });
@@ -969,7 +974,7 @@ async fn drive_pi_native_answer_rechecks_cursor_and_guards_each_effect() {
     .unwrap();
     assert_eq!(
         result.reply.disposition,
-        runtime::protocol::Disposition::Accepted
+        runtime_reply::Disposition::Accepted
     );
     assert_eq!(
         io.writes(),
@@ -997,7 +1002,7 @@ async fn drive_pi_native_free_text_goes_through_the_other_option() {
     .unwrap();
     assert_eq!(
         result.reply.disposition,
-        runtime::protocol::Disposition::Accepted
+        runtime_reply::Disposition::Accepted
     );
     assert_eq!(
         io.writes(),
@@ -1044,7 +1049,7 @@ async fn drive_omp_native_answer_uses_only_the_live_box_cursor() {
     .unwrap();
     assert_eq!(
         result.reply.disposition,
-        runtime::protocol::Disposition::Accepted
+        runtime_reply::Disposition::Accepted
     );
     assert_eq!(
         io.writes(),
@@ -1100,7 +1105,7 @@ async fn drive_menu_toggle_does_not_claim_submission_and_submit_requires_its_tab
     .unwrap();
     assert_eq!(
         result.reply.disposition,
-        runtime::protocol::Disposition::Accepted
+        runtime_reply::Disposition::Accepted
     );
     assert_eq!(
         io.writes(),
@@ -1120,7 +1125,7 @@ async fn drive_menu_toggle_does_not_claim_submission_and_submit_requires_its_tab
     .unwrap();
     assert_eq!(
         result.reply.disposition,
-        runtime::protocol::Disposition::Unknown
+        runtime_reply::Disposition::Unknown
     );
     assert_eq!(io.writes(), vec![("Right".into(), false)]);
 }
@@ -1147,7 +1152,7 @@ async fn drive_pi_new_paste_and_image_placeholders_remain_proof_after_notice_nor
         .await;
         assert_eq!(
             result.disposition,
-            terminal_input::Disposition::Accepted,
+            terminal_delivery::Disposition::Accepted,
             "{placeholder}"
         );
         assert_eq!(io.writes().len(), 2);
@@ -1174,7 +1179,7 @@ async fn drive_editor_native_draft_blocks_pi_and_omp_even_when_the_pane_is_empty
         let result = drive::prompt(&target, &io, "nova mensagem", Some(&initial)).await;
         assert_eq!(
             result.disposition,
-            terminal_input::Disposition::Deferred,
+            terminal_delivery::Disposition::Deferred,
             "{provider:?}"
         );
         assert_eq!(result.code, "composer_busy");
@@ -1198,7 +1203,7 @@ async fn drive_editor_native_empty_overrides_pane_residue_and_proves_pi_and_omp_
         let result = drive::prompt(&target, &io, text, Some(&initial)).await;
         assert_eq!(
             result.disposition,
-            terminal_input::Disposition::Accepted,
+            terminal_delivery::Disposition::Accepted,
             "{provider:?}"
         );
         assert_eq!(
@@ -1221,7 +1226,7 @@ async fn drive_editor_none_preserves_pi_draft_above_sixteen_blank_rows() {
     let initial = frame(&pane);
     let io = Io::default();
     let result = drive::prompt(&target, &io, "nova mensagem", Some(&initial)).await;
-    assert_eq!(result.disposition, terminal_input::Disposition::Deferred);
+    assert_eq!(result.disposition, terminal_delivery::Disposition::Deferred);
     assert_eq!(result.code, "composer_busy");
     assert!(io.writes().is_empty());
 }
