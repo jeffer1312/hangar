@@ -126,6 +126,13 @@ export interface PlacementSuggestion { serverId: string; text: string }
 
 const identOf = (server: Server) => getIdentificadorEm(server, undefined, WAIT).then((r) => r.identificador || null, () => null);
 
+/** As máquinas de `machines` fora `skip`, com o identificador de cada uma (`null`: não respondeu), lidos em paralelo. */
+async function othersWithIdent(machines: readonly Server[], skip: Server): Promise<Array<[Server, string | null]>> {
+  const others = machines.filter((s) => s.id !== skip.id);
+  const idents = await Promise.all(others.map(identOf));
+  return others.map((s, i) => [s, idents[i]]);
+}
+
 /** A máquina da lista (`Server.id`) que a Nova conversa marca e o motivo, perguntados ao servidor ativo.
  *  `null`: nada a marcar, ou a sugerida não está entre `machines`. Falha de leitura rejeita. */
 export async function placementSuggestionFor(active: Server, machines: readonly Server[]): Promise<PlacementSuggestion | null> {
@@ -138,10 +145,9 @@ export async function placementSuggestionFor(active: Server, machines: readonly 
   const here = await identOf(active);
   if (here) names.set(here, active.label);
   if (here === chosen.server) return reply(active);
-  const others = machines.filter((s) => s.id !== active.id);
-  const idents = await Promise.all(others.map(identOf));
-  others.forEach((s, i) => { const id = idents[i]; if (id) names.set(id, s.label); });
-  const found = others.find((_, i) => idents[i] === chosen.server);
+  const others = await othersWithIdent(machines, active);
+  for (const [s, id] of others) if (id) names.set(id, s.label);
+  const found = others.find(([, id]) => id === chosen.server)?.[0];
   return found ? reply(found) : null;
 }
 
@@ -163,9 +169,7 @@ export async function placementRuleOfferFor(marked: Server, machines: readonly S
   if (config.ui_mode === 'off') return null;
   const rule = placementRuleOf(await suggestPlacement(marked, { cwd, machine: 'auto' }));
   if (!rule || await identOf(marked) === rule.server) return null;
-  const others = machines.filter((s) => s.id !== marked.id);
-  const idents = await Promise.all(others.map(identOf));
-  const found = others.find((_, i) => idents[i] === rule.server);
+  const found = (await othersWithIdent(machines, marked)).find(([, id]) => id === rule.server)?.[0];
   return found ? { server: rule.server, serverId: found.id, project: rule.project, cwd } : null;
 }
 

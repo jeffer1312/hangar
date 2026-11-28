@@ -7,7 +7,7 @@ mod rules;
 pub mod store;
 
 pub use choose::{
-    choose, CloneTarget, Exclusion, KnownRepo, MachineFacts, OpenContext, Placement, ReasonCode,
+    choose, pinned, CloneTarget, Exclusion, KnownRepo, MachineFacts, OpenContext, Placement, ReasonCode,
     Unpublished, Warning,
 };
 pub use rules::{AgentMode, Limits, PlacementConfig, ProjectRule, ScheduleRule, UiMode};

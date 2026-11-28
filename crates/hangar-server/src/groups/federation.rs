@@ -1175,7 +1175,7 @@ async fn remote_group(st: &AppState, who: &Member) -> Result<Option<(String, Str
         }
         Ok(None) => Err(old_version(&who.server)),
         // A rota não existe lá: máquina antiga.
-        Err(PeerError::Refused { status: 404, detail }) if detail.get("code").is_none() => Err(old_version(&who.server)),
+        Err(error) if error.missing_route() => Err(old_version(&who.server)),
         Err(PeerError::Refused { status: 404, .. }) => Ok(None),
         Err(PeerError::Unknown) => Err(unregistered(&who.server)),
         // Fora do ar ou outra recusa: tratada como solta; a confirmação da máquina decide depois.

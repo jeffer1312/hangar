@@ -11,14 +11,13 @@ fn failure(status: StatusCode, code: &str, message: &str, params: serde_json::Va
 
 pub async fn config(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
     if let Err(response) = owner_gate(&state, peer, &request).await { return response; }
-    let home = state.accounts.env.home.clone();
     if request.method() != Method::PUT {
-        return match tokio::task::spawn_blocking(move || store::load(&home)).await {
-            Ok(Ok(config)) => json_response(StatusCode::OK, json!(config)),
-            _ => failure(StatusCode::SERVICE_UNAVAILABLE, "placement_config_unreadable",
-                "não foi possível ler as regras do balanceamento", json!({})),
+        return match super::suggest::load_config(&state).await {
+            Ok(config) => json_response(StatusCode::OK, json!(config)),
+            Err(code) => failure(StatusCode::SERVICE_UNAVAILABLE, code, "não foi possível ler as regras do balanceamento", json!({})),
         };
     }
+    let home = state.accounts.env.home.clone();
     let parsed = to_bytes(request.into_body(), 64 * 1024).await.ok()
         .and_then(|raw| serde_json::from_slice::<PlacementConfig>(&raw).ok());
     let Some(config) = parsed else {

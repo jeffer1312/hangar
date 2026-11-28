@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use hangar_placement::{MachineFacts, OpenContext};
 
 use crate::groups::peers::{OPEN_TIMEOUT, PeerClient, PeerError};
-use crate::session_open::SessionOpenRequest;
+use crate::session_open::{OpenError, SessionOpenRequest};
 use crate::session_write::detail_body;
 
 /// A parte do prazo da abertura que a busca no remoto pode gastar: o resto é da criação lá.
@@ -76,11 +76,20 @@ pub async fn open(peers: &PeerClient, server: &str, body: &Value, fetch: bool) -
     let opened = tokio::time::timeout_at(deadline, peers.call_opening(server, Method::POST, "/api/sessions", Some(body))).await
         .map_err(|_| PeerError::Transport(format!("{server} não terminou a abertura em {} s", OPEN_TIMEOUT.as_secs())))?;
     let mut info = opened?.unwrap_or(Value::Null);
-    if let Some(warning) = warning && let Some(fields) = info.as_object_mut() {
-        let warnings = fields.entry("avisos").or_insert_with(|| json!([]));
-        if let Some(list) = warnings.as_array_mut() { list.push(json!(warning)); }
-    }
+    add_avisos(&mut info, warning.into_iter().collect());
     Ok(info)
+}
+
+/// Junta `items` aos `avisos` da resposta da abertura; sem itens, não cria a lista.
+pub(crate) fn add_avisos(info: &mut Value, items: Vec<String>) {
+    if items.is_empty() { return }
+    let list = info.as_object_mut().and_then(|fields| fields.entry("avisos").or_insert_with(|| json!([])).as_array_mut());
+    if let Some(list) = list { list.extend(items.into_iter().map(Value::from)); }
+}
+
+pub(crate) fn machine_unknown(server: &str) -> OpenError {
+    OpenError::new(400, "placement_machine_unknown", format!("a máquina '{server}' não está no peers.json (ou sem base_url/token)"))
+        .with_params(json!({"server": server}))
 }
 
 /// Lá respondeu: nada abriu, ou não está no `peers.json`. O resto (rede, prazo, corpo ilegível) é incerto.
@@ -94,8 +103,7 @@ fn uncertain_text(server: &str) -> String {
 pub fn failure(server: &str, error: &PeerError) -> (u16, Value) {
     match error {
         PeerError::Refused { status, detail } => (*status, json!({"detail": detail})),
-        PeerError::Unknown => (400, detail_body("placement_machine_unknown",
-            &format!("a máquina '{server}' não está no peers.json (ou sem base_url/token)"), json!({"server": server}))),
+        PeerError::Unknown => (400, machine_unknown(server).body()),
         other => (504, detail_body("placement_uncertain", &uncertain_text(server), json!({"server": server, "cause": other.text(server)}))),
     }
 }

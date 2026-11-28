@@ -49,13 +49,7 @@ impl ProjectId {
     pub fn from_dir(root: &Path) -> Self {
         let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         Self(format!("dir:{name}"))
-    }
-
-    /// Projeto sem git só junta máquinas depois de confirmado na tela.
-    pub fn is_dir(&self) -> bool {
-        self.0.starts_with("dir:")
-    }
-}
+    }}
 
 #[cfg(test)]
 mod tests {

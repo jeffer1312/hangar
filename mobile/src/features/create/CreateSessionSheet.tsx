@@ -45,6 +45,9 @@ import { superficie } from '../../theme/superficie';
 import { AnchoredPanel } from '../../ui/AnchoredPanel';
 import * as m from '../../paraglide/messages';
 
+/** As máquinas próprias, fora a demonstração, entre as quais o balanceamento escolhe. */
+const placementMachines = (list: readonly Server[]) => ownUpdatableServers(list).filter((s) => !isDemoUrl(`${s.baseUrl}/`));
+
 type ProviderProbe = Record<string, { disponivel: boolean; motivo: string | null; default?: boolean }>;
 type Choice = Omit<ComponentProps<typeof QuietPill>, 'ref'>;
 // Em cima só o vão até a pílula da máquina: mais que isso roubaria o toque dela.
@@ -116,8 +119,7 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
     // Com a criação escondida atrás da lista, nada é pedido; a pergunta sai quando ela aparece.
     if (asked.current || chosen.current || !active || !isOwnMachine(active) || home?.mode === 'sessions') return;
     asked.current = true;
-    const others = ownUpdatableServers(servers).filter((s) => !isDemoUrl(`${s.baseUrl}/`));
-    placementSuggestionFor(active, others).then((found) => {
+    placementSuggestionFor(active, placementMachines(servers)).then((found) => {
       if (!mounted.current || !found) return;
       setSuggestion(found);
       if (!chosen.current) setMachine(found.serverId);
@@ -670,8 +672,7 @@ function CreateSessionForm({ active, machines, onPickMachine, suggestion, onTouc
     setRuleOffer(null);
     setRuleTaken(false);
     if (p !== NO_PROJECT_CWD && isOwnMachine(active)) {
-      const others = ownUpdatableServers(machines).filter((s) => !isDemoUrl(`${s.baseUrl}/`));
-      placementRuleOfferFor(active, others, p).then((offer) => {
+      placementRuleOfferFor(active, placementMachines(machines), p).then((offer) => {
         if (mounted.current && generation === pickGeneration.current) setRuleOffer(offer);
       }, (cause: unknown) => console.warn('[nova-conversa] regra de projeto da pasta não lida', cause));
     }

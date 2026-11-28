@@ -27,8 +27,8 @@ pub enum Step {
     /// Abre nesta máquina; `placement` vai na resposta quando o pedido trouxe `auto`.
     Here(Option<Value>),
     /// Abre em `server` com este corpo (`forward::open`); `placement` é `None` com máquina explícita.
-    /// `warnings` vão aos `avisos` da resposta (o clone novo).
-    There { server: String, body: Value, placement: Option<Value>, warnings: Vec<String> },
+    /// `cloned`: o repositório foi clonado lá agora (o aviso vai aos `avisos` da resposta).
+    There { server: String, body: Value, placement: Option<Value>, cloned: bool },
     Refused(OpenError),
 }
 
@@ -48,7 +48,7 @@ fn count_placed(telemetry: Option<&hangar_telemetry::Telemetry>, caller: &OpenCa
     let Some(telemetry) = telemetry.filter(|_| matches!(caller, OpenCaller::Owner)) else { return };
     let (outcome, clone) = match step {
         Step::Here(_) => (PlacementOutcome::Here, false),
-        Step::There { warnings, .. } => (PlacementOutcome::Elsewhere, warnings.iter().any(|w| w == crate::session_open::baton::FRESH_CLONE_NOTE)),
+        Step::There { cloned, .. } => (PlacementOutcome::Elsewhere, *cloned),
         Step::Refused(_) => (PlacementOutcome::Refused, false),
     };
     // Só a etiqueta `code` do motivo: projeto e `why` ficam de fora.
@@ -70,9 +70,11 @@ async fn choose_step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &
     let machine = if !auto && kept.is_none() {
         match machine_key(st, machine).await {
             Some(found) => { key = found; key.as_str() }
-            None => return Step::Refused(OpenError::new(400, "placement_machine_unknown",
-                format!("a máquina '{machine}' não está no peers.json (ou sem base_url/token) nem é o id informado por uma delas"))
-                .with_params(json!({"server": machine}))),
+            None => {
+                let mut error = forward::machine_unknown(machine);
+                error.msg.push_str(" nem é o id informado por uma delas");
+                return Step::Refused(error);
+            }
         }
     } else { machine };
     match (auto, kept) {
@@ -127,23 +129,22 @@ async fn choose_step(st: &Arc<AppState>, request: &SessionOpenRequest, caller: &
         Ok(inherited) => inherited,
         Err(error) => return Step::Refused(error),
     };
-    let mut warnings = Vec::new();
     let missing = ctx.cwd_project.as_ref().filter(|p| !dest.repos.iter().any(|r| &r.project == *p));
+    let cloned = missing.is_some();
     if let Some(project) = missing {
         let root = match clone_there(st, &server, &ctx, &dest, placement.as_ref()).await {
             Ok(root) => root,
             Err(error) => return Step::Refused(error),
         };
         dest.repos.push(KnownRepo { project: project.clone(), root });
-        warnings.push(crate::session_open::baton::FRESH_CLONE_NOTE.to_owned());
     }
     match forward::body(request, &ctx, &dest, &inherited) {
         Some(mut body) => {
             // A sessão do clone novo instala o que o projeto pede antes do resto.
-            if !warnings.is_empty() {
+            if cloned {
                 body["initial_prompt"] = json!(crate::session_open::baton::fresh_clone_prompt(body["initial_prompt"].as_str()));
             }
-            Step::There { server, body, placement: placement.as_ref().map(wire), warnings }
+            Step::There { server, body, placement: placement.as_ref().map(wire), cloned }
         }
         None => Step::Refused(clone_unavailable(&server, placement.as_ref())),
     }
@@ -194,16 +195,15 @@ async fn suggestion(st: &Arc<AppState>, request: &SessionOpenRequest) -> Placeme
 async fn place(st: &Arc<AppState>, ctx: &OpenContext, config: &PlacementConfig) -> (Placement, Vec<(String, MachineFacts)>) {
     let now = Utc::now();
     // Mesma pasta, trabalho não publicado e pasta sem git decidem sem fato nenhum.
-    let pinned = choose(ctx, &[], config, now);
-    let is_pinned = matches!(pinned.reason, ReasonCode::SameFolder | ReasonCode::Unpublished { .. } | ReasonCode::PlainDir);
-    if is_pinned && pinned.server == ctx.local_id { return (pinned, Vec::new()) }
+    let pinned = hangar_placement::pinned(ctx, config);
+    if let Some(pinned) = pinned.as_ref().filter(|p| p.server == ctx.local_id) { return (pinned.clone(), Vec::new()) }
     // A escolha não olha os repositórios daqui: a pasta do pedido é desta máquina.
     let mut seen = match facts::local(st, None, false).await {
         Ok(local) => vec![(ctx.local_id.clone(), local)],
         Err(code) => { skipped(st, code); return (not_balanced(&ctx.local_id, code), Vec::new()) }
     };
     let only = |seen: &[(String, MachineFacts)]| seen.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>();
-    if !is_pinned {
+    if pinned.is_none() {
         let first = choose(ctx, &only(&seen), config, now);
         if first.server == ctx.local_id && first.warnings.is_empty() { return (first, seen) }
     }
@@ -243,10 +243,7 @@ fn read_facts(key: String, answer: Result<Option<Value>, PeerError>) -> Option<(
     let facts = match answer {
         Ok(Some(value)) => serde_json::from_value::<MachineFacts>(value).ok()
             .map(|f| if f.server_id.is_empty() { MachineFacts { server_id: key.clone(), capable: false, ..f } } else { f })?,
-        Err(PeerError::Refused { status: 404, detail }) if detail.get("code").is_none() => MachineFacts {
-            server_id: key.clone(), version: String::new(), capable: false, mem_total: 0, mem_available: 0, working: 0, cpu_pct: None,
-            repos: Vec::new(), clone_dir: None,
-        },
+        Err(error) if error.missing_route() => MachineFacts { server_id: key.clone(), ..Default::default() },
         _ => return None,
     };
     Some((key, facts))
@@ -308,7 +305,7 @@ fn kept_by_request(request: &SessionOpenRequest, caller: &OpenCaller) -> Option<
     None
 }
 
-async fn load_config(st: &AppState) -> Result<PlacementConfig, &'static str> {
+pub(super) async fn load_config(st: &AppState) -> Result<PlacementConfig, &'static str> {
     let home = st.accounts.env.home.clone();
     match tokio::task::spawn_blocking(move || hangar_placement::store::load(&home)).await {
         Ok(Ok(config)) => Ok(config),
@@ -551,8 +548,7 @@ mod tests {
         assert!(telemetry.counters().is_empty(), "convidado não conta");
         count_placed(Some(&telemetry), &OpenCaller::Owner, None, &Step::Here(None));
         count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&ReasonCode::NotBalanced { why: "orq".into() }), &Step::Here(None));
-        let there = Step::There { server: "notebook".into(), body: json!({}), placement: None,
-            warnings: vec![crate::session_open::baton::FRESH_CLONE_NOTE.to_owned()] };
+        let there = Step::There { server: "notebook".into(), body: json!({}), placement: None, cloned: true };
         count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&ReasonCode::LeastLoaded { local_out: Exclusion::Working }), &there);
         count_placed(Some(&telemetry), &OpenCaller::Owner, Some(&rule), &Step::Refused(ask(&Placement { server: "nb".into(),
             reason: rule.clone(), clone: None, warnings: Vec::new() })));

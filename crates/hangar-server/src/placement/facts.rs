@@ -1,5 +1,5 @@
 //! `GET /api/placement/facts`: o que esta máquina responde a quem escolhe onde abrir.
-use std::{collections::BTreeMap, net::SocketAddr, path::Path, sync::Arc, time::{Duration, Instant}};
+use std::{collections::BTreeMap, net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
 use axum::{extract::{ConnectInfo, Request, State}, http::StatusCode, response::Response};
 use hangar_core::project::ProjectId;
@@ -11,9 +11,6 @@ use crate::{routes::{AppState, owner_gate}, session_write::{detail_body, json_re
 
 /// Quem pergunta espera 2 s pela resposta inteira: a lista publicada tem só parte disso.
 const LIST_WAIT: Duration = Duration::from_millis(1500);
-const LIST_POLL: Duration = Duration::from_millis(50);
-/// A mesma janela de "pasta recente" da lista de worktrees.
-const RECENT_SECS: f64 = 30.0 * 86400.0;
 
 pub async fn facts(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
     if let Err(response) = owner_gate(&state, peer, &request).await { return response; }
@@ -33,16 +30,9 @@ pub async fn facts(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connec
 /// Os fatos desta máquina; `project` deixa em `repos` só as raízes desse projeto. Sem `repos` (a escolha feita
 /// aqui, que não olha os repositórios daqui) pula a varredura: `repos` e `clone_dir` vêm vazios.
 pub(crate) async fn local(st: &Arc<AppState>, project: Option<&ProjectId>, with_repos: bool) -> Result<MachineFacts, &'static str> {
-    let rows = async {
-        // Assina só pela leitura: com lista aberta a resposta é a já publicada, sem rodada nova.
-        let sub = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
-        let start = Instant::now();
-        loop {
-            if let Some(rows) = sub.rows() { break Some(rows) }
-            if start.elapsed() >= LIST_WAIT { break None }
-            tokio::time::sleep(LIST_POLL).await;
-        }
-    };
+    // Assina só pela leitura: com lista aberta a resposta é a já publicada, sem rodada nova.
+    let sub = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
+    let rows = sub.wait_rows(LIST_WAIT);
     let scan = {
         let st = st.clone();
         tokio::task::spawn_blocking(move || if with_repos { scan(&st) } else { Ok((Vec::new(), None, hangar_status::host::placement_load())) })
@@ -78,7 +68,7 @@ fn scan(st: &AppState) -> Result<Scan, &'static str> {
     let bases = crate::worktree_context::project_bases(st).map_err(|_| "placement_facts_config")?;
     let scan_roots = crate::worktree_context::roots(st).map_err(|_| "placement_facts_config")?;
     let recent = crate::archive_list::worktree_activities(st, &bases, now).into_iter()
-        .filter(|(_, mtime)| *mtime >= now - RECENT_SECS).map(|(cwd, _)| cwd).collect::<Vec<_>>();
+        .filter(|(_, mtime)| *mtime >= now - crate::worktree_context::RECENT_SECS).map(|(cwd, _)| cwd).collect::<Vec<_>>();
     let mut roots = worktrees::main_repos(recent.iter().map(String::as_str));
     roots.extend(worktrees::discover_repositories(&scan_roots).repos);
     let configured = match hangar_placement::store::load(&st.accounts.env.home) {

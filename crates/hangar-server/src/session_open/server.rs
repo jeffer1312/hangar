@@ -550,7 +550,7 @@ pub(crate) async fn resolve_here(st: &Arc<AppState>, request: &SessionOpenReques
 
 /// A abertura que a escolha mandou a outra máquina: a resposta é a de lá, com `alvo`, `placement` e, com
 /// `link`, a ligação feita daqui (a criadora é daqui; lá a filha nasce sem ela).
-async fn forwarded(st: &Arc<AppState>, server: &str, body: &Value, placement: Option<Value>, warnings: Vec<String>, link: super::LinkPlan) -> Response {
+async fn forwarded(st: &Arc<AppState>, server: &str, body: &Value, placement: Option<Value>, cloned: bool, link: super::LinkPlan) -> Response {
     use crate::groups::peers::PeerError;
     let opened = crate::placement::forward::open(&st.peers, server, body, true).await
         .and_then(|info| if info["name"].is_string() { Ok(info) } else { Err(PeerError::Transport(format!("{server}: resposta da abertura sem o nome"))) });
@@ -562,11 +562,9 @@ async fn forwarded(st: &Arc<AppState>, server: &str, body: &Value, placement: Op
                 if let Some(error) = link_error { fields.insert("link_error".into(), error); }
                 fields.insert("alvo".into(), json!(alvo));
                 if let Some(placement) = placement { fields.insert("placement".into(), placement); }
-                if !warnings.is_empty() {
-                    let avisos = fields.entry("avisos").or_insert_with(|| json!([]));
-                    if let Some(list) = avisos.as_array_mut() { list.extend(warnings.into_iter().map(Value::from)); }
-                }
             }
+            let warnings = if cloned { vec![super::baton::FRESH_CLONE_NOTE.to_owned()] } else { Vec::new() };
+            crate::placement::forward::add_avisos(&mut info, warnings);
             crate::session_write::json_response(StatusCode::OK, info)
         }
         Err(error) => {
@@ -606,31 +604,21 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let Ok(request) = SessionOpenRequest::parse(&bytes) else { return crate::session_write::invalid_body(&parts.headers) };
     let _progress = super::open::Progress::track(request.name.as_deref().unwrap_or(""));
     let caller = guest.as_ref().map_or(OpenCaller::Owner, |g| OpenCaller::Guest { root: g.root.clone() });
+    let done = |mut response: Response| {
+        crate::routes::cors(&parts.headers, response.headers_mut());
+        access_diary("POST /api/sessions", &response, started, &diag);
+        response
+    };
     use crate::placement::suggest::Step;
     // Ligação recusada não chega a escolher máquina nem a clonar; a abertura aqui confere de novo.
     let link = match request.link_plan(&caller) {
         Ok(link) => link,
-        Err(error) => {
-            let mut response = reply(&error);
-            crate::routes::cors(&parts.headers, response.headers_mut());
-            access_diary("POST /api/sessions", &response, started, &diag);
-            return response;
-        }
+        Err(error) => return done(reply(&error)),
     };
     let placement = match crate::placement::suggest::step(&st, &request, &caller).await {
         Step::Here(placement) => placement,
-        Step::Refused(error) => {
-            let mut response = reply(&error);
-            crate::routes::cors(&parts.headers, response.headers_mut());
-            access_diary("POST /api/sessions", &response, started, &diag);
-            return response;
-        }
-        Step::There { server, body, placement, warnings } => {
-            let mut response = forwarded(&st, &server, &body, placement, warnings, link).await;
-            crate::routes::cors(&parts.headers, response.headers_mut());
-            access_diary("POST /api/sessions", &response, started, &diag);
-            return response;
-        }
+        Step::Refused(error) => return done(reply(&error)),
+        Step::There { server, body, placement, cloned } => return done(forwarded(&st, &server, &body, placement, cloned, link).await),
     };
     match decide_detached(&st, request, caller, guest, None).await {
         Decision::Opened(mut opened) => {
@@ -640,24 +628,11 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
                 fields.insert("placement".into(), placement);
                 fields.insert("alvo".into(), alvo);
             }
-            let mut response = crate::session_write::json_response(StatusCode::OK, opened.body);
-            crate::routes::cors(&parts.headers, response.headers_mut());
-            access_diary("POST /api/sessions", &response, started, &diag);
-            response
+            done(crate::session_write::json_response(StatusCode::OK, opened.body))
         }
-        Decision::Refused(error) => {
-            let mut response = reply(&error);
-            crate::routes::cors(&parts.headers, response.headers_mut());
-            access_diary("POST /api/sessions", &response, started, &diag);
-            response
-        }
+        Decision::Refused(error) => done(reply(&error)),
         // Só Pi, omp e Kimi sem terminal chegam aqui (`opens_here`): a combinação não existe, o servidor está de pé.
-        Decision::NotOurs => {
-            let mut response = reply(&OpenError::new(400, "erro_orq_headless_provider", "sem terminal só vale para claude ou codex"));
-            crate::routes::cors(&parts.headers, response.headers_mut());
-            access_diary("POST /api/sessions", &response, started, &diag);
-            response
-        }
+        Decision::NotOurs => done(reply(&OpenError::new(400, "erro_orq_headless_provider", "sem terminal só vale para claude ou codex"))),
     }
 }
 

@@ -25,17 +25,8 @@ struct Asked {
     dir: String,
 }
 
-/// O que a rota responde quando não há raiz.
-#[derive(Debug, PartialEq)]
-pub struct Refusal {
-    pub status: u16,
-    pub code: &'static str,
-    pub msg: String,
-    pub params: Value,
-}
-
-fn refusal(status: u16, code: &'static str, msg: impl Into<String>, params: Value) -> Refusal {
-    Refusal { status, code, msg: msg.into(), params }
+fn refusal(status: u16, code: &'static str, msg: impl Into<String>, params: Value) -> OpenError {
+    OpenError::new(status, code, msg).with_params(params)
 }
 
 pub async fn clone(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
@@ -51,15 +42,15 @@ pub async fn clone(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     match result {
         Ok(root) => json_response(StatusCode::OK, json!({"root": root})),
         Err(r) => {
-            st.diag.report("rust.placement_clone_failed", "", r.code, "clone do balanceamento recusado");
-            json_response(StatusCode::from_u16(r.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), detail_body(r.code, &r.msg, r.params))
+            st.diag.report("rust.placement_clone_failed", "", r.code.unwrap_or_default(), "clone do balanceamento recusado");
+            json_response(StatusCode::from_u16(r.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), r.body())
         }
     }
 }
 
 /// Clona `origin` em `<dir>/<nome>` por uma pasta temporária ao lado, renomeada só no fim: clone pela metade
 /// nunca parece repositório. A pasta que já existe com o mesmo `origin` é a resposta.
-pub fn clone_into(origin: &str, dir: &Path, wait: Duration) -> Result<String, Refusal> {
+pub fn clone_into(origin: &str, dir: &Path, wait: Duration) -> Result<String, OpenError> {
     let origin = origin.trim();
     let name = folder_name(origin).filter(|_| !origin.starts_with('-'))
         .ok_or_else(|| refusal(422, "placement_clone_invalid", "origin sem nome de repositório", json!({})))?;
@@ -95,7 +86,7 @@ pub fn clone_into(origin: &str, dir: &Path, wait: Duration) -> Result<String, Re
 }
 
 /// A pasta que já ocupa o nome: serve se for o mesmo repositório.
-fn existing(target: &Path, origin: &str) -> Result<String, Refusal> {
+fn existing(target: &Path, origin: &str) -> Result<String, OpenError> {
     let root = target.to_string_lossy().into_owned();
     match worktrees::origin_url(&root) {
         Some(found) if same_repo(&found, origin) => Ok(root),
@@ -142,7 +133,7 @@ fn read_remote(server: &str, answer: Result<Option<Value>, PeerError>) -> Result
             .ok_or_else(|| uncertain(format!("{server}: resposta do clone sem a raiz"))),
         Ok(None) => Err(uncertain(format!("{server}: resposta do clone vazia"))),
         // A rota não existe lá: a máquina não devia ter sido candidata.
-        Err(PeerError::Refused { status: 404, detail }) if detail.get("code").is_none() => Err(OpenError::new(409, "placement_peer_old",
+        Err(error) if error.missing_route() => Err(OpenError::new(409, "placement_peer_old",
             format!("{server} está numa versão sem o clone do balanceamento: escolha outra máquina")).with_params(params)),
         Err(PeerError::Refused { status, detail }) => {
             let code = match detail["code"].as_str() {
@@ -156,8 +147,7 @@ fn read_remote(server: &str, answer: Result<Option<Value>, PeerError>) -> Result
             params["server"] = json!(server);
             Err(OpenError::new(status, code, msg).with_params(params))
         }
-        Err(PeerError::Unknown) => Err(OpenError::new(400, "placement_machine_unknown",
-            format!("a máquina '{server}' não está no peers.json (ou sem base_url/token)")).with_params(params)),
+        Err(PeerError::Unknown) => Err(super::forward::machine_unknown(server)),
         Err(error) => Err(uncertain(error.text(server))),
     }
 }
@@ -198,8 +188,8 @@ mod tests {
     #[test]
     fn an_invalid_origin_or_a_relative_dir_is_refused_before_anything() {
         let base = tempfile::tempdir().unwrap();
-        assert_eq!(clone_into("--upload-pack=x", base.path(), CLONE_WAIT).unwrap_err().code, "placement_clone_invalid");
-        assert_eq!(clone_into("https://github.com/a/b", Path::new("rel"), CLONE_WAIT).unwrap_err().code, "placement_clone_invalid");
+        assert_eq!(clone_into("--upload-pack=x", base.path(), CLONE_WAIT).unwrap_err().code, Some("placement_clone_invalid"));
+        assert_eq!(clone_into("https://github.com/a/b", Path::new("rel"), CLONE_WAIT).unwrap_err().code, Some("placement_clone_invalid"));
         assert_eq!(std::fs::read_dir(base.path()).unwrap().count(), 0);
     }
 

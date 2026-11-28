@@ -148,6 +148,14 @@ fn local_tz() -> String {
         .filter(|tz| tz.parse::<chrono_tz::Tz>().is_ok()).unwrap_or_default()
 }
 
+/// As pastas de clone dos campos sobre `dirs`: campo vazio tira a pasta da máquina.
+fn merge_clone_dirs(dirs: &mut BTreeMap<String, String>, inputs: &Inputs, cx: &App) {
+    for (ident, input) in &inputs.clone {
+        let dir = input.read(cx).value().trim().to_owned();
+        if dir.is_empty() { dirs.remove(ident); } else { dirs.insert(ident.clone(), dir); }
+    }
+}
+
 fn project_title(project: &str) -> String { project.strip_prefix("git:").unwrap_or(project).to_owned() }
 
 fn day_name(day: u8) -> String { tr(&format!("placement_day_{day}")) }
@@ -219,17 +227,14 @@ impl Hangar {
 
     /// Monta os campos com o rascunho; as listas de projeto e máquina e as pastas de clone se refazem quando chega fato novo.
     fn placement_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(draft) = self.placement.draft.clone() else { return };
+        if self.placement.draft.is_none() { return; }
         let choices = self.placement.choices();
         if self.placement.inputs.as_ref().is_some_and(|i| i.choices == choices) { return; }
+        let Some(draft) = &self.placement.draft else { return };
+        let limits = draft.limits.clone();
         // As pastas digitadas antes do fato novo ficam no rascunho, senão a lista refeita as perderia.
         let mut clone_dirs = draft.clone_dirs.clone();
-        if let Some(inputs) = &self.placement.inputs {
-            for (ident, input) in &inputs.clone {
-                let dir = input.read(cx).value().trim().to_owned();
-                if dir.is_empty() { clone_dirs.remove(ident); } else { clone_dirs.insert(ident.clone(), dir); }
-            }
-        }
+        if let Some(inputs) = &self.placement.inputs { merge_clone_dirs(&mut clone_dirs, inputs, cx); }
         let field = |value: String, placeholder: String, window: &mut Window, cx: &mut Context<Self>|
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value));
         let (projects, machines) = &choices;
@@ -248,9 +253,9 @@ impl Hangar {
         let inputs = match kept {
             Some(old) => Inputs { clone, project, project_server, avoid, choices, ..old },
             None => Inputs {
-                mem: field(draft.limits.mem_free_pct.to_string(), String::new(), window, cx),
-                working: field(draft.limits.working.to_string(), String::new(), window, cx),
-                cpu: field(draft.limits.cpu_pct.to_string(), String::new(), window, cx),
+                mem: field(limits.mem_free_pct.to_string(), String::new(), window, cx),
+                working: field(limits.working.to_string(), String::new(), window, cx),
+                cpu: field(limits.cpu_pct.to_string(), String::new(), window, cx),
                 from: field(String::new(), "09:00".into(), window, cx),
                 to: field(String::new(), "18:00".into(), window, cx),
                 tz: field(local_tz(), "America/Sao_Paulo".into(), window, cx),
@@ -267,10 +272,7 @@ impl Hangar {
         let text = |input: &Entity<InputState>| input.read(cx).value().to_string();
         let mut config = draft.clone();
         config.limits = limits(&text(&inputs.mem), &text(&inputs.working), &text(&inputs.cpu)).map_err(tr)?;
-        for (ident, input) in &inputs.clone {
-            let dir = text(input).trim().to_owned();
-            if dir.is_empty() { config.clone_dirs.remove(ident); } else { config.clone_dirs.insert(ident.clone(), dir); }
-        }
+        merge_clone_dirs(&mut config.clone_dirs, inputs, cx);
         Ok(config)
     }
 

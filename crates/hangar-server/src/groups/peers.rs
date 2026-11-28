@@ -134,6 +134,8 @@ pub enum PeerError {
 
 impl PeerError {
     pub fn is_transport(&self) -> bool { matches!(self, PeerError::Transport(_)) }
+    /// 404 sem `code`: a rota não existe lá (versão antiga); 404 com código é recusa comum.
+    pub fn missing_route(&self) -> bool { matches!(self, PeerError::Refused { status: 404, detail } if detail.get("code").is_none()) }
 
     /// `str(PeerError)` do Python para a máquina `server`.
     pub fn text(&self, server: &str) -> String {
@@ -452,7 +454,7 @@ impl PeerClient {
         let group_get = method == reqwest::Method::GET
             && path.strip_prefix("/api/groups/").is_some_and(|rest| !rest.is_empty() && !rest.contains('/'));
         let answer = match self.send(None, if waiting { Wait::Owner } else { Wait::Read }, server, method, path, body).await.map(|(_, v)| v) {
-            Err(PeerError::Refused { status: 404, detail }) if path.starts_with("/api/groups/") && detail.get("code").is_none() => {
+            Err(error) if path.starts_with("/api/groups/") && error.missing_route() => {
                 return Err(PeerError::OldVersion);
             }
             other => other?.unwrap_or(Value::Null),

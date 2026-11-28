@@ -1,6 +1,6 @@
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import type { AccountBadge } from '@hangar/core';
+import type { AccountBadge, PlacementSuggestion } from '@hangar/core';
 import { Icon, type IconName } from '../../ui/Icon';
 import { ProviderGlyph } from '../../ui/ProviderGlyph';
 import { haptic } from '../../ui/haptics';
@@ -77,7 +77,7 @@ function Accounts({ accounts }: { accounts: Record<string, AccountBadge> | undef
 // O menu de máquinas da conversa nova: cada máquina com o ícone dela e as contas que tem; a demonstração por último.
 // `suggested`: a máquina que o balanceamento marcou, com o motivo na linha dela.
 export function MachineMenu({ machines, active, onPick, suggested }: {
-  machines: MachineEntry[]; active: string; onPick: (id: string) => void; suggested?: { serverId: string; text: string } | null;
+  machines: MachineEntry[]; active: string; onPick: (id: string) => void; suggested?: PlacementSuggestion | null;
 }) {
   const { theme } = useUnistyles();
   const real = machines.filter((sv) => !sv.demo);

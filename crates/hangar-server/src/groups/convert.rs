@@ -150,7 +150,7 @@ async fn convert(st: &Arc<AppState>, groups: &Arc<GroupService>, me: &str, l: Le
     let seen = match st.peers.call(server, reqwest::Method::GET, &format!("/api/sessions/{}/group", segment(&l.remote)), None).await {
         Ok(Some(body)) => body,
         Ok(None) => return old(server),
-        Err(PeerError::Refused { status: 404, detail }) if detail.get("code").is_none() => return old(server),
+        Err(error) if error.missing_route() => return old(server),
         Err(error) => {
             tracing::warn!(code = "groups_convert_not_confirmed", %server, error = %error.text(server), "groups: o par antigo não foi conferido na outra máquina");
             return true;

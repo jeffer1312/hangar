@@ -1003,7 +1003,7 @@ impl NewSession {
         self.menu.set(None);
         // Troca à mão descarta a oferta da regra; voltar à máquina desta tela depois do clique só a desfaz.
         (self.rule_offer, self.rule_seq) = (None, self.rule_seq + 1);
-        if key == super::servers::norm(&self.link.api.identity()) { cx.notify(); return; }
+        if key == self.here_key() { cx.notify(); return; }
         if self.creating || self.account_busy || self.baton.is_some() { return; }
         let Some(choice) = self.servers.ok().and_then(|list| list.iter().find(|c| c.key == key)).cloned() else { return };
         match Api::new(&choice.address, &choice.token) {
@@ -1136,7 +1136,7 @@ impl NewSession {
 
     /// A máquina que a pílula mostra: a da regra depois do clique, senão a desta tela.
     fn shown_key(&self) -> String {
-        self.taken_offer().map_or_else(|| super::servers::norm(&self.link.api.identity()), |offer| offer.key.clone())
+        self.taken_offer().map_or_else(|| self.here_key(), |offer| offer.key.clone())
     }
 
     fn choice_of(&self, key: &str) -> Option<&ServerChoice> { self.servers.ok().and_then(|list| list.iter().find(|c| c.key == key)) }
@@ -1782,7 +1782,7 @@ impl NewSession {
                     Ok(None) => {}
                     Ok(Some((key, text))) => {
                         // Depois de a pessoa mexer na tela, a troca de máquina zeraria o que ela escolheu: fica só o motivo.
-                        if key != super::servers::norm(&self.link.api.identity()) && !self.edited(cx) {
+                        if key != self.here_key() && !self.edited(cx) {
                             self.pick_machine(key.clone(), window, cx);
                             self.machine_touched = false;
                         }
@@ -2844,7 +2844,10 @@ impl NewSession {
             .into_any_element()
     }
 
-    fn current_server(&self, choice: &ServerChoice) -> bool { choice.key == super::servers::norm(&self.link.api.identity()) }
+    /// A chave desta máquina, no formato de `ServerChoice::key`.
+    fn here_key(&self) -> String { super::servers::norm(&self.link.api.identity()) }
+
+    fn current_server(&self, choice: &ServerChoice) -> bool { choice.key == self.here_key() }
 
     fn server_label(&self) -> String {
         self.servers.ok().and_then(|list| list.iter().find(|c| self.current_server(c))).map(|c| c.label.clone())
@@ -2983,7 +2986,7 @@ impl NewSession {
 
     /// A etiqueta da conta `id` (o id de `/api/credenciais`), lida na máquina desta tela.
     fn account_badge(&self, id: &str) -> Option<&super::tags::Badge> {
-        self.tags.get(&super::servers::norm(&self.link.api.identity()))?.accounts.get(id)
+        self.tags.get(&self.here_key())?.accounts.get(id)
     }
 
     /// Onde o agente trabalha, curto, para a pílula de baixo; o texto completo da branch vai na dica. Sem Git, nada.
@@ -3043,16 +3046,14 @@ impl NewSession {
             .children(self.render_mode_pill(open == Some(Menu::Mode), cx))
     }
 
-    /// A dica da pílula de máquina: o motivo da sugestão, enquanto a máquina é a sugerida, e a branch.
     /// O motivo do balanceamento na linha da máquina sugerida, também quando ela não foi marcada porque a pessoa já mexeu.
     fn machine_reason(&self, key: &str) -> Option<String> {
         self.placement.as_ref().filter(|(suggested, _)| suggested == key).map(|(_, text)| tr("new_chat_machine_suggested").replace("{motivo}", text))
     }
 
+    /// A dica da pílula de máquina: o motivo da sugestão, enquanto a máquina é a sugerida, e a branch.
     fn machine_pill_tip(&self, cx: &App) -> Option<String> {
-        let here = super::servers::norm(&self.link.api.identity());
-        let reason = self.placement.as_ref().filter(|(key, _)| *key == here && self.taken_offer().is_none())
-            .map(|(_, text)| tr("new_chat_machine_suggested").replace("{motivo}", text));
+        let reason = self.machine_reason(&self.here_key()).filter(|_| self.taken_offer().is_none());
         let rule = self.taken_offer().map(|offer| offer.notice(&self.machine_title(&offer.key)));
         let lines = [reason, rule, self.branch_pill_label(cx).filter(|_| !self.no_project())].into_iter().flatten().collect::<Vec<_>>();
         (!lines.is_empty()).then(|| lines.join("\n"))

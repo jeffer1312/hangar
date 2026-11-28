@@ -125,7 +125,7 @@ impl Sidecar {
 
     /// Tem filha ligada de outra máquina ainda no grupo.
     pub fn has_remote_child(&self) -> bool {
-        self.linked_children.iter().any(|c| c.contains("::") && self.peers.contains(c))
+        self.linked_children.iter().any(|c| super::local::is_remote(c) && self.peers.contains(c))
     }
 
     /// Vínculos que só valem com a outra ponta em `peers`: quem saiu leva o seu junto.

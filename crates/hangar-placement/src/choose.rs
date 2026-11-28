@@ -10,7 +10,7 @@ use hangar_core::project::ProjectId;
 use crate::rules::PlacementConfig;
 
 /// O que uma máquina responde em `GET /api/placement/facts`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MachineFacts {
     pub server_id: String,
     pub version: String,
@@ -109,23 +109,35 @@ pub struct Placement {
     pub warnings: Vec<Warning>,
 }
 
-pub fn choose(ctx: &OpenContext, facts: &[MachineFacts], config: &PlacementConfig, now: DateTime<Utc>) -> Placement {
-    let rule = ctx.cwd_project.as_ref().and_then(|p| config.project_rules.iter().find(|r| &r.project == p));
-    let pinned = if ctx.same_folder_server.is_some() {
-        Some(ReasonCode::SameFolder)
+fn project_rule<'a>(ctx: &OpenContext, config: &'a PlacementConfig) -> Option<&'a crate::rules::ProjectRule> {
+    ctx.cwd_project.as_ref().and_then(|p| config.project_rules.iter().find(|r| &r.project == p))
+}
+
+/// Mesma pasta, trabalho não publicado e pasta sem git: a escolha sai sem fato nenhum. `None`: nada prende.
+pub fn pinned(ctx: &OpenContext, config: &PlacementConfig) -> Option<Placement> {
+    let reason = if ctx.same_folder_server.is_some() {
+        ReasonCode::SameFolder
     } else if let Some(why) = ctx.unpublished {
-        Some(ReasonCode::Unpublished { why })
+        ReasonCode::Unpublished { why }
     } else if ctx.plain_dir_not_home {
-        Some(ReasonCode::PlainDir)
+        ReasonCode::PlainDir
     } else {
-        None
+        return None;
     };
-    if let Some(reason) = pinned {
-        let server = ctx.same_folder_server.clone().unwrap_or_else(|| ctx.local_id.clone());
-        let warnings =
-            rule.filter(|r| r.server != server).map(|r| Warning::RuleOverridden { server: r.server.clone() }).into_iter().collect();
-        return Placement { server, reason, clone: None, warnings };
+    let server = ctx.same_folder_server.clone().unwrap_or_else(|| ctx.local_id.clone());
+    let warnings = project_rule(ctx, config)
+        .filter(|r| r.server != server)
+        .map(|r| Warning::RuleOverridden { server: r.server.clone() })
+        .into_iter()
+        .collect();
+    Some(Placement { server, reason, clone: None, warnings })
+}
+
+pub fn choose(ctx: &OpenContext, facts: &[MachineFacts], config: &PlacementConfig, now: DateTime<Utc>) -> Placement {
+    if let Some(placement) = pinned(ctx, config) {
+        return placement;
     }
+    let rule = project_rule(ctx, config);
 
     let eval = |id: &str| match facts.iter().find(|f| f.server_id == id) {
         Some(f) => check(ctx, f, config, now),
