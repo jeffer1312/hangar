@@ -5,6 +5,7 @@ mod accounts;
 mod panel;
 mod store;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -23,16 +24,34 @@ const MAX_BODY: usize = 2 * 1024 * 1024;
 /// O aviso de recusa são quatro campos curtos.
 const MAX_REFUSAL_BODY: usize = 1024;
 
-fn app(pool: PgPool) -> Router {
+/// Aviso em processo de pacote gravado, para o painel aberto reler; e o sinal de desligar, que fecha esses canais.
+pub struct Live {
+    notify: tokio::sync::broadcast::Sender<()>,
+    stop: tokio::sync::watch::Sender<bool>,
+}
+
+impl Live {
+    fn new() -> Live {
+        Live { notify: tokio::sync::broadcast::channel(16).0, stop: tokio::sync::watch::channel(false).0 }
+    }
+}
+
+#[derive(Clone)]
+struct Ingest {
+    pool: PgPool,
+    live: Arc<Live>,
+}
+
+fn app(pool: PgPool, live: Arc<Live>) -> Router {
     Router::new()
         .route("/v1/batch", post(post_batch))
         .route("/v1/declined", post(post_declined).layer(DefaultBodyLimit::max(MAX_REFUSAL_BODY)))
         .layer(DefaultBodyLimit::max(MAX_BODY))
-        .with_state(pool)
+        .with_state(Ingest { pool, live })
 }
 
-fn app_with_panel(pool: PgPool) -> Router {
-    app(pool.clone()).merge(panel::router(pool))
+fn app_with_panel(pool: PgPool, live: Arc<Live>) -> Router {
+    app(pool.clone(), live.clone()).merge(panel::router(pool, live))
 }
 
 fn reply(status: StatusCode, body: String) -> Response {
@@ -44,15 +63,19 @@ fn refused(status: StatusCode, field: &str) -> Response {
 }
 
 /// O corpo vem como bytes para que pacote fora da forma seja 400, e não o 422 do `Json` do axum.
-async fn post_batch(State(pool): State<PgPool>, body: Bytes) -> Response {
+async fn post_batch(State(ingest): State<Ingest>, body: Bytes) -> Response {
     let Ok(batch) = serde_json::from_slice::<Batch>(&body) else {
         return refused(StatusCode::BAD_REQUEST, "json");
     };
     if let Err(field) = batch.validate() {
         return refused(StatusCode::BAD_REQUEST, field);
     }
-    match store::insert(&pool, &batch).await {
-        Ok(store::Insert::Accepted) => reply(StatusCode::OK, r#"{"ok":true}"#.to_owned()),
+    match store::insert(&ingest.pool, &batch).await {
+        Ok(store::Insert::Accepted) => {
+            // Sem painel aberto não há quem ouça, e o envio só falha por isso.
+            let _ = ingest.live.notify.send(());
+            reply(StatusCode::OK, r#"{"ok":true}"#.to_owned())
+        }
         Ok(store::Insert::DayAhead) => refused(StatusCode::BAD_REQUEST, "day"),
         Err(error) if store::is_bad_value(&error) => refused(StatusCode::BAD_REQUEST, "value"),
         Err(error) => {
@@ -130,13 +153,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&listen).await?;
     eprintln!("telemetry-ingest: listening on {listen}");
     // O pedido em curso termina de gravar antes de o processo sair.
+    let live = Arc::new(Live::new());
+    let closing = live.clone();
+    // Os canais ao vivo do painel ficariam abertos para sempre: o desligamento os fecha antes de esperar os pedidos.
     let stop = async move {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = terminate.recv() => {}
         }
+        // `send_replace` grava mesmo sem ninguém ouvindo: um canal que assina depois já nasce fechado.
+        closing.stop.send_replace(true);
     };
-    axum::serve(listener, app_with_panel(pool)).with_graceful_shutdown(stop).await?;
+    axum::serve(listener, app_with_panel(pool, live)).with_graceful_shutdown(stop).await?;
     Ok(())
 }
 
@@ -150,6 +178,10 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    fn app(pool: PgPool) -> Router { super::app(pool, Arc::new(Live::new())) }
+
+    fn app_with_panel(pool: PgPool) -> Router { super::app_with_panel(pool, Arc::new(Live::new())) }
 
     /// Pool que nunca conecta: os pedidos recusados antes do banco não precisam dele.
     fn offline() -> PgPool {
@@ -217,7 +249,7 @@ mod tests {
         let response = router.oneshot(request.unwrap()).await.unwrap();
         let (status, headers) = (response.status(), response.headers().clone());
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        (status, headers, String::from_utf8(bytes.to_vec()).unwrap())
+        (status, headers, String::from_utf8_lossy(&bytes).into_owned())
     }
 
     /// O par `nome=valor` do Set-Cookie, como o navegador o devolve.
@@ -226,16 +258,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn without_a_session_the_panel_shows_the_login_and_hides_the_data() {
+    async fn without_a_session_the_panel_serves_the_app_and_hides_the_data() {
         let (status, _, page) = call(app_with_panel(offline()), "GET", "/panel", None, None).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(page.contains("/panel/api/login") && !page.contains("/panel/data"), "sem sessão vem a entrada, não o painel");
+        // O app pergunta a sessão em /panel/api/me e mostra a entrada; a página em si não traz dado nenhum.
+        assert!(page.contains(r#"<div id="root">"#) && !page.contains("/panel/data"), "{page}");
         assert_eq!(call(app_with_panel(offline()), "GET", "/panel/data", None, None).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(call(app_with_panel(offline()), "GET", "/panel/events", None, None).await.0, StatusCode::UNAUTHORIZED);
         assert_eq!(call(app_with_panel(offline()), "POST", "/panel/api/invites", None, None).await.0, StatusCode::UNAUTHORIZED);
         assert_eq!(call(app_with_panel(offline()), "GET", "/panel/trail?machine=x&day=y", None, None).await.0, StatusCode::UNAUTHORIZED);
         // Consulta que nem desserializa também é 401 sem sessão.
         assert_eq!(call(app_with_panel(offline()), "GET", "/panel/trail?machine=a&machine=b", None, None).await.0, StatusCode::UNAUTHORIZED);
         assert_eq!(call(app_with_panel(offline()), "GET", "/panel/data?days=abc", None, None).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn the_panel_installs_as_an_app_without_caching_pages() {
+        let (status, headers, body) = call(app_with_panel(offline()), "GET", "/panel/manifest.webmanifest", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/manifest+json");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+        let manifest: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!((manifest["start_url"].as_str(), manifest["display"].as_str()), (Some("/panel"), Some("standalone")));
+        let icons = manifest["icons"].as_array().unwrap();
+        for size in ["192x192", "512x512"] {
+            for purpose in ["any", "maskable"] {
+                assert!(icons.iter().any(|i| i["sizes"] == size && i["purpose"] == purpose), "{size} {purpose}");
+            }
+        }
+        for src in icons.iter().map(|i| i["src"].as_str().unwrap()).chain(["/panel/apple-touch-icon.png"]) {
+            let (status, headers, _) = call(app_with_panel(offline()), "GET", src, None, None).await;
+            assert!(status == StatusCode::OK && headers[header::CONTENT_TYPE] == "image/png", "{src}");
+        }
+
+        let (status, headers, body) = call(app_with_panel(offline()), "GET", "/panel/sw.js", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "text/javascript; charset=utf-8");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+        assert_eq!(headers["service-worker-allowed"], "/panel");
+        assert!(body.contains("fetch(e.request)"), "{body}");
+
+        for path in ["/panel", "/panel/", "/panel/join"] {
+            let (status, headers, page) = call(app_with_panel(offline()), "GET", path, None, None).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert_eq!(headers[header::CACHE_CONTROL], "no-store", "a página nunca fica guardada: {path}");
+            assert!(page.contains("/panel/manifest.webmanifest"), "{path}");
+            let policy = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+            assert!(policy.contains("script-src 'self';") && policy.contains("worker-src 'self'") && !policy.contains("sha256-"), "{policy}");
+            assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY");
+        }
+    }
+
+    #[tokio::test]
+    async fn hashed_assets_stay_cached_and_unknown_files_are_404() {
+        let (_, _, page) = call(app_with_panel(offline()), "GET", "/panel", None, None).await;
+        let script = page.split(r#"src=""#).nth(1).and_then(|rest| rest.split('"').next()).unwrap().to_owned();
+        assert!(script.starts_with("/panel/assets/") && script.ends_with(".js"), "{script}");
+        let (status, headers, body) = call(app_with_panel(offline()), "GET", &script, None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "text/javascript; charset=utf-8");
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
+        // O app registra o service worker que só repassa à rede.
+        assert!(body.contains("/panel/sw.js"), "o app registra o service worker");
+        for missing in ["/panel/assets/nada.js", "/panel/assets/../index.html", "/panel/nada.png"] {
+            assert_eq!(call(app_with_panel(offline()), "GET", missing, None, None).await.0, StatusCode::NOT_FOUND, "{missing}");
+        }
     }
 
     #[tokio::test]
@@ -256,8 +343,7 @@ mod tests {
         let cookie = session_of(&headers);
         assert!(headers[header::SET_COOKIE].to_str().unwrap().contains("HttpOnly; Secure; SameSite=Strict"));
 
-        let (status, _, page) = call(app(), "GET", "/panel", Some(&cookie), None).await;
-        assert!(status == StatusCode::OK && page.contains("/panel/data"), "com sessão vem o painel");
+        assert_eq!(call(app(), "GET", "/panel/api/me", Some(&cookie), None).await.0, StatusCode::OK, "com sessão o app abre o painel");
         assert_eq!(call(app(), "GET", "/panel/data?days=7", Some(&cookie), None).await.0, StatusCode::OK);
 
         let (status, _, body) = call(app(), "POST", "/panel/api/invites", Some(&cookie), None).await;
@@ -361,6 +447,29 @@ mod tests {
         let after = store::summary(&pool, 7).await.unwrap()["refusals"].clone();
         let grew = |kind: &str| after[kind].as_i64().unwrap() - before[kind].as_i64().unwrap();
         assert!(grew("declined") >= 2 && grew("revoked") >= 1, "{before} {after}");
+    }
+
+    #[tokio::test]
+    #[ignore = "precisa de TELEMETRY_TEST_DATABASE_URL"]
+    async fn the_open_panel_hears_each_new_batch() {
+        use futures_util::StreamExt;
+        let pool = online().await;
+        let cookie = logged_in(&pool).await;
+        let live = Arc::new(Live::new());
+        let request = Request::get("/panel/events").header(header::HOST, "telemetry.test").header(header::COOKIE, &cookie).body(Body::empty()).unwrap();
+        let response = super::app_with_panel(pool.clone(), live.clone()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "text/event-stream");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response.headers()["x-accel-buffering"], "no", "proxy no meio não junta os avisos");
+        let mut events = response.into_body().into_data_stream();
+        let id = fresh_id();
+        let batch = batch_body(&id, &utc_day(&pool, 0).await);
+        let request = Request::post("/v1/batch").header(header::CONTENT_TYPE, "application/json").body(Body::from(batch.to_string())).unwrap();
+        assert_eq!(super::app(pool.clone(), live.clone()).oneshot(request).await.unwrap().status(), StatusCode::OK);
+        let chunk = tokio::time::timeout(Duration::from_secs(5), events.next()).await.expect("aviso do pacote").unwrap().unwrap();
+        assert!(String::from_utf8_lossy(&chunk).contains("event: batch"), "{chunk:?}");
+        forget(&pool, &[id]).await;
     }
 
     #[tokio::test]

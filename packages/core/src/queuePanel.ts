@@ -61,7 +61,12 @@ export function beginQueueEdit(entry: QueuePanelEntry, draft: string, current: Q
  *  `refs`: citações da mensagem em edição, que voltam na frente do texto; com elas o campo pode ficar vazio. */
 export function canUpdateQueueEdit(text: string, refs: readonly ContextRef[] = []): boolean {
   const trimmed = composeWithContextRefs(refs, text);
-  return trimmed.length > 0 && !trimmed.startsWith('/');
+  return trimmed.length > 0 && !isSlashCommand(trimmed);
+}
+
+/** O servidor trata como comando todo texto que começa com `/`, até caminho colado: só no Codex ele entra na fila. */
+export function isSlashCommand(text: string): boolean {
+  return text.trimStart().startsWith('/');
 }
 
 /** O texto que o Atualizar grava (sem as bordas em branco), ou `null` quando ele não mudou e só sai da edição. */

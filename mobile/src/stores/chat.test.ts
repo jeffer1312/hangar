@@ -750,6 +750,98 @@ test('/clear aceito só retira seu eco quando o servidor confirma a troca de con
   chat.release();
 });
 
+test('comando de barra com a sessão trabalhando fica na conversa até ela repeti-lo, fora do painel "Na fila"', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[]];
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'working' }));
+    const requests = fetchManual();
+    const sending = chat.send('/effort xhigh');
+    expect(chat.use.getState().pending.map((p) => [p.text, p.queue])).toEqual([['/effort xhigh', undefined]]);
+    requests[0].responder({ ok: true });
+    await sending;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/effort xhigh']);
+    created[0].trigger('message', JSON.stringify(ev({ id: 'u:1', text: '/effort xhigh' })));
+    expect(chat.use.getState().pending).toEqual([]);
+    chat.release();
+  } finally { vi.useRealTimers(); }
+});
+
+test('comando que a conversa não repete (/compact) sai do eco depois de a sessão parar', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[]];
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'working' }));
+    const requests = fetchManual();
+    const sending = chat.send('/compact');
+    requests[0].responder({ ok: true });
+    await sending;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/compact']);
+    created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'idle' }));
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/compact']);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(chat.use.getState().pending).toEqual([]);
+    chat.release();
+  } finally { vi.useRealTimers(); }
+});
+
+test('comando de barra no Codex trabalhando vai para o painel "Na fila": lá o servidor o enfileira', async () => {
+  historyResponses = [[]];
+  const chat = chatStore('srv1', 'sess');
+  chat.setIdentity({ provider: 'codex' });
+  chat.retain();
+  await tick();
+  created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'working' }));
+  const requests = fetchManual();
+  const sending = chat.send('/review');
+  expect(chat.use.getState().pending.map((p) => [p.text, p.queue])).toEqual([['/review', true]]);
+  requests[0].responder({ ok: true });
+  await sending;
+  chat.release();
+});
+
+test('/clear com a rede caindo no POST não fica para sempre: sem reset, o eco sai no prazo', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[]];
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed'); }));
+    await chat.send('/clear').catch(() => undefined);
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/clear']);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(chat.use.getState().pending).toEqual([]);
+    chat.release();
+  } finally { vi.useRealTimers(); }
+});
+
+test('comando de barra com a rede caindo no POST mantém o eco: o envio pode ter chegado', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[]];
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed'); }));
+    await chat.send('/compact').catch(() => undefined);
+    expect(chat.use.getState().pending.map((p) => p.text)).toEqual(['/compact']);
+    expect(readDraft('srv1', 'sess')?.submission?.status).toBe('unknown');
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(chat.use.getState().pending).toEqual([]);
+    chat.release();
+  } finally { vi.useRealTimers(); }
+});
+
 test('(c) preview some quando o assistant_msg real chega', async () => {
   historyResponses = [[]];
   const chat = chatStore('srv1', 'sess');
