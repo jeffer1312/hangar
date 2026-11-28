@@ -1106,7 +1106,12 @@ impl ClaudeEngine {
                         self.cli_note(None,format!("⚙️ A CLI pediu `{subtype}`; respondi vazio"),effects);
                     }
                 } else if tool == "AskUserQuestion" {
-                    self.question = Some(json!({"provider":"claude","request_id":request_id,"questions":request["input"]["questions"]}));
+                    let mut question = json!({"provider":"claude","request_id":request_id,"questions":request["input"]["questions"]});
+                    // A chamada identifica a pergunta entre reaberturas, e a marca de repasse (`hangar-child:<chamada>`)
+                    // vai à linha: o retorno da filha procura as duas.
+                    if let Some(call) = request["tool_use_id"].as_str() { question["tool_use_id"] = json!(call); }
+                    if let Some(source) = request["input"]["metadata"]["source"].as_str() { question["source"] = json!(source); }
+                    self.question = Some(question);
                 } else if self.permission_mode.as_deref() == Some("plan") && self.previous_non_plan.as_deref() == Some("bypassPermissions")
                     && !["ExitPlanMode","Edit","Write","MultiEdit","NotebookEdit"].contains(&tool) {
                     let id = self.server_answer_id();
@@ -1954,6 +1959,31 @@ mod tests {
             Effect::TurnStopped { kind,line_id,at } => Some((*kind,line_id.clone(),*at)),
             _ => None,
         }).collect()
+    }
+
+    /// A marca de repasse do AskUserQuestion (`metadata.source`) chega à pergunta publicada; o dono não a vê.
+    #[test]
+    fn the_question_keeps_the_metadata_source() {
+        let mut engine = ClaudeEngine::new(json!({"name":"session","session_id":"sid","initialized":true}),1,clock(10.0));
+        engine.set_interactions("key".into(),Arc::new(InteractionStore::default())).unwrap();
+        let ask = |request:&str,source:Value| json!({"type":"control_request","request_id":request,"request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":format!("toolu_{request}"),
+            "input":{"questions":[{"header":"h","question":"Qual pasta?","multiSelect":false,"options":[{"label":"src","description":""}]}],
+                "metadata":{"source":source}}}});
+        line(&mut engine,ask("r1",json!("hangar-child:q1")),11.0);
+        let published = engine.public_state().codex_question.expect("pergunta publicada");
+        assert_eq!((&published["source"],&published["tool_use_id"]),(&json!("hangar-child:q1"),&json!("toolu_r1")));
+        // Sem marca (ou torta), a pergunta segue igual, sem o campo.
+        line(&mut engine,ask("r2",json!(5)),12.0);
+        assert!(engine.public_state().codex_question.expect("pergunta publicada").get("source").is_none());
+    }
+
+    /// A resposta livre do repasse vale também em múltipla escolha sem terminal.
+    #[test]
+    fn a_free_text_answer_is_taken_by_a_multi_select_question() {
+        let question = json!({"questions":[{"question":"Quais?","multiSelect":true,"options":[{"label":"a"},{"label":"b"}]}]});
+        let body = answer_body(&question,&json!([{"kind":"text","value":"Respondida pelo dono na filha f: a, b.","type_index":2}])).unwrap();
+        assert_eq!(body["behavior"],"allow");
+        assert_eq!(body["updatedInput"]["answers"]["Quais?"],"Respondida pelo dono na filha f: a, b.");
     }
 
     #[test]
