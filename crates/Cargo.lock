@@ -2349,6 +2349,7 @@ dependencies = [
  "hangar-scheduled-tasks",
  "hangar-send",
  "hangar-session-open-fields",
+ "hangar-session-open-policy",
  "hangar-session-ports",
  "hangar-session-tools",
  "hangar-shortcut-transfer",
@@ -2419,6 +2420,21 @@ dependencies = [
 [[package]]
 name = "hangar-session-open-fields"
 version = "0.1.0"
+
+[[package]]
+name = "hangar-session-open-policy"
+version = "0.1.0"
+dependencies = [
+ "hangar-antigravity",
+ "hangar-core",
+ "indexmap",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "unicode-normalization",
+]
 
 [[package]]
 name = "hangar-session-ports"

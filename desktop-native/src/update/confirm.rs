@@ -1,7 +1,7 @@
 //! Confirmação da atualização com os avisos e as novidades da versão nova, e "O que chegou para você" depois dela.
 
-use std::{cell::Cell, path::Path, rc::Rc, time::Instant};
-use gpui_kit::{assets::IconName, component::{Sizable, WindowExt, button::*, dialog::DialogFooter, radio::Radio, text::TextView}, prelude::FluentBuilder, *};
+use std::{cell::{Cell, RefCell}, path::Path, rc::Rc, time::{Duration, Instant}};
+use gpui_kit::{assets::IconName, component::{DialogId, Sizable, WindowExt, button::*, dialog::DialogFooter, radio::Radio, text::TextView}, prelude::FluentBuilder, *};
 use serde::Deserialize;
 use serde_json::Value;
 use crate::{api::{Api, Failure}, app::chrome, i18n::{tr, tr_shared}, theme};
@@ -398,23 +398,86 @@ pub(crate) fn stage_slot(id: &str, guess: Pixels, draw: crate::news::NewsAnimati
     }, |_, _, _, _| {}).absolute().top_0().left_0().size_full())
 }
 
-/// "O que chegou para você": uma vez, com o que o servidor diz que chegou.
+/// Num computador usado de longe ninguém fecha o aviso, e cada atualização deixava mais um aberto.
+const WHATS_NEW_IDLE: Duration = Duration::from_secs(10 * 60);
+
+/// O "O que chegou para você" aberto, para o que chega depois entrar nele.
+struct OpenWhatsNew { window: AnyWindowHandle, dialog: DialogId, items: Rc<RefCell<Vec<News>>>, touched: Rc<Cell<Instant>>,
+    started: Rc<Cell<Instant>>, scroll: ScrollHandle }
+
+thread_local! { static WHATS_NEW: RefCell<Option<OpenWhatsNew>> = const { RefCell::new(None) }; }
+
+/// "O que chegou para você": um só por janela. O que chega com ele aberto entra no topo dele, que volta ao começo, e o
+/// prazo recomeça.
 fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window, cx: &mut App) {
+    let here = window.window_handle();
+    let open = WHATS_NEW.with_borrow(|open| open.as_ref().filter(|open| open.window == here)
+        .map(|open| (open.dialog, open.items.clone(), open.touched.clone(), open.started.clone(), open.scroll.clone())));
+    // Um aviso na animação de saída não conta: o que entrasse nele sumiria junto.
+    if let Some((dialog, open_items, touched, started, scroll)) = open && window.is_dialog_open(dialog, cx) {
+        let merged = merge_news(items, &open_items.borrow());
+        *open_items.borrow_mut() = merged;
+        touched.set(Instant::now());
+        started.set(Instant::now());
+        scroll.set_offset(point(px(0.), px(0.)));
+        return window.refresh();
+    }
+    let items = Rc::new(RefCell::new(items));
+    let touched = Rc::new(Cell::new(Instant::now()));
+    let started = Rc::new(Cell::new(Instant::now()));
+    let scroll = ScrollHandle::new();
     let fixes_open = Rc::new(Cell::new(false));
-    let started = Instant::now();
-    window.open_dialog(cx, move |dialog, window, cx| {
-        let max = window.viewport_size().height * 0.8 - px(110.);
-        let top = (window.viewport_size().height * 0.1).max(px(24.));
-        let width = px(780.).min(window.viewport_size().width * 0.92);
-        // Largura do primeiro quadro da animação (modal menos borda e respiros dele e do cartão); depois vale a medida.
-        let stage = width - px(64.);
-        crate::app::popup::dialog(dialog).w(width).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
-            .child(div().id("whats-new-body").max_h(max).overflow_y_scroll()
-                .child(sections(tr_shared("update_whats_new_title", &[]), &items, Some(stage), &fixes_open, show.as_ref(), started, window, cx)))
-            .footer(DialogFooter::new().child(chrome::light_button("whats-new-close", true, cx).label(tr("close"))
-                .on_click(|_, window, cx| window.close_dialog(cx))))
+    let dialog = window.open_dialog_with_id(cx, {
+        let (items, touched, started, scroll) = (items.clone(), touched.clone(), started.clone(), scroll.clone());
+        move |dialog, window, cx| {
+            let presence = touched.clone();
+            let max = window.viewport_size().height * 0.8 - px(110.);
+            let top = (window.viewport_size().height * 0.1).max(px(24.));
+            let width = px(780.).min(window.viewport_size().width * 0.92);
+            // Largura do primeiro quadro da animação (modal menos borda e respiros dele e do cartão); depois vale a medida.
+            let stage = width - px(64.);
+            crate::app::popup::dialog(dialog).w(width).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
+                .child(div().id("whats-new-body").max_h(max).overflow_y_scroll().track_scroll(&scroll)
+                    .child(canvas(|_, _, _| {}, move |_, _, window, _| watch_presence(&presence, window)).absolute().size_0())
+                    .child(sections(tr_shared("update_whats_new_title", &[]), &items.borrow(), Some(stage), &fixes_open, show.as_ref(),
+                        started.get(), window, cx)))
+                .footer(DialogFooter::new().child(chrome::light_button("whats-new-close", true, cx).label(tr("close"))
+                    .on_click(|_, window, cx| window.close_dialog(cx))))
+        }
     });
+    WHATS_NEW.set(Some(OpenWhatsNew { window: here, dialog, items, touched: touched.clone(), started, scroll }));
+    // Tecla também é alguém diante da janela. Ouvinte de tecla de elemento só vê o caminho do foco, que é o do diálogo.
+    let typed = touched.clone();
+    let keys = cx.intercept_keystrokes(move |_, window, _| if window.window_handle() == here { typed.set(Instant::now()) });
+    window.spawn(cx, async move |cx| loop {
+        let _keys = &keys;
+        match idle_left(touched.get().elapsed()) {
+            Some(left) => cx.background_executor().timer(left).await,
+            None => { let _ = cx.update(|window, cx| window.close_dialog_by_id(dialog, cx)); break; }
+        }
+        // Fechado antes do prazo (pela pessoa ou pela janela que sumiu): nada a fechar.
+        if !cx.update(|window, cx| window.is_dialog_open(dialog, cx)).unwrap_or(false) { break; }
+    }).detach();
 }
+
+/// Mouse em qualquer ponto da janela, rodapé e borda do aviso inclusive, mostra alguém diante dela. Registrado a cada
+/// pintura do aviso, como todo ouvinte de janela.
+fn watch_presence(touched: &Rc<Cell<Instant>>, window: &mut Window) {
+    let (moved, scrolled, pressed) = (touched.clone(), touched.clone(), touched.clone());
+    window.on_mouse_event(move |_: &MouseMoveEvent, phase, _, _| if phase == DispatchPhase::Bubble { moved.set(Instant::now()) });
+    window.on_mouse_event(move |_: &ScrollWheelEvent, phase, _, _| if phase == DispatchPhase::Bubble { scrolled.set(Instant::now()) });
+    window.on_mouse_event(move |_: &MouseDownEvent, phase, _, _| if phase == DispatchPhase::Bubble { pressed.set(Instant::now()) });
+}
+
+/// O que chegou agora vem primeiro; do que já estava aberto fica o que não se repete.
+fn merge_news(mut newer: Vec<News>, open: &[News]) -> Vec<News> {
+    let older: Vec<News> = open.iter().filter(|old| !newer.iter().any(|new| new.id == old.id)).cloned().collect();
+    newer.extend(older);
+    newer
+}
+
+/// Quanto falta para o "O que chegou para você" fechar sozinho, depois de `quiet` sem ninguém mexer nele; `None`: já.
+fn idle_left(quiet: Duration) -> Option<Duration> { WHATS_NEW_IDLE.checked_sub(quiet).filter(|left| !left.is_zero()) }
 
 fn for_desktop(news: &News) -> bool { matches!(news.platforms.as_str(), "desktop" | "all") }
 
@@ -581,6 +644,23 @@ mod tests {
         assert_eq!(arrived(Err(refused(Some(405), "Method Not Allowed")), None), Arrived::Absent);
         assert!(matches!(arrived(Err(refused(Some(503), "update_arrived_unavailable")), None), Arrived::Failed(_)));
         assert!(matches!(arrived(Ok(serde_json::json!({"news": []})), None), Arrived::Failed(_)), "sem `through` não marca nada");
+    }
+
+    #[test]
+    fn a_later_arrival_joins_the_open_whats_new_newest_first_without_repeats() {
+        let item = |id: &str, title: &str| News { id: id.into(), title: title.into(), kind: "new".into(), text: String::new(),
+            platforms: "desktop".into(), try_it: None, animation: None, anchor: None };
+        let merged = merge_news(vec![item("c", "C"), item("a", "novo A")], &[item("a", "velho A"), item("b", "B")]);
+        assert_eq!(merged.iter().map(|n| (n.id.as_str(), n.title.as_str())).collect::<Vec<_>>(),
+            [("c", "C"), ("a", "novo A"), ("b", "B")]);
+    }
+
+    #[test]
+    fn whats_new_closes_after_ten_quiet_minutes() {
+        assert_eq!(idle_left(Duration::ZERO), Some(Duration::from_secs(600)));
+        assert_eq!(idle_left(Duration::from_secs(599)), Some(Duration::from_secs(1)));
+        assert_eq!(idle_left(Duration::from_secs(600)), None);
+        assert_eq!(idle_left(Duration::from_secs(3600)), None);
     }
 
     #[test]
