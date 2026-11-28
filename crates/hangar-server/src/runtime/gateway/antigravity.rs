@@ -60,7 +60,7 @@ impl RuntimeRegistry {
         }
         let (state_path,_) = super::super::codex_terminal::queue_files(&queue_dir,&key);
         let (q,k,n) = (queue_dir.clone(),key.clone(),name.to_owned());
-        let generation = match tokio::task::spawn_blocking(move||super::super::queue::Store::open(&state_path,&q,super::super::queue::State::new(&k,1,&n,Vec::new()))
+        let generation = match tokio::task::spawn_blocking(move||super::super::queue::open_observed_store(&state_path,&q,super::super::queue::State::new(&k,1,&n,Vec::new()))
             .map(|store|store.state().generation)).await {
             Ok(Ok(generation)) => generation,
             Ok(Err(_)) => return Some(Err(failure("queue_state_read"))),

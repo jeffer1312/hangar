@@ -70,6 +70,7 @@ hangar-api.workspace = true
 hangar-codex.workspace = true
 hangar-core.workspace = true
 hangar-other-terminal-policy.workspace = true
+hangar-runtime-queue.workspace = true
 hangar-session-open-fields.workspace = true
 hangar-session-open-policy.workspace = true
 hangar-codex-account-sync.workspace = true

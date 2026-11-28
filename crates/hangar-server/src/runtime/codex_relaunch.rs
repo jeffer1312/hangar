@@ -10,7 +10,7 @@ use super::ingress::IngressGates;
 use super::lifecycle::ClosedIngress;
 use crate::session_open::Surface;
 use super::protocol::{CanoBinding,ClockSample,Disposition,OperationKind,RuntimeCommand,RuntimeError,RuntimeTarget};
-use super::queue::{Action,State as QueueState,Store};
+use super::queue::{Action,State as QueueState,open_observed_store};
 use crate::accounts::{AccountService,Provider,catalog::resolved};
 use crate::list::discover_other::truthy;
 use crate::list::procs::{ProcessView,SystemProcs,exited};
@@ -370,7 +370,7 @@ impl Watcher {
         let (queue_dir,key,name) = (self.cfg.queue_dir.clone(),key.to_owned(),name.to_owned());
         tokio::task::spawn_blocking(move || -> std::io::Result<u64> {
             let _lease = terminal::lease_blocking(&lease_path)?;
-            Ok(Store::open(&state_path,&queue_dir,QueueState::new(&key,1,&name,Vec::new()))?.state().generation)
+            Ok(open_observed_store(&state_path,&queue_dir,QueueState::new(&key,1,&name,Vec::new()))?.state().generation)
         }).await.map_err(|_|job())?.map_err(terminal::io_failure)
     }
 
@@ -653,7 +653,7 @@ impl Watcher {
         let (queue_dir,key,name) = (self.cfg.queue_dir.clone(),key.to_owned(),name.to_owned());
         tokio::task::spawn_blocking(move || -> std::io::Result<u64> {
             let _lease = terminal::lease_blocking(&lease_path)?;
-            let mut store = Store::open(&state_path,&queue_dir,QueueState::new(&key,1,&name,Vec::new()))?;
+            let mut store = open_observed_store(&state_path,&queue_dir,QueueState::new(&key,1,&name,Vec::new()))?;
             let current = store.state().generation;
             let state = json!({"name":name,"codex_life":null});
             let id = terminal::life_call_id(store.state(),current + 1,&state);

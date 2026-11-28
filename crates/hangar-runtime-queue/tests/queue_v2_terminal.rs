@@ -1,4 +1,4 @@
-use hangar_server::runtime::{protocol::ClockSample, queue::*};
+use hangar_runtime_queue::{Action, ClockSample, ReceiptIndex, State, Status, Store, acquire_lease};
 use serde_json::{json,Value};
 
 fn clock()->ClockSample {ClockSample {monotonic_s:10.0,epoch_s:1_800_000_000.0}}
@@ -98,7 +98,6 @@ fn terminal_v1_prepare_receipt_becomes_durable_generation_proof() {
 
 #[test]
 fn absent_transcript_one_echo_cannot_confirm_two_equal_inputs_after_compact_reopen() {
-    use hangar_server::runtime::receipt::ReceiptIndex;
     let dir=tempfile::tempdir().unwrap();let path=dir.path().join("state");let transcript=dir.path().join("absent.jsonl");
     let mut index=ReceiptIndex::new("claude","sid");let cursor=index.capture(&transcript).unwrap();assert!(cursor.file_identity.is_none());
     let mut store=Store::open(&path,dir.path(),State::new("key",1,"session",vec![])).unwrap();
@@ -135,7 +134,6 @@ fn input_being_written_to_the_terminal_holds_the_automatic_update() {
 
 #[test]
 fn terminal_write_barrier_follows_remaining_uncertain_input_and_lifts_after_last() {
-    use hangar_server::runtime::receipt::ReceiptIndex;
     for resolution in ["confirm","late_accepted"] {
         let dir=tempfile::tempdir().unwrap();let path=dir.path().join("state");let transcript=dir.path().join("sid.jsonl");
         let mut index=ReceiptIndex::new("claude","sid");let cursor=index.capture(&transcript).unwrap();
@@ -176,7 +174,6 @@ fn terminal_write_barrier_follows_remaining_uncertain_input_and_lifts_after_last
 
 #[test]
 fn uncertain_input_of_a_second_conversation_blocks_writes_while_old_barrier_stays() {
-    use hangar_server::runtime::receipt::ReceiptIndex;
     let dir=tempfile::tempdir().unwrap();let path=dir.path().join("state");
     let mut store=Store::open(&path,dir.path(),State::new("key",1,"session",vec![])).unwrap();
     for (text,conversation,generation) in [("A","sid",1),("C","new-sid",2)] {
@@ -220,7 +217,6 @@ fn terminal_recover_requeues_only_attempts_that_never_started_writing() {
 
 #[test]
 fn giving_up_an_uncertain_input_passes_the_barrier_on_and_lifts_it_after_the_last() {
-    use hangar_server::runtime::receipt::ReceiptIndex;
     let dir=tempfile::tempdir().unwrap();let path=dir.path().join("state");
     let cursor=ReceiptIndex::new("claude","sid").capture(&dir.path().join("sid.jsonl")).unwrap();
     let mut store=Store::open(&path,dir.path(),State::new("key",1,"session",vec![])).unwrap();

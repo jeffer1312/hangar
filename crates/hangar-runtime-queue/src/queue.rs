@@ -1,5 +1,5 @@
-use super::protocol::{ClockSample, RequestId};
-use crate::config_sync::bundle::sha256;
+use hangar_codex::proto::RequestId;
+use hangar_core::{clock::ClockSample, ids::sha256_hex as sha256};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,20 +10,11 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 mod batch;
-pub(super) const BATCH_TOO_LARGE: &str = "queue_batch_too_large";
-pub(super) const BATCH_SIZE_MESSAGE: &str = "texto do lote ultrapassa o limite do transporte";
-
-pub(super) fn queue_problem(state: &mut hangar_api::state::StateEvent, detail: Option<String>) -> bool {
-    if state.problema.as_deref().is_some_and(|code| code != BATCH_TOO_LARGE) { return false; }
-    let code = detail.as_ref().map(|_| BATCH_TOO_LARGE.to_owned());
-    if state.problema == code && state.problema_detalhe == detail { return false; }
-    state.problema = code;
-    state.problema_detalhe = detail;
-    true
-}
+pub const BATCH_TOO_LARGE: &str = "queue_batch_too_large";
+pub const BATCH_SIZE_MESSAGE: &str = "texto do lote ultrapassa o limite do transporte";
 
 const CALL_PREFIX: &str = "call::";
-pub(crate) const CAP: usize = 1000;
+pub const CAP: usize = 1000;
 const VERSION: u32 = 2;
 /// Janela de chamadas recentes que nunca sai: cobre a repetição da mesma chamada e o ACK atrasado
 /// de uma fase. Mesmo valor de `_RECENT_CALLS` em runtime_queue.py.
@@ -360,10 +351,17 @@ pub struct Store {
     held: bool,
     /// sha256 do catálogo de comandos que o arquivo irmão guarda; `None`: sem irmão conferido.
     commands_hash: Option<String>,
+    observer: Option<DeliveryObserver>,
 }
 
-pub use hangar_core::fs::QueueRefusal;
-pub(super) use hangar_core::fs::invalid;
+/// Funções do servidor chamadas para mensagens recém-confirmadas, após a gravação da fila.
+#[derive(Clone, Copy)]
+pub struct DeliveryObserver {
+    pub tracks: fn(&str) -> bool,
+    pub delivered: fn(&str, &str, bool, Option<f64>),
+}
+
+use hangar_core::fs::{QueueRefusal, invalid};
 
 /// A frase da recusa, se o erro veio da fila; erros do sistema ou do serde ficam só com o tipo.
 pub fn refusal(error: &io::Error) -> Option<&'static str> {
@@ -437,7 +435,7 @@ fn sanitize(name: &str) -> String {
 }
 
 /// A projeção da fila de `name`: o mesmo `.jsonl` que o `PromptQueue` do Python lê e grava pelo nome.
-pub(crate) fn projection_path(projection_dir: &Path, name: &str) -> PathBuf { projection_dir.join(format!("{}.jsonl", sanitize(name))) }
+pub fn projection_path(projection_dir: &Path, name: &str) -> PathBuf { projection_dir.join(format!("{}.jsonl", sanitize(name))) }
 
 impl Store {
     pub fn open(state_path: &Path, projection_dir: &Path, mut initial: State) -> io::Result<Self> {
@@ -459,9 +457,14 @@ impl Store {
             Err(error) => return Err(error),
         };
         let recover_before_compact=needs_terminal_recovery(&state);
-        let mut store = Self { state_path:state_path.into(), projection_dir:projection_dir.into(), state:Arc::new(state), fenced:false, recover_before_compact, held:false, commands_hash };
+        let mut store = Self { state_path:state_path.into(), projection_dir:projection_dir.into(), state:Arc::new(state), fenced:false, recover_before_compact, held:false, commands_hash, observer:None };
         store.ensure_projection()?;
         Ok(store)
+    }
+
+    pub fn with_delivery_observer(mut self, observer: DeliveryObserver) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     pub fn state(&self) -> &State { &self.state }
@@ -571,7 +574,11 @@ impl Store {
             state.compact();
             self.fenced = true;
             persist(&self.state_path, &mut state, &mut self.commands_hash)?;
-            if crate::telemetry_hooks::speed_knows(&state.name) { speed_confirmed(&self.state, &state); }
+            if let Some(observer) = self.observer && (observer.tracks)(&state.name) {
+                for row in newly_confirmed(&self.state, &state) {
+                    (observer.delivered)(&state.name, row["text"].as_str().unwrap_or(""), row["steered"] == true, row_clock(row));
+                }
+            }
             self.state = Arc::new(state);
             self.fenced = false;
             self.recover_before_compact=false;
@@ -579,14 +586,6 @@ impl Store {
             if !self.held { self.ensure_projection()?; }
         }
         Ok(result)
-    }
-}
-
-/// Mensagem da pessoa ou de outra sessão que passou a confirmada nesta ação: chegou ao agente.
-fn speed_confirmed(before: &State, after: &State) {
-    for row in newly_confirmed(before, after) {
-        let sent = row_clock(row);
-        crate::telemetry_hooks::speed_delivered(&after.name, row["text"].as_str().unwrap_or(""), row["steered"] == true, sent);
     }
 }
 
@@ -678,7 +677,7 @@ fn waiting_row(state:&State,row:&Value)->bool {
                 || op.status==Status::Prepared && !terminal_input(state,op) && !stale_terminal_intent(op)))
 }
 
-pub(crate) use hangar_core::queue_row::row_waits;
+use hangar_core::queue_row::row_waits;
 
 /// Intenção terminal de uma vida anterior que nunca começou a escrever (queda e reabertura no meio):
 /// a linha continua só esperando, e a drenagem desta vida a leva com tentativa nova.
@@ -709,7 +708,7 @@ pub fn oldest_waiting(state:&State,min_ts:f64)->Option<f64> {
 
 /// Texto que a fila aceita como mensagem: comando de barra não tem linha na fila, e controle quebraria a digitação.
 /// Uma regra só, para a edição do painel, a rota e a intenção terminal recuperada.
-pub(crate) fn queue_text_ok(text:&str)->bool {
+pub fn queue_text_ok(text:&str)->bool {
     !text.trim().is_empty() && !text.trim_start().starts_with('/') && !text.chars().any(|c|c.is_control() && !matches!(c,'\n'|'\t'))
 }
 
@@ -1230,7 +1229,7 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
                 super::receipt::other_matching_text(row,&occurrence.text,&state.rows).as_deref() == Some(normalized_text.as_str())
             } else {
                 entry_lines(row).contains(&normalized_text)
-                    && crate::transcript::history::chaves_de_commit(&occurrence.text).contains(&normalized_text)
+                    && hangar_transcript::history::chaves_de_commit(&occurrence.text).contains(&normalized_text)
             };
             let proven = row["ts"].as_f64().is_some_and(|sent|super::receipt::legacy_accepts(&occurrence,sent))
                 && matches;
@@ -1347,7 +1346,7 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
 /// A reivindicada pelo próprio drain ainda não foi escrita. Nos agentes nativos, um eco tardio
 /// também pode resgatar a desistida; Claude/Codex conservam a exclusão anterior.
 /// A mais recente vem primeiro, para a perdida mais antiga não levar a linha da que chegou.
-pub(crate) fn legacy_rows(state: &State) -> Vec<Value> {
+pub fn legacy_rows(state: &State) -> Vec<Value> {
     let rescue_abandoned = other_terminal_policy(state);
     let dispatched: BTreeSet<&str> = state.operations.values().filter_map(|op|op.entry_id.as_deref()).collect();
     let claimed: BTreeSet<&str> = state.operations.iter().filter(|(key,op)|key.starts_with(CALL_PREFIX) && matches!(op.payload["kind"].as_str(),Some("claim"|"claim_batch")))
@@ -1360,7 +1359,7 @@ pub(crate) fn legacy_rows(state: &State) -> Vec<Value> {
 
 pub(crate) fn entry_lines(row: &Value) -> BTreeSet<String> {
     let raw = row["text"].as_str().unwrap_or("").trim();
-    let stripped = crate::transcript::history::strip_attach(raw);
+    let stripped = hangar_transcript::history::strip_attach(raw);
     let mut lines: BTreeSet<_> = if row["batch_entries"].is_array() && row["batch_image_receipt"].is_string() {
         // Lote do terminal (nunca guarda `batch_prompt`): a TUI pode deixar o path como texto, sem anexar a imagem,
         // e aí só o texto inteiro aparece. Sem terminal, a imagem enviada pelo próprio servidor tem de constar.
@@ -1446,12 +1445,9 @@ fn reconcile(state: &mut State, protected: &BTreeSet<String>, committed: Vec<Str
     json!(requeued)
 }
 
-pub use hangar_core::fs::{read_replaced, read_replaced_to_string};
-pub(crate) use hangar_core::fs::{atomic_write, replace};
-#[cfg(test)]
-pub(crate) use hangar_core::fs::atomic_write_inspected;
+use hangar_core::fs::{atomic_write, read_replaced};
 
-pub(super) type BatchValidator = Box<dyn FnOnce(&mut Value)->io::Result<()> + Send>;
+pub type BatchValidator = Box<dyn FnOnce(&mut Value)->io::Result<()> + Send>;
 enum QueueMessage {
     Exec { generation:u64, call_id:String, clock:ClockSample, action:Action, hold:bool, validate:Option<BatchValidator>, reply:oneshot::Sender<io::Result<Value>> },
     Stop,
@@ -1514,7 +1510,7 @@ impl QueueActor {
         self.exec_validated(generation,call_id,clock,action,hold,None).await
     }
 
-    pub(super) async fn exec_validated(&self,generation:u64,call_id:&str,clock:ClockSample,action:Action,hold:bool,validate:Option<BatchValidator>) -> io::Result<Value> {
+    pub async fn exec_validated(&self,generation:u64,call_id:&str,clock:ClockSample,action:Action,hold:bool,validate:Option<BatchValidator>) -> io::Result<Value> {
         let (reply,response) = oneshot::channel();
         self.sender.send(QueueMessage::Exec { generation,call_id:call_id.into(),clock,action,hold,validate,reply }).await
             .map_err(|_|invalid("fila encerrada"))?;

@@ -14,8 +14,9 @@ Python tools that are not the server yet (Codex launcher, orq scripts, push keys
 The app never scrapes the terminal for chat content — it reads structured transcripts/events.
 Only terminal sessions use the tmux pane for live **state** and input. Server pieces:
 
-- Lista, transcript, estado, entrada e fila das sessões Claude/Codex são do Rust
-  (`crates/hangar-server/src/runtime/`, `list/`, `state/`); o `backend/app/` não tem motor de chat.
+- Lista, transcript, estado, entrada e fila das sessões Claude/Codex são do Rust. O servidor
+  coordena a execução em `runtime/`, `list/` e `state/`. A persistência e os recibos da fila
+  moram em `crates/hangar-runtime-queue/`.
 - Codex (`runtime/codex*.rs`) — um app-server WebSocket de loopback por sessão Codex; o servidor
   consome eventos JSON-RPC enquanto a TUI `codex --remote` da mesma thread roda no tmux.
   O app-server é do PANE, não do servidor. Sem terminal, ele roda em stdio
@@ -1187,6 +1188,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   Python não os produz em nenhum modo. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#estado-do-claude-sem-terminal-no-feed-do-runtime).
 - **A fila durável ao vivo do chat é do hub do Rust, em qualquer porta.**
+  Estado, persistência, lotes e recibos estão no `hangar-runtime-queue`. O servidor fornece a
+  telemetria de entrega, chamada depois da gravação durável.
   Um produtor por hub e por geração (`queue_feed.rs`) lê a projeção da fila e publica
   `message`/`queue_confirmed` pelo retrato; o login de convidado lê o mesmo hub no Rust. A
   baixa da fila do Codex sem terminal é pedida pelo hub ao ator, em processo. Contrato e diferenças em

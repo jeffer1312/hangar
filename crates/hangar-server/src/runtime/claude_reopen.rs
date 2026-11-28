@@ -1439,7 +1439,7 @@ impl RuntimeRegistry {
         let (key,name)=(key.to_owned(),name.to_owned());
         tokio::task::spawn_blocking(move||{
             let _lease=super::queue::acquire_lease_within(&lease_path,Duration::from_secs(3)).map_err(|_|refused("queue_lease","a fila da sessão está presa"))?;
-            let mut store=super::queue::Store::open(&state_path,&queue,super::queue::State::new(&key,generation,&name,Vec::new())).map_err(|_|refused("queue_io","fila da sessão inacessível"))?;
+            let mut store=super::queue::open_observed_store(&state_path,&queue,super::queue::State::new(&key,generation,&name,Vec::new())).map_err(|_|refused("queue_io","fila da sessão inacessível"))?;
             if store.state().generation!=generation {return Err(refused("runtime_generation","a vida da sessão mudou durante a reabertura"));}
             let clock=super::protocol::ClockSample {monotonic_s:0.0,epoch_s:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())};
             store.exec(generation,&format!("claude-reopen:{}",crate::mods::state::random_hex(8)),clock,
@@ -1458,7 +1458,7 @@ impl RuntimeRegistry {
         tokio::task::spawn_blocking(move||{
             let committed=committed_user_lines(&transcript).map_err(|_|refused("reopen_transcript_read","o transcript da conversa não pôde ser lido"))?;
             let _lease=super::queue::acquire_lease_within(&lease_path,Duration::from_secs(3)).map_err(|_|refused("queue_lease","a fila da sessão está presa"))?;
-            let mut store=match super::queue::Store::open(&state_path,&queue,super::queue::State::new(&key,1,"",Vec::new())) {
+            let mut store=match super::queue::open_observed_store(&state_path,&queue,super::queue::State::new(&key,1,"",Vec::new())) {
                 Ok(store)=>store,
                 Err(_)=>return Err(refused("queue_io","fila da sessão inacessível")),
             };

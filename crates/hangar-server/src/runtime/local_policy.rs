@@ -8,6 +8,8 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 
+use hangar_runtime_queue::image_receipt;
+
 /// Teto da API por imagem; acima disso fica só o path (o `Read` do agente abre).
 const IMAGE_CAP: u64 = 5 * 1024 * 1024;
 /// A API reduz a imagem a este lado de qualquer jeito; mandar maior só enche o cano do Claude.
@@ -127,16 +129,6 @@ pub(super) fn batch_validator(provider:String,mut template:Value) -> super::queu
         if !terminal {row["batch_prompt"]=prepared;}
         Ok(())
     })
-}
-
-/// O texto inteiro e os bytes de todas as imagens formam uma prova só, mesmo quando a TUI tira os paths.
-pub(super) fn image_receipt(text:&str,content:&Value) -> Option<String> {
-    let images:Vec<_>=content.as_array()?.iter().filter(|block|block["type"]=="image")
-        .map(|block|block["source"]["data"].as_str().map(|data|sha1_smol::Sha1::from(data).digest().to_string())).collect::<Option<_>>()?;
-    if images.is_empty() {return None;}
-    static PREFIX:LazyLock<regex::Regex>=LazyLock::new(||regex::Regex::new(r"\A(?:\[Image #\d+\])+\s*").unwrap());
-    let text=PREFIX.replace(text.trim(),"");
-    Some(format!("hangar-image-receipt:{}:{}",sha1_smol::Sha1::from(text.trim()).digest(),images.join(":")))
 }
 
 #[cfg(test)]

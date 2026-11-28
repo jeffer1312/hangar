@@ -6,3 +6,12 @@ use serde_json::Value;
 pub fn row_waits(row:&Value)->bool {
     row["delivered"]==false && row["confirmed"]!=true && row["desistiu"]!=true && row["papel"]!="assistant" && row["reserved"]!=true
 }
+
+/// Remetente e corpo de um recado reservado da fila.
+pub fn message_prefix(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix('[')?;
+    let (prefix, body) = rest.split_once(']')?;
+    let sender = ["de:", "grupo:", "painel:"].iter().find_map(|kind| prefix.strip_prefix(kind))?.trim();
+    if sender.is_empty() { return None; }
+    Some((sender, body.trim_start()))
+}

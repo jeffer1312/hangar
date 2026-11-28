@@ -6,7 +6,7 @@ use super::cano::IoTasks;
 use super::codex_sidecar::{self,SidecarLife};
 use super::gateway::RuntimeRegistry;
 use super::protocol::{CanoBinding,ClockSample,RuntimeError,RuntimeTarget};
-use super::queue::{Action,CODEX_LIFE,State as QueueState,Store,acquire_lease};
+use super::queue::{Action,CODEX_LIFE,State as QueueState,Store,acquire_lease,open_observed_store};
 use super::websocket::WebSocketConnection;
 use crate::list::discover_other::truthy;
 use crate::list::mux::{Mux,Pane};
@@ -333,7 +333,7 @@ pub(crate) fn queue_before_adoption(queue_dir:&Path,key:&str,name:&str,text:&str
     let (state_path,lease_path) = queue_files(queue_dir,key);
     if let Some(dir) = state_path.parent() { std::fs::create_dir_all(dir).map_err(io_failure)?; }
     let _lease = lease_blocking(&lease_path).map_err(io_failure)?;
-    let mut store = Store::open(&state_path,queue_dir,QueueState::new(key,1,name,Vec::new())).map_err(io_failure)?;
+    let mut store = open_observed_store(&state_path,queue_dir,QueueState::new(key,1,name,Vec::new())).map_err(io_failure)?;
     // Escrever ao lado do ator duplicaria o dono da fila.
     if !store.state().runtime_state[CODEX_LIFE].is_null() {
         return Err(RuntimeError::new(ADOPTED_MEANWHILE,"a fila desta sessão já é de uma conversa aberta; feche e abra a sessão se o erro continuar"));
@@ -372,7 +372,7 @@ fn prepare(sidecar_dir:&Path,queue_dir:&Path,c:&Candidate,life:&Value) -> Result
         let (state_path,lease_path) = queue_files(queue_dir,&key);
         let lease = acquire_lease(&lease_path).map_err(io_failure)?;
         let existed = state_path.exists();
-        let mut store = Store::open(&state_path,queue_dir,QueueState::new(&key,1,&c.name,Vec::new())).map_err(io_failure)?;
+        let mut store = open_observed_store(&state_path,queue_dir,QueueState::new(&key,1,&c.name,Vec::new())).map_err(io_failure)?;
         // Só o que a fila não tem: linhas dela na projeção são dela (inclusive as de uma vida que sai).
         let foreign = foreign.get_or_insert_with(||projected.iter().filter(|row|!store.state().rows.iter().any(|own|own["id"] == row["id"])).cloned().collect());
         let recorded = store.state().runtime_state[CODEX_LIFE].clone();

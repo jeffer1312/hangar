@@ -15,8 +15,42 @@ pub mod codex_relaunch;
 pub mod antigravity;
 pub mod antigravity_launch;
 pub mod antigravity_sidecar;
-pub mod queue;
-pub mod receipt;
+pub mod queue {
+    use std::{io, path::Path};
+
+    pub use hangar_core::fs::{QueueRefusal, read_replaced, read_replaced_to_string};
+    pub(crate) use hangar_core::{fs::{atomic_write, replace}, queue_row::row_waits};
+    pub(super) use hangar_core::fs::invalid;
+    #[cfg(test)]
+    pub(crate) use hangar_core::fs::atomic_write_inspected;
+    pub use hangar_runtime_queue::{
+        Action, CODEX_LIFE, Lease, Operation, QueueActor, State, Status, Store,
+        acquire_lease, acquire_lease_within, discard, oldest_waiting, refusal, waiting_ids,
+    };
+    pub(crate) use hangar_runtime_queue::{CAP, legacy_rows, projection_path, queue_text_ok};
+    pub(super) use hangar_runtime_queue::{BATCH_SIZE_MESSAGE, BATCH_TOO_LARGE, BatchValidator};
+
+    pub(crate) fn open_observed_store(path: &Path, projection: &Path, initial: State) -> io::Result<Store> {
+        Ok(Store::open(path, projection, initial)?.with_delivery_observer(
+            hangar_runtime_queue::DeliveryObserver {
+                tracks: crate::telemetry_hooks::speed_knows,
+                delivered: crate::telemetry_hooks::speed_delivered,
+            },
+        ))
+    }
+
+    pub(super) fn queue_problem(state: &mut hangar_api::state::StateEvent, detail: Option<String>) -> bool {
+        if state.problema.as_deref().is_some_and(|code| code != BATCH_TOO_LARGE) { return false; }
+        let code = detail.as_ref().map(|_| BATCH_TOO_LARGE.to_owned());
+        if state.problema == code && state.problema_detalhe == detail { return false; }
+        state.problema = code;
+        state.problema_detalhe = detail;
+        true
+    }
+}
+pub mod receipt {
+    pub use hangar_runtime_queue::{DispatchCursor, Occurrence, ReceiptIndex, ReceiptProof};
+}
 pub mod claude;
 pub mod codex;
 pub mod actor;

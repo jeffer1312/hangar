@@ -22,6 +22,9 @@ pub fn nodelay(tcp: &mut tokio::net::TcpStream) {
 
 pub type HttpClient = Client<HttpConnector, Body>;
 
+/// Tamanho máximo do quadro do runtime e do texto de um lote.
+pub const MAX_FRAME: usize = 16 * 1024 * 1024;
+
 /// Abaixo dos 5 s em que o uvicorn fecha a conexão ociosa: reaproveitar uma que ele está
 /// fechando derruba o pedido no meio e vira 502 na tela.
 pub const POOL_IDLE: Duration = Duration::from_secs(3);

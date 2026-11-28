@@ -1,5 +1,5 @@
 //! A fila e a vida são gravadas sob a mesma lease antes de publicar a projeção.
-use super::super::queue::{Lease, State, Store, acquire_lease_within};
+use super::super::queue::{Lease, State, Store, acquire_lease_within, open_observed_store};
 use super::*;
 pub(in crate::runtime) fn life(target: &OtherTarget) -> Value {
     json!({"pane":target.binding.pane,"created":target.binding.created,"agent_pid":target.agent_pid,"birth":target.agent_birth,"conversation":target.binding.conversation,"provider":target.provider.as_str()})
@@ -126,7 +126,7 @@ pub(in crate::runtime) async fn open(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => legacy(&location)?,
             Err(_) => return Err(failed("queue_io")),
         };
-        let mut store = Store::open(
+        let mut store = open_observed_store(
             &location.state,
             &location.projection,
             State::new(&location.key, location.generation, &location.name, rows),
