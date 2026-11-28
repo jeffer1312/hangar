@@ -828,7 +828,10 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         body.enabled == Some(false) || destination_changed || body.secrets.is_some();
     // O segredo salvo pertence ao Client ID antigo: nem mantê-lo calado nem apagá-lo calado; quem troca o ID manda o segredo.
     let client_id_changed = !remote_url_changed
-        && manual_client_id(&existing.auth) != manual_client_id(&candidate_config.auth);
+        && matches!(
+            (manual_client_id(&existing.auth), manual_client_id(&candidate_config.auth)),
+            (Some(old), Some(new)) if old != new
+        );
     let sends_client_secret = match &body.secrets {
         None => false,
         Some(None) => true,
