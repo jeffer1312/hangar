@@ -1263,6 +1263,8 @@ pub(super) struct ClientTelemetry {
     visible_since: Option<Instant>,
     /// A conversa aberta esperando aparecer: quando o clique veio e a máquina dela.
     chat_open: Option<(Instant, Api)>,
+    /// `app.pronto` ainda pode sair: só a primeira lista da execução decide.
+    app_ready_pending: bool,
     settings_probe: u64,
     settings_day: HashMap<String, (String, String)>,
     unsent: Arc<Unsent>,
@@ -1307,7 +1309,7 @@ impl ClientTelemetry {
     /// Do pânico só fica o "houve": o texto leva caminho e mensagem.
     pub(super) fn new(crash: Option<&str>) -> Self {
         let unsent = Unsent { crashed: AtomicBool::new(crash.is_some()), ..Unsent::default() };
-        Self { visible: Duration::ZERO, visible_since: None, chat_open: None, settings_probe: 0, settings_day: HashMap::new(), unsent: Arc::new(unsent) }
+        Self { visible: Duration::ZERO, visible_since: None, chat_open: None, app_ready_pending: true, settings_probe: 0, settings_day: HashMap::new(), unsent: Arc::new(unsent) }
     }
     pub(super) fn hidden(&mut self, now: Instant) {
         if let Some(since) = self.visible_since.take() { self.visible += now.saturating_duration_since(since); }
@@ -1348,6 +1350,8 @@ impl ClientTelemetry {
             self.settings_day.insert(key, mark);
         }
     }
+    /// A primeira lista consome a vez, tenha vindo ou não: depois de uma falha a medida já não é do início do app.
+    pub(super) fn take_app_ready(&mut self, counts: bool) -> bool { std::mem::take(&mut self.app_ready_pending) && counts }
     /// Uma vez por queda.
     fn take_crash(&mut self) -> Option<Value> {
         self.unsent.crashed.swap(false, Ordering::SeqCst).then(|| telemetry_batch(serde_json::json!({"evento": "app.crash", "codigo": "panic"})))
@@ -1383,11 +1387,13 @@ fn settings_values(a: &appearance::Appearance, seen: &crate::tour::state::Seen) 
 fn telemetry_batch(mut event: Value) -> Value {
     event["cliente"] = Value::from("native");
     // Sem `ts`, o servidor não marca a linha para a coleta do dono.
-    if matches!(event["evento"].as_str(), Some("settings.snapshot" | "chat.opened" | "app.crash")) {
+    if matches!(event["evento"].as_str(), Some("settings.snapshot" | "chat.opened" | "app.crash" | "app.pronto")) {
         event["ts"] = Value::from(chrono::Utc::now().to_rfc3339());
     }
     serde_json::json!({"eventos": [event]})
 }
+
+fn app_ready_batch(took: Duration) -> Value { telemetry_batch(serde_json::json!({"evento": "app.pronto", "ms": millis(took)})) }
 
 /// Inteiro: o servidor descarta `ms` fracionário.
 fn millis(took: Duration) -> u64 { u64::try_from(took.as_millis()).unwrap_or(u64::MAX) }
@@ -1477,6 +1483,15 @@ impl Hangar {
         }
     }
 
+    /// Do início do processo à primeira lista desenhada, à máquina ativa e nunca a convite.
+    pub(super) fn first_list_arrived(&mut self, ok: bool, window: &mut Window) {
+        let counts = ok && !self.active_invite();
+        if !self.client_telemetry.take_app_ready(counts) { return; }
+        let Some(api) = self.api.clone() else { return };
+        let (runtime, unsent) = (self.runtime.clone(), self.client_telemetry.unsent.clone());
+        window.on_next_frame(move |_, _| send_telemetry(&runtime, api, app_ready_batch(crate::STARTED.elapsed()), unsent, |_| {}));
+    }
+
     /// Começa a medir a abertura da conversa, na máquina dela; convite fica de fora.
     pub(super) fn chat_open_started(&mut self, opens_chat: bool) {
         let invite = self.server_entry(&self.open_server()).is_some_and(|s| s.invite);
@@ -1498,7 +1513,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod telemetry_tests {
-    use super::{ClientTelemetry, millis, settings_values};
+    use super::{ClientTelemetry, app_ready_batch, millis, settings_values};
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
@@ -1548,6 +1563,20 @@ mod telemetry_tests {
         assert!(capture(&telemetry, "a", stamp + chrono::TimeDelta::seconds(1)).is_some());
         let scope_3 = json!({"consent": true, "consent_scope": 3, "enabled": true, "disabled_by": null, "snapshot_period": period});
         assert!(telemetry.capture_settings("c", stamp, &scope_3, || json!({}), || None).is_some(), "o aceite da opção B cobre o retrato do app");
+    }
+
+    #[test]
+    fn telemetry_app_ready_leaves_once_and_only_when_the_first_list_came() {
+        let mut telemetry = ClientTelemetry::new(None);
+        assert!(telemetry.take_app_ready(true));
+        assert!(!telemetry.take_app_ready(true), "uma vez por execução");
+        let mut failed = ClientTelemetry::new(None);
+        assert!(!failed.take_app_ready(false));
+        assert!(!failed.take_app_ready(true), "primeira carga que falhou não espera a segunda");
+        let mut batch = app_ready_batch(Duration::from_micros(1_234_567));
+        let ts = batch["eventos"][0].as_object_mut().unwrap().remove("ts").expect("sem ts a linha não conta");
+        assert!(chrono::DateTime::parse_from_rfc3339(ts.as_str().unwrap()).is_ok());
+        assert_eq!(batch, serde_json::json!({"eventos": [{"evento": "app.pronto", "ms": 1234, "cliente": "native"}]}));
     }
 
     #[test]

@@ -279,15 +279,14 @@ impl Host for SessionHost {
                         request.base = base.clone();
                     }
                     let host = crate::session_open::server::ServerHost::new(state.clone()).await;
-                    match crate::session_open::server::decide(
+                    let decided = crate::session_open::server::decide(
                         &state,
                         &host,
                         request,
                         OpenCaller::Owner,
                         None,
-                    )
-                    .await
-                    {
+                    );
+                    match crate::session_open::open::SCHEDULED_OPEN.scope((), decided).await {
                         crate::session_open::server::Decision::Opened(opened) => {
                             let name = opened.body["name"]
                                 .as_str()

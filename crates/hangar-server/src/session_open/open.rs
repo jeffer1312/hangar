@@ -487,18 +487,29 @@ async fn open_resolved(host: &dyn OpenHost, resolved: Resolved, caller: &OpenCal
         }
     }
     let started = Instant::now();
+    let opened_by = opened_by(restore || orphan.is_some(), spec.creator.is_some());
+    let first_send = opened_by == hangar_telemetry::events::OpenedBy::Agent && initial_prompt.is_none();
+    // Antes do lançamento: o agente sem terminal pode ficar pronto dentro dele.
+    let timed = matches!(caller, OpenCaller::Owner) && host.telemetry().is_some();
+    if timed {
+        let (provider, surface) = wire_session(&spec);
+        crate::telemetry_hooks::speed_opened(&spec.name, provider, surface, opened_by, first_send, started);
+    }
     match launch(host, &mut spec, read_only, warnings, initial_prompt.as_deref(), remember_provider, previous_non_plan, &runtime, codex_home.as_deref(),
                  resume.as_deref(), restore, adopting.as_deref_mut(), orphan).await {
         Ok((jsonl, warnings, route)) => {
             // A reserva que não coube abriu frio: não é aberta pré-aquecida.
             let prewarm = adopting.as_deref().is_some_and(super::adopt::Adopting::was_adopted);
-            count_opened(host.telemetry(), caller, &spec, restore, prewarm, started.elapsed());
+            count_opened(host.telemetry(), caller, &spec, Opening { restore, prewarm, opened_by, took: started.elapsed() });
+            // A reserva pré-aquecida adotada já estava pronta.
+            if timed && prewarm { crate::telemetry_hooks::speed_ready(&spec.name); }
             // O Codex sem terminal já subiu dentro da abertura (`warm_codex`).
             if spec.surface == Surface::Headless && matches!(spec.provider, AgentProvider::Claude | AgentProvider::Antigravity) { host.wake(&spec.name); }
             Ok(Opened { body: created_body(&spec, jsonl.as_deref(), warnings, route.as_ref(), codex_home.as_deref(), provider_source), undo, key: spec.key.clone() })
         }
         // Incerta, a sessão pode estar de pé na worktree: desfazer apagaria a pasta debaixo dela.
         Err(error) => {
+            if timed { crate::telemetry_hooks::speed_forget(&spec.name); }
             if let Some(undo) = undo && error.code != Some(UNCERTAIN) { undo.undo().await?; }
             Err(error)
         }
@@ -551,18 +562,40 @@ fn wire_provider(provider: &str) -> hangar_telemetry::events::Provider {
     hangar_telemetry::events::Provider::parse(provider).unwrap_or(hangar_telemetry::events::Provider::Other)
 }
 
+tokio::task_local! {
+    /// A abertura que uma tarefa agendada pediu (`scheduled_tasks`): `opened_by` sai `scheduled`.
+    pub(crate) static SCHEDULED_OPEN: ();
+}
+
+fn opened_by(restore: bool, creator: bool) -> hangar_telemetry::events::OpenedBy {
+    use hangar_telemetry::events::OpenedBy;
+    if restore { OpenedBy::Restore }
+    else if SCHEDULED_OPEN.try_with(|_| ()).is_ok() { OpenedBy::Scheduled }
+    else if creator { OpenedBy::Agent }
+    else { OpenedBy::Person }
+}
+
+/// O que a telemetria da abertura precisa além do spec.
+struct Opening { restore: bool, prewarm: bool, opened_by: hangar_telemetry::events::OpenedBy, took: Duration }
+
+fn wire_session(spec: &SessionSpec) -> (hangar_telemetry::events::Provider, hangar_telemetry::events::Surface) {
+    use hangar_telemetry::events::Surface as WireSurface;
+    (wire_provider(spec.provider.name()), match spec.surface { Surface::Terminal => WireSurface::Terminal, Surface::Headless => WireSurface::Headless })
+}
+
 /// `session_opened` do spec resolvido, só do dono: só valores das listas, e motor sai `engine`, nunca o nome dele.
-fn count_opened(telemetry: Option<&hangar_telemetry::Telemetry>, caller: &OpenCaller, spec: &SessionSpec, restore: bool, prewarm: bool, took: Duration) {
-    use hangar_telemetry::events::{Code, Dims, Event, Surface as WireSurface, model};
+fn count_opened(telemetry: Option<&hangar_telemetry::Telemetry>, caller: &OpenCaller, spec: &SessionSpec, opening: Opening) {
+    use hangar_telemetry::events::{Code, Dims, Event, model};
     let Some(telemetry) = telemetry.filter(|_| matches!(caller, OpenCaller::Owner)) else { return };
-    let provider = wire_provider(spec.provider.name());
+    let Opening { restore, prewarm, opened_by, took } = opening;
+    let (provider, surface) = wire_session(spec);
     let engine = matches!(spec.account, Account::Engine { .. });
-    let surface = match spec.surface { Surface::Terminal => WireSurface::Terminal, Surface::Headless => WireSurface::Headless };
     let dims = Dims::new().with("provider", provider).with("surface", surface)
         .with("model", model(provider, spec.model.as_deref().unwrap_or("default"), engine))
         .with("effort", Code::known(spec.effort.as_deref().unwrap_or("default"), EFFORTS))
         .with("permission", Code::fixed(spec.permission_mode.map_or("default", permission_name)))
-        .with("restore", restore).with("jev", spec.jev).with("prewarm", prewarm).with("worktree", spec.worktree.is_some());
+        .with("restore", restore).with("jev", spec.jev).with("prewarm", prewarm).with("worktree", spec.worktree.is_some())
+        .with("opened_by", opened_by);
     telemetry.duration(Event::SessionOpened, dims, took);
 }
 
@@ -1123,13 +1156,15 @@ mod telemetry_tests {
         let home = tempfile::tempdir().unwrap();
         let telemetry = crate::telemetry_hooks::test_telemetry(home.path(), true);
         let guest = OpenCaller::Guest { root: "/x".into() };
-        count_opened(Some(&*telemetry), &guest, &spec(), false, false, Duration::from_millis(50));
+        let opening = || Opening { restore: false, prewarm: false, opened_by: opened_by(false, true), took: Duration::from_millis(50) };
+        count_opened(Some(&*telemetry), &guest, &spec(), opening());
         assert!(telemetry.counters().is_empty(), "abertura de convidado não conta");
-        count_opened(Some(&*telemetry), &OpenCaller::Owner, &spec(), false, false, Duration::from_millis(50));
+        count_opened(Some(&*telemetry), &OpenCaller::Owner, &spec(), opening());
         let counters = telemetry.counters();
         assert_eq!(counters.len(), 1);
         assert_eq!(counters[0].event, Event::SessionOpened.as_str());
         assert_eq!((counters[0].dims["model"].as_str(), counters[0].dims["permission"].as_str()), ("engine", "bypass_permissions"));
+        assert_eq!(counters[0].dims["opened_by"].as_str(), "agent", "criadora na abertura é agente");
         assert!(counters[0].dims.values().all(|v| !v.contains("motor") && !v.contains("minha-sessao")));
     }
 

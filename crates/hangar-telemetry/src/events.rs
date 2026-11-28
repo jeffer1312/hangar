@@ -64,6 +64,10 @@ named_enum!(Event {
     LogDropped => "log_dropped",
     Settings => "settings",
     DiaryDropped => "diary_dropped",
+    SessionReady => "session_ready",
+    SessionFirstSend => "session_first_send",
+    FirstReply => "first_reply",
+    AppReady => "app_ready",
 });
 
 named_enum!(
@@ -154,6 +158,11 @@ dim_enum!(
 dim_enum!(
     /// Quem escreveu a mensagem: a pessoa, ou outra sessão (texto que casa o `FROM` do `input`).
     SenderOrigin { Person => "person", Session => "session" }
+);
+
+dim_enum!(
+    /// Quem pediu a sessão: a pessoa pela tela, um agente (`creator`), a restauração depois de reboot ou uma tarefa agendada.
+    OpenedBy { Person => "person", Agent => "agent", Restore => "restore", Scheduled => "scheduled", Other => "other" }
 );
 
 dim_enum!(UpdateStepName {
@@ -369,6 +378,7 @@ mod tests {
         names.extend(Surface::ALL.iter().map(|v| v.as_str()));
         names.extend(ClientKind::ALL.iter().map(|v| v.as_str()));
         names.extend(SenderOrigin::ALL.iter().map(|v| v.as_str()));
+        names.extend(OpenedBy::ALL.iter().map(|v| v.as_str()));
         names.extend(UpdateStepName::ALL.iter().map(|v| v.as_str()));
         names.extend(UpdateOrigin::ALL.iter().map(|v| v.as_str()));
         names.extend(PeerKind::ALL.iter().map(|v| v.as_str()));

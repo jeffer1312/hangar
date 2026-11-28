@@ -1190,6 +1190,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                 }
                 Effect::Publish { channel,data } => {
                     if ["preview","thinking","tool","output"].contains(&channel.as_str()) {
+                        if channel == "preview" && data["text"].as_str().is_some_and(|text|!text.trim().is_empty()) { crate::telemetry_hooks::speed_replied(&target.name); }
                         channels.insert(channel.clone(),data.clone());
                         // Prévia só pelo canal do hub: no `events` ela subiria a
                         // revisão e o Python a decodificaria a cada delta.
@@ -2267,6 +2268,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                                 // Confirmar em todo idle, como o adapter Python: sem isto nenhuma entrada vira
                                 // confirmed, a poda não as alcança e a fila enche.
                                 let state = view["public_state"]["state"].as_str().unwrap_or("").to_owned();
+                                if view["deliverable"] == true || view["in_progress"] == true { crate::telemetry_hooks::speed_ready(&target.name); }
                                 // Sem pane não há hook `Notification`: o marcador do state_hook põe a espera na mesma
                                 // esteira do push de "aguardando" e da pausa do loop das sessões com terminal.
                                 // A queda grava `dead` (push de "caiu", como no tmux); a saída limpa só desfaz a espera.

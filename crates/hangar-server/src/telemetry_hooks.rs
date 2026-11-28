@@ -1,14 +1,15 @@
 //! Ganchos da telemetria sem handler próprio: fim de turno, recurso usado pela API e o motor desta vida
 //! para quem não recebe o estado do servidor. Contar, guardar e enviar é do crate `hangar-telemetry`.
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use axum::extract::{MatchedPath, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use hangar_telemetry::{Collection, Telemetry};
-use hangar_telemetry::events::{Dims, Event, Provider};
+use hangar_telemetry::events::{Dims, Event, OpenedBy, Provider, Surface};
+use hangar_telemetry::speed::{Measure, Session, SpeedClock};
 use hangar_usage_diary::OwnerAction;
 
 use crate::list::bridge::ListBridge;
@@ -33,6 +34,7 @@ pub(crate) fn installed() -> Option<&'static Telemetry> { INSTALLED.get().map(Ar
 
 /// Liga o motor desta vida aos ganchos, conta a saída da vida anterior e assina os fins de turno.
 pub fn spawn(st: &Arc<AppState>) -> Option<tokio::task::JoinHandle<()>> {
+    LazyLock::force(&ANCHOR);
     let telemetry = st.telemetry.clone()?;
     let _ = INSTALLED.set(telemetry.clone());
     crate::update::stop_intent::count_previous_exits(&telemetry);
@@ -59,6 +61,106 @@ async fn turns(list: Arc<ListBridge>, telemetry: Arc<Telemetry>) {
 fn provider_of(list: &ListBridge, sid: &str) -> Provider {
     list.last_rows().and_then(|rows| rows.iter().find(|row| row.jsonl.as_deref().is_some_and(|jsonl| crate::locate::session_key(jsonl) == sid))
         .and_then(|row| Provider::parse(&row.provider))).unwrap_or(Provider::Other)
+}
+
+/// O relógio e a época de consentimento em que ele começou: aceite novo zera o que ficou pendente.
+static SPEED: LazyLock<Mutex<(u64, SpeedClock)>> = LazyLock::new(Default::default);
+static ANCHOR: LazyLock<Instant> = LazyLock::new(Instant::now);
+/// Desde quando o `Monitor` de cada sessão lê a tela: sinal dele só vale para o que aconteceu depois.
+static WATCHERS: LazyLock<Mutex<HashMap<String, (Instant, u64)>>> = LazyLock::new(Default::default);
+
+fn epoch_now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()) }
+fn since_anchor(at: Instant) -> Duration { at.saturating_duration_since(*ANCHOR) }
+/// A hora de parede gravada na fila vira o relógio monotônico pela idade dela agora: a suspensão da máquina não
+/// anda o `Instant` e deixaria a âncora fixa no futuro.
+fn epoch_to_anchor(epoch: f64, now: Duration) -> Duration {
+    now.saturating_sub(Duration::try_from_secs_f64(epoch_now() - epoch).unwrap_or(Duration::ZERO))
+}
+
+fn speed(change: impl FnOnce(&mut SpeedClock, Duration) -> Option<Measure>) {
+    let Some(telemetry) = installed() else { return };
+    let epoch = telemetry.consent_epoch();
+    let measure = {
+        let mut guard = SPEED.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.0 != epoch { guard.1.clear(); guard.0 = epoch; }
+        change(&mut guard.1, since_anchor(Instant::now()))
+    };
+    if let Some(m) = measure { telemetry.duration_in(epoch, m.event, m.dims, m.took); }
+}
+
+/// Marca do texto, só em memória: liga a linha confirmada na fila à mensagem que o dono mandou.
+fn message_mark(text: &str) -> u64 {
+    use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+    BuildHasherDefault::<DefaultHasher>::default().hash_one(text.trim())
+}
+
+/// Abertura do dono, antes do lançamento, do `started` da abertura.
+pub(crate) fn speed_opened(name: &str, provider: Provider, surface: Surface, opened_by: OpenedBy, first_send: bool, started: Instant) {
+    speed(|clock, _| { clock.opened(name, Session { provider, surface }, opened_by, first_send, since_anchor(started)); None });
+}
+
+pub(crate) fn speed_forget(name: &str) { speed(|clock, _| { clock.forget(name); None }); }
+
+/// Mensagem do dono pela API; comando (`/cost`) não tem resposta para medir.
+pub(crate) fn speed_touch(name: &str, provider: Provider, surface: Surface, text: &str) {
+    if text.trim_start().starts_with('/') { return; }
+    speed(|clock, now| { clock.touch(name, Session { provider, surface }, message_mark(text), now); None });
+}
+
+/// O envio da mensagem foi recusado.
+pub(crate) fn speed_untouch(name: &str, text: &str) { speed(|clock, _| { clock.untouch(name, message_mark(text)); None }); }
+
+/// Barato e sem o motor: quem paga para juntar o sinal (fila) pergunta antes.
+pub(crate) fn speed_knows(name: &str) -> bool {
+    installed().is_some() && SPEED.lock().unwrap_or_else(|e| e.into_inner()).1.knows(name)
+}
+
+/// Quem paga para ler a tela pergunta antes.
+pub(crate) fn speed_awaits_ready(name: &str) -> bool {
+    installed().is_some() && SPEED.lock().unwrap_or_else(|e| e.into_inner()).1.awaits_ready(name)
+}
+
+/// Pronta vista por quem observa a sessão desde sempre (ator do runtime, captura dos outros com terminal).
+pub(crate) fn speed_ready(name: &str) { speed(|clock, now| clock.ready(name, Duration::ZERO, now)); }
+
+/// Linha da fila confirmada no agente, despachada a ele em `sent` (hora de parede da tentativa, `row_clock`): a espera
+/// na fila com o agente ocupado não entra no `first_reply`. `text` só decide se é recado
+/// de outra sessão ou comando e não sai daqui.
+pub(crate) fn speed_delivered(name: &str, text: &str, steered: bool, sent: Option<f64>) {
+    if text.trim_start().starts_with('/') { return; }
+    speed(|clock, now| {
+        let sent = sent.map_or(now, |epoch| epoch_to_anchor(epoch, now));
+        clock.delivered(name, message_mark(text), crate::session_write::input::is_relay(text), steered, sent, now)
+    });
+}
+
+/// Primeiro texto da resposta visto pelo ator do runtime.
+pub(crate) fn speed_replied(name: &str) { speed(|clock, now| clock.replied(name, Duration::ZERO, now)); }
+
+/// O `Monitor` `owner` da sessão nasceu (só existe com a conversa aberta num app).
+pub(crate) fn speed_watch(name: &str, owner: u64) {
+    WATCHERS.lock().unwrap_or_else(|e| e.into_inner()).insert(name.to_owned(), (Instant::now(), owner));
+}
+
+/// O `Monitor` acabou; o que já o substituiu fica.
+pub(crate) fn speed_unwatch(name: &str, owner: u64) {
+    let mut watchers = WATCHERS.lock().unwrap_or_else(|e| e.into_inner());
+    if watchers.get(name).is_some_and(|(_, current)| *current == owner) { watchers.remove(name); }
+}
+
+fn watched_since(name: &str) -> Option<Duration> {
+    WATCHERS.lock().unwrap_or_else(|e| e.into_inner()).get(name).map(|(since, _)| since_anchor(*since))
+}
+
+/// Pronta e primeiro texto vistos pelo `Monitor`: só valem para o que aconteceu depois de ele começar a ler.
+pub(crate) fn speed_ready_seen(name: &str) {
+    let Some(since) = watched_since(name) else { return };
+    speed(|clock, now| clock.ready(name, since, now));
+}
+
+pub(crate) fn speed_replied_seen(name: &str) {
+    let Some(since) = watched_since(name) else { return };
+    speed(|clock, now| clock.replied(name, since, now));
 }
 
 /// Início do turno de cada conversa: `working` abre, `idle` fecha e dá a duração.

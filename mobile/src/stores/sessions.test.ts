@@ -398,6 +398,43 @@ test('linha que não mudou mantém o mesmo objeto quando outra sessão do servid
   expect(useSessions.getState().byServer[0].sessions).toContain(pick(before, 'beta'));
 });
 
+test('app.pronto sai uma vez, com a primeira lista do servidor ativo', async () => {
+  const registrar = vi.fn();
+  configureDiag({ registrar, novoReq: () => 'pronto' });
+  useSessions.getState().retain();
+  await settle();
+  (created[0] as unknown as { trigger: (t: string, d: string) => void }).trigger('sessions', '[]');
+  const ready = registrar.mock.calls.filter(([e]) => e.evento === 'app.pronto');
+  expect(ready).toEqual([[{ evento: 'app.pronto', ms: expect.any(Number) }, 'http://localhost:8765']]);
+  expect(Number.isInteger(ready[0][0].ms)).toBe(true);
+});
+
+test('app aberto sem servidor salvo não conta o pareamento como abertura', async () => {
+  const registrar = vi.fn();
+  configureDiag({ registrar, novoReq: () => 'pronto' });
+  const saved = useServers.getState().servers[0];
+  useServers.setState({ servers: [], activeId: null, ready: true });
+  useSessions.getState().retain();
+  await settle();
+  useServers.setState({ servers: [saved], activeId: saved.id });
+  await settle();
+  (created.at(-1) as unknown as { trigger: (t: string, d: string) => void }).trigger('sessions', '[]');
+  expect(registrar.mock.calls.filter(([e]) => e.evento === 'app.pronto')).toEqual([]);
+});
+
+test('primeira lista que falhou não manda app.pronto naquela execução', async () => {
+  const registrar = vi.fn();
+  configureDiag({ registrar, novoReq: () => 'pronto' });
+  fetchMock.mockResolvedValue(response({}, 503));
+  useSessions.getState().retain();
+  await settle();
+  fetchMock.mockResolvedValue(response([]));
+  useSessions.getState().reconnect();
+  await settle();
+  expect(useSessions.getState().byServer[0].loaded).toBe(true);
+  expect(registrar.mock.calls.filter(([e]) => e.evento === 'app.pronto')).toEqual([]);
+});
+
 test('mensagem malformada mantém última lista e mostra erro de dados, não queda de rede', async () => {
   useSessions.getState().retain();
   await settle();

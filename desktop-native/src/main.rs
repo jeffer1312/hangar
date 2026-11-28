@@ -49,7 +49,7 @@ mod a11y_snapshot_tests {
     include!("../vendor/gpui-pre-0.3.12/src/window/a11y/snapshot.rs");
 }
 use gpui_kit::{component::{Root, Theme, ThemeMode}, *};
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, sync::{Arc, LazyLock}, time::Instant};
 
 gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, GitPullRequest, ShieldCheck, Video, RotateCcwClock, Paperclip, Plug, SquareSlash,
     Activity, Contrast, Droplet, Image, Keyboard, Layers, Lightbulb, List, Mic, Monitor, RefreshCw, Server, SlidersHorizontal, Type, Users,
@@ -231,7 +231,11 @@ fn askpass_prompt(mut args: impl Iterator<Item = String>) -> Option<(String, boo
     Some((reason, args.next().as_deref() == Some("--retry")))
 }
 
+/// O início do processo, para o `app.pronto`.
+static STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
+
 fn main() {
+    LazyLock::force(&STARTED);
     // Antes da instância única: senão esta execução viraria um repasse para a janela e sairia sem imprimir a senha.
     if let Some((reason, retry)) = askpass_prompt(std::env::args()) { std::process::exit(single_instance::askpass_client(&reason, retry)); }
     log_panics();

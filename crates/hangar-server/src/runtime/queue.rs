@@ -571,6 +571,7 @@ impl Store {
             state.compact();
             self.fenced = true;
             persist(&self.state_path, &mut state, &mut self.commands_hash)?;
+            if crate::telemetry_hooks::speed_knows(&state.name) { speed_confirmed(&self.state, &state); }
             self.state = Arc::new(state);
             self.fenced = false;
             self.recover_before_compact=false;
@@ -579,6 +580,19 @@ impl Store {
         }
         Ok(result)
     }
+}
+
+/// Mensagem da pessoa ou de outra sessão que passou a confirmada nesta ação: chegou ao agente.
+fn speed_confirmed(before: &State, after: &State) {
+    for row in newly_confirmed(before, after) {
+        let sent = row_clock(row);
+        crate::telemetry_hooks::speed_delivered(&after.name, row["text"].as_str().unwrap_or(""), row["steered"] == true, sent);
+    }
+}
+
+fn newly_confirmed<'a>(before: &State, after: &'a State) -> impl Iterator<Item = &'a Value> {
+    let was_confirmed = |id: &str| before.rows.iter().any(|row| row_id(row) == id && row["confirmed"] == true);
+    after.rows.iter().filter(move |row| row["confirmed"] == true && row["papel"] != "assistant" && !was_confirmed(row_id(row)))
 }
 
 fn other_terminal_policy(state: &State) -> bool {
@@ -1516,6 +1530,21 @@ impl QueueActor {
     pub async fn shutdown(self) -> io::Result<()> {
         self.sender.send(QueueMessage::Stop).await.map_err(|_|invalid("fila já encerrada"))?;
         self.task.await.map_err(|_|invalid("persistência da fila interrompida"))
+    }
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::*;
+
+    #[test]
+    fn only_rows_confirmed_by_this_action_reach_the_agent() {
+        let rows = |confirmed: [bool; 3]| vec![json!({"id":"a","text":"oi","confirmed":confirmed[0]}),
+            json!({"id":"b","text":"[de: mae] vai","confirmed":confirmed[1]}), json!({"id":"c","papel":"assistant","confirmed":confirmed[2]})];
+        let before = State::new("key", 1, "s", rows([true, false, false]));
+        let after = State::new("key", 1, "s", rows([true, true, true]));
+        let ids: Vec<&str> = newly_confirmed(&before, &after).map(row_id).collect();
+        assert_eq!(ids, ["b"], "a já estava confirmada; c é resposta do agente");
     }
 }
 

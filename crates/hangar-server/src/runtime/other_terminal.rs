@@ -914,6 +914,9 @@ impl Observer {
                     self.working_revision = self.working_revision.saturating_add(1);
                 }
                 self.in_progress = progress;
+                if crate::telemetry_hooks::speed_awaits_ready(&target.name) && (observed.state.state == "working" || drive::ready(target, &frame) && !drive::blocked(target, &frame)) {
+                    crate::telemetry_hooks::speed_ready(&target.name);
+                }
                 self.memory = observed.memory;
                 let prior = live.borrow().clone();
                 let mut next = super::protocol::LiveState {

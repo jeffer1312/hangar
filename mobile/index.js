@@ -1,3 +1,4 @@
+require('./src/net/appStart');
 require('expo');
 const { Platform } = require('react-native');
 const Constants = require('expo-constants').default;

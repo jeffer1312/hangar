@@ -196,6 +196,9 @@ macro_rules! in_period {
     };
 }
 
+/// Os eventos que o bloco Velocidade do painel desenha.
+const SPEED_EVENTS: &[&str] = &["session_ready", "session_first_send", "first_reply", "app_ready", "chat_open", "server_startup"];
+
 /// Resumo do painel dos últimos `days` dias (UTC), tudo calculado no banco. Cada soma para no maior
 /// `bigint`: o `validate` limita cada pacote, mas pacote antigo no banco não pode derrubar o resumo.
 pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx::Error> {
@@ -256,6 +259,17 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
          GROUP BY c.event, c.bucket ORDER BY c.event"
     ))
     .bind(days)
+    .fetch_all(&mut *pool)
+    .await?;
+    // As medidas do bloco Velocidade com o sistema do pacote, para o filtro por sistema do painel.
+    let speed: Vec<(String, Json<serde_json::Value>, String, String, i64, i64)> = sqlx::query_as(concat!(
+        "SELECT c.event, c.dims, c.bucket, b.os, LEAST(sum(c.count), 9223372036854775807)::bigint, count(DISTINCT b.machine_id)
+         FROM counters c JOIN batches b ON b.batch_id = c.batch_id
+         WHERE ", in_period!("b.day"), " AND c.bucket IS NOT NULL AND c.event = ANY($2)
+         GROUP BY c.event, c.dims, c.bucket, b.os ORDER BY c.event"
+    ))
+    .bind(days)
+    .bind(SPEED_EVENTS)
     .fetch_all(&mut *pool)
     .await?;
     let logs: Vec<(String, String, String, i64, i64, String, String, Vec<String>)> = sqlx::query_as(concat!(
@@ -400,6 +414,8 @@ pub async fn summary(pool: &PgPool, days: i32) -> Result<serde_json::Value, sqlx
         "per_owner": per_owner.into_iter().map(|(machines, owners)| json!({"machines": machines, "owners": owners})).collect::<Vec<_>>(),
         "by_dims": by_dims.into_iter().map(|(event, dims, count, machines)|
             json!({"event": event, "dims": dims.0, "count": count, "machines": machines})).collect::<Vec<_>>(),
+        "speed": speed.into_iter().map(|(event, dims, bucket, os, count, machines)|
+            json!({"event": event, "dims": dims.0, "bucket": bucket, "os": os, "count": count, "machines": machines})).collect::<Vec<_>>(),
         "by_bucket": by_bucket.into_iter().map(|(event, bucket, count, machines)|
             json!({"event": event, "bucket": bucket, "count": count, "machines": machines})).collect::<Vec<_>>(),
         "logs": logs.into_iter().map(|(level, target, message, count, machines, first, last, versions)| json!({

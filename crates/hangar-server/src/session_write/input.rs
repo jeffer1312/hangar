@@ -411,7 +411,13 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         (direct, Some(note), expected)
     } else { (steer, None, None) };
     let conversation = conversation_route(wants_conversation, &ctx.target, &text);
+    // Antes do envio: a fila pode confirmar a linha antes de a resposta voltar.
+    if counted && st.counting().is_some() {
+        let (provider, surface) = wire_session(&ctx.target.provider, ctx.target.terminal);
+        crate::telemetry_hooks::speed_touch(&ctx.name, provider, surface, &text);
+    }
     let mut result = send_with_receipt(&ctx.st, &ctx.name, &ctx.target, &text, steer, conversation, expected_turn, false).await;
+    if counted && !result.0.is_success() { crate::telemetry_hooks::speed_untouch(&ctx.name, &text); }
     // `false`: o pedido foi para a fila comum (Claude com terminal, Pi, omp, Kimi, Antigravity, comando de barra).
     if wants_conversation && result.0.is_success() { result.1["conversation"] = json!(conversation); }
     if let Some(note) = note {
@@ -429,8 +435,13 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 const SEND_REFUSALS: &[&str] = &["erro_envio_falhou", "erro_aguarde_clear", "erro_comando_nao_executado"];
 
 /// `message_sent` ou `send_failed` do `/input`; `telemetry` só vem com o dono.
+fn wire_session(provider: &str, terminal: bool) -> (hangar_telemetry::events::Provider, hangar_telemetry::events::Surface) {
+    use hangar_telemetry::events::{Provider, Surface};
+    (Provider::parse(provider).unwrap_or(Provider::Other), if terminal { Surface::Terminal } else { Surface::Headless })
+}
+
 fn count_input(telemetry: Option<&hangar_telemetry::Telemetry>, provider: &str, terminal: bool, text: &str, steer: bool, result: &(StatusCode, Value)) {
-    use hangar_telemetry::events::{Code, Dims, Event, Provider, SenderOrigin, Surface};
+    use hangar_telemetry::events::{Code, Dims, Event, SenderOrigin};
     let Some(telemetry) = telemetry else { return };
     let (status, body) = result;
     if !status.is_success() {
@@ -439,9 +450,8 @@ fn count_input(telemetry: Option<&hangar_telemetry::Telemetry>, provider: &str, 
         return;
     }
     let origin = if FROM.is_match(text) { SenderOrigin::Session } else { SenderOrigin::Person };
-    let dims = Dims::new().with("provider", Provider::parse(provider).unwrap_or(Provider::Other))
-        .with("surface", if terminal { Surface::Terminal } else { Surface::Headless })
-        .with("steer", steer).with("origin", origin);
+    let (provider, surface) = wire_session(provider, terminal);
+    let dims = Dims::new().with("provider", provider).with("surface", surface).with("steer", steer).with("origin", origin);
     telemetry.count(Event::MessageSent, dims, 1);
 }
 

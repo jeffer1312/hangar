@@ -9,7 +9,7 @@ export const SECTIONS: { id: string; name: string; hue: string; icon: LucideIcon
   { id: "top", name: "O que mais usam", hue: "#66c7e8", icon: Zap, explain: "Os recursos do app e as ferramentas do Hangar que os agentes mais chamam." },
   { id: "effort", name: "Modelo e esforço", hue: "#a8aff3", icon: Cpu, explain: "Com que modelo e esforço as sessões abrem." },
   { id: "places", name: "De onde usam", hue: "#e8b45a", icon: Smartphone, explain: "Em que app as pessoas ficam e se as sessões têm terminal." },
-  { id: "speed", name: "Velocidade", hue: "#5a9fe8", icon: Timer, explain: "Quanto cada coisa demora. Cada coluna é uma faixa de tempo; a mais forte é onde fica a metade das vezes." },
+  { id: "speed", name: "Velocidade", hue: "#5a9fe8", icon: Timer, explain: "Quanto a pessoa espera em cada momento do Hangar. \"Normalmente\" é o tempo de metade das vezes; \"9 em 10\" mostra o tempo das vezes lentas." },
   { id: "trail", name: "Caminho de uso", hue: "#b5d65a", icon: Route, explain: "Por onde as pessoas passam no app, passo a passo, só pelo nome de cada ação." },
   { id: "machines", name: "Máquinas", hue: "#b48cf0", icon: Monitor, explain: "Versão, sistema e canal de cada máquina, e a saúde do servidor." },
   { id: "settings", name: "Como configuram", hue: "#e88ab8", icon: Settings2, explain: "Quantas máquinas escolheram cada opção. Cada app manda o retrato uma vez por dia." },

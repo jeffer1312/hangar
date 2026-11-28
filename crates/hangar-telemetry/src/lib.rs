@@ -3,6 +3,7 @@
 //! (`services/telemetry-ingest`) usa só eles.
 pub mod buckets;
 pub mod events;
+pub mod speed;
 pub mod wire;
 
 #[cfg(feature = "runtime")]

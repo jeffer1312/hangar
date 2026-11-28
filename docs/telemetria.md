@@ -41,7 +41,7 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 |---|---|---|
 | `app_visible_minutes` | `client` (`ios`, `android`) | Minutos com o Expo na tela. Só conta se o início e o fim da medida caem no período ativo e no mesmo dia UTC; no máximo 5 min por aviso ao servidor ativo |
 | `message_sent` | `provider`, `surface` (`terminal`, `headless`), `steer` (sim/não), `origin` (`person`, ou `session` quando a mensagem é recado de outra sessão) | Mensagem que você mandou pelo app ou pela API |
-| `session_opened` (faixa) | `provider`, `surface`, `model` (lista curta de modelos; motor do `engines.json` sai `engine`, nunca o nome), `effort`, `permission`, e sim/não para `restore`, `jev`, `prewarm`, `worktree` | Sessão que você abriu, com o tempo que levou. Sessão aberta por convidado não conta |
+| `session_opened` (faixa) | `provider`, `surface`, `model` (lista curta de modelos; motor do `engines.json` sai `engine`, nunca o nome), `effort`, `permission`, `opened_by` (`person`, `agent`, `restore`, `scheduled`, `other`), e sim/não para `restore`, `jev`, `prewarm`, `worktree` | Sessão que você abriu, com o tempo que levou. `opened_by` diz quem pediu: você pela tela, um agente (pedido com sessão criadora, pelo MCP ou pelo `hangar-send --new` de dentro de uma sessão), a restauração depois de reboot ou uma tarefa agendada. Sessão aberta por convidado não conta |
 | `feature_used` | `feature` (código da lista `FEATURE_ROUTES`, como `session.rename` ou `search`) | Ação sua que deu certo numa rota da lista. Leituras que os apps repetem sozinhos (lista, conversa, status) não contam |
 | `mcp_tool` | `tool` (nome da tool do MCP `hangar`), `error` (sim/não) | Chamada de tool do MCP `hangar` por um agente. Sessão de convidado com login não conta |
 | `voice_call` (faixa) | — | Duração da chamada de voz |
@@ -75,6 +75,19 @@ eventos marcados com "(faixa)", cada ocorrência soma 1 na faixa da duração.
 | `client_route` (faixa quando há tempo) | `client`, `failed` (sim/não), e `route` (`principal`, `rede_local`, `tailscale`, `connect`) ou `code` da falha | Caminho que o app escolheu para chegar ao servidor |
 | `server_startup` (faixa) | — | Tempo de subida do servidor |
 | `chat_open` (faixa) | `client` | Tempo para abrir uma conversa |
+
+### Velocidade
+
+Tempos de espera em faixas, contados pelo servidor. Sessão aberta por convidado não entra: o relógio só
+acompanha a sessão que você abriu ou para a qual você escreveu desde a subida do servidor. Medida sem sinal
+em 10 min cai, sem número.
+
+| Evento | Dimensões | O que conta |
+|---|---|---|
+| `session_ready` (faixa) | `provider`, `surface`, `opened_by` | Do início da abertura até a sessão poder receber mensagem. Sem terminal (Claude, Codex, Antigravity) e Codex com terminal: o agente diz que aceita mensagem ou começa a trabalhar. Pi, omp, Kimi e Antigravity com terminal: a tela mostra a caixa de entrada pronta ou o agente trabalhando. Claude com terminal: só quando a conversa foi aberta num app até 10 s depois do início da abertura, porque é o app aberto que faz o servidor ler a tela dele. Reserva pré-aquecida adotada: pronta na própria abertura |
+| `session_first_send` (faixa) | `provider`, `surface` | Só sessão aberta por um agente sem primeira tarefa: do início da abertura até a primeira mensagem de outra sessão chegar ao agente (a linha da fila confirmada na conversa, não a resposta do envio). A primeira tarefa da abertura não passa pela fila e fica de fora |
+| `first_reply` (faixa) | `provider`, `surface` | Da mensagem que você mandou pela API até o primeiro texto da resposta, contada quando o agente confirma que recebeu (até 15 s depois do envio e antes de qualquer texto dele). Comando (`/cost`), orientação no meio do turno, mensagem de convidado e de outro agente pelo MCP não contam. Sem terminal e Codex com terminal: sempre. Claude com terminal: só com a conversa já aberta num app antes da mensagem, porque é o app aberto que faz o servidor ler a prévia. Pi, omp, Kimi e Antigravity com terminal: não medem (a prévia deles também só existe com a conversa aberta, e começa a ser lida no meio da resposta) |
+| `app_ready` (faixa) | `client` | Do app começar a abrir até a lista de sessões aparecer pela primeira vez, uma vez por abertura. Desktop: do início do processo até a lista desenhada. Celular: do carregamento do JavaScript até a primeira lista do servidor ativo, sem o tempo da tela de abertura do sistema. Primeira lista que falhou não conta |
 
 ### Preferências
 
@@ -233,7 +246,7 @@ máquina de outra pessoa no `peers.json`, as duas passam a contar como um dono s
 em [`services/telemetry-ingest`](../services/telemetry-ingest): grava o pacote num Postgres, não lê
 IP, limita o corpo a 2 MiB e guarda evento ou valor que ainda não conhece em vez de
 recusar. Os dados ficam 400 dias. Só o mantenedor do Hangar e quem ele convidar veem o resumo, na
-página `/panel` do mesmo receptor, com conta e senha.
+página inicial do mesmo receptor (`https://telemetry.hangar.dev.br/`), com conta e senha.
 
 ## Servidores legados
 

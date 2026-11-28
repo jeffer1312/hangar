@@ -6090,7 +6090,7 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   dono quer ver máquinas por dono. Com volume pequeno e perguntas específicas, ficou um receptor
   axum + Postgres na VPS (`services/telemetry-ingest`), com workspace próprio para o driver do
   Postgres não entrar no `Cargo.lock` nem no portão do PR; ele reusa só o módulo `wire` do
-  `hangar-telemetry`. Para ver os dados, o próprio receptor serve `/panel`, com conta de e-mail e senha
+  `hangar-telemetry`. Para ver os dados, o próprio receptor serve o painel na página inicial (`/`; `/panel` antigo redireciona), com conta de e-mail e senha
   (argon2) e entrada só por convite de uso único; a primeira conta nasce pelo `telemetry-ingest
   set-user`, com a senha na entrada padrão. Ficou no lugar do Grafana que estava no plano: um serviço a
   menos na VPS e a mesma tela no PC e no celular.
@@ -6180,6 +6180,18 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   parte, fora da barra. Outro limite aceito, raro: um binário antigo (volta de atualização) regrava o
   `telemetry.json` sem `refusal_reported`, e o aviso pode sair de novo nessa máquina se ela recusar de
   novo depois de voltar à versão nova. Não vale mudar o formato do arquivo por isso.
+- **Velocidade: um relógio em memória no servidor, quatro sinais.** `telemetry_hooks` guarda o
+  `SpeedClock` (`hangar-telemetry/src/speed.rs`): a abertura do dono liga a sessão, e chegam pronta
+  (vista do ator, borda `deliverable` do `Monitor`, captura dos atores Pi/omp/Kimi), entrega (linha da
+  fila que passa a confirmada, em `queue.rs`) e primeiro texto (prévia). Não há sinal único de "pronta":
+  Claude com terminal e a prévia dos outros com terminal só existem com a conversa aberta num app. O sinal
+  do `Monitor` só vale para o que aconteceu depois de ele nascer (abertura até 10 s antes, entrega depois),
+  senão o chat aberto minutos depois viraria a medida; a primeira resposta só arma com mensagem do dono
+  confirmada até 15 s depois do envio e sem texto do agente no meio (a conferência do fim do turno também
+  confirma). Fora desses casos a medida fica de fora em vez de inventar número. A primeira tarefa da abertura não passa
+  pela fila: `session_first_send` mede só a sessão aberta por agente sem ela. `opened_by` sai do
+  `creator` do pedido, da restauração e da tarefa agendada (`SCHEDULED_OPEN`). Reiniciar o servidor
+  esquece o relógio. O painel mostra mediana e p90 como faixa, nunca número exato.
 
 ## Servidor tmux antigo vivo não ganha outro por cima (27/11/2026)
 

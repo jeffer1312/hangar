@@ -41,7 +41,7 @@ export const mock = (): Plugin => ({
       if (p === "/panel/api/logout") { logged = false; return json(res, 204); }
       if (!logged) return json(res, 401, { error: "session" });
       if (p === "/panel/api/me") return json(res, 200, { email: "dono@hangar.dev.br" });
-      if (p === "/panel/api/invites") return json(res, 200, { path: "/panel/join#" + "ab12".repeat(16), days: 7 });
+      if (p === "/panel/api/invites") return json(res, 200, { path: "/join#" + "ab12".repeat(16), days: 7 });
       if (p === "/panel/events") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
         res.write(": ok\n\n");
@@ -57,7 +57,7 @@ export const mock = (): Plugin => ({
       if (state === "empty") {
         const s = summary(days);
         return json(res, 200, { ...s, records: [], records_total: 0, transitions: [], transitions_total: 0, trail_days: [], trail_days_total: 0, refusals: { declined: 0, revoked: 0 },
-          period: { batches: 0, machines: 0, partial_batches: 0 }, daily: [], env: [], per_owner: [], by_dims: [], by_bucket: [], logs: [], trend: [], counters: [] });
+          period: { batches: 0, machines: 0, partial_batches: 0 }, daily: [], env: [], per_owner: [], by_dims: [], by_bucket: [], speed: [], logs: [], trend: [], counters: [] });
       }
       return json(res, 200, summary(days));
     });
