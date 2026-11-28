@@ -23,8 +23,8 @@ git diff --stat origin/main...HEAD -- desktop-native/src mobile/src mobile/app m
 git log --no-merges --format='%h %s' origin/main..HEAD | grep -E ' feat(\(|!|:)'
 ```
 
-O portão do PR (`scripts/check-novidade.sh`) falha quando há mudança nessas pastas ou commit `feat` em
-qualquer pasta (servidor incluído) sem arquivo novo em `docs/novidades/`. Recurso do servidor que a
+O portão do PR (`scripts/check-novidade.sh`) falha quando há mudança em `desktop-native/src`, `mobile/src`, `mobile/app` ou `messages/*.json` (fora arquivos de teste) ou
+commit `feat` em qualquer pasta (servidor incluído) sem arquivo novo em `docs/novidades/`. Recurso do servidor que a
 pessoa percebe na conversa ou na lista também é novidade.
 
 Leia o diff das telas até entender o que a pessoa passa a ver ou fazer. A lista de commits não é a
@@ -40,7 +40,8 @@ novidade: nunca a copie.
 | Refatoração, teste, texto interno, nada visível | — | nada |
 
 Ajuste interno não ganha arquivo. Diga ao autor para pôr `HANGAR_SEM_NOVIDADE: <motivo>` na
-mensagem de um commit (é o que cala o aviso do CI) e pare aqui.
+mensagem de cada commit que mexe na tela sem mudar o que a pessoa vê (o escape vale só para o commit
+que o tem; sem ele o portão do CI falha) e pare aqui.
 
 `onde`: `desktop` (só `desktop-native/`), `celular` (só `mobile/`) ou `todos` (os dois apps têm a
 mudança). Outro valor faz a rota descartar o arquivo sem aviso.

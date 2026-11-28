@@ -7631,7 +7631,7 @@
   "native_tour_tip_slash_title": "Comandos do Claude",
   "native_tour_tip_slash_body": "Digite / para ver os comandos desta sessão.",
   "native_tour_tip_model_title": "Modelo da conversa",
-  "native_tour_tip_model_body": "Clique aqui para trocar o modelo e o raciocínio; Ctrl+1 a Ctrl+9 escolhem um favorito.",
+  "native_tour_tip_model_body": "Clique aqui para trocar o modelo e o raciocínio desta conversa.",
   "native_tour_tip_scheduled_title": "Pedidos na hora certa",
   "native_tour_tip_scheduled_body": "Aqui você agenda um pedido para o agente fazer numa data, em dias da semana ou de tempos em tempos.",
   "native_tour_tip_reviews_title": "Seus PRs e MRs",

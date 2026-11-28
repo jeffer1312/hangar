@@ -314,7 +314,7 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   que entra pelo Connect com credencial própria também é registrado. Evidência em [frontend.md](docs/decisoes/frontend.md#tour-de-primeiro-uso-do-nativo-30102026).
 - **Mudança visível ou commit `feat` sem novidade barra o portão, e peça nova do nativo ganha dica.**
   `scripts/check-novidade.sh` falha sem arquivo novo em `docs/novidades/` (escape:
-  `HANGAR_SEM_NOVIDADE` só para o que a pessoa não percebe); toda âncora de `tour/anchors.rs` tem passo
+  `HANGAR_SEM_NOVIDADE` no próprio commit, só para o que a pessoa não percebe); toda âncora de `tour/anchors.rs` tem passo
   ou dica em `tour/steps.rs` (`every_anchor_has_a_tour_step_or_a_tip`). Quem escreve é a skill
   `hangar-novidade`. [Motivo](docs/decisoes/frontend.md#novidade-barra-o-portão-e-peça-nova-ganha-dica-28112026).
 - **Mensagem esperando na fila do Hangar aparece no painel "Na fila", não como bolha.** A lista e a

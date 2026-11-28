@@ -7631,7 +7631,7 @@
   "native_tour_tip_slash_title": "Claude commands",
   "native_tour_tip_slash_body": "Type / to see this session's commands.",
   "native_tour_tip_model_title": "Conversation model",
-  "native_tour_tip_model_body": "Click here to change the model and reasoning; Ctrl+1 to Ctrl+9 pick a favorite.",
+  "native_tour_tip_model_body": "Click here to change this conversation's model and reasoning.",
   "native_tour_tip_scheduled_title": "Requests on schedule",
   "native_tour_tip_scheduled_body": "Schedule a request for the agent here: on a date, on weekdays or every so often.",
   "native_tour_tip_reviews_title": "Your PRs and MRs",

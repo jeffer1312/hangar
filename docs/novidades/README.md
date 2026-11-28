@@ -41,11 +41,11 @@ uma página própria com o texto todo. Novidade de um parágrafo só, sem anima�
 ## Quando o portão cobra
 
 O portão do PR (`scripts/check-novidade.sh`, passo `novidade` do `gate.yml`) falha quando o PR muda
-`desktop-native/src`, `mobile/` ou `messages/`, ou traz um commit `feat` em qualquer pasta, sem um
+`desktop-native/src`, `mobile/src`, `mobile/app` ou `messages/*.json` (fora arquivos de teste), ou traz um commit `feat` em qualquer pasta, sem um
 arquivo novo aqui. Recurso novo com peça própria na tela do nativo também ganha uma dica do tour
 (`desktop-native/src/tour/steps.rs`); a skill `hangar-novidade` faz as duas coisas.
 
 ## Mudança sem novidade
 
-Se a pessoa não percebe nada (refatoração, teste, texto interno), a mensagem de um commit leva a linha
-`HANGAR_SEM_NOVIDADE: <motivo>`. Conserto que a pessoa nota é `correcao`, não escape.
+Se a pessoa não percebe nada (refatoração, teste, texto interno), a mensagem do commit leva a linha
+`HANGAR_SEM_NOVIDADE: <motivo>`; ela vale só para aquele commit. Conserto que a pessoa nota é `correcao`, não escape.
