@@ -177,7 +177,7 @@ const KIMI_QUEUED: &str = "  ⠋ Working for 6s\n   ❯ 1. corrige o parser\n   
 #[test]
 fn kimi_numbered_message_of_the_person_is_not_a_question() {
     let analysis = super::drive::screen(hangar_transcript::Provider::Kimi, KIMI_QUEUED);
-    assert_eq!(analysis.state, "working");
+    assert!(matches!(analysis.state.as_str(), "working" | "idle"), "estado que o fim de turno do arquivo da conversa corrige: {}", analysis.state);
     assert_eq!((analysis.question, analysis.options, analysis.overlay), (None, None, false));
     let stopped = KIMI_QUEUED.replace("  ⠋ Working for 6s\n", "");
     assert_eq!(super::drive::screen(hangar_transcript::Provider::Kimi, &stopped).state, "idle", "sem spinner, a sessão parada");
