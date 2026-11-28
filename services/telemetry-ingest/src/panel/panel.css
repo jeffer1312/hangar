@@ -15,10 +15,11 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html { background: var(--bg); scrollbar-color: var(--raised) transparent; }
+html { background: var(--bg); scrollbar-color: var(--raised) transparent; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 /* Instalado no iPhone a página vai até as bordas: fundos encostam nelas, o conteúdo recua pelo entalhe e pela barra de início. */
 :root { --sl: env(safe-area-inset-left, 0px); --sr: env(safe-area-inset-right, 0px); --st: env(safe-area-inset-top, 0px); --sb: env(safe-area-inset-bottom, 0px); }
-body { margin: 0; color: var(--text); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; min-height: 100vh; font-feature-settings: "cv11", "ss01"; }
+body { margin: 0; color: var(--text); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; min-height: 100vh; font-feature-settings: "cv11", "ss01";
+  -webkit-tap-highlight-color: transparent; }
 ::selection { background: rgba(124,135,232,.34); color: #fff; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 10px; border: 2px solid var(--bg); }
@@ -62,10 +63,12 @@ button, input { font: inherit; color: inherit; }
 .bar { position: sticky; top: 0; z-index: 6; padding-top: var(--st); background: rgba(18,16,19,.92); backdrop-filter: blur(16px); }
 .top { border-bottom: 1px solid var(--line); }
 .top-in { max-width: 1240px; margin: 0 auto; padding: 0 calc(var(--s8) + var(--sr)) 0 calc(var(--s8) + var(--sl)); height: 64px; display: flex; align-items: center; gap: var(--s5); }
-.brand-line { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
-.brand-line h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.005em; white-space: nowrap; }
+.brand-line { display: flex; align-items: center; gap: var(--s3); min-width: 0; flex: none; }
+.brand-line > div { min-width: 0; }
+.brand-line h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand-line .sub { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.search { flex: 1; max-width: 520px; margin: 0 auto; position: relative; display: flex; align-items: center; }
+.search { flex: 1; min-width: 140px; max-width: 520px; margin: 0 auto; position: relative; display: flex; align-items: center; }
+@media (max-width: 1040px) { .brand-line .sub { display: none; } }
 .search .ic { position: absolute; left: 12px; color: var(--muted); pointer-events: none; }
 .search input { width: 100%; height: 40px; padding: 0 40px 0 40px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line-strong);
   caret-color: var(--accent); transition: border-color .15s var(--ease), box-shadow .15s var(--ease), background-color .15s var(--ease); }
@@ -113,6 +116,19 @@ main.wrap { max-width: 1240px; margin: 0 auto; padding: var(--s8) calc(var(--s8)
 .notice { display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); margin-bottom: var(--s6); border-radius: 12px;
   background: var(--accent-soft); color: var(--text); font-size: 13px; }
 .notice button { margin-left: auto; }
+.fresh { display: flex; align-items: center; gap: var(--s2); width: fit-content; height: 28px; margin: 0 0 var(--s4) auto; padding: 0 var(--s3);
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer;
+  font-variant-numeric: tabular-nums; transition: color .15s var(--ease), border-color .15s var(--ease); }
+.fresh i { width: 6px; height: 6px; border-radius: 50%; background: var(--ready); }
+.fresh.busy i { animation: blink 1s ease-in-out infinite alternate; }
+.fresh.failed { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.fresh.failed i { background: var(--warn); }
+@media (hover: hover) { .fresh:hover { color: var(--text); border-color: var(--line-strong); } }
+@keyframes blink { to { opacity: .25; } }
+/* Número que mudou na releitura automática: realce que some sozinho. */
+.changed { border-radius: 6px; animation: changed 2.4s var(--ease); }
+@keyframes changed { 0%, 25% { background: color-mix(in srgb, var(--hue, var(--accent)) 26%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--hue, var(--accent)) 26%, transparent); } }
 
 .sec { --hue: var(--accent); --hue-soft: color-mix(in srgb, var(--hue) 15%, transparent); scroll-margin-top: calc(var(--bar-h, 124px) + var(--s4)); margin-bottom: var(--s16); }
 .sec-head { display: flex; align-items: center; gap: var(--s4); margin-bottom: var(--s5); }
@@ -148,7 +164,7 @@ main.wrap { max-width: 1240px; margin: 0 auto; padding: var(--s8) calc(var(--s8)
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s4); margin-bottom: var(--s4); }
 .kpi { --hue: var(--accent); display: block; text-decoration: none; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   padding: var(--s5) var(--s6) var(--s6); transition: border-color .2s var(--ease), background-color .2s var(--ease), transform .2s var(--ease); }
-a.kpi:hover { border-color: color-mix(in srgb, var(--hue) 40%, transparent); background: color-mix(in srgb, var(--hue) 5%, var(--card)); transform: translateY(-2px); }
+@media (hover: hover) { a.kpi:hover { border-color: color-mix(in srgb, var(--hue) 40%, transparent); background: color-mix(in srgb, var(--hue) 5%, var(--card)); transform: translateY(-2px); } }
 .kpi .label { display: flex; align-items: center; gap: var(--s2); color: var(--secondary); font-size: 13px; font-weight: 500; }
 .kpi .label .ic { color: var(--hue); width: 16px; height: 16px; }
 .kpi .value { font-size: 34px; line-height: 1.1; font-weight: 650; letter-spacing: -.025em; margin-top: var(--s3); font-variant-numeric: tabular-nums; }
@@ -198,9 +214,9 @@ svg .hit { fill: transparent; cursor: crosshair; }
 .level .ic { width: 12px; height: 12px; }
 .level.error { color: var(--error); background: var(--error-soft); }
 .level.warn { color: var(--warn); background: var(--warn-soft); }
-.log-main { min-width: 0; display: grid; gap: var(--s1); }
+.log-main { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
 .log-msg { font: 13px/1.5 var(--mono); overflow-wrap: anywhere; color: var(--text); }
-.log-target { font: 12px var(--mono); color: var(--muted); }
+.log-target { font: 12px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
 .log-meta { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); color: var(--secondary); font-size: 12px; margin-top: var(--s1); font-variant-numeric: tabular-nums; }
 .log-meta b { color: var(--text); font-weight: 600; }
 
@@ -301,7 +317,24 @@ dialog p { margin: 0 0 var(--s5); color: var(--secondary); font-size: 13px; }
 .skel-grid .kp { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s4); }
 @keyframes shimmer { to { background-position: -200% 0; } }
 
+/* Celular em pé ou deitado: só a faixa de seções fica presa ao rolar; a de cima sai da tela e a faixa do relógio ganha fundo próprio. */
+@media (max-width: 860px), (max-height: 500px) {
+  .bar { top: calc(-1 * var(--top-h, 0px)); }
+  body::before { content: ""; position: fixed; inset: 0 0 auto; height: var(--st); z-index: 7; background: rgba(18,16,19,.92); backdrop-filter: blur(16px); }
+  .sec, #failure-details { scroll-margin-top: calc(var(--bar-h, 124px) - var(--top-h, 0px) + var(--s3)); }
+}
+/* Dedo: alvos de 40–44 px e campos de 16 px, que o iPhone não amplia ao tocar. */
+@media (pointer: coarse), (max-width: 860px) {
+  .search input, .field input, .link-box input { font-size: 16px; }
+  .seg button { height: 36px; }
+  .menu summary { width: 40px; height: 40px; }
+  .chip { height: 40px; }
+  .rec-actions .btn { min-height: 44px; }
+  .fresh { height: 32px; }
+}
 @media (max-width: 860px) {
+  .chips-in { scroll-padding-inline: var(--s4); mask-image: linear-gradient(90deg, transparent, #000 var(--s4), #000 calc(100% - var(--s6)), transparent); }
+  .fresh { margin: calc(-1 * var(--s3)) 0 var(--s2) auto; }
   .top-in { height: auto; flex-wrap: wrap; padding: var(--s3) calc(var(--s4) + var(--sr)) var(--s3) calc(var(--s4) + var(--sl)); gap: var(--s3); }
   .brand-line .sub { display: none; }
   .search { order: 5; max-width: none; flex-basis: 100%; }
@@ -312,6 +345,12 @@ dialog p { margin: 0 0 var(--s5); color: var(--secondary); font-size: 13px; }
   .card { padding: var(--s5); }
   .sec-head .big { display: none; }
   .search kbd { display: none; }
+}
+@media (max-width: 560px) {
+  .brand-line h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .log-row { grid-template-columns: minmax(0, 1fr); }
+  .log-row .level { justify-self: start; padding-inline: var(--s2); }
+  .log-row .log-meta { grid-column: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

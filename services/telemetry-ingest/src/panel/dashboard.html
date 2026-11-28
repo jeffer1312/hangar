@@ -20,7 +20,7 @@
 <header class="top">
   <div class="top-in">
     <div class="brand-line"><svg class="logo" width="30" height="30" viewBox="0 0 200 200" aria-hidden="true"><rect width="200" height="200" rx="44" fill="#1b1d1f"/><g fill="none" stroke="#f5f5f0" stroke-linecap="round" stroke-width="17" transform="translate(0 16)"><path d="M 33.49 132.44 A 74 74 0 1 1 166.51 132.44"/><path d="M 56.96 109.15 A 44 44 0 1 1 143.04 109.15"/></g></svg><div><h1>Telemetria do Hangar</h1><div class="sub" id="sub">dados anônimos, envio a cada hora</div></div></div>
-    <label class="search"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="q" type="search" placeholder="Buscar erro, campo, passo, versão ou opção" aria-label="Buscar no painel" autocomplete="off"><kbd id="q-key">/</kbd><button id="q-clear" type="button" aria-label="Limpar busca" hidden><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></label>
+    <label class="search"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="q" type="search" placeholder="Buscar erro, passo ou versão" aria-label="Buscar no painel" autocomplete="off"><kbd id="q-key">/</kbd><button id="q-clear" type="button" aria-label="Limpar busca" hidden><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></label>
     <div class="seg" id="period" role="group" aria-label="Período">
       <button data-days="7" type="button">7 dias</button><button data-days="30" type="button">30 dias</button><button data-days="90" type="button">90 dias</button>
     </div>
@@ -38,6 +38,7 @@
 </div>
 <main class="wrap">
   <div class="notice" id="notice" hidden><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><span id="notice-text"></span><button class="btn ghost" id="notice-clear" type="button">Limpar busca</button></div>
+  <button class="fresh" id="fresh" type="button" hidden><i aria-hidden="true"></i><span id="fresh-text"></span></button>
   <p class="load-status" id="panel-status" role="status">Carregando dados do painel…</p>
   <div id="content" aria-busy="true"><div class="skel-grid" aria-hidden="true"><div class="kp"><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div><div class="skeleton" style="height:118px"></div></div><div class="skeleton" style="height:300px"></div></div></div>
 </main>
@@ -296,10 +297,14 @@ const animate = !matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // Números rolam do valor anterior até o novo: trocar 7/30/90 dias mostra o quanto mudou.
 const lastShown = new Map();
+// Na releitura automática nada entra animado; só o que mudou ganha um realce breve.
+let quietRender = false;
+function flash(node) { node.classList.remove("changed"); void node.offsetWidth; node.classList.add("changed"); }
 function countUp(node, key, value, format) {
   const from = lastShown.has(key) ? lastShown.get(key) : 0;
+  if (quietRender && lastShown.has(key) && from !== value) flash(node);
   lastShown.set(key, value);
-  if (!animate || from === value) { node.textContent = format(value); return node; }
+  if (!animate || quietRender || from === value) { node.textContent = format(value); return node; }
   const start = performance.now(), dur = 900;
   const step = now => {
     const t = Math.min(1, Math.max(0, (now - start) / dur)), e = 1 - Math.pow(2, -10 * t);
@@ -363,7 +368,9 @@ function lineChart(slot) {
       const anchor = i === 0 ? "start" : i === rows.length - 1 ? "end" : "middle";
       const t = svgEl("text", { x: pts[i][0], y: H - 4, "text-anchor": anchor }); t.textContent = dayMonth(s.day); svg.append(t);
     }
-    const hit = svgEl("rect", { class: "hit", x: pts[i][0] - band / 2, y: T, width: Math.max(band, 4), height: H - B - T });
+    // Presa à largura do gráfico: com o SVG em overflow visível, a faixa do último dia passaria da tela.
+    const x0 = Math.max(0, pts[i][0] - Math.max(band, 4) / 2), x1 = Math.min(W, pts[i][0] + Math.max(band, 4) / 2);
+    const hit = svgEl("rect", { class: "hit", x: x0, y: T, width: x1 - x0, height: H - B - T });
     const show = (x, y) => {
       cross.setAttribute("x1", pts[i][0]); cross.setAttribute("x2", pts[i][0]); cross.style.opacity = 1;
       dot.setAttribute("cx", pts[i][0]); dot.setAttribute("cy", pts[i][1]);
@@ -426,7 +433,7 @@ function logCard(logs) {
   };
   const errors = logs.filter(l => l.level === "error").length;
   for (const [value, label] of [["", "Todos"], ["error", "Erros · " + errors], ["warn", "Avisos · " + (logs.length - errors)]]) {
-    const button = el("button", { type: "button", "aria-pressed": String(value === logLevel), text: label });
+    const button = el("button", { type: "button", "aria-pressed": String(value === logLevel), "data-v": "log:" + value, text: label });
     button.addEventListener("click", () => {
       logLevel = value;
       levels.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === button)));
@@ -541,7 +548,7 @@ function recordRow(r, i) {
     el("span", { class: "iss-t", title: "Última no período: " + when(r.last) + " UTC" }, el("b", { text: ago(r.last) }), el("small", { text: "desde " + dayMonth(r.first) })),
     el("span", { class: "iss-go" }, icon("chevron")));
   const body = el("div", { class: "rec-body", id });
-  const row = el("div", { class: "rec", "data-q": q }, head, body);
+  const row = el("div", { class: "rec", "data-q": q, "data-key": key }, head, body);
   const toggle = open => {
     if (open && !body.childElementCount) body.append(...recordBody(r));
     body.hidden = !open; head.setAttribute("aria-expanded", String(open)); row.classList.toggle("open", open);
@@ -583,6 +590,7 @@ function cutNote(total, shown, unit) {
 
 // O dia escolhido e o filtro sobrevivem ao redesenho.
 let trailPick = "", trailOnlyProblems = false, trailRequest;
+const trailCache = new Map();
 function timelineCard(days, total) {
   const explain = "Passos de uma máquina na ordem registrada, com horários em UTC. Falhas e avisos ficam marcados.";
   if (!days.length) return card("Um dia de uso", explain, el("p", { class: "empty", text: "Nenhum dia com caminho no período." }));
@@ -615,7 +623,7 @@ function timelineCard(days, total) {
     applyFilter();
   };
   for (const [value, label] of [[false, "Todos"], [true, "Só falhas e avisos"]]) {
-    const button = el("button", { type: "button", "aria-pressed": String(value === trailOnlyProblems), text: label });
+    const button = el("button", { type: "button", "aria-pressed": String(value === trailOnlyProblems), "data-v": "trail:" + value, text: label });
     button.addEventListener("click", () => {
       trailOnlyProblems = value;
       filter.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === button)));
@@ -630,12 +638,17 @@ function timelineCard(days, total) {
     trailRequest = new AbortController();
     const { signal } = trailRequest;
     const stale = () => signal.aborted || !box.isConnected;
-    result = null;
-    timeline.dataset.trailState = "loading";
-    status.textContent = "Carregando os passos desse dia…";
-    box.setAttribute("aria-busy", "true");
-    box.replaceChildren(el("div", { class: "skel-rows", "aria-hidden": "true" }, ...Array.from({ length: 4 }, () => el("div", { class: "skeleton" }))));
-    if (timeline.isConnected) applyFilter();
+    // O dia já lido aparece na hora (releitura automática, volta ao mesmo dia) e é conferido em seguida.
+    const key = trailPick, cached = trailCache.get(key);
+    result = cached || null;
+    if (cached) { delete timeline.dataset.trailState; draw(); }
+    else {
+      timeline.dataset.trailState = "loading";
+      status.textContent = "Carregando os passos desse dia…";
+      box.setAttribute("aria-busy", "true");
+      box.replaceChildren(el("div", { class: "skel-rows", "aria-hidden": "true" }, ...Array.from({ length: 4 }, () => el("div", { class: "skeleton" }))));
+      if (timeline.isConnected) applyFilter();
+    }
     try {
       const query = new URLSearchParams({ machine: d.machine, day: d.day });
       const res = await fetch("/panel/trail?" + query, { cache: "no-store", signal });
@@ -645,11 +658,19 @@ function timelineCard(days, total) {
       const body = await res.json();
       if (stale()) return;
       if (!Array.isArray(body.steps)) throw new Error("A resposta não trouxe os passos do dia.");
-      result = { day: d.day, steps: body.steps, partial: body.partial };
+      const fresh = { day: d.day, steps: body.steps, partial: body.partial };
+      trailCache.set(key, fresh);
       delete timeline.dataset.trailState;
+      if (cached && JSON.stringify(cached) === JSON.stringify(fresh)) return;
+      result = fresh;
+      // Cartão acima de quem lê: o que cresceu ou encolheu nele não empurra a leitura.
+      const above = timeline.getBoundingClientRect().bottom <= document.getElementById("bar").getBoundingClientRect().bottom;
+      const h0 = timeline.offsetHeight;
       draw();
+      if (above) scrollBy(0, timeline.offsetHeight - h0);
     } catch (err) {
       if (stale()) return;
+      if (cached) { status.textContent += " Não foi possível conferir se mudou (" + err.message + ")."; return; }
       timeline.dataset.trailState = "error";
       status.textContent = "Não foi possível ler o caminho desse dia.";
       const retry = el("button", { class: "btn", type: "button", text: "Tentar de novo" });
@@ -842,6 +863,8 @@ function stackChart(rows, keys) {
 }
 
 // Uso por agente: barras empilhadas por dia e a fatia de cada um, com destaque ao passar ou tocar.
+// O agente fixado sobrevive ao redesenho.
+let pinned = null;
 function agentCards(data) {
   const rows = agentDays(data.trend || [], data.days);
   const totals = {};
@@ -859,14 +882,14 @@ function agentCards(data) {
   daysCard.append(chart);
   const ranked = [...keys].sort((x, y) => totals[y] - totals[x]);
   const max = totals[ranked[0]];
-  let pinned = null;
+  if (!keys.includes(pinned)) pinned = null;
   const focus = k => {
     chart.classList.toggle("focus-a", !!k);
     chart.querySelectorAll("[data-a]").forEach(s => s.classList.toggle("on", s.dataset.a === k));
   };
   const list = el("div", { class: "ags" });
   ranked.forEach((k, i) => {
-    const b = el("button", { class: "ag", type: "button", "aria-pressed": "false", style: "--c:" + AGENT_COLOR[k] + ";--i:" + i,
+    const b = el("button", { class: "ag", type: "button", "aria-pressed": String(pinned === k), style: "--c:" + AGENT_COLOR[k] + ";--i:" + i,
       "data-q": (agentName(k) + " " + k).toLowerCase(), "aria-label": agentName(k) + ": " + fmt.format(totals[k]) + " mensagens, " + pct.format(totals[k] / sum) + ". Destacar no gráfico" },
       el("span", { class: "ag-logo" }, logo(k, 18, AGENT_COLOR[k])), el("span", { class: "ag-n", text: agentName(k) }),
       el("span", { class: "ag-bar" }, el("i", { style: "--w:" + (totals[k] / max).toFixed(3) })),
@@ -880,6 +903,7 @@ function agentCards(data) {
     });
     list.append(b);
   });
+  focus(pinned);
   shareCard.append(el("div", { class: "split-bar", "aria-hidden": "true" },
     ...ranked.map(k => el("span", { style: "flex:" + totals[k] + ";background:" + AGENT_COLOR[k] }))), list);
   return [daysCard, shareCard];
@@ -1241,7 +1265,7 @@ function reveal(c) {
 let cardObserver = null;
 function watchCards() {
   cardObserver?.disconnect();
-  if (!animate) { document.querySelectorAll("#content .card").forEach(reveal); return; }
+  if (!animate || quietRender) { document.querySelectorAll("#content .card").forEach(reveal); return; }
   document.body.classList.add("anim");
   cardObserver = new IntersectionObserver(entries => {
     for (const e of entries) if (e.isIntersecting) { reveal(e.target); cardObserver.unobserve(e.target); }
@@ -1259,7 +1283,7 @@ function drawChips(counts, hot) {
 }
 
 // O chip da seção que está na tela fica aceso.
-let spyObserver = null;
+let spyObserver = null, spyChip = null;
 function spy() {
   spyObserver?.disconnect();
   const visible = new Map();
@@ -1267,6 +1291,13 @@ function spy() {
     for (const e of entries) visible.set(e.target.id, e.isIntersecting ? e.intersectionRatio : 0);
     const best = [...document.querySelectorAll(".sec")].find(s => (visible.get(s.id) || 0) > 0);
     document.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-current", String(!!best && "s-" + c.dataset.sec === best.id)));
+    // Na tela estreita a faixa de chips rola para os lados: o chip aceso não pode ficar escondido.
+    const chip = best && document.querySelector('.chip[data-sec="' + best.id.slice(2) + '"]');
+    if (chip && chip !== spyChip) {
+      spyChip = chip;
+      const box = chip.parentElement, b = box.getBoundingClientRect(), c = chip.getBoundingClientRect();
+      if (c.left < b.left || c.right > b.right) box.scrollTo({ left: box.scrollLeft + c.left - b.left - (b.width - c.width) / 2, behavior: animate ? "smooth" : "auto" });
+    }
   }, { rootMargin: "-150px 0px -55% 0px", threshold: [0, .01] });
   document.querySelectorAll(".sec").forEach(s => spyObserver.observe(s));
 }
@@ -1326,30 +1357,52 @@ window.addEventListener("resize", () => {
   clearTimeout(resizing);
   resizing = setTimeout(() => { if (innerWidth !== lastWidth) { lastWidth = innerWidth; drawCharts(); } }, 150);
 });
-async function load(days) {
-  current = days;
+// Releitura sozinha a cada minuto com a página na tela; parada com ela escondida e feita na volta.
+const REFRESH_MS = 60000;
+let lastBody = "", lastRead = 0, lastTry = 0, readFailed = false, loading = false, refreshTimer = 0;
+async function load(days, quiet = false) {
+  if (!quiet) {
+    current = days;
+    trailRequest?.abort();
+    document.querySelectorAll("#period button").forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.days) === days)));
+    history.replaceState(null, "", "?days=" + days + location.hash);
+    document.getElementById("chips").replaceChildren();
+    document.getElementById("notice").hidden = true;
+    panelStatus.textContent = "Carregando dados do painel…";
+    panelContent.setAttribute("aria-busy", "true");
+    panelContent.replaceChildren(panelLoading);
+    lastBody = "";
+    trailCache.clear();
+  }
   const mine = ++request;
-  trailRequest?.abort();
-  document.querySelectorAll("#period button").forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.days) === days)));
-  history.replaceState(null, "", "?days=" + days + location.hash);
-  document.getElementById("chips").replaceChildren();
-  document.getElementById("notice").hidden = true;
-  panelStatus.textContent = "Carregando dados do painel…";
-  panelContent.setAttribute("aria-busy", "true");
-  panelContent.replaceChildren(panelLoading);
+  loading = true;
+  lastTry = Date.now();
+  fresh.classList.add("busy");
   try {
-    const res = await fetch("/panel/data?days=" + days, { cache: "no-store" });
+    // Com teto: uma leitura presa na troca de rede travaria a releitura e o toque no indicador.
+    // AbortController em vez de AbortSignal.timeout, que o iOS 15 não tem.
+    const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 30000);
+    const res = await fetch("/panel/data?days=" + days, { cache: "no-store", signal: stop.signal }).finally(() => clearTimeout(timer));
     if (mine !== request) return;
     if (res.status === 401) { location.replace("/panel"); return; }
     if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
+    const body = await res.text();
     if (mine !== request) return;
-    render(data);
+    if (body !== lastBody) {
+      const data = JSON.parse(body);
+      if (quiet) rerender(data); else render(data);
+      // Só depois de desenhar: um corpo que quebra o desenho é tentado de novo na próxima leitura.
+      lastBody = body;
+      const m = data.active.machines_30d, p = data.active.owners_30d;
+      document.getElementById("sub").textContent = m + (m === 1 ? " máquina · " : " máquinas · ") + p + (p === 1 ? " pessoa" : " pessoas") + " · dados anônimos";
+    }
+    lastRead = Date.now(); readFailed = false; fresh.title = "";
     panelStatus.textContent = "";
-    const m = data.active.machines_30d, p = data.active.owners_30d;
-    document.getElementById("sub").textContent = m + (m === 1 ? " máquina · " : " máquinas · ") + p + (p === 1 ? " pessoa" : " pessoas") + " · dados anônimos";
   } catch (err) {
     if (mine !== request) return;
+    // Releitura que falha deixa os dados na tela e diz no indicador desde quando não atualiza.
+    if (quiet && lastBody) { readFailed = true; fresh.title = err.message; return; }
+    lastRead = 0; fresh.hidden = true;
     panelStatus.textContent = "Não foi possível ler os dados do painel.";
     const retry = el("button", { class: "btn", type: "button", text: "Tentar de novo" });
     retry.addEventListener("click", () => {
@@ -1358,13 +1411,89 @@ async function load(days) {
     });
     panelContent.replaceChildren(el("div", { class: "error-box" }, icon("alertCircle"), el("span", { text: err.message }), retry));
   } finally {
-    if (mine === request) panelContent.setAttribute("aria-busy", "false");
+    if (mine === request) {
+      loading = false;
+      panelContent.setAttribute("aria-busy", "false");
+      fresh.classList.remove("busy");
+      freshTick();
+      schedule();
+    }
   }
 }
+
+// Redesenha mantendo o que a pessoa abriu e o ponto da tela em que estava.
+// Cartão achado pela seção, pelo título e pela ordem entre os de mesmo título: a posição mudaria quando um cartão surge ou some.
+const cardKey = c => (c.closest(".sec")?.id || "") + "|" + (c.dataset.title || "");
+function cardRef(c) {
+  const key = cardKey(c);
+  return { key, n: [...document.querySelectorAll("#content .card")].filter(x => cardKey(x) === key).indexOf(c) };
+}
+const findCard = ref => ref && [...document.querySelectorAll("#content .card")].filter(x => cardKey(x) === ref.key)[ref.n];
+function rerender(data) {
+  const barBottom = document.getElementById("bar").getBoundingClientRect().bottom;
+  const first = [...document.querySelectorAll("#content .card")].find(c => !c.hidden && c.getBoundingClientRect().bottom > barBottom);
+  const anchor = first && cardRef(first), anchorTop = first ? first.getBoundingClientRect().top : 0;
+  hideTip(); touchTip = null;
+  const active = panelContent.contains(document.activeElement) ? document.activeElement : null;
+  const chipFocus = document.activeElement?.closest?.(".chip")?.dataset.sec;
+  const activeCard = active?.closest(".card");
+  // Pelo identificador estável quando há; o texto muda com as contagens ("Erros · 5").
+  const stable = active && (active.getAttribute("aria-controls") ? '[aria-controls="' + active.getAttribute("aria-controls") + '"]'
+    : active.dataset.v != null ? '[data-v="' + active.dataset.v + '"]' : null);
+  const focusRef = activeCard && !active.closest(".rec") && (stable || active.textContent) && { card: cardRef(activeCard), stable, tag: active.tagName, text: active.textContent };
+  const expanded = [...document.querySelectorAll('#content .more-btn[aria-expanded="true"]')].map(b => b.getAttribute("aria-controls"));
+  const opened = [...document.querySelectorAll("#content details[open]")].map(d => d.dataset.title);
+  const focusKey = document.activeElement?.closest?.(".rec")?.dataset.key;
+  const where = n => n.closest(".chip")?.dataset.sec ?? n.closest(".sec").id;
+  const before = new Map([...document.querySelectorAll(".sec-head .big b, .chip em")].map(n => [where(n), n.textContent]));
+  quietRender = true;
+  try { render(data); } finally { quietRender = false; }
+  expanded.forEach(id => document.querySelector('.more-btn[aria-controls="' + id + '"]')?.click());
+  opened.forEach(t => document.querySelector('#content details[data-title="' + CSS.escape(t) + '"]')?.setAttribute("open", ""));
+  if (focusKey) [...document.querySelectorAll("#content .rec")].find(r => r.dataset.key === focusKey)?.querySelector(".rec-head")?.focus({ preventScroll: true });
+  const again0 = focusRef && findCard(focusRef.card);
+  if (again0) (focusRef.stable ? again0.querySelector(focusRef.stable) : [...again0.querySelectorAll(focusRef.tag)].find(e => e.textContent === focusRef.text))?.focus({ preventScroll: true });
+  if (chipFocus) document.querySelector('.chip[data-sec="' + chipFocus + '"]')?.focus({ preventScroll: true });
+  for (const n of document.querySelectorAll(".sec-head .big b, .chip em")) if (before.has(where(n)) && before.get(where(n)) !== n.textContent) flash(n);
+  const again = findCard(anchor);
+  if (again) scrollBy(0, again.getBoundingClientRect().top - anchorTop);
+}
+
+const fresh = document.getElementById("fresh"), freshText = document.getElementById("fresh-text");
+function freshTick() {
+  if (!lastRead) return;
+  const s = Math.round((Date.now() - lastRead) / 1000);
+  const when = s < 10 ? "agora" : s < 60 ? "há " + Math.floor(s / 10) * 10 + " s" : "há " + Math.floor(s / 60) + " min";
+  freshText.textContent = readFailed ? "Não atualizou · última leitura " + when : "Atualizado " + when;
+  fresh.classList.toggle("failed", readFailed);
+  fresh.hidden = false;
+}
+setInterval(freshTick, 5000);
+// Não redesenha com a pessoa escolhendo algo, digitando ou com texto selecionado: tenta de novo logo depois.
+const busyHere = () => dialog.open || menu.open || /^(SELECT|TEXTAREA)$/.test(document.activeElement?.tagName)
+  || String(getSelection() || "").trim() !== "";
+function refreshNow() {
+  if (document.hidden) return;
+  if (loading || busyHere()) { clearTimeout(refreshTimer); refreshTimer = setTimeout(refreshNow, 5000); return; }
+  load(current, true);
+}
+function schedule() {
+  clearTimeout(refreshTimer);
+  // Da última tentativa, não da última leitura boa: com o servidor fora, a próxima espera o minuto inteiro.
+  if (!document.hidden) refreshTimer = setTimeout(refreshNow, Math.max(0, Math.max(lastRead, lastTry) + REFRESH_MS - Date.now()));
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden) clearTimeout(refreshTimer); else { freshTick(); schedule(); } });
+fresh.addEventListener("click", () => { if (!loading) load(current, true); });
 document.querySelectorAll("#period button").forEach(b => b.addEventListener("click", () => load(Number(b.dataset.days))));
 
 // A barra quebra em linhas no celular: a altura real dela diz onde a seção para ao rolar.
-new ResizeObserver(([e]) => document.documentElement.style.setProperty("--bar-h", Math.ceil(e.borderBoxSize[0].blockSize) + "px")).observe(document.getElementById("bar"));
+// No celular só a faixa de chips fica presa: --top-h é quanto da barra sai da tela.
+const barEl = document.getElementById("bar"), topRow = barEl.querySelector(".top");
+new ResizeObserver(() => {
+  const s = document.documentElement.style;
+  s.setProperty("--bar-h", Math.ceil(barEl.getBoundingClientRect().height) + "px");
+  s.setProperty("--top-h", Math.ceil(topRow.getBoundingClientRect().height) + "px");
+}).observe(barEl, { box: "border-box" });
 const menu = document.getElementById("menu");
 document.addEventListener("click", e => { if (menu.open && !menu.contains(e.target)) menu.open = false; });
 fetch("/panel/api/me").then(r => r.ok ? r.json() : null).then(me => {
