@@ -18,8 +18,7 @@ const OTHER_ADDRESS: &str = "erro_jev_aux_chave_outro_endereco";
 
 fn log(text: impl AsRef<str>) { tracing::warn!(target: "jev_aux", "{}", text.as_ref()); }
 
-/// `jev_aux_mode` = `session`: quem desempata é a própria sessão que chamou o Jev, e nenhum modelo por
-/// API recebe a página ou a tela. Vazio segue o de antes: o auxiliar gravado, quando há um.
+/// Só `session` dispensa o auxiliar por API; vazio segue o auxiliar gravado.
 pub(crate) fn session_helps(mode: &Value) -> bool { mode.as_str().map(str::trim) == Some("session") }
 
 #[derive(Deserialize)]

@@ -90,7 +90,7 @@ const TUNES: [Tune; 4] = [
 struct Field { key: &'static str, label: &'static str, help: &'static str, icon: IconName, kind: Kind, page: Page }
 
 const AUX_MODEL: &str = "jev_aux_modelo";
-/// Quem desempata quando o Jev fica em dúvida: `session` (a sessão que o chamou) ou `api` (o auxiliar abaixo).
+/// `session` ou `api`; vazio segue o auxiliar gravado.
 const AUX_MODE: &str = "jev_aux_mode";
 
 /// Na ordem do `CAMPOS` do web, filtrada por página.
@@ -2297,7 +2297,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, PROVIDERS, Quiet, ServerConfig, TUNES, Voice, env_value, shown, text_of};
+    use super::{AUX_MODE, Kind, PROVIDERS, Quiet, ServerConfig, TUNES, Voice, env_value, shown, text_of};
     use serde_json::{Map, Value, json};
 
     #[test]

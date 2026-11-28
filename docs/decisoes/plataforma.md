@@ -1773,8 +1773,8 @@ tinha a TypeSafe fixa.
   o `LLM_*` do MCP quando o primeiro não existe. Se o legado estiver ilegível, a gravação recusa em
   vez de perdê-lo. O `llm_*` do ditado continua separado, pela regra de capacidades separadas.
 - **27/11/2026: a ajuda pode ser a própria sessão (`jev_aux_mode`).** Vazio segue o de antes (o
-  auxiliar gravado, quando há um); `api` usa o auxiliar; `session` não manda a página nem a tela a
-  nenhum modelo por API. Nesse modo a sessão recebe `JEV_AUX_MODE=session` e nenhum `JEV_AUX_*`, o
+  auxiliar gravado, quando há um); `api` usa o auxiliar; `session` não manda a página nem a tela ao
+  auxiliar. O Jev continua recebendo o print pelo provedor dele (entrada "Jev vê o print"). Nesse modo a sessão recebe `JEV_AUX_MODE=session` e nenhum `JEV_AUX_*`, o
   `objetivo` do hangar-preview para na dúvida e diz a quem chamou para olhar a página (menos na
   parada por operação arriscada, que espera a ordem do usuário), e o MCP do Computer Use fica sem
   `LLM_*`. O texto dos campos do formulário passa a sair do comando local (`jev_texto_cmd`, padrão
