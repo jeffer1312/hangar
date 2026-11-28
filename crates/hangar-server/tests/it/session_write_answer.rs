@@ -47,6 +47,20 @@ fn terminal_plan_never_supplies_a_missing_public_id_from_the_pending_question() 
     assert_eq!(terminal_plan(&current,&expected,true).err().unwrap().1["detail"]["code"], "erro_terminal_aberto");
 }
 
+/// A resposta livre do repasse (`type_index` = número de opções) passa pela rota em múltipla escolha, pelo plugin e
+/// pelas teclas; quem digita é o motorista, que confere o rótulo "Type something" antes de escrever.
+#[test]
+fn terminal_plan_takes_the_relay_free_text_in_a_multi_select_question() {
+    let relay = body(json!({"answers":[{"kind":"text","value":"Respondida pelo dono na filha f: a.","type_index":2}],"interaction_id":"shown-a"}));
+    let mut plugin = expected(InteractionKind::Question);
+    plugin.target.request_key = "plugin:ask:1".into();
+    plugin.semantic = json!({"questions":[{"question":"Quais?","multiSelect":true,"options":[{"label":"a"},{"label":"b"}]}]});
+    for expected in [plugin, expected(InteractionKind::Question)] {
+        let Plan::Control(payload) = terminal_plan(&relay, &expected, false).unwrap() else { panic!("controle") };
+        assert_eq!((payload["answers"][0]["kind"].as_str(), payload["answers"][0]["type_index"].as_i64()), (Some("text"), Some(2)));
+    }
+}
+
 /// Parágrafos: pelo plugin seguem inteiros (`\r\n` vira `\n`); digitados no terminal, inclusive no "Conversar", viram uma linha.
 #[test]
 fn terminal_plan_keeps_paragraphs_for_the_plugin_and_one_line_for_the_keys() {
