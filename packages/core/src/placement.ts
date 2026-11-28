@@ -45,14 +45,15 @@ const WAIT = 5000;
 /** Servidor sem o limite de abertas: a tela mostra o padrão que o servidor novo usaria. */
 const DEFAULT_OPEN = 10;
 
+const withOpen = (c: PlacementConfig): PlacementConfig => ({ ...c, limits: { ...c.limits, open: c.limits?.open ?? DEFAULT_OPEN } });
+
 export function getPlacementConfig(server: Server): Promise<PlacementConfig> {
-  return apiFetchForServer<PlacementConfig>(server, '/api/placement/config', undefined, WAIT)
-    .then((c) => ({ ...c, limits: { ...c.limits, open: c.limits?.open ?? DEFAULT_OPEN } }));
+  return apiFetchForServer<PlacementConfig>(server, '/api/placement/config', undefined, WAIT).then(withOpen);
 }
 
 /** Grava e devolve o que o servidor guardou. */
 export function savePlacementConfig(server: Server, config: PlacementConfig): Promise<PlacementConfig> {
-  return apiFetchForServer<PlacementConfig>(server, '/api/placement/config', { method: 'PUT', body: JSON.stringify(config) }, WAIT);
+  return apiFetchForServer<PlacementConfig>(server, '/api/placement/config', { method: 'PUT', body: JSON.stringify(config) }, WAIT).then(withOpen);
 }
 
 export function getPlacementFacts(server: Server): Promise<PlacementFacts> {
