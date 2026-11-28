@@ -99,15 +99,16 @@ describe('sincronização do visto', () => {
 describe('volta do tour', () => {
   beforeEach(() => { useTour.setState({ synced: true }); });
 
-  it('sem o visto dos servidores só as dicas existem, e a volta é planejada quando ele chega', () => {
+  it('sem o visto dos servidores nem tour nem dica, e os dois são planejados quando ele chega', () => {
     useTour.setState({ synced: false });
     planTour(2);
     expect(useTour.getState().planned).toBe(false);
     expect(useTour.getState().run).toBeNull();
-    expect(useTour.getState().tips.map((t) => t.id)).toEqual(['media']);
+    expect(useTour.getState().tips).toEqual([]);
     useTour.setState({ synced: true });
     planTour(2);
     expect(useTour.getState().run?.steps[0].id).toBe('menu');
+    expect(useTour.getState().tips.map((t) => t.id)).toEqual(['media']);
   });
 
   it('no modo nova conversa o tour começa pelas peças da conversa', () => {

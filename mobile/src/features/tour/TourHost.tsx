@@ -44,6 +44,12 @@ export function TourHost({ enabled }: { enabled: boolean }) {
   useEffect(() => { if (enabled && !synced && loadedKey) void syncTour(); }, [enabled, synced, loadedKey]);
   useEffect(() => {
     if (!enabled || synced) return;
+    // Leitura do visto que falhou tenta de novo sozinha, sem esperar o app voltar à frente.
+    const timers = [5_000, 15_000, 30_000].map((ms) => setTimeout(() => { void syncTour(); }, ms));
+    return () => timers.forEach(clearTimeout);
+  }, [enabled, synced]);
+  useEffect(() => {
+    if (!enabled || synced) return;
     const sub = AppState.addEventListener('change', (state) => { if (state === 'active') void syncTour(); });
     return () => sub.remove();
   }, [enabled, synced]);

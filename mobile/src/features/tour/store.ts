@@ -64,7 +64,9 @@ let queued: Promise<void> | null = null;
  */
 export function syncTour(): Promise<void> {
   if (!running) {
-    running = syncRound().finally(() => { running = null; });
+    running = syncRound()
+      .catch((e: unknown) => failed('tour_progress_sync_failed', e))
+      .finally(() => { running = null; });
     return running;
   }
   queued ??= running.then(() => { queued = null; return syncTour(); });
@@ -95,14 +97,15 @@ async function syncRound(): Promise<void> {
 }
 
 /**
- * Planeja com as listas lidas e o modo da tela inicial. Sem o visto dos servidores só as dicas
- * existem; a volta do tour espera ele chegar. O tour já visto (ou pulado) só deixa as dicas.
+ * Planeja com as listas lidas e o modo da tela inicial. Sem o visto dos servidores nada é planejado,
+ * nem dica; tudo espera ele chegar. O tour já visto (ou pulado) só deixa as dicas.
  */
 export function planTour(sessions: number, home: TourHomeMode = 'sessions') {
   const { progress, planned, synced, replay } = useTour.getState();
   if (planned) return;
   const { steps, tips } = planMobileTour(sessions, home);
-  if (!synced && !replay) { useTour.setState({ tips }); return; }
+  // Sem o visto dos servidores, nem dica: quem já a viu ou desligou noutro aparelho a veria de novo.
+  if (!synced && !replay) return;
   const run = replay || mobileTourOutcome(progress) === null ? startTourRun(steps) : null;
   useTour.setState({ planned: true, replay: false, run, tips });
 }
